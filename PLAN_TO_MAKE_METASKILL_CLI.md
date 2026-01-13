@@ -76,6 +76,17 @@ version: 1.0.0
 tags: [rust, cli, deployment]
 requires: [core-cli-basics, logging-standards]
 provides: [rust-cli-patterns]
+aliases: [legacy-cli-patterns]
+requirements:
+  platforms: [macos, linux]
+  tools:
+    - name: git
+      min_version: "2.40.0"
+    - name: gh
+      required: false
+  env:
+    - GITHUB_TOKEN
+  network: required
 ---
 
 # Skill Title
@@ -713,6 +724,8 @@ meta_skill/
 │   │   │   ├── search.rs          # ms search
 │   │   │   ├── load.rs            # ms load
 │   │   │   ├── suggest.rs         # ms suggest
+│   │   │   ├── alias.rs           # ms alias
+│   │   │   ├── requirements.rs    # ms requirements
 │   │   │   ├── build.rs           # ms build (CASS integration)
 │   │   │   ├── bundle.rs          # ms bundle
 │   │   │   ├── update.rs          # ms update
@@ -725,6 +738,7 @@ meta_skill/
 │   │   ├── skill.rs               # Skill struct and parsing
 │   │   ├── registry.rs            # Skill registry management
 │   │   ├── disclosure.rs          # Progressive disclosure logic
+│   │   ├── requirements.rs        # Environment requirement checks
 │   │   └── validation.rs          # Skill validation
 │   ├── storage/
 │   │   ├── mod.rs
@@ -864,6 +878,9 @@ pub struct SkillMetadata {
     pub tags: Vec<String>,
 
     #[serde(default)]
+    pub aliases: Vec<String>,  // Alternate names / legacy ids
+
+    #[serde(default)]
     pub requires: Vec<String>,  // Dependencies on other skills
 
     #[serde(default)]
@@ -880,6 +897,24 @@ pub struct SkillMetadata {
 
     #[serde(default)]
     pub toolchains: Vec<ToolchainConstraint>,  // Compatibility constraints
+
+    #[serde(default)]
+    pub requirements: SkillRequirements,  // Tooling/OS/environment requirements
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DeprecationInfo {
+    /// When the skill was deprecated (YYYY-MM-DD)
+    pub since: Option<String>,
+
+    /// Reason for deprecation
+    pub reason: String,
+
+    /// Replacement skill id (if any)
+    pub replaced_by: Option<String>,
+
+    /// Optional sunset date after which skill should not be suggested
+    pub sunset_at: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -909,6 +944,54 @@ pub struct ToolchainConstraint {
     /// Human-readable notes about compatibility
     pub notes: Option<String>,
 }
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct SkillRequirements {
+    /// Supported platforms (empty = any)
+    pub platforms: Vec<Platform>,
+
+    /// Required external tools (git, docker, gh, etc.)
+    pub tools: Vec<ToolRequirement>,
+
+    /// Required environment variables (presence only)
+    pub env: Vec<String>,
+
+    /// Network requirement (offline/online)
+    pub network: NetworkRequirement,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ToolRequirement {
+    pub name: String,
+    pub min_version: Option<String>,
+    pub max_version: Option<String>,
+    #[serde(default = "default_required")]
+    pub required: bool,
+    pub notes: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub enum Platform {
+    Any,
+    Linux,
+    Macos,
+    Windows,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum NetworkRequirement {
+    OfflineOk,
+    Required,
+    PreferOffline,
+}
+
+impl Default for NetworkRequirement {
+    fn default() -> Self {
+        NetworkRequirement::OfflineOk
+    }
+}
+
+fn default_required() -> bool { true }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SkillAssets {
@@ -1122,6 +1205,17 @@ CREATE TABLE skills (
     is_deprecated INTEGER NOT NULL DEFAULT 0,
     deprecation_reason TEXT
 );
+
+-- Alternate names / legacy ids
+CREATE TABLE skill_aliases (
+    alias TEXT PRIMARY KEY,
+    skill_id TEXT NOT NULL,
+    alias_type TEXT NOT NULL, -- alias | deprecated
+    created_at TEXT NOT NULL,
+    FOREIGN KEY(skill_id) REFERENCES skills(id) ON DELETE CASCADE
+);
+
+CREATE INDEX idx_skill_aliases_skill ON skill_aliases(skill_id);
 
 -- Full-text search
 CREATE VIRTUAL TABLE skills_fts USING fts5(
@@ -1379,7 +1473,8 @@ CREATE INDEX idx_usage_time ON skill_usage(used_at);
 
 ### 3.4 Dependency Graph and Resolution
 
-Skills declare dependencies (`requires`) and capabilities (`provides`) in metadata.
+Skills declare dependencies (`requires`), capabilities (`provides`), and environment requirements
+(platforms, tools, env vars) in metadata.
 ms builds a dependency graph to resolve load order, detect cycles, and auto-load prerequisites.
 
 ```rust
@@ -1434,6 +1529,39 @@ impl DependencyResolver {
 
 Default behavior: `ms load` uses `DependencyLoadMode::Auto` (load dependencies
 at `overview` disclosure, root skill at the requested level).
+
+#### 3.4.1 Skill Aliases and Deprecation
+
+Renames are inevitable. ms preserves backward compatibility by maintaining
+alias mappings (old id → canonical id) and surfacing deprecations with explicit
+replacements.
+
+```rust
+pub struct AliasResolver {
+    db: Connection,
+}
+
+#[derive(Debug, Clone)]
+pub struct AliasResolution {
+    pub canonical_id: String,
+    pub alias_type: String,  // alias | deprecated
+    pub replaced_by: Option<String>,
+}
+
+impl AliasResolver {
+    pub fn resolve(&self, id_or_alias: &str) -> Option<AliasResolution> {
+        // 1) If skill id exists, return canonical
+        // 2) Otherwise check skill_aliases table
+        // 3) Return alias metadata for UI warnings
+        unimplemented!()
+    }
+}
+```
+
+**Behavior:**
+- `ms load legacy-id` resolves to canonical skill and emits a warning if deprecated.
+- `ms search` and `ms suggest` exclude deprecated skills by default unless explicitly requested.
+- If `deprecated.replaced_by` is set, ms highlights the replacement in output.
 
 ### 3.5 Layering and Conflict Resolution
 
@@ -1641,6 +1769,7 @@ ms search "git workflow"
 ms search "git workflow" --limit 10
 ms search "error handling" --tags rust,cli
 ms search "testing" --min-quality 0.7
+ms search "legacy patterns" --include-deprecated
 ms search "logging" --layer project  # restrict to a layer
 
 # Load a skill (progressive disclosure)
@@ -1671,6 +1800,17 @@ ms show ntm
 ms show ntm --usage  # Include usage stats
 ms show ntm --deps   # Show dependency graph
 ms show ntm --layer user  # show a specific layer
+
+# Manage aliases and deprecations
+ms alias list ntm
+ms alias add legacy-cli-patterns ntm
+ms alias resolve legacy-cli-patterns
+ms alias remove legacy-cli-patterns
+
+# Check environment requirements
+ms requirements ntm
+ms requirements ntm --project /data/projects/my-rust-project
+ms requirements ntm --robot
 
 # Resolve dependency order
 ms deps ntm
@@ -1773,6 +1913,7 @@ ms doctor
 ms doctor --fix  # Attempt auto-fixes
 ms doctor --check=transactions
 ms doctor --check=security
+ms doctor --check=requirements
 
 # Configuration
 ms config show
@@ -1919,6 +2060,7 @@ pub struct SuggestionItem {
     pub dependencies: Vec<String>,
     pub layer: Option<String>,
     pub conflicts: Vec<String>,
+    pub requirements: Option<RequirementStatus>,
     pub explanation: Option<SuggestionExplanation>,
 }
 
@@ -1962,6 +2104,15 @@ pub struct BuildStatusResponse {
     pub recent_completed: Vec<BuildSessionSummary>,
     pub queued_patterns: usize,
     pub queued_uncertainties: usize,
+}
+
+/// --robot requirements response
+#[derive(Serialize)]
+pub struct RequirementsResponse {
+    pub skill_id: String,
+    pub requirements: SkillRequirements,
+    pub status: RequirementStatus,
+    pub environment: EnvironmentSnapshot,
 }
 
 #[derive(Serialize)]
@@ -2056,6 +2207,7 @@ pub enum CheckCategory {
     Safety,
     Security,
     Toolchain,
+    Requirements,
     Dependencies,
     Layers,
     Transactions,
@@ -2103,6 +2255,11 @@ pub enum HealthStatus {
 │  ☐ Project toolchain detected (node/cargo/go/etc.)                         │
 │  ☐ Skill compatibility constraints parsed                                  │
 │  ☐ Drift check completed (skill ranges vs project versions)                │
+│                                                                             │
+│ REQUIREMENTS                                                                │
+│  ☐ Required tools found in PATH (git/docker/gh/etc.)                        │
+│  ☐ Required environment variables present                                  │
+│  ☐ Platform compatibility satisfied                                         │
 │                                                                             │
 │ DEPENDENCIES                                                                │
 │  ☐ Dependency graph builds without errors                                  │
@@ -2272,6 +2429,8 @@ _ms() {
         'search:Search for skills'
         'list:List all skills'
         'show:Show skill details'
+        'alias:Manage skill aliases'
+        'requirements:Check environment requirements'
         'load:Load skill content'
         'suggest:Get contextual suggestions'
         'build:Build new skill'
@@ -2307,7 +2466,18 @@ _ms() {
                     _arguments \
                         '--limit[Max results]:number' \
                         '--tags[Filter by tags]:tags' \
-                        '--type[Filter by type]:type:(command code workflow constraint)'
+                        '--type[Filter by type]:type:(command code workflow constraint)' \
+                        '--include-deprecated[Include deprecated skills]'
+                    ;;
+                alias)
+                    _arguments \
+                        '1:action:(list add remove resolve)' \
+                        '*:skill:_ms_skills'
+                    ;;
+                requirements)
+                    _arguments \
+                        '--project[Project path for environment check]:path:_files' \
+                        '*:skill:_ms_skills'
                     ;;
                 load)
                     _arguments \
@@ -5073,6 +5243,10 @@ impl HybridSearcher {
 }
 ```
 
+**Alias + Deprecation Handling:**
+- If the query exactly matches a skill alias, ms resolves to the canonical skill id.
+- Deprecated skills are filtered out by default (use `--include-deprecated` to show them).
+
 ### 7.2 Context-Aware Suggestion
 
 ```rust
@@ -5080,6 +5254,7 @@ impl HybridSearcher {
 pub struct Suggester {
     searcher: HybridSearcher,
     registry: SkillRegistry,
+    requirements: RequirementChecker,
 }
 
 impl Suggester {
@@ -5126,6 +5301,22 @@ impl Suggester {
                 result.conflicts = resolved.conflicts.iter()
                     .map(|c| c.section.clone())
                     .collect();
+
+                let req_status = self.requirements.check(skill, context);
+                result.requirements = Some(req_status.clone());
+                if !req_status.is_satisfied() {
+                    result.score *= 0.6; // down-rank incompatible skills
+                    result.reason = req_status.summary();
+                }
+
+                if let Some(deprecation) = &skill.metadata.deprecated {
+                    result.score *= 0.2; // heavily down-rank deprecated skills
+                    if let Some(replacement) = &deprecation.replaced_by {
+                        result.reason = format!("deprecated → use {}", replacement);
+                    } else {
+                        result.reason = "deprecated".to_string();
+                    }
+                }
 
                 if explain {
                     result.explanation = Some(self.explain_result(skill, &signals, result.score));
@@ -5206,6 +5397,111 @@ pub struct SuggestionContext {
     pub explain: bool,
     pub pack_mode: Option<PackMode>,
     pub max_per_group: Option<usize>,
+    pub environment: Option<EnvironmentSnapshot>,
+}
+```
+
+**Requirement-aware suggestions:**
+
+```rust
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct EnvironmentSnapshot {
+    pub platform: Platform,
+    pub tools: HashMap<String, Option<String>>, // name -> version (if known)
+    pub env_vars: Vec<String>,
+    pub network: NetworkStatus,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum NetworkStatus {
+    Online,
+    Offline,
+    Unknown,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RequirementStatus {
+    pub platform_ok: bool,
+    pub missing_tools: Vec<String>,
+    pub missing_env: Vec<String>,
+    pub network_ok: bool,
+}
+
+impl RequirementStatus {
+    pub fn is_satisfied(&self) -> bool {
+        self.platform_ok
+            && self.missing_tools.is_empty()
+            && self.missing_env.is_empty()
+            && self.network_ok
+    }
+
+    pub fn summary(&self) -> String {
+        let mut parts = vec![];
+        if !self.platform_ok {
+            parts.push("platform mismatch".to_string());
+        }
+        if !self.missing_tools.is_empty() {
+            parts.push(format!("missing tools: {}", self.missing_tools.join(", ")));
+        }
+        if !self.missing_env.is_empty() {
+            parts.push(format!("missing env: {}", self.missing_env.join(", ")));
+        }
+        if !self.network_ok {
+            parts.push("network required".to_string());
+        }
+        if parts.is_empty() {
+            "requirements satisfied".to_string()
+        } else {
+            parts.join("; ")
+        }
+    }
+}
+
+pub struct RequirementChecker;
+
+impl RequirementChecker {
+    pub fn check(&self, skill: &Skill, context: &SuggestionContext) -> RequirementStatus {
+        let env = match &context.environment {
+            Some(env) => env,
+            None => {
+                return RequirementStatus {
+                    platform_ok: true,
+                    missing_tools: vec![],
+                    missing_env: vec![],
+                    network_ok: true,
+                };
+            }
+        };
+
+        let platforms = &skill.metadata.requirements.platforms;
+        let platform_ok = platforms.is_empty()
+            || platforms.iter().any(|p| matches!(p, Platform::Any) || p == &env.platform);
+
+        let missing_tools = skill.metadata.requirements.tools.iter()
+            .filter(|tool| {
+                tool.required && !env.tools.contains_key(&tool.name)
+            })
+            .map(|tool| tool.name.clone())
+            .collect::<Vec<_>>();
+
+        let missing_env = skill.metadata.requirements.env.iter()
+            .filter(|var| !env.env_vars.iter().any(|v| v == *var))
+            .cloned()
+            .collect::<Vec<_>>();
+
+        let network_ok = match (skill.metadata.requirements.network.clone(), &env.network) {
+            (NetworkRequirement::Required, NetworkStatus::Offline) => false,
+            (NetworkRequirement::PreferOffline, NetworkStatus::Online) => false,
+            _ => true,
+        };
+
+        RequirementStatus {
+            platform_ok,
+            missing_tools,
+            missing_env,
+            network_ok,
+        }
+    }
 }
 ```
 
@@ -5596,6 +5892,17 @@ impl QualityScorer {
         let deprecated = check_deprecated_patterns(&skill.body);
         score -= 0.1 * deprecated.len() as f32;
 
+        // Skill-level deprecation penalty
+        if let Some(deprecation) = &skill.metadata.deprecated {
+            score -= 0.4;
+            issues.push(QualityIssue::DeprecatedSkill {
+                replaced_by: deprecation.replaced_by.clone(),
+            });
+            if let Some(replacement) = &deprecation.replaced_by {
+                suggestions.push(format!("Use '{}' instead of this deprecated skill", replacement));
+            }
+        }
+
         // Toolchain mismatch penalty (if project context available)
         if let Some(path) = &self.project_path {
             if let Ok(toolchain) = self.toolchain_detector.detect(path) {
@@ -5670,6 +5977,9 @@ pub enum QualityIssue {
 
     /// Evidence coverage too low
     LowEvidenceCoverage(f32),
+
+    /// Skill is deprecated
+    DeprecatedSkill { replaced_by: Option<String> },
 
     /// Skill is incompatible with the project's toolchain versions
     ToolchainMismatch { tool: String, skill_range: String, project_version: String },
@@ -7317,6 +7627,7 @@ skill_paths = [
 │ ☐ Context analysis (directory, files, commands)                            │
 │ ☐ Trigger matching system                                                  │
 │ ☐ Suggestion ranking with context boosting                                 │
+│ ☐ Requirement-aware suggestions (platform/tools/env gating)                │
 │ ☐ Usage tracking                                                           │
 │                                                                             │
 │ Deliverable: ms load, ms suggest work                                      │
@@ -15193,3 +15504,759 @@ Before deployment:
 - [ ] Logging doesn't include secrets or PII
 - [ ] Dependencies scanned for known vulnerabilities
 
+---
+
+## Section 33: Error Handling Patterns and Methodology
+
+*CASS-mined insights on robust error handling in Rust applications*
+
+### 33.1 Error Handling Philosophy
+
+Error handling in Rust differs fundamentally from exceptions in other languages. The key principles:
+
+1. **Errors are values** - `Result<T, E>` makes errors explicit and composable
+2. **Fail loudly, recover gracefully** - Errors should be visible but recoverable
+3. **Context over raw messages** - Error chains explain *why*, not just *what*
+4. **Match error types to boundaries** - Different error types for different layers
+
+```rust
+// The error handling spectrum
+// 
+// Recoverable (Result)                          Unrecoverable (panic)
+// ├────────────────────────────────────────────────────────────────┤
+// │ File not found    Network timeout    Invalid input │ Invariant │
+// │ Permission denied Rate limited       Parse error   │ violated  │
+// │ Resource busy     Service unavailable              │ Bug/logic │
+// └────────────────────────────────────────────────────────────────┘
+```
+
+### 33.2 The thiserror and anyhow Dichotomy
+
+**thiserror** is for library code - create specific, matchable error types:
+
+```rust
+use thiserror::Error;
+
+/// Domain-specific error type for skill operations.
+/// 
+/// Use thiserror when:
+/// - Building a library consumed by others
+/// - Callers need to match on specific error variants
+/// - You want to expose a stable error API
+#[derive(Debug, Error)]
+pub enum SkillError {
+    #[error("skill not found: {name}")]
+    NotFound { name: String },
+    
+    #[error("invalid skill manifest at line {line}: {reason}")]
+    InvalidManifest { line: usize, reason: String },
+    
+    #[error("skill execution failed: {0}")]
+    ExecutionFailed(#[source] std::io::Error),
+    
+    #[error("dependency cycle detected: {path}")]
+    CycleDetected { path: String },
+    
+    #[error("rate limited (retry after {retry_after_secs}s)")]
+    RateLimited { retry_after_secs: u64 },
+    
+    #[error(transparent)]
+    Internal(#[from] anyhow::Error),
+}
+
+// Enable conversion from io::Error
+impl From<std::io::Error> for SkillError {
+    fn from(err: std::io::Error) -> Self {
+        SkillError::ExecutionFailed(err)
+    }
+}
+```
+
+**anyhow** is for application code - rich context chains without ceremony:
+
+```rust
+use anyhow::{Context, Result, bail, ensure};
+
+/// Load and validate a skill file.
+/// 
+/// Use anyhow when:
+/// - Building an application (not a library)
+/// - You want rich error context without boilerplate
+/// - Errors will be displayed to users, not programmatically matched
+pub fn load_skill(path: &Path) -> Result<Skill> {
+    // .context() adds human-readable context to errors
+    let content = std::fs::read_to_string(path)
+        .with_context(|| format!("failed to read skill file at {}", path.display()))?;
+    
+    // Parse with context
+    let manifest: SkillManifest = toml::from_str(&content)
+        .with_context(|| format!("invalid TOML in skill manifest: {}", path.display()))?;
+    
+    // bail! for early returns with error
+    if manifest.version != SUPPORTED_VERSION {
+        bail!(
+            "unsupported skill version {} (expected {})",
+            manifest.version,
+            SUPPORTED_VERSION
+        );
+    }
+    
+    // ensure! for assertions that return errors
+    ensure!(
+        !manifest.name.is_empty(),
+        "skill name cannot be empty in {}",
+        path.display()
+    );
+    
+    Ok(Skill::from_manifest(manifest))
+}
+```
+
+### 33.3 Structured CLI Error Types
+
+For CLI applications, create a structured error type that maps to exit codes:
+
+```rust
+/// Structured CLI error with exit code mapping.
+/// 
+/// Exit codes follow Unix conventions:
+/// - 0: Success
+/// - 1: General error
+/// - 2: Usage error (invalid arguments)
+/// - 3: Not found
+/// - 4: Permission denied
+/// - 5: Conflict
+/// - 6: Network/external service error
+/// - 7: Resource exhausted
+/// - 8: Timeout
+/// - 9: Internal error (bug)
+#[derive(Debug, Clone)]
+pub struct CliError {
+    /// Unix exit code (0-9)
+    pub code: i32,
+    /// Error category for programmatic handling
+    pub kind: &'static str,
+    /// Human-readable message
+    pub message: String,
+    /// Actionable suggestion for the user
+    pub hint: Option<String>,
+    /// Whether the operation can be retried
+    pub retryable: bool,
+}
+
+impl CliError {
+    pub fn usage(message: impl Into<String>, hint: Option<String>) -> Self {
+        Self {
+            code: 2,
+            kind: "usage",
+            message: message.into(),
+            hint,
+            retryable: false,
+        }
+    }
+    
+    pub fn not_found(message: impl Into<String>) -> Self {
+        Self {
+            code: 3,
+            kind: "not_found",
+            message: message.into(),
+            hint: None,
+            retryable: false,
+        }
+    }
+    
+    pub fn network(message: impl Into<String>, retryable: bool) -> Self {
+        Self {
+            code: 6,
+            kind: "network",
+            message: message.into(),
+            hint: if retryable {
+                Some("You may retry this operation".to_string())
+            } else {
+                None
+            },
+            retryable,
+        }
+    }
+    
+    pub fn timeout(message: impl Into<String>) -> Self {
+        Self {
+            code: 8,
+            kind: "timeout",
+            message: message.into(),
+            hint: Some("Consider increasing timeout or checking network".to_string()),
+            retryable: true,
+        }
+    }
+    
+    pub fn internal(message: impl Into<String>) -> Self {
+        Self {
+            code: 9,
+            kind: "internal",
+            message: message.into(),
+            hint: Some("This is a bug. Please report it.".to_string()),
+            retryable: false,
+        }
+    }
+    
+    /// Format for machine consumption (--robot mode)
+    pub fn to_json(&self) -> serde_json::Value {
+        serde_json::json!({
+            "status": "error",
+            "code": self.code,
+            "kind": self.kind,
+            "message": self.message,
+            "hint": self.hint,
+            "retryable": self.retryable
+        })
+    }
+}
+
+pub type CliResult<T = ()> = std::result::Result<T, CliError>;
+```
+
+### 33.4 Error Taxonomy Patterns
+
+For protocol or API libraries, define a comprehensive error taxonomy:
+
+```rust
+/// FCP-style error taxonomy with numeric codes.
+/// 
+/// Code ranges:
+/// - 1xxx: Protocol errors
+/// - 2xxx: Authentication/identity errors
+/// - 3xxx: Capability/authorization errors
+/// - 4xxx: Zone/topology errors
+/// - 5xxx: Lifecycle/health errors
+/// - 6xxx: Resource errors
+/// - 7xxx: External service errors
+/// - 9xxx: Internal errors
+#[derive(Debug, Clone)]
+pub struct FcpError {
+    /// Error code (e.g., "FCP-2001")
+    pub code: String,
+    /// Human-readable message
+    pub message: String,
+    /// Whether the operation can be retried
+    pub retryable: bool,
+    /// Suggested retry delay in milliseconds
+    pub retry_after_ms: Option<u64>,
+    /// Additional structured context
+    pub details: serde_json::Value,
+    /// AI-friendly recovery suggestion
+    pub ai_recovery_hint: Option<String>,
+}
+
+impl FcpError {
+    /// Create protocol error (1xxx)
+    pub fn protocol(code: u16, message: impl Into<String>) -> Self {
+        Self {
+            code: format!("FCP-{code}"),
+            message: message.into(),
+            retryable: false,
+            retry_after_ms: None,
+            details: serde_json::json!({}),
+            ai_recovery_hint: None,
+        }
+    }
+    
+    /// Create auth error (2xxx)
+    pub fn auth(code: u16, message: impl Into<String>) -> Self {
+        Self {
+            code: format!("FCP-{code}"),
+            message: message.into(),
+            retryable: false,
+            retry_after_ms: None,
+            details: serde_json::json!({}),
+            ai_recovery_hint: Some("Check credentials and permissions".to_string()),
+        }
+    }
+    
+    /// Create rate limit error (7xxx)
+    pub fn rate_limited(retry_after_ms: u64) -> Self {
+        Self {
+            code: "FCP-7429".to_string(),
+            message: "Rate limit exceeded".to_string(),
+            retryable: true,
+            retry_after_ms: Some(retry_after_ms),
+            details: serde_json::json!({
+                "limit_type": "requests_per_minute"
+            }),
+            ai_recovery_hint: Some(format!(
+                "Wait {}ms before retrying",
+                retry_after_ms
+            )),
+        }
+    }
+    
+    /// Check if error is in a specific range
+    pub fn is_protocol_error(&self) -> bool {
+        self.code.starts_with("FCP-1")
+    }
+    
+    pub fn is_auth_error(&self) -> bool {
+        self.code.starts_with("FCP-2")
+    }
+    
+    pub fn is_external_error(&self) -> bool {
+        self.code.starts_with("FCP-7")
+    }
+}
+
+/// Common error codes reference
+pub mod error_codes {
+    // Protocol errors (1xxx)
+    pub const INVALID_MESSAGE: u16 = 1001;
+    pub const VERSION_MISMATCH: u16 = 1002;
+    pub const MALFORMED_REQUEST: u16 = 1003;
+    pub const CHECKSUM_MISMATCH: u16 = 1004;
+    
+    // Auth errors (2xxx)
+    pub const TOKEN_EXPIRED: u16 = 2001;
+    pub const TOKEN_INVALID: u16 = 2002;
+    pub const INSUFFICIENT_SCOPE: u16 = 2003;
+    
+    // Resource errors (6xxx)
+    pub const RESOURCE_NOT_FOUND: u16 = 6001;
+    pub const RESOURCE_EXHAUSTED: u16 = 6002;
+    pub const RESOURCE_LOCKED: u16 = 6003;
+    
+    // External errors (7xxx)
+    pub const EXTERNAL_UNAVAILABLE: u16 = 7001;
+    pub const EXTERNAL_TIMEOUT: u16 = 7002;
+    pub const RATE_LIMITED: u16 = 7429;
+    
+    // Internal errors (9xxx)
+    pub const INTERNAL_ERROR: u16 = 9001;
+    pub const NOT_IMPLEMENTED: u16 = 9002;
+}
+```
+
+### 33.5 Error Context Chaining
+
+Build rich error chains that explain the full failure path:
+
+```rust
+use anyhow::{Context, Result};
+
+/// Error context should read as a stack trace from specific to general.
+/// 
+/// Example output:
+/// Error: failed to execute skill "git-commit"
+/// 
+/// Caused by:
+///     0: failed to render template "commit_message.md"
+///     1: variable 'ticket_id' not found
+///     2: missing required context field
+pub fn execute_skill(name: &str, context: &SkillContext) -> Result<()> {
+    let skill = load_skill(name)
+        .with_context(|| format!("failed to load skill '{name}'"))?;
+    
+    let template = skill.template()
+        .with_context(|| format!("failed to get template for skill '{name}'"))?;
+    
+    let rendered = template.render(context)
+        .with_context(|| format!("failed to render template for skill '{name}'"))?;
+    
+    execute_command(&rendered)
+        .with_context(|| format!("failed to execute skill '{name}'"))?;
+    
+    Ok(())
+}
+
+/// For errors crossing module boundaries, wrap with From implementations
+impl From<TemplateError> for SkillError {
+    fn from(err: TemplateError) -> Self {
+        match err {
+            TemplateError::VariableNotFound { name } => {
+                SkillError::InvalidManifest {
+                    line: 0,
+                    reason: format!("missing template variable: {name}"),
+                }
+            }
+            TemplateError::SyntaxError { line, message } => {
+                SkillError::InvalidManifest { line, reason: message }
+            }
+            other => SkillError::Internal(other.into()),
+        }
+    }
+}
+```
+
+### 33.6 Error Recovery Patterns
+
+Implement retry logic with exponential backoff:
+
+```rust
+use std::time::Duration;
+use tokio::time::sleep;
+
+/// Retry configuration
+#[derive(Debug, Clone)]
+pub struct RetryConfig {
+    /// Maximum number of retry attempts
+    pub max_retries: u32,
+    /// Initial delay before first retry
+    pub initial_delay: Duration,
+    /// Maximum delay between retries
+    pub max_delay: Duration,
+    /// Multiplier for exponential backoff
+    pub backoff_factor: f64,
+    /// Add random jitter to prevent thundering herd
+    pub jitter: bool,
+}
+
+impl Default for RetryConfig {
+    fn default() -> Self {
+        Self {
+            max_retries: 3,
+            initial_delay: Duration::from_millis(100),
+            max_delay: Duration::from_secs(30),
+            backoff_factor: 2.0,
+            jitter: true,
+        }
+    }
+}
+
+/// Retry an operation with exponential backoff
+pub async fn with_retry<T, E, F, Fut>(
+    config: &RetryConfig,
+    mut operation: F,
+) -> Result<T, E>
+where
+    F: FnMut() -> Fut,
+    Fut: std::future::Future<Output = Result<T, E>>,
+    E: std::fmt::Debug,
+{
+    let mut attempt = 0;
+    let mut delay = config.initial_delay;
+    
+    loop {
+        match operation().await {
+            Ok(result) => return Ok(result),
+            Err(err) if attempt >= config.max_retries => {
+                tracing::error!(?err, "operation failed after {} attempts", attempt + 1);
+                return Err(err);
+            }
+            Err(err) => {
+                attempt += 1;
+                tracing::warn!(
+                    ?err,
+                    attempt,
+                    max_retries = config.max_retries,
+                    "operation failed, retrying after {:?}",
+                    delay
+                );
+                
+                // Add jitter: +/- 25%
+                let actual_delay = if config.jitter {
+                    let jitter_factor = 0.75 + rand::random::<f64>() * 0.5;
+                    delay.mul_f64(jitter_factor)
+                } else {
+                    delay
+                };
+                
+                sleep(actual_delay).await;
+                
+                // Exponential backoff with cap
+                delay = std::cmp::min(
+                    delay.mul_f64(config.backoff_factor),
+                    config.max_delay,
+                );
+            }
+        }
+    }
+}
+
+/// Circuit breaker for preventing cascading failures
+#[derive(Debug)]
+pub struct CircuitBreaker {
+    /// Number of failures before opening
+    failure_threshold: u32,
+    /// Duration to stay open before half-open
+    reset_timeout: Duration,
+    /// Current state
+    state: std::sync::Mutex<CircuitState>,
+}
+
+#[derive(Debug)]
+enum CircuitState {
+    Closed { failures: u32 },
+    Open { opened_at: std::time::Instant },
+    HalfOpen,
+}
+
+impl CircuitBreaker {
+    pub fn new(failure_threshold: u32, reset_timeout: Duration) -> Self {
+        Self {
+            failure_threshold,
+            reset_timeout,
+            state: std::sync::Mutex::new(CircuitState::Closed { failures: 0 }),
+        }
+    }
+    
+    /// Check if the circuit allows requests
+    pub fn allow_request(&self) -> bool {
+        let mut state = self.state.lock().unwrap();
+        match *state {
+            CircuitState::Closed { .. } => true,
+            CircuitState::Open { opened_at } => {
+                if opened_at.elapsed() >= self.reset_timeout {
+                    *state = CircuitState::HalfOpen;
+                    true
+                } else {
+                    false
+                }
+            }
+            CircuitState::HalfOpen => true,
+        }
+    }
+    
+    /// Record a successful operation
+    pub fn record_success(&self) {
+        let mut state = self.state.lock().unwrap();
+        *state = CircuitState::Closed { failures: 0 };
+    }
+    
+    /// Record a failed operation
+    pub fn record_failure(&self) {
+        let mut state = self.state.lock().unwrap();
+        match *state {
+            CircuitState::Closed { failures } => {
+                let new_failures = failures + 1;
+                if new_failures >= self.failure_threshold {
+                    *state = CircuitState::Open {
+                        opened_at: std::time::Instant::now(),
+                    };
+                } else {
+                    *state = CircuitState::Closed { failures: new_failures };
+                }
+            }
+            CircuitState::HalfOpen => {
+                *state = CircuitState::Open {
+                    opened_at: std::time::Instant::now(),
+                };
+            }
+            CircuitState::Open { .. } => {}
+        }
+    }
+}
+```
+
+### 33.7 Panic vs Result Guidelines
+
+**When to use panic (via `unwrap`, `expect`, `unreachable!`):**
+
+```rust
+// ✓ CORRECT: Static data that cannot fail at runtime
+static REGEX: LazyLock<Regex> = LazyLock::new(|| {
+    // This regex is constant - if it fails, it's a programmer error
+    Regex::new(r"^\w+$").expect("static regex must compile")
+});
+
+// ✓ CORRECT: Invariant that would indicate a bug
+fn pop_from_non_empty_stack(stack: &mut Vec<i32>) -> i32 {
+    // Caller guarantees non-empty; if empty, it's a bug
+    stack.pop().expect("stack should not be empty")
+}
+
+// ✓ CORRECT: Test code
+#[test]
+fn test_parsing() {
+    let result = parse("valid input").unwrap(); // Test should fail if this errors
+    assert_eq!(result.value, 42);
+}
+
+// ✓ CORRECT: unreachable! for exhaustive matches
+match state {
+    State::Ready => process(),
+    State::Running => wait(),
+    State::Complete => return,
+    // Enum is non_exhaustive, but we handle all current variants
+    _ => unreachable!("unknown state variant"),
+}
+```
+
+**When to use Result (proper error handling):**
+
+```rust
+// ✗ WRONG: User input can fail - don't panic
+fn parse_config(input: &str) -> Config {
+    toml::from_str(input).unwrap() // DON'T: user input can be invalid
+}
+
+// ✓ CORRECT: Return Result for user input
+fn parse_config(input: &str) -> Result<Config, ConfigError> {
+    toml::from_str(input).map_err(|e| ConfigError::ParseFailed(e.to_string()))
+}
+
+// ✗ WRONG: File operations can fail - don't panic
+fn read_settings() -> Settings {
+    let content = std::fs::read_to_string("settings.toml").unwrap(); // DON'T
+    toml::from_str(&content).unwrap() // DON'T
+}
+
+// ✓ CORRECT: Return Result for IO operations
+fn read_settings() -> Result<Settings> {
+    let content = std::fs::read_to_string("settings.toml")
+        .context("failed to read settings file")?;
+    toml::from_str(&content)
+        .context("failed to parse settings file")
+}
+
+// ✗ WRONG: Network operations can fail - don't panic
+async fn fetch_data(url: &str) -> Data {
+    reqwest::get(url).await.unwrap().json().await.unwrap() // DON'T
+}
+
+// ✓ CORRECT: Return Result for network operations
+async fn fetch_data(url: &str) -> Result<Data> {
+    let response = reqwest::get(url).await
+        .with_context(|| format!("failed to fetch {url}"))?;
+    
+    response.json().await
+        .with_context(|| format!("failed to parse response from {url}"))
+}
+```
+
+### 33.8 Error Boundary Patterns
+
+For systems with multiple error domains, create clear boundaries:
+
+```rust
+/// Library error type - specific, matchable variants
+#[derive(Debug, Error)]
+pub enum LibraryError {
+    #[error("validation failed: {0}")]
+    Validation(String),
+    
+    #[error("resource not found: {0}")]
+    NotFound(String),
+    
+    #[error("operation timed out after {0:?}")]
+    Timeout(Duration),
+}
+
+/// Application error type - broader categories
+#[derive(Debug)]
+pub enum AppError {
+    /// User-facing error with helpful message
+    User { message: String, hint: Option<String> },
+    /// Internal error (log and show generic message)
+    Internal { message: String, source: anyhow::Error },
+}
+
+/// Convert library errors to application errors at the boundary
+impl From<LibraryError> for AppError {
+    fn from(err: LibraryError) -> Self {
+        match err {
+            LibraryError::Validation(msg) => AppError::User {
+                message: format!("Invalid input: {msg}"),
+                hint: Some("Check your input and try again".to_string()),
+            },
+            LibraryError::NotFound(resource) => AppError::User {
+                message: format!("Not found: {resource}"),
+                hint: Some("The requested resource does not exist".to_string()),
+            },
+            LibraryError::Timeout(duration) => AppError::User {
+                message: format!("Operation timed out after {duration:?}"),
+                hint: Some("The service may be busy. Try again later.".to_string()),
+            },
+        }
+    }
+}
+
+/// Display errors appropriately based on context
+impl AppError {
+    pub fn display(&self, verbose: bool) -> String {
+        match self {
+            AppError::User { message, hint } => {
+                if let Some(h) = hint {
+                    format!("{message}\n\nHint: {h}")
+                } else {
+                    message.clone()
+                }
+            }
+            AppError::Internal { message, source } => {
+                if verbose {
+                    format!("Internal error: {message}\n\nCause: {source:?}")
+                } else {
+                    "An internal error occurred. Run with --verbose for details.".to_string()
+                }
+            }
+        }
+    }
+}
+```
+
+### 33.9 Error Logging Best Practices
+
+```rust
+use tracing::{error, warn, info, debug, instrument};
+
+/// Instrument functions that can fail for automatic error logging
+#[instrument(skip(content), fields(path = %path.display()))]
+pub fn save_file(path: &Path, content: &[u8]) -> Result<()> {
+    std::fs::write(path, content)
+        .with_context(|| format!("failed to write to {}", path.display()))?;
+    
+    info!(bytes = content.len(), "file saved successfully");
+    Ok(())
+}
+
+/// Log errors with appropriate severity
+pub fn handle_error(err: &AppError) {
+    match err {
+        // User errors are warnings - user's fault, not ours
+        AppError::User { message, .. } => {
+            warn!(error = %message, "user error");
+        }
+        // Internal errors are errors - something we need to fix
+        AppError::Internal { message, source } => {
+            error!(
+                error = %message,
+                cause = ?source,
+                "internal error"
+            );
+        }
+    }
+}
+
+/// Structured error logging for monitoring
+pub fn log_structured_error(err: &CliError) {
+    tracing::error!(
+        code = err.code,
+        kind = err.kind,
+        message = %err.message,
+        retryable = err.retryable,
+        "cli error"
+    );
+}
+```
+
+### 33.10 Application to meta_skill
+
+| Error Category | Pattern | Example |
+|----------------|---------|---------|
+| **Skill Loading** | `thiserror` enum | `SkillError::NotFound`, `SkillError::ParseFailed` |
+| **CLI Interface** | `CliError` struct | Exit codes, hints, retryable flags |
+| **Template Rendering** | `anyhow` context | Rich failure chains |
+| **External APIs** | `FcpError` taxonomy | Error codes, retry hints |
+| **Network Operations** | Retry with backoff | `with_retry()` function |
+| **Service Stability** | Circuit breaker | Prevent cascading failures |
+
+### 33.11 Error Handling Checklist
+
+Before shipping error handling:
+- [ ] All public API functions return `Result` (not `Option` for errors)
+- [ ] Error types are appropriate for the layer (library vs application)
+- [ ] Error messages are user-friendly (no raw technical jargon)
+- [ ] Errors include actionable hints where possible
+- [ ] Sensitive information is not leaked in error messages
+- [ ] Errors are logged with appropriate severity
+- [ ] Retryable errors are clearly marked
+- [ ] Exit codes follow Unix conventions
+- [ ] Error chains preserve the full context
+- [ ] Panics only occur for programming errors, not user input
+- [ ] Circuit breakers protect against cascading failures
+- [ ] Retry logic includes jitter and backoff
