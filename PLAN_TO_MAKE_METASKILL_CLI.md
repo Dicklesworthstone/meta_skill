@@ -9764,7 +9764,494 @@ ms version unpin rust-patterns
 
 ---
 
-*Plan version: 1.2.0*
+## 26. Real-World Pattern Mining: CASS Insights
+
+This section documents actual patterns discovered by mining CASS sessions. These represent the "inner truths" that `ms build` should extract and transform into skills.
+
+### 26.1 Discovered Skill Candidates
+
+#### Pattern 1: UI Polish Checklist (from brenner_bot sessions)
+
+**Source Sessions:** `/home/ubuntu/.claude/projects/-data-projects-brenner-bot/agent-a9a6d6d.jsonl`
+
+**Recurring Categories:**
+```
+UI Polish Checklist
+├── Touch Interactions
+│   ├── touch-manipulation (mobile tap response)
+│   ├── active:scale-* (press feedback, e.g., active:scale-[0.98])
+│   └── min 44px touch targets
+├── Focus States
+│   ├── focus-visible: (NOT focus:) for keyboard a11y
+│   └── focus-visible:ring-2 focus-visible:ring-ring
+├── Accessibility
+│   ├── aria-label on icon-only buttons
+│   ├── aria-pressed for toggle buttons
+│   ├── aria-selected for tabs/selections
+│   └── aria-hidden="true" on decorative elements
+├── Motion Sensitivity
+│   ├── useReducedMotion() hook
+│   ├── motion-reduce:* Tailwind variants
+│   └── prefers-reduced-motion media query
+└── Transitions
+    ├── transition-colors (NOT transition-all unless needed)
+    └── Consistent duration (150ms standard)
+```
+
+**Report Format (from sessions):**
+```
+| File | Line | Issue | Fix |
+|------|------|-------|-----|
+| path/to/file.tsx | 167 | Missing touch-manipulation | Add `touch-manipulation active:scale-[0.95]` |
+```
+
+**Inner Truth → Skill:**
+```yaml
+name: nextjs-ui-polish
+description: Systematic UI polish checklist for Next.js/React apps with Tailwind
+tags: [nextjs, react, tailwind, accessibility, mobile]
+```
+
+---
+
+#### Pattern 2: Iterative Convergence (from automated_plan_reviser_pro)
+
+**Source Sessions:** `/home/ubuntu/.claude/projects/-data-projects-automated-plan-reviser-pro/`
+
+**The Convergence Pattern:**
+> "Specifications improve through multiple iterations like numerical optimization converging to steady state"
+
+**Round Progression Heuristics:**
+```rust
+pub struct ConvergenceProfile {
+    pub round_expectations: Vec<RoundExpectation>,
+}
+
+impl Default for ConvergenceProfile {
+    fn default() -> Self {
+        Self {
+            round_expectations: vec![
+                RoundExpectation {
+                    rounds: 1..=2,
+                    label: "Major Fixes",
+                    expected_changes: ChangeLevel::Significant,
+                    focus_areas: vec![
+                        "Security gaps",
+                        "Architectural issues",
+                        "Critical bugs",
+                    ],
+                },
+                RoundExpectation {
+                    rounds: 3..=5,
+                    label: "Architecture Refinement",
+                    expected_changes: ChangeLevel::Moderate,
+                    focus_areas: vec![
+                        "Feature completeness",
+                        "Interface design",
+                        "Edge cases",
+                    ],
+                },
+                RoundExpectation {
+                    rounds: 6..=10,
+                    label: "Fine-tuning",
+                    expected_changes: ChangeLevel::Minor,
+                    focus_areas: vec![
+                        "Performance",
+                        "Abstractions",
+                        "Error messages",
+                    ],
+                },
+                RoundExpectation {
+                    rounds: 11..=20,
+                    label: "Polish",
+                    expected_changes: ChangeLevel::Minimal,
+                    focus_areas: vec![
+                        "Documentation",
+                        "Edge cases",
+                        "Consistency",
+                    ],
+                },
+            ],
+        }
+    }
+}
+```
+
+**Steady-State Detection:**
+```rust
+pub fn detect_steady_state(
+    round_outputs: &[RoundOutput],
+    threshold: f32,
+) -> SteadyStateResult {
+    if round_outputs.len() < 3 {
+        return SteadyStateResult::InsufficientData;
+    }
+
+    let recent = &round_outputs[round_outputs.len()-3..];
+    let deltas: Vec<f32> = recent.windows(2)
+        .map(|w| compute_semantic_delta(&w[0], &w[1]))
+        .collect();
+
+    let avg_delta = deltas.iter().sum::<f32>() / deltas.len() as f32;
+
+    if avg_delta < threshold {
+        SteadyStateResult::Converged {
+            final_round: round_outputs.len(),
+            avg_delta,
+        }
+    } else {
+        SteadyStateResult::StillConverging {
+            current_delta: avg_delta,
+            threshold,
+            estimated_rounds_remaining: estimate_remaining(avg_delta, threshold),
+        }
+    }
+}
+```
+
+---
+
+#### Pattern 3: Brenner Principles Extraction (from brenner_bot)
+
+**Methodology Pattern:**
+Sessions reveal extraction of "AppliedPrinciples" from specific instances:
+
+```rust
+pub struct AppliedPrinciple {
+    pub name: String,           // e.g., "Epistemic Humility"
+    pub explanation: String,    // How it was applied
+    pub source_line: usize,     // Where detected
+    pub confidence: f32,        // 0.0-1.0 detection confidence
+}
+
+pub fn extract_principles(
+    session_content: &str,
+    principle_keywords: &[PrincipleKeyword],
+) -> Vec<AppliedPrinciple> {
+    let mut found = Vec::new();
+
+    for keyword in principle_keywords {
+        for (line_num, line) in session_content.lines().enumerate() {
+            if keyword.matches(line) {
+                found.push(AppliedPrinciple {
+                    name: keyword.principle_name.clone(),
+                    explanation: extract_context(session_content, line_num, 3),
+                    source_line: line_num,
+                    confidence: keyword.compute_confidence(line),
+                });
+            }
+        }
+    }
+
+    // Deduplicate and limit
+    found.sort_by(|a, b| b.confidence.partial_cmp(&a.confidence).unwrap());
+    found.truncate(6); // Top 6 for conciseness
+    found
+}
+```
+
+**Inner Truth:** Domain expertise can be encoded as keyword → principle mappings, then extracted from sessions automatically.
+
+---
+
+#### Pattern 4: Accessibility Standards (multi-project)
+
+**Recurring Pattern Across Sessions:**
+```typescript
+// Pattern: useReducedMotion hook
+const prefersReducedMotion = useReducedMotion();
+
+// Pattern: Conditional animation
+<motion.div
+  animate={{ opacity: 1 }}
+  transition={prefersReducedMotion ? { duration: 0 } : { duration: 0.3 }}
+>
+
+// Pattern: aria-hidden on decorative
+<ArrowIcon aria-hidden="true" />
+
+// Pattern: focus-visible not focus
+className="focus-visible:ring-2 focus-visible:ring-ring"
+// NOT: className="focus:ring-2 focus:ring-ring"
+```
+
+---
+
+### 26.2 Pattern-to-Skill Transformation Examples
+
+#### Example: UI Polish → Generated Skill
+
+**Input (aggregated from 15+ sessions):**
+- 47 instances of touch-manipulation additions
+- 23 instances of active:scale-* additions
+- 18 instances of focus-visible corrections
+- 12 instances of aria-label additions
+- 8 instances of useReducedMotion additions
+
+**Generated Skill Draft:**
+
+```markdown
+---
+name: ui-polish-nextjs
+description: Systematic UI polish for Next.js/React/Tailwind apps. Run as iterative checklist.
+version: 1.0.0
+tags: [nextjs, react, tailwind, accessibility, mobile, ui]
+---
+
+# Next.js UI Polish Skill
+
+Systematic checklist for polishing Next.js/React applications with Tailwind CSS.
+
+## ⚠️ CRITICAL RULES
+
+1. ALWAYS use `focus-visible:` NOT `focus:` for focus rings
+2. ALWAYS add `touch-manipulation` to clickable elements
+3. NEVER use `transition-all` when specific properties suffice
+4. ALWAYS check `prefers-reduced-motion` for animations
+
+## Checklist Categories
+
+### 1. Touch Interactions
+- [ ] All buttons have `touch-manipulation`
+- [ ] All buttons have `active:scale-[0.98]` or similar
+- [ ] Touch targets are minimum 44x44px on mobile
+
+### 2. Focus States
+- [ ] Using `focus-visible:ring-2` NOT `focus:ring-2`
+- [ ] Focus rings have proper offset
+- [ ] All interactive elements have visible focus states
+
+### 3. Accessibility
+- [ ] Icon-only buttons have `aria-label`
+- [ ] Toggle buttons have `aria-pressed`
+- [ ] Decorative elements have `aria-hidden="true"`
+- [ ] Form inputs have associated labels
+
+### 4. Motion
+- [ ] Animations respect `prefers-reduced-motion`
+- [ ] Using `useReducedMotion()` hook where needed
+- [ ] Infinite animations can be disabled
+
+### 5. Transitions
+- [ ] Using specific properties (`transition-colors`, `transition-transform`)
+- [ ] Consistent durations (150ms for micro, 300ms for larger)
+
+## Quick Audit Commands
+
+\`\`\`bash
+# Find missing touch-manipulation
+rg "onClick|cursor-pointer" --type tsx | rg -v "touch-manipulation"
+
+# Find incorrect focus usage
+rg "focus:ring" --type tsx
+
+# Find transition-all usage
+rg "transition-all" --type tsx
+
+# Find missing aria-labels on buttons
+ast-grep -l tsx -p '<button $$$><Icon /></button>'
+\`\`\`
+
+## Example Fixes
+
+**Before:**
+\`\`\`tsx
+<button onClick={handle} className="cursor-pointer focus:ring-2">
+  <Icon />
+</button>
+\`\`\`
+
+**After:**
+\`\`\`tsx
+<button
+  onClick={handle}
+  className="cursor-pointer touch-manipulation active:scale-[0.98] focus-visible:ring-2"
+  aria-label="Action description"
+>
+  <Icon aria-hidden="true" />
+</button>
+\`\`\`
+```
+
+---
+
+### 26.3 Cluster Analysis Insights
+
+The CASS searches revealed natural clustering:
+
+| Cluster | Sessions | Key Terms | Potential Skill |
+|---------|----------|-----------|-----------------|
+| UI Polish | 15+ | touch-manipulation, focus-visible, aria | `ui-polish-nextjs` |
+| Accessibility | 12+ | reduced-motion, aria-label, a11y | `react-accessibility` |
+| Iterative Refinement | 8+ | rounds, convergence, steady-state | `iterative-spec-refinement` |
+| Code Review | 10+ | fresh eyes, systematic, checklist | `code-review-methodology` |
+| Error Handling | 7+ | try-catch, Result, error boundary | `error-handling-patterns` |
+
+---
+
+### 26.4 CASS Query Patterns for Skill Mining
+
+**Effective queries discovered:**
+
+```bash
+# Category-specific searches
+cass search "touch-manipulation focus-visible" --robot --limit 20
+cass search "aria-label aria-pressed accessibility" --robot --limit 20
+cass search "useReducedMotion prefers-reduced-motion" --robot --limit 20
+
+# Methodology searches
+cass search "iterate refine polish rounds" --robot --limit 10
+cass search "steady state convergence" --robot --limit 10
+cass search "extract principles pattern" --robot --limit 10
+
+# Project-specific deep dives
+cass search "UI polish" --robot --limit 20  # Then filter by workspace
+
+# View session context
+cass view <session_path> -n <line_number> --json
+cass expand <session_path> -n <line_number> -C 5 --json
+```
+
+**Query expansion strategy:**
+1. Start with exact phrase: `"inner truth"`
+2. Expand to component terms: `inner`, `truth`, `abstract`
+3. Add synonyms: `general`, `principles`, `universal`
+4. Add domain context: `pattern`, `extract`, `lesson`
+
+---
+
+### 26.5 Inner Truth Extraction Algorithm
+
+Based on session analysis, here's the refined extraction algorithm:
+
+```rust
+pub struct InnerTruthExtractor {
+    /// Terms that indicate generalizable knowledge
+    generalization_markers: Vec<&'static str>,
+    /// Terms that indicate specific instances
+    specificity_markers: Vec<&'static str>,
+    /// Minimum occurrences to consider a pattern
+    min_pattern_occurrences: usize,
+}
+
+impl Default for InnerTruthExtractor {
+    fn default() -> Self {
+        Self {
+            generalization_markers: vec![
+                "always", "never", "pattern", "principle",
+                "best practice", "checklist", "systematic",
+                "every", "all", "any", "standard",
+            ],
+            specificity_markers: vec![
+                "this file", "line 42", "in this case",
+                "here specifically", "for this project",
+            ],
+            min_pattern_occurrences: 3,
+        }
+    }
+}
+
+impl InnerTruthExtractor {
+    pub fn extract(&self, sessions: &[Session]) -> Vec<InnerTruth> {
+        let mut candidates: HashMap<String, PatternCandidate> = HashMap::new();
+
+        for session in sessions {
+            for segment in session.segments() {
+                // Score generalization potential
+                let gen_score = self.generalization_score(&segment);
+                let spec_score = self.specificity_score(&segment);
+
+                // High generalization, low specificity = inner truth candidate
+                if gen_score > 0.6 && spec_score < 0.3 {
+                    let key = self.normalize_pattern(&segment);
+                    candidates.entry(key)
+                        .or_insert_with(PatternCandidate::new)
+                        .add_occurrence(session.id(), segment.clone());
+                }
+            }
+        }
+
+        // Filter by minimum occurrences
+        candidates.into_iter()
+            .filter(|(_, c)| c.occurrences >= self.min_pattern_occurrences)
+            .map(|(pattern, candidate)| InnerTruth {
+                pattern,
+                occurrences: candidate.occurrences,
+                sessions: candidate.session_ids,
+                confidence: candidate.avg_confidence(),
+                suggested_skill_content: self.generate_skill_section(&candidate),
+            })
+            .collect()
+    }
+}
+```
+
+---
+
+### 26.6 Future CASS Integration Enhancements
+
+Based on mining experience, these CASS features would improve skill generation:
+
+1. **Semantic clustering API**: `cass cluster --by-topic --limit 10`
+2. **Cross-session patterns**: `cass patterns --min-occurrences 3`
+3. **Project filtering**: `cass search "query" --workspace /data/projects/brenner_bot`
+4. **Time-range filtering**: `cass search "query" --since "2025-12-01"`
+5. **Agent filtering**: `cass search "query" --agent claude_code`
+
+---
+
+## 27. Appendix: Raw CASS Mining Results
+
+### A.1 UI Polish Session Excerpts
+
+**Session:** `agent-a9a6d6d.jsonl` (brenner_bot)
+**Key Finding:** Comprehensive UI polish report format
+
+```
+### SUMMARY OF ISSUES BY CATEGORY:
+
+**Focus Styling Issues (focus: vs focus-visible:):**
+- input.tsx (line 44)
+- textarea.tsx (line 54)
+- nav.tsx (line 417)
+- copy-button.tsx (lines 159-181)
+
+**Missing Active Scale Feedback:**
+- command-palette.tsx (line 308)
+- nav.tsx (lines 187, 343)
+- corpus/page.tsx (lines 536, 597, 727)
+```
+
+### A.2 Iterative Refinement Session Excerpts
+
+**Session:** automated_plan_reviser_pro exploration
+**Key Finding:** Round progression pattern
+
+```
+Round 1-2:    Major fixes, security gaps, architectural issues
+Round 3-5:    Architecture improvements, feature refinements
+Round 6-10:   Fine-tuning abstractions, interfaces, performance
+Round 11+:    Polish, documentation, edge cases
+```
+
+### A.3 Accessibility Pattern Excerpts
+
+**Multi-project recurring pattern:**
+```tsx
+// Infinite animations not respecting reduced motion fix:
+const prefersReducedMotion = useReducedMotion();
+transition={prefersReducedMotion ? { duration: 0 } : springConfig}
+
+// aria-hidden on decorative elements:
+<ArrowIcon aria-hidden="true" />
+
+// Proper focus styling:
+className="focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
+```
+
+---
+
+*Plan version: 1.3.0*
 *Created: 2026-01-13*
 *Updated: 2026-01-13*
 *Author: Claude Opus 4.5*
