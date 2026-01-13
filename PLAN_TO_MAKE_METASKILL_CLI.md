@@ -1167,6 +1167,15 @@ CREATE TABLE skill_evidence (
 
 CREATE INDEX idx_evidence_skill ON skill_evidence(skill_id);
 
+-- Rule strength calibration (0.0 - 1.0)
+CREATE TABLE skill_rules (
+    skill_id TEXT NOT NULL REFERENCES skills(id),
+    rule_id TEXT NOT NULL,
+    strength REAL NOT NULL DEFAULT 0.5,
+    updated_at TEXT NOT NULL,
+    PRIMARY KEY (skill_id, rule_id)
+);
+
 -- Uncertainty queue for low-confidence generalizations
 CREATE TABLE uncertainty_queue (
     id TEXT PRIMARY KEY,
@@ -1189,6 +1198,16 @@ CREATE TABLE redaction_reports (
 );
 
 CREATE INDEX idx_redaction_session ON redaction_reports(session_id);
+
+-- Prompt injection reports for safety filtering
+CREATE TABLE injection_reports (
+    id INTEGER PRIMARY KEY,
+    session_id TEXT NOT NULL,
+    report_json TEXT NOT NULL,   -- InjectionReport
+    created_at TEXT NOT NULL
+);
+
+CREATE INDEX idx_injection_session ON injection_reports(session_id);
 
 -- Skill usage tracking
 CREATE TABLE skill_usage (
@@ -1215,6 +1234,17 @@ CREATE TABLE skill_usage_events (
     variant_id TEXT,
     outcome TEXT,                     -- JSON
     feedback TEXT                     -- JSON
+);
+
+-- Per-rule outcomes for calibration
+CREATE TABLE rule_outcomes (
+    id TEXT PRIMARY KEY,
+    skill_id TEXT NOT NULL REFERENCES skills(id),
+    rule_id TEXT NOT NULL,
+    session_id TEXT NOT NULL,
+    followed INTEGER NOT NULL,
+    outcome TEXT NOT NULL,     -- JSON SessionOutcome
+    created_at TEXT NOT NULL
 );
 
 -- A/B experiments for skill variants
@@ -1674,6 +1704,7 @@ ms build --from-cass "api keys" --no-redact  # only if you explicitly accept ris
 ms build --from-cass "auth mistakes" --no-antipatterns  # skip counter-examples
 ms build --from-cass "error handling" --output-spec skill.spec.json
 ms build --from-cass "error handling" --min-session-quality 0.6
+ms build --from-cass "auth issues" --no-injection-filter  # only if you explicitly accept risk
 
 # Resume existing build session
 ms build --resume session-abc123
@@ -1713,10 +1744,12 @@ ms bundle create rust-toolkit --tags rust --min-quality 0.8
 # Publish bundle to GitHub
 ms bundle publish my-skills --repo user/skill-bundle
 ms bundle publish my-skills --gist  # As a GitHub Gist
+ms bundle publish my-skills --sign --key ~/.keys/ms_ed25519
 
 # Install bundle from GitHub
 ms bundle install user/skill-bundle
 ms bundle install user/skill-bundle --skills ntm,dcg  # Specific skills only
+ms bundle install user/skill-bundle --channel beta --verify
 
 # List installed bundles
 ms bundle list
@@ -1724,6 +1757,8 @@ ms bundle list
 # Update installed bundles
 ms bundle update
 ms bundle update user/skill-bundle
+ms bundle update --channel beta
+ms bundle verify user/skill-bundle
 ```
 
 ### 4.4 Maintenance Commands
@@ -2017,6 +2052,8 @@ pub enum CheckCategory {
     Configuration,
     CassIntegration,
     Redaction,
+    Safety,
+    Security,
     Toolchain,
     Dependencies,
     Layers,
@@ -2091,6 +2128,11 @@ pub enum HealthStatus {
 │  ☐ Redaction rules loaded (built-in + custom)                              │
 │  ☐ Recent redaction report available                                       │
 │  ☐ No high-risk secrets leaked in last N builds                            │
+│                                                                             │
+│ SAFETY                                                                      │
+│  ☐ Prompt-injection filter enabled                                         │
+│  ☐ Quarantine directory writable                                           │
+│  ☐ No high-severity injection findings in last N builds                    │
 │                                                                             │
 │ GIT ARCHIVE                                                                 │
 │  ☐ Archive directory exists                                                │
@@ -2315,6 +2357,7 @@ compdef _ms ms
 │  │  - Extract tool calls, code blocks, user feedback                     │ │
 │  │  - Identify success/failure signals                                   │ │
 │  │  - Score session quality and drop low-signal sessions                  │ │
+│  │  - Detect prompt-injection content and quarantine                     │ │
 │  └───────────────────────────────────────────────────────────────────────┘ │
 │                                      │                                      │
 │                                      ▼                                      │
@@ -4630,6 +4673,47 @@ impl SessionQuality {
 
 ---
 
+### 5.17 Prompt Injection Defense
+
+ms filters prompt-injection content before pattern extraction. Any session messages
+that attempt to override system rules or instruct the agent to ignore constraints
+are quarantined and excluded by default.
+
+**Injection Report Model:**
+
+```rust
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct InjectionReport {
+    pub session_id: String,
+    pub findings: Vec<InjectionFinding>,
+    pub severity: InjectionSeverity,
+    pub created_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct InjectionFinding {
+    pub pattern: String,
+    pub message_index: u32,
+    pub snippet_hash: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum InjectionSeverity {
+    Low,
+    Medium,
+    High,
+}
+```
+
+**CLI Examples:**
+
+```bash
+ms doctor --check=safety
+ms build --from-cass "auth issues" --no-injection-filter
+```
+
+---
+
 ## 6. Progressive Disclosure System
 
 ### 6.1 Disclosure Levels
@@ -5649,6 +5733,7 @@ pub fn filter_by_quality(
 # bundle.yaml
 name: rust-toolkit
 version: 1.0.0
+channel: stable
 description: Essential skills for Rust development
 author: Dicklesworthstone
 license: MIT
@@ -5672,6 +5757,10 @@ dependencies:
     version: ">=2.0.0"
 
 checksum: sha256:abc123...
+signatures:
+  - signer: "dicklesworthstone"
+    key_id: "ed25519:abcd1234"
+    signature: "base64:..."
 ```
 
 ### 8.2 GitHub Integration
@@ -5708,6 +5797,11 @@ pub async fn publish_to_github(
         ..Default::default()
     }).await?;
 
+    // Optionally sign bundle manifest
+    if config.signing_enabled {
+        sign_bundle_manifest(bundle, &config.signing_key)?;
+    }
+
     Ok(PublishResult {
         repo_url: repo.html_url,
         release_url: release.html_url,
@@ -5726,10 +5820,11 @@ pub async fn publish_to_github(
 │                                                                             │
 │  1. Resolve bundle location                                                 │
 │     └─► GitHub API: GET /repos/Dicklesworthstone/rust-toolkit-skills        │
+│     └─► Select release channel (stable/beta)                               │
 │                                                                             │
 │  2. Fetch bundle manifest                                                   │
 │     └─► GET bundle.yaml from repo                                           │
-│     └─► Verify checksum                                                     │
+│     └─► Verify checksum + signature                                         │
 │                                                                             │
 │  3. Check dependencies                                                      │
 │     └─► Recursively resolve and install dependencies                        │
@@ -7044,6 +7139,30 @@ redaction_patterns = [
 redaction_allowlist = [
     "EXAMPLE_API_KEY",
     "TEST_TOKEN",
+]
+
+[safety]
+# Detect prompt-injection content in sessions
+prompt_injection_enabled = true
+
+# Regex patterns for prompt injection
+prompt_injection_patterns = [
+    "(?i)ignore previous instructions",
+    "(?i)system prompt",
+    "(?i)you are now",
+    "(?i)override safety",
+]
+
+# Quarantine directory for flagged excerpts
+quarantine_dir = "~/.local/share/ms/quarantine"
+
+[security]
+# Verify bundle signatures on install/update
+verify_bundles = true
+
+# Trusted signer public keys
+trusted_keys = [
+    "~/.config/ms/keys/dicklesworthstone.pub",
 ]
 
 [build]
@@ -9855,6 +9974,14 @@ pub struct SkillUsageEvent {
     pub feedback: Option<SkillFeedback>,
 }
 
+/// Per-rule outcome signals for calibration
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RuleOutcome {
+    pub rule_id: String,
+    pub followed: bool,
+    pub outcome: SessionOutcome,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum DiscoveryMethod {
     /// User explicitly requested the skill
@@ -10033,6 +10160,42 @@ impl EffectivenessTracker {
             })
         }
     }
+
+    /// Infer whether specific rules were followed and their outcomes
+    pub async fn infer_rule_outcomes(
+        &self,
+        session: &Session,
+        skill: &Skill,
+    ) -> Result<Vec<RuleOutcome>> {
+        // Heuristic: look for rule-linked commands, file edits, and keywords
+        // to determine if a rule was followed.
+        let mut outcomes = Vec::new();
+        for rule in skill.evidence.rules.keys() {
+            let followed = session.contains_rule_signal(rule);
+            outcomes.push(RuleOutcome {
+                rule_id: rule.clone(),
+                followed,
+                outcome: if followed {
+                    SessionOutcome::Success { duration: session.duration(), quality_signals: vec![] }
+                } else {
+                    SessionOutcome::Failure { reason: FailureReason::Unknown, at_step: None }
+                },
+            });
+        }
+        Ok(outcomes)
+    }
+
+    /// Aggregate per-rule stats for calibration
+    pub fn get_rule_stats(&self, skill_id: &str) -> Result<HashMap<String, RuleStat>> {
+        // Query rule_outcomes and compute success rate per rule
+        unimplemented!()
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct RuleStat {
+    pub total: usize,
+    pub success: usize,
 }
 ```
 
@@ -10139,6 +10302,18 @@ impl QualityUpdater {
 
             // Recalculate overall
             score.overall = self.calculate_weighted_score(&score.factors);
+        }
+
+        // Calibrate rule strengths based on outcomes
+        let rule_stats = self.tracker.get_rule_stats(skill_id)?;
+        for (rule_id, stats) in rule_stats {
+            if stats.total >= 5 {
+                let success_rate = stats.success as f32 / stats.total as f32;
+                self.db.execute(
+                    "UPDATE skill_rules SET strength = ? WHERE skill_id = ? AND rule_id = ?",
+                    params![success_rate, skill_id, rule_id],
+                )?;
+            }
         }
 
         // Store updated score
@@ -10297,6 +10472,9 @@ ms stats effectiveness rust-patterns
 ms improvements rust-patterns
 # → HIGH: Clarify "Error Handling" section (5 reports)
 # → MED: Add more examples for async patterns (3 requests)
+
+# Calibrate rule strengths from outcomes
+ms calibrate rust-patterns
 
 # Update quality scores with latest data
 ms quality update --all
@@ -12837,7 +13015,1091 @@ After optimization:
 
 ---
 
-*Plan version: 1.6.0*
+*Plan version: 1.7.0*
 *Created: 2026-01-13*
 *Updated: 2026-01-13*
 *Author: Claude Opus 4.5*
+
+## Section 31: Optimization Patterns and Methodology
+
+*Source: CASS mining from optimization sessions across multiple codebases*
+
+This section captures systematic optimization methodologies and specific optimization patterns discovered through CASS analysis of real-world performance work.
+
+### 31.1 Optimization Methodology Framework
+
+Before attempting any optimization, follow this disciplined methodology:
+
+#### A) Baseline Establishment
+
+```bash
+# 1. Run full test suite to establish correctness baseline
+cargo test --all-features
+
+# 2. Run representative workload with timing
+time cargo run --release -- process large_dataset.json
+
+# 3. Capture golden outputs for regression testing
+cargo run --release -- process input.json > golden_output.json
+```
+
+**Key Principle**: Never optimize without knowing your starting point.
+
+#### B) Profile Before Proposing
+
+```bash
+# CPU profiling with flamegraph
+cargo flamegraph --root -- process input.json
+
+# Memory allocation profiling
+DHAT=1 cargo run --release -- process input.json
+
+# I/O profiling (Linux)
+strace -c -f cargo run --release -- process input.json
+
+# Sampling profiler
+cargo build --release
+perf record -g ./target/release/meta_skill process input.json
+perf report
+```
+
+**Anti-pattern**: Optimizing based on intuition rather than profiling data.
+
+#### C) Equivalence Oracle
+
+Define explicit verification criteria before making changes:
+
+```rust
+/// Equivalence oracle for optimization validation
+struct OptimizationOracle {
+    /// Golden outputs that must remain identical
+    golden_outputs: HashMap<PathBuf, Vec<u8>>,
+    
+    /// Invariants that must hold
+    invariants: Vec<Box<dyn Fn(&Output) -> bool>>,
+    
+    /// Acceptable variance (e.g., for floating point)
+    tolerance: f64,
+}
+
+impl OptimizationOracle {
+    fn verify(&self, new_output: &Output) -> Result<(), ValidationError> {
+        // Check golden outputs match exactly
+        for (path, expected) in &self.golden_outputs {
+            let actual = std::fs::read(path)?;
+            if actual != *expected {
+                return Err(ValidationError::OutputMismatch { path: path.clone() });
+            }
+        }
+        
+        // Check all invariants hold
+        for (idx, invariant) in self.invariants.iter().enumerate() {
+            if !invariant(new_output) {
+                return Err(ValidationError::InvariantViolation { index: idx });
+            }
+        }
+        
+        Ok(())
+    }
+}
+```
+
+#### D) Isomorphism Proof Per Change
+
+Every optimization diff must include proof that outputs cannot change:
+
+```rust
+// OPTIMIZATION: Replace Vec<String> with Vec<Cow<'static, str>>
+//
+// ISOMORPHISM PROOF:
+// - All string values in this collection are either:
+//   (a) Static string literals → Cow::Borrowed preserves identity
+//   (b) Runtime strings → Cow::Owned preserves value
+// - Collection ordering unchanged (same iteration order)
+// - Comparison semantics unchanged (Cow<str> derefs to &str)
+// - No observable behavior change for any consumer
+//
+// VERIFIED BY: test_string_collection_equivalence() in tests/optimization.rs
+```
+
+#### E) Opportunity Matrix
+
+Rank optimizations by expected value:
+
+| Opportunity | Impact (1-5) | Confidence (1-5) | Effort (1-5) | Score |
+|-------------|--------------|------------------|--------------|-------|
+| Replace Vec with SmallVec for N<8 | 3 | 5 | 1 | 15.0 |
+| Parallelize with Rayon | 4 | 4 | 2 | 8.0 |
+| Switch to FxHashMap | 2 | 5 | 1 | 10.0 |
+| Implement SIMD dot product | 4 | 3 | 4 | 3.0 |
+| Memory-map large files | 5 | 4 | 3 | 6.7 |
+
+**Formula**: Score = (Impact × Confidence) / Effort
+
+#### F) Minimal Diffs
+
+One performance lever per commit:
+
+```
+❌ Bad: "Optimize parsing: use SIMD, parallelize, and cache results"
+✓ Good: "Use SIMD for float parsing" → "Parallelize file reads" → "Add LRU cache"
+```
+
+Benefits:
+- Easier to measure individual impact
+- Easier to bisect regressions
+- Easier to revert if problems arise
+
+#### G) Regression Guardrails
+
+Add benchmark thresholds to CI:
+
+```rust
+// benches/regression.rs
+use criterion::{criterion_group, criterion_main, Criterion};
+
+fn benchmark_critical_path(c: &mut Criterion) {
+    c.bench_function("skill_extraction", |b| {
+        b.iter(|| extract_skills(test_data()))
+    });
+}
+
+criterion_group! {
+    name = regression_tests;
+    config = Criterion::default()
+        .significance_level(0.01)  // 1% significance
+        .sample_size(100);
+    targets = benchmark_critical_path
+}
+```
+
+```yaml
+# .github/workflows/bench.yml
+- name: Check for performance regression
+  run: |
+    cargo bench -- --save-baseline main
+    # Fail if >10% slower than baseline
+    cargo bench -- --baseline main --threshold 1.1
+```
+
+### 31.2 Memory Optimization Patterns
+
+#### Zero-Copy Pattern
+
+```rust
+// BEFORE: Copies data unnecessarily
+fn process_data(input: &[u8]) -> Vec<u8> {
+    let data = input.to_vec();  // Allocation + copy
+    transform(&data)
+}
+
+// AFTER: Zero-copy with lifetime management
+fn process_data<'a>(input: &'a [u8]) -> Cow<'a, [u8]> {
+    if needs_transform(input) {
+        Cow::Owned(transform(input))
+    } else {
+        Cow::Borrowed(input)  // No copy when unchanged
+    }
+}
+```
+
+#### Buffer Reuse Pattern
+
+```rust
+/// Reusable buffer pool to avoid repeated allocations
+struct BufferPool {
+    buffers: Vec<Vec<u8>>,
+    buffer_size: usize,
+}
+
+impl BufferPool {
+    fn acquire(&mut self) -> Vec<u8> {
+        self.buffers.pop().unwrap_or_else(|| Vec::with_capacity(self.buffer_size))
+    }
+    
+    fn release(&mut self, mut buffer: Vec<u8>) {
+        buffer.clear();  // Reset length but keep capacity
+        if self.buffers.len() < 32 {  // Cap pool size
+            self.buffers.push(buffer);
+        }
+    }
+}
+
+// Usage pattern
+let mut pool = BufferPool::new(4096);
+for chunk in input.chunks(4096) {
+    let mut buf = pool.acquire();
+    buf.extend_from_slice(chunk);
+    process(&buf);
+    pool.release(buf);
+}
+```
+
+#### String Interning
+
+```rust
+use std::collections::HashSet;
+use std::sync::Arc;
+
+/// String interner for deduplicating repeated strings
+struct StringInterner {
+    strings: HashSet<Arc<str>>,
+}
+
+impl StringInterner {
+    fn intern(&mut self, s: &str) -> Arc<str> {
+        if let Some(existing) = self.strings.get(s) {
+            Arc::clone(existing)
+        } else {
+            let arc: Arc<str> = Arc::from(s);
+            self.strings.insert(Arc::clone(&arc));
+            arc
+        }
+    }
+}
+
+// Useful for skill names, tag names, etc. that repeat across sessions
+```
+
+#### Copy-on-Write (Cow) Pattern
+
+```rust
+use std::borrow::Cow;
+
+/// Configuration that's usually static but sometimes modified
+struct SkillConfig<'a> {
+    name: Cow<'a, str>,
+    template: Cow<'a, str>,
+    tags: Cow<'a, [String]>,
+}
+
+impl<'a> SkillConfig<'a> {
+    /// Create from static defaults (no allocation)
+    fn default_static() -> Self {
+        Self {
+            name: Cow::Borrowed("default"),
+            template: Cow::Borrowed(include_str!("default.hbs")),
+            tags: Cow::Borrowed(&[]),
+        }
+    }
+    
+    /// Modify only when needed (allocation on demand)
+    fn with_name(mut self, name: String) -> Self {
+        self.name = Cow::Owned(name);
+        self
+    }
+}
+```
+
+#### Structure of Arrays (SoA) vs Array of Structures (AoS)
+
+```rust
+// AoS: Good for single-item access, bad for cache when iterating one field
+struct SkillAoS {
+    skills: Vec<Skill>,  // Each Skill has name, description, tags, etc.
+}
+
+// SoA: Better cache utilization when iterating single fields
+struct SkillSoA {
+    names: Vec<String>,
+    descriptions: Vec<String>,
+    tags: Vec<Vec<String>>,
+    // All names are contiguous in memory - better for iteration
+}
+
+// Hybrid: Common fields together, rare fields separate
+struct SkillHybrid {
+    // Hot data (frequently accessed together)
+    hot: Vec<SkillHot>,
+    // Cold data (rarely accessed)
+    cold: Vec<SkillCold>,
+}
+
+struct SkillHot {
+    name: String,
+    score: f32,
+}
+
+struct SkillCold {
+    description: String,
+    examples: Vec<String>,
+    metadata: HashMap<String, String>,
+}
+```
+
+### 31.3 Algorithm and Data Structure Optimizations
+
+#### Trie for Prefix Matching
+
+```rust
+/// Trie for efficient prefix matching of skill names/commands
+struct TrieNode {
+    children: HashMap<char, TrieNode>,
+    is_end: bool,
+    value: Option<usize>,  // Index into skills array
+}
+
+impl TrieNode {
+    fn insert(&mut self, key: &str, value: usize) {
+        let mut node = self;
+        for ch in key.chars() {
+            node = node.children.entry(ch).or_default();
+        }
+        node.is_end = true;
+        node.value = Some(value);
+    }
+    
+    fn find_prefix_matches(&self, prefix: &str) -> Vec<usize> {
+        let mut node = self;
+        for ch in prefix.chars() {
+            match node.children.get(&ch) {
+                Some(child) => node = child,
+                None => return vec![],
+            }
+        }
+        self.collect_all_values(node)
+    }
+}
+```
+
+#### Bloom Filter for Membership Testing
+
+```rust
+/// Bloom filter for fast "definitely not in set" checks
+struct BloomFilter {
+    bits: Vec<u64>,
+    num_hashes: usize,
+}
+
+impl BloomFilter {
+    fn insert(&mut self, item: &str) {
+        for i in 0..self.num_hashes {
+            let hash = self.hash(item, i);
+            let idx = hash % (self.bits.len() * 64);
+            self.bits[idx / 64] |= 1 << (idx % 64);
+        }
+    }
+    
+    fn may_contain(&self, item: &str) -> bool {
+        for i in 0..self.num_hashes {
+            let hash = self.hash(item, i);
+            let idx = hash % (self.bits.len() * 64);
+            if self.bits[idx / 64] & (1 << (idx % 64)) == 0 {
+                return false;  // Definitely not present
+            }
+        }
+        true  // Possibly present (may be false positive)
+    }
+}
+
+// Use case: Skip expensive skill matching for sessions that definitely
+// don't contain certain patterns
+```
+
+#### Interval Tree for Range Queries
+
+```rust
+/// Interval tree for efficient range overlap queries
+/// Useful for: finding skills applicable to time ranges, line ranges, etc.
+struct IntervalTree<T> {
+    root: Option<Box<IntervalNode<T>>>,
+}
+
+struct IntervalNode<T> {
+    interval: (usize, usize),  // (start, end)
+    max_end: usize,
+    value: T,
+    left: Option<Box<IntervalNode<T>>>,
+    right: Option<Box<IntervalNode<T>>>,
+}
+
+impl<T> IntervalTree<T> {
+    fn query_overlapping(&self, start: usize, end: usize) -> Vec<&T> {
+        let mut results = vec![];
+        self.query_recursive(&self.root, start, end, &mut results);
+        results
+    }
+}
+```
+
+#### Segment Tree with Lazy Propagation
+
+```rust
+/// Segment tree for range queries with lazy updates
+/// Useful for: aggregating scores over ranges, bulk updates
+struct SegmentTree {
+    tree: Vec<i64>,
+    lazy: Vec<i64>,
+    n: usize,
+}
+
+impl SegmentTree {
+    fn range_update(&mut self, l: usize, r: usize, delta: i64) {
+        self.update_range(0, 0, self.n - 1, l, r, delta);
+    }
+    
+    fn range_query(&mut self, l: usize, r: usize) -> i64 {
+        self.query_range(0, 0, self.n - 1, l, r)
+    }
+    
+    // Lazy propagation defers updates until queries need them
+    fn push_down(&mut self, node: usize, start: usize, end: usize) {
+        if self.lazy[node] != 0 {
+            let mid = (start + end) / 2;
+            let left = 2 * node + 1;
+            let right = 2 * node + 2;
+            
+            self.tree[left] += self.lazy[node] * (mid - start + 1) as i64;
+            self.tree[right] += self.lazy[node] * (end - mid) as i64;
+            self.lazy[left] += self.lazy[node];
+            self.lazy[right] += self.lazy[node];
+            self.lazy[node] = 0;
+        }
+    }
+}
+```
+
+### 31.4 Advanced Algorithmic Techniques
+
+#### Convex Hull Trick for DP Optimization
+
+```rust
+/// Convex hull trick for optimizing DP recurrences of form:
+/// dp[i] = min(dp[j] + b[j] * a[i]) for j < i
+/// 
+/// Reduces O(n²) to O(n log n) or O(n) if slopes monotonic
+struct ConvexHullTrick {
+    lines: Vec<(i64, i64)>,  // (slope, intercept)
+}
+
+impl ConvexHullTrick {
+    fn add_line(&mut self, m: i64, b: i64) {
+        // Remove lines that are no longer part of lower envelope
+        while self.lines.len() >= 2 {
+            let n = self.lines.len();
+            let (m1, b1) = self.lines[n - 2];
+            let (m2, b2) = self.lines[n - 1];
+            // Check if (m2, b2) is useless
+            if (b - b2) * (m1 - m2) <= (b2 - b1) * (m2 - m) {
+                self.lines.pop();
+            } else {
+                break;
+            }
+        }
+        self.lines.push((m, b));
+    }
+    
+    fn query(&self, x: i64) -> i64 {
+        // Binary search for optimal line
+        let idx = self.lines.partition_point(|(m, b)| {
+            // Find first line where next line is better
+            true  // Simplified - actual implementation more complex
+        });
+        let (m, b) = self.lines[idx.saturating_sub(1)];
+        m * x + b
+    }
+}
+```
+
+#### Matrix Exponentiation for Linear Recurrences
+
+```rust
+/// Fast matrix exponentiation for computing linear recurrences
+/// Example: Fibonacci F(n) in O(log n) via matrix form
+type Matrix = [[i64; 2]; 2];
+
+fn matrix_mult(a: &Matrix, b: &Matrix, modulo: i64) -> Matrix {
+    let mut result = [[0; 2]; 2];
+    for i in 0..2 {
+        for j in 0..2 {
+            for k in 0..2 {
+                result[i][j] = (result[i][j] + a[i][k] * b[k][j]) % modulo;
+            }
+        }
+    }
+    result
+}
+
+fn matrix_pow(base: &Matrix, mut exp: u64, modulo: i64) -> Matrix {
+    let mut result = [[1, 0], [0, 1]];  // Identity matrix
+    let mut base = *base;
+    
+    while exp > 0 {
+        if exp & 1 == 1 {
+            result = matrix_mult(&result, &base, modulo);
+        }
+        base = matrix_mult(&base, &base, modulo);
+        exp >>= 1;
+    }
+    result
+}
+
+// Fibonacci: [[1,1],[1,0]]^n gives [F(n+1), F(n)] in first row
+fn fibonacci(n: u64) -> i64 {
+    let base = [[1, 1], [1, 0]];
+    let result = matrix_pow(&base, n, i64::MAX);
+    result[0][1]
+}
+```
+
+#### FFT/NTT for Polynomial Multiplication
+
+```rust
+/// Number Theoretic Transform for fast polynomial multiplication
+/// Useful for: convolutions, string matching, etc.
+const MOD: i64 = 998244353;  // Prime with good NTT properties
+const PRIMITIVE_ROOT: i64 = 3;
+
+fn ntt(a: &mut [i64], invert: bool) {
+    let n = a.len();
+    if n == 1 { return; }
+    
+    // Bit-reversal permutation
+    let mut j = 0;
+    for i in 1..n {
+        let mut bit = n >> 1;
+        while j & bit != 0 {
+            j ^= bit;
+            bit >>= 1;
+        }
+        j ^= bit;
+        if i < j {
+            a.swap(i, j);
+        }
+    }
+    
+    // Cooley-Tukey iterative FFT
+    let mut len = 2;
+    while len <= n {
+        let w = if invert {
+            mod_pow(PRIMITIVE_ROOT, (MOD - 1) - (MOD - 1) / len as i64, MOD)
+        } else {
+            mod_pow(PRIMITIVE_ROOT, (MOD - 1) / len as i64, MOD)
+        };
+        
+        for i in (0..n).step_by(len) {
+            let mut wn = 1i64;
+            for j in 0..len/2 {
+                let u = a[i + j];
+                let v = a[i + j + len/2] * wn % MOD;
+                a[i + j] = (u + v) % MOD;
+                a[i + j + len/2] = (u - v + MOD) % MOD;
+                wn = wn * w % MOD;
+            }
+        }
+        len *= 2;
+    }
+    
+    if invert {
+        let n_inv = mod_pow(n as i64, MOD - 2, MOD);
+        for x in a.iter_mut() {
+            *x = *x * n_inv % MOD;
+        }
+    }
+}
+
+fn mod_pow(mut base: i64, mut exp: i64, modulo: i64) -> i64 {
+    let mut result = 1;
+    while exp > 0 {
+        if exp & 1 == 1 {
+            result = result * base % modulo;
+        }
+        base = base * base % modulo;
+        exp >>= 1;
+    }
+    result
+}
+```
+
+### 31.5 Lazy Evaluation Patterns
+
+#### Lazy Iterator Chains
+
+```rust
+// BEFORE: Materializes all intermediate collections
+fn process_skills(skills: Vec<Skill>) -> Vec<ProcessedSkill> {
+    let filtered: Vec<_> = skills.into_iter()
+        .filter(|s| s.is_valid())
+        .collect();
+    let mapped: Vec<_> = filtered.into_iter()
+        .map(|s| s.process())
+        .collect();
+    mapped
+}
+
+// AFTER: Lazy evaluation - no intermediate allocations
+fn process_skills(skills: Vec<Skill>) -> Vec<ProcessedSkill> {
+    skills.into_iter()
+        .filter(|s| s.is_valid())
+        .map(|s| s.process())
+        .collect()  // Single allocation for final result
+}
+```
+
+#### Lazy Loading with OnceCell
+
+```rust
+use std::cell::OnceCell;
+
+/// Resource loaded on first access
+struct LazySkillIndex {
+    path: PathBuf,
+    index: OnceCell<SkillIndex>,
+}
+
+impl LazySkillIndex {
+    fn new(path: PathBuf) -> Self {
+        Self { path, index: OnceCell::new() }
+    }
+    
+    fn get(&self) -> &SkillIndex {
+        self.index.get_or_init(|| {
+            // Expensive initialization only happens once, on demand
+            SkillIndex::load(&self.path).expect("Failed to load index")
+        })
+    }
+}
+```
+
+#### Deferred Computation Pattern
+
+```rust
+/// Computation that's only performed if result is actually used
+enum Deferred<T, F: FnOnce() -> T> {
+    Pending(F),
+    Computed(T),
+}
+
+impl<T, F: FnOnce() -> T> Deferred<T, F> {
+    fn new(f: F) -> Self {
+        Deferred::Pending(f)
+    }
+    
+    fn get(&mut self) -> &T {
+        match self {
+            Deferred::Pending(_) => {
+                // Take ownership of closure and compute
+                let f = match std::mem::replace(self, Deferred::Computed(unsafe { 
+                    std::mem::zeroed() 
+                })) {
+                    Deferred::Pending(f) => f,
+                    _ => unreachable!(),
+                };
+                *self = Deferred::Computed(f());
+                match self {
+                    Deferred::Computed(v) => v,
+                    _ => unreachable!(),
+                }
+            }
+            Deferred::Computed(v) => v,
+        }
+    }
+}
+```
+
+### 31.6 Memoization with Invalidation
+
+#### Time-Based Cache Invalidation
+
+```rust
+use std::time::{Duration, Instant};
+use std::collections::HashMap;
+
+struct TimedCache<K, V> {
+    entries: HashMap<K, (V, Instant)>,
+    ttl: Duration,
+}
+
+impl<K: Eq + std::hash::Hash, V: Clone> TimedCache<K, V> {
+    fn get(&self, key: &K) -> Option<V> {
+        self.entries.get(key).and_then(|(value, inserted)| {
+            if inserted.elapsed() < self.ttl {
+                Some(value.clone())
+            } else {
+                None  // Expired
+            }
+        })
+    }
+    
+    fn insert(&mut self, key: K, value: V) {
+        self.entries.insert(key, (value, Instant::now()));
+    }
+    
+    fn evict_expired(&mut self) {
+        self.entries.retain(|_, (_, inserted)| inserted.elapsed() < self.ttl);
+    }
+}
+```
+
+#### Version-Based Invalidation
+
+```rust
+/// Cache that invalidates when source version changes
+struct VersionedCache<V> {
+    value: Option<V>,
+    cached_version: u64,
+}
+
+impl<V> VersionedCache<V> {
+    fn get<F>(&mut self, current_version: u64, compute: F) -> &V 
+    where
+        F: FnOnce() -> V,
+    {
+        if self.value.is_none() || self.cached_version != current_version {
+            self.value = Some(compute());
+            self.cached_version = current_version;
+        }
+        self.value.as_ref().unwrap()
+    }
+    
+    fn invalidate(&mut self) {
+        self.value = None;
+    }
+}
+
+// Usage with file modification time
+struct FileCache {
+    path: PathBuf,
+    cache: VersionedCache<ParsedContent>,
+}
+
+impl FileCache {
+    fn get(&mut self) -> &ParsedContent {
+        let mtime = std::fs::metadata(&self.path)
+            .and_then(|m| m.modified())
+            .map(|t| t.duration_since(std::time::UNIX_EPOCH).unwrap().as_secs())
+            .unwrap_or(0);
+        
+        self.cache.get(mtime, || parse_file(&self.path))
+    }
+}
+```
+
+#### Dependency-Based Invalidation
+
+```rust
+/// Cache with explicit dependency tracking
+struct DependencyCache<K, V> {
+    entries: HashMap<K, CacheEntry<V>>,
+    dependencies: HashMap<K, Vec<K>>,  // key -> keys that depend on it
+}
+
+struct CacheEntry<V> {
+    value: V,
+    valid: bool,
+}
+
+impl<K: Clone + Eq + std::hash::Hash, V> DependencyCache<K, V> {
+    fn invalidate(&mut self, key: &K) {
+        if let Some(entry) = self.entries.get_mut(key) {
+            entry.valid = false;
+        }
+        
+        // Cascade invalidation to dependents
+        if let Some(dependents) = self.dependencies.get(key).cloned() {
+            for dependent in dependents {
+                self.invalidate(&dependent);
+            }
+        }
+    }
+    
+    fn set_dependency(&mut self, key: K, depends_on: K) {
+        self.dependencies
+            .entry(depends_on)
+            .or_default()
+            .push(key);
+    }
+}
+```
+
+### 31.7 I/O Optimization Patterns
+
+#### Scatter-Gather I/O
+
+```rust
+use std::io::{IoSlice, Write};
+
+/// Write multiple buffers in single syscall
+fn write_multiple<W: Write>(writer: &mut W, buffers: &[&[u8]]) -> std::io::Result<usize> {
+    let slices: Vec<IoSlice> = buffers.iter()
+        .map(|b| IoSlice::new(b))
+        .collect();
+    writer.write_vectored(&slices)
+}
+
+// Avoids copying multiple small buffers into one large buffer
+// before writing
+```
+
+#### Buffered I/O with Controlled Flushing
+
+```rust
+use std::io::{BufWriter, Write};
+
+/// Batched writer that flushes at optimal intervals
+struct BatchedWriter<W: Write> {
+    inner: BufWriter<W>,
+    writes_since_flush: usize,
+    flush_interval: usize,
+}
+
+impl<W: Write> BatchedWriter<W> {
+    fn write_item(&mut self, data: &[u8]) -> std::io::Result<()> {
+        self.inner.write_all(data)?;
+        self.writes_since_flush += 1;
+        
+        if self.writes_since_flush >= self.flush_interval {
+            self.inner.flush()?;
+            self.writes_since_flush = 0;
+        }
+        Ok(())
+    }
+}
+```
+
+#### Async I/O for Concurrent Operations
+
+```rust
+use tokio::fs::File;
+use tokio::io::AsyncReadExt;
+use futures::future::join_all;
+
+/// Read multiple files concurrently
+async fn read_all_files(paths: &[PathBuf]) -> Vec<Result<Vec<u8>, std::io::Error>> {
+    let futures: Vec<_> = paths.iter()
+        .map(|path| async move {
+            let mut file = File::open(path).await?;
+            let mut contents = Vec::new();
+            file.read_to_end(&mut contents).await?;
+            Ok(contents)
+        })
+        .collect();
+    
+    join_all(futures).await
+}
+```
+
+### 31.8 Precomputation Patterns
+
+#### Lookup Tables
+
+```rust
+/// Precomputed lookup table for fast conversions
+struct LookupTable {
+    // Precompute all possible byte -> hex conversions
+    byte_to_hex: [[u8; 2]; 256],
+}
+
+impl LookupTable {
+    fn new() -> Self {
+        let mut byte_to_hex = [[0u8; 2]; 256];
+        for i in 0..256 {
+            byte_to_hex[i] = [
+                HEX_CHARS[i >> 4],
+                HEX_CHARS[i & 0xF],
+            ];
+        }
+        Self { byte_to_hex }
+    }
+    
+    fn to_hex(&self, bytes: &[u8], out: &mut Vec<u8>) {
+        out.reserve(bytes.len() * 2);
+        for &byte in bytes {
+            out.extend_from_slice(&self.byte_to_hex[byte as usize]);
+        }
+    }
+}
+
+const HEX_CHARS: [u8; 16] = *b"0123456789abcdef";
+```
+
+#### Compile-Time Computation
+
+```rust
+/// Compile-time computed constants
+const fn compute_factorial(n: usize) -> usize {
+    if n <= 1 { 1 } else { n * compute_factorial(n - 1) }
+}
+
+const FACTORIALS: [usize; 13] = [
+    compute_factorial(0),  compute_factorial(1),  compute_factorial(2),
+    compute_factorial(3),  compute_factorial(4),  compute_factorial(5),
+    compute_factorial(6),  compute_factorial(7),  compute_factorial(8),
+    compute_factorial(9),  compute_factorial(10), compute_factorial(11),
+    compute_factorial(12),
+];
+
+// Zero runtime cost - computed at compile time
+fn factorial(n: usize) -> Option<usize> {
+    FACTORIALS.get(n).copied()
+}
+```
+
+#### Static Initialization with LazyLock
+
+```rust
+use std::sync::LazyLock;
+use regex::Regex;
+
+/// Compile regex once, reuse everywhere
+static SKILL_PATTERN: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"(?i)\b(skill|function|pattern|technique)\b.*:\s*(.+)").unwrap()
+});
+
+fn extract_skill(text: &str) -> Option<&str> {
+    SKILL_PATTERN.captures(text)
+        .and_then(|caps| caps.get(2))
+        .map(|m| m.as_str())
+}
+```
+
+### 31.9 N+1 Query Elimination
+
+#### Batch Loading Pattern
+
+```rust
+/// Avoid N+1 by loading all related data upfront
+struct SkillRepository {
+    db: Database,
+}
+
+impl SkillRepository {
+    // BAD: N+1 queries
+    async fn get_skills_with_tags_bad(&self, ids: &[i64]) -> Vec<SkillWithTags> {
+        let mut results = vec![];
+        for id in ids {
+            let skill = self.db.get_skill(*id).await;      // 1 query
+            let tags = self.db.get_skill_tags(*id).await;  // N queries
+            results.push(SkillWithTags { skill, tags });
+        }
+        results
+    }
+    
+    // GOOD: 2 queries total
+    async fn get_skills_with_tags_good(&self, ids: &[i64]) -> Vec<SkillWithTags> {
+        // Batch load all skills
+        let skills = self.db.get_skills_batch(ids).await;  // 1 query
+        
+        // Batch load all tags
+        let all_tags = self.db.get_tags_for_skills(ids).await;  // 1 query
+        let tags_by_skill: HashMap<i64, Vec<Tag>> = all_tags.into_iter()
+            .fold(HashMap::new(), |mut map, tag| {
+                map.entry(tag.skill_id).or_default().push(tag);
+                map
+            });
+        
+        // Join in memory
+        skills.into_iter()
+            .map(|skill| SkillWithTags {
+                tags: tags_by_skill.get(&skill.id).cloned().unwrap_or_default(),
+                skill,
+            })
+            .collect()
+    }
+}
+```
+
+#### DataLoader Pattern
+
+```rust
+use std::collections::HashMap;
+use std::sync::Mutex;
+
+/// DataLoader batches and caches requests
+struct DataLoader<K, V> {
+    load_fn: Box<dyn Fn(&[K]) -> HashMap<K, V> + Send + Sync>,
+    cache: Mutex<HashMap<K, V>>,
+    pending: Mutex<Vec<K>>,
+}
+
+impl<K: Clone + Eq + std::hash::Hash, V: Clone> DataLoader<K, V> {
+    fn load(&self, key: K) -> Option<V> {
+        // Check cache first
+        if let Some(value) = self.cache.lock().unwrap().get(&key) {
+            return Some(value.clone());
+        }
+        
+        // Add to pending batch
+        self.pending.lock().unwrap().push(key.clone());
+        
+        // Batch execute on next tick (simplified)
+        self.execute_batch();
+        
+        self.cache.lock().unwrap().get(&key).cloned()
+    }
+    
+    fn execute_batch(&self) {
+        let pending: Vec<K> = self.pending.lock().unwrap().drain(..).collect();
+        if pending.is_empty() { return; }
+        
+        let loaded = (self.load_fn)(&pending);
+        self.cache.lock().unwrap().extend(loaded);
+    }
+}
+```
+
+### 31.10 Application to meta_skill
+
+| Pattern | Application |
+|---------|-------------|
+| **Zero-Copy** | Parse session files without copying string data |
+| **Buffer Reuse** | Reuse buffers when processing multiple sessions |
+| **String Interning** | Deduplicate skill names and tag names |
+| **Trie** | Fast prefix matching for skill/command autocomplete |
+| **Bloom Filter** | Quick "no match" checks before expensive extraction |
+| **Lazy Loading** | Load skill definitions on demand |
+| **Memoization** | Cache extracted skills per session file |
+| **Batch Loading** | Load all skills for displayed results in one pass |
+| **Precomputation** | Pre-compile regex patterns, build lookup tables |
+| **Convex Hull** | Optimize ranking/scoring DP if applicable |
+
+### 31.11 Optimization Decision Flowchart
+
+```
+START: Performance problem identified
+         │
+         ▼
+    ┌────────────┐
+    │ Profile    │ ◄── "Measure, don't guess"
+    │ first      │
+    └────┬───────┘
+         │
+         ▼
+    Is it CPU-bound?
+    │Yes            │No
+    ▼               ▼
+┌──────────┐   Is it I/O-bound?
+│Algorithm │   │Yes            │No
+│& Data    │   ▼               ▼
+│Structure │  ┌──────────┐   Is it memory-bound?
+└────┬─────┘  │Async/    │   │Yes            │No
+     │        │Batch/    │   ▼               ▼
+     ▼        │Cache     │  ┌──────────┐   ┌──────────┐
+┌──────────┐  └──────────┘  │Memory    │   │Measure   │
+│Try:      │                │Layout/   │   │again -   │
+│• Better  │                │Zero-copy │   │wrong     │
+│  algo    │                │Pooling   │   │diagnosis │
+│• SIMD    │                └──────────┘   └──────────┘
+│• Paral-  │
+│  lelism  │
+└──────────┘
+```
+
+### 31.12 Optimization Checklist
+
+Before optimizing:
+- [ ] Establish golden outputs / equivalence oracle
+- [ ] Profile under realistic workload
+- [ ] Identify actual bottleneck (don't guess)
+- [ ] Calculate opportunity score: (Impact × Confidence) / Effort
+
+During optimization:
+- [ ] One change at a time
+- [ ] Document isomorphism proof for each change
+- [ ] Verify tests still pass
+- [ ] Measure improvement
+
+After optimization:
+- [ ] Add regression benchmark
+- [ ] Document the optimization for future maintainers
+- [ ] Consider if optimization adds complexity worth the gain
