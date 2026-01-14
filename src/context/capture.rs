@@ -97,7 +97,12 @@ impl ContextCapture {
                 if trimmed.is_empty() {
                     continue;
                 }
-                files.push(PathBuf::from(trimmed));
+                let path = PathBuf::from(trimmed);
+                if path.is_absolute() {
+                    files.push(path);
+                } else {
+                    files.push(repo_root.join(path));
+                }
             }
             if !files.is_empty() {
                 return files;
@@ -122,7 +127,13 @@ impl ContextCapture {
             if line.len() < 4 {
                 continue;
             }
-            let path = line[3..].trim();
+            let mut path = line[3..].trim();
+            if let Some((_, new_path)) = path.split_once(" -> ") {
+                path = new_path.trim();
+            }
+            if path.starts_with('"') && path.ends_with('"') && path.len() >= 2 {
+                path = &path[1..path.len() - 1];
+            }
             if !path.is_empty() {
                 files.push(repo_root.join(path));
             }

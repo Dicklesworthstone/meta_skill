@@ -3,8 +3,8 @@ use std::path::PathBuf;
 use proptest::prelude::*;
 
 use crate::config::{
-    CacheConfig, CassConfig, Config, DisclosureConfig, LayersConfig, RobotConfig, SearchConfig,
-    SecurityConfig, SkillPathsConfig, UpdateConfig,
+    CacheConfig, CassConfig, Config, DisclosureConfig, LayersConfig, RobotConfig, SafetyConfig,
+    SearchConfig, SecurityConfig, SkillPathsConfig, UpdateConfig,
 };
 use crate::core::skill::{BlockType, SkillBlock, SkillMetadata, SkillSection, SkillSpec};
 use crate::security::{AcipConfig, TrustBoundaryConfig, TrustLevel};
@@ -22,7 +22,7 @@ fn arb_block_type() -> impl Strategy<Value = BlockType> {
 
 fn arb_skill_block() -> impl Strategy<Value = SkillBlock> {
     (
-        "[a-z][a-z0-9_\-]{2,24}",
+        "[a-z][a-z0-9_-]{2,24}",
         arb_block_type(),
         ".{0,200}",
     )
@@ -35,7 +35,7 @@ fn arb_skill_block() -> impl Strategy<Value = SkillBlock> {
 
 fn arb_skill_section() -> impl Strategy<Value = SkillSection> {
     (
-        "[a-z][a-z0-9_\-]{2,24}",
+        "[a-z][a-z0-9_-]{2,24}",
         ".{1,40}",
         prop::collection::vec(arb_skill_block(), 0..5),
     )
@@ -260,6 +260,15 @@ fn arb_security() -> impl Strategy<Value = SecurityConfig> {
     arb_acip().prop_map(|acip| SecurityConfig { acip })
 }
 
+fn arb_safety() -> impl Strategy<Value = SafetyConfig> {
+    (any::<bool>(),).prop_map(|(require_verbatim_approval,)| SafetyConfig {
+        dcg_bin: PathBuf::new(),
+        dcg_packs: vec![],
+        dcg_explain_format: String::new(),
+        require_verbatim_approval,
+    })
+}
+
 /// Generate arbitrary Config.
 pub fn arb_config() -> impl Strategy<Value = Config> {
     (
@@ -272,9 +281,10 @@ pub fn arb_config() -> impl Strategy<Value = Config> {
         arb_update(),
         arb_robot(),
         arb_security(),
+        arb_safety(),
     )
         .prop_map(
-            |(skill_paths, layers, disclosure, search, cass, cache, update, robot, security)| {
+            |(skill_paths, layers, disclosure, search, cass, cache, update, robot, security, safety)| {
                 Config {
                     skill_paths,
                     layers,
@@ -285,6 +295,7 @@ pub fn arb_config() -> impl Strategy<Value = Config> {
                     update,
                     robot,
                     security,
+                    safety,
                 }
             },
         )

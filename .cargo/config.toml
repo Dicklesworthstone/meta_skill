@@ -1,4 +1,6 @@
 [env]
 CARGO_INCREMENTAL = "0"
-RUSTFLAGS = "-Cinstrument-coverage"
 LLVM_PROFILE_FILE = "coverage/default-%p-%m.profraw"
+
+[target.x86_64-unknown-linux-gnu]
+rustflags = ["-C", "linker=cc", "-C", "link-arg=-B/usr/bin"]

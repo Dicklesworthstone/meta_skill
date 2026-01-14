@@ -20,9 +20,15 @@ fn main() -> ExitCode {
         Err(e) => {
             if cli.robot {
                 // Robot mode: JSON error output to stdout
+                let (code, message) = match &e {
+                    ms::MsError::ApprovalRequired(msg) => ("approval_required", msg.clone()),
+                    ms::MsError::DestructiveBlocked(msg) => ("destructive_blocked", msg.clone()),
+                    _ => ("error", e.to_string()),
+                };
                 let error_json = serde_json::json!({
                     "error": true,
-                    "message": e.to_string(),
+                    "code": code,
+                    "message": message,
                 });
                 println!("{}", serde_json::to_string(&error_json).unwrap_or_default());
             } else {

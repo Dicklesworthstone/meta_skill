@@ -6,7 +6,7 @@ use walkdir::WalkDir;
 use crate::error::{MsError, Result};
 
 use super::parser::MetaSkillParser;
-use super::types::{MetaSkill, MetaSkillMetadata};
+use super::types::MetaSkill;
 
 #[derive(Debug, Default)]
 pub struct MetaSkillRegistry {
@@ -162,6 +162,7 @@ fn parse_if_meta_skill(path: &Path) -> Result<Option<MetaSkill>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use super::super::types::MetaSkillMetadata;
 
     #[test]
     fn registry_indexes_tags_and_stacks() {

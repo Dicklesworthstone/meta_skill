@@ -151,7 +151,10 @@ fn parse_modified_at(raw: &str) -> Option<chrono::DateTime<chrono::Utc>> {
         return Some(dt.with_timezone(&chrono::Utc));
     }
     if let Ok(dt) = chrono::NaiveDateTime::parse_from_str(raw, "%Y-%m-%d %H:%M:%S") {
-        return Some(chrono::DateTime::<chrono::Utc>::from_utc(dt, chrono::Utc));
+        return Some(chrono::DateTime::<chrono::Utc>::from_naive_utc_and_offset(
+            dt,
+            chrono::Utc,
+        ));
     }
     None
 }

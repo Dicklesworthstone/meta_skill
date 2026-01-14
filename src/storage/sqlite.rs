@@ -17,6 +17,14 @@ pub struct Database {
     schema_version: u32,
 }
 
+impl std::fmt::Debug for Database {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Database")
+            .field("schema_version", &self.schema_version)
+            .finish_non_exhaustive()
+    }
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct SkillRecord {
     pub id: String,
@@ -471,6 +479,39 @@ impl Database {
             ],
         )?;
         Ok(())
+    }
+
+    pub fn list_command_safety_events(&self, limit: usize) -> Result<Vec<CommandSafetyEvent>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT session_id, command, dcg_version, dcg_pack, decision_json, created_at
+             FROM command_safety_events
+             ORDER BY created_at DESC
+             LIMIT ?",
+        )?;
+        let rows = stmt.query_map(params![limit as i64], |row| {
+            let decision_json: String = row.get(4)?;
+            let decision = serde_json::from_str(&decision_json).map_err(|err| {
+                rusqlite::Error::FromSqlConversionFailure(
+                    4,
+                    rusqlite::types::Type::Text,
+                    Box::new(err),
+                )
+            })?;
+            Ok(CommandSafetyEvent {
+                session_id: row.get(0)?,
+                command: row.get(1)?,
+                dcg_version: row.get(2)?,
+                dcg_pack: row.get(3)?,
+                decision,
+                created_at: row.get(5)?,
+            })
+        })?;
+
+        let mut out = Vec::new();
+        for row in rows {
+            out.push(row?);
+        }
+        Ok(out)
     }
 
     pub fn list_quarantine_records(&self, limit: usize) -> Result<Vec<QuarantineRecord>> {

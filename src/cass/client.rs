@@ -75,9 +75,7 @@ impl CassClient {
                 return false;
             }
         }
-        cmd.output()
-            .map(|o| o.status.success())
-            .unwrap_or(false)
+        cmd.output().map(|o| o.status.success()).unwrap_or(false)
     }
 
     /// Get CASS health status
@@ -89,13 +87,8 @@ impl CassClient {
 
     /// Search sessions with the given query
     pub fn search(&self, query: &str, limit: usize) -> Result<Vec<SessionMatch>> {
-        let output = self.run_command(&[
-            "search",
-            query,
-            "--robot",
-            "--limit",
-            &limit.to_string(),
-        ])?;
+        let output =
+            self.run_command(&["search", query, "--robot", "--limit", &limit.to_string()])?;
 
         let results: CassSearchResults = serde_json::from_slice(&output)
             .map_err(|e| MsError::CassUnavailable(format!("Failed to parse search output: {e}")))?;
@@ -111,7 +104,11 @@ impl CassClient {
     }
 
     /// Expand a session with context window
-    pub fn expand_session(&self, session_id: &str, context_lines: usize) -> Result<SessionExpanded> {
+    pub fn expand_session(
+        &self,
+        session_id: &str,
+        context_lines: usize,
+    ) -> Result<SessionExpanded> {
         let output = self.run_command(&[
             "expand",
             session_id,
@@ -145,13 +142,8 @@ impl CassClient {
 
     /// Incremental scan: only return sessions not seen or changed since last scan
     pub fn incremental_sessions(&self, limit: usize) -> Result<Vec<SessionMatch>> {
-        let output = self.run_command(&[
-            "search",
-            "*",
-            "--robot",
-            "--limit",
-            &limit.to_string(),
-        ])?;
+        let output =
+            self.run_command(&["search", "*", "--robot", "--limit", &limit.to_string()])?;
 
         let results: CassSearchResults = serde_json::from_slice(&output)
             .map_err(|e| MsError::CassUnavailable(format!("Failed to parse search output: {e}")))?;
@@ -270,7 +262,10 @@ fn classify_cass_error(exit_code: i32, stderr: &str) -> MsError {
     }
 
     // Default: CASS unavailable/generic error
-    MsError::CassUnavailable(format!("CASS command failed (exit {}): {}", exit_code, stderr))
+    MsError::CassUnavailable(format!(
+        "CASS command failed (exit {}): {}",
+        exit_code, stderr
+    ))
 }
 
 // =============================================================================
@@ -437,9 +432,9 @@ impl FingerprintCache {
             .ok();
 
         match cached_hash {
-            None => Ok(true), // New session
+            None => Ok(true),                             // New session
             Some(ref h) if h != content_hash => Ok(true), // Changed
-            _ => Ok(false), // Unchanged
+            _ => Ok(false),                               // Unchanged
         }
     }
 
@@ -473,11 +468,11 @@ impl FingerprintCache {
 
     /// Get count of cached fingerprints
     pub fn count(&self) -> Result<usize> {
-        let count: i64 = self
-            .conn
-            .query_row("SELECT COUNT(*) FROM cass_fingerprints", [], |row| {
-                row.get(0)
-            })?;
+        let count: i64 =
+            self.conn
+                .query_row("SELECT COUNT(*) FROM cass_fingerprints", [], |row| {
+                    row.get(0)
+                })?;
         Ok(count as usize)
     }
 }
@@ -495,8 +490,7 @@ mod tests {
 
     #[test]
     fn test_cass_client_builder() {
-        let client = CassClient::with_binary("/usr/local/bin/cass")
-            .with_data_dir("/data/cass");
+        let client = CassClient::with_binary("/usr/local/bin/cass").with_data_dir("/data/cass");
         assert_eq!(client.cass_bin, PathBuf::from("/usr/local/bin/cass"));
         assert_eq!(client.data_dir, Some(PathBuf::from("/data/cass")));
     }

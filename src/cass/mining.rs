@@ -166,10 +166,7 @@ pub struct EvidenceRef {
 #[serde(tag = "ir_type", rename_all = "snake_case")]
 pub enum PatternIR {
     /// Raw text content
-    Text {
-        content: String,
-        role: TextRole,
-    },
+    Text { content: String, role: TextRole },
 
     /// Structured command sequence
     CommandSeq {
@@ -200,14 +197,10 @@ pub enum PatternIR {
     },
 
     /// Sequence of IR nodes
-    Sequence {
-        items: Vec<PatternIR>,
-    },
+    Sequence { items: Vec<PatternIR> },
 
     /// Reference to another pattern
-    PatternRef {
-        pattern_id: String,
-    },
+    PatternRef { pattern_id: String },
 }
 
 /// Role of text in a pattern
@@ -241,7 +234,7 @@ pub struct CommandIR {
 /// 2. Change - making modifications to solve the problem
 /// 3. Validation - testing, verifying the changes work
 /// 4. WrapUp - committing, cleanup, final summaries
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum SessionPhase {
     /// Initial exploration: reading files, searching, understanding
@@ -311,7 +304,10 @@ pub fn segment_session(session: &Session) -> SegmentedSession {
                 phase: current_phase,
                 start_idx: phase_start,
                 end_idx: idx,
-                confidence: compute_segment_confidence(&session.messages[phase_start..idx], current_phase),
+                confidence: compute_segment_confidence(
+                    &session.messages[phase_start..idx],
+                    current_phase,
+                ),
             });
             current_phase = detected_phase;
             phase_start = idx;
@@ -529,6 +525,9 @@ pub fn extract_patterns(_session_path: &str) -> Result<Vec<Pattern>> {
 pub fn extract_from_session(session: &Session) -> Result<Vec<ExtractedPattern>> {
     let mut patterns = Vec::new();
 
+    // Segment the session into phases
+    let segmented = segment_session(session);
+
     // Extract command patterns from tool calls
     let command_pattern = extract_command_patterns(session);
     if let Some(p) = command_pattern {
@@ -538,6 +537,20 @@ pub fn extract_from_session(session: &Session) -> Result<Vec<ExtractedPattern>> 
     // Extract code patterns from messages
     let code_patterns = extract_code_patterns(session);
     patterns.extend(code_patterns);
+
+    // Extract workflow patterns from session phases
+    let workflow_pattern = extract_workflow_pattern(session, &segmented);
+    if let Some(p) = workflow_pattern {
+        patterns.push(p);
+    }
+
+    // Extract error handling patterns
+    let error_patterns = extract_error_patterns(session);
+    patterns.extend(error_patterns);
+
+    // Normalize and deduplicate patterns
+    let patterns = normalize_patterns(patterns);
+    let patterns = deduplicate_patterns(patterns);
 
     Ok(patterns)
 }
@@ -633,6 +646,485 @@ fn extract_code_patterns(session: &Session) -> Vec<ExtractedPattern> {
     patterns
 }
 
+/// Extract workflow pattern from segmented session
+fn extract_workflow_pattern(
+    session: &Session,
+    segmented: &SegmentedSession,
+) -> Option<ExtractedPattern> {
+    // Need at least 2 distinct phases to form a workflow
+    let unique_phases: std::collections::HashSet<_> =
+        segmented.segments.iter().map(|s| s.phase).collect();
+    if unique_phases.len() < 2 {
+        return None;
+    }
+
+    let mut steps = Vec::new();
+    let mut triggers = Vec::new();
+    let mut outcomes = Vec::new();
+    let mut evidence = Vec::new();
+
+    for (order, segment) in segmented.segments.iter().enumerate() {
+        // Collect representative actions from each phase
+        let phase_actions = collect_phase_actions(session, segment);
+        if phase_actions.is_empty() {
+            continue;
+        }
+
+        let step_description = summarize_phase_actions(&phase_actions, segment.phase);
+        steps.push(WorkflowStep {
+            order: order + 1,
+            action: format!("{:?}", segment.phase),
+            description: step_description,
+            optional: segment.confidence < 0.5,
+            conditions: vec![],
+        });
+
+        // Track evidence
+        evidence.push(EvidenceRef {
+            session_id: session.id.clone(),
+            message_indices: (segment.start_idx..segment.end_idx).collect(),
+            relevance: segment.confidence,
+            snippet: Some(truncate(&phase_actions.join("; "), 100)),
+        });
+    }
+
+    if steps.len() < 2 {
+        return None;
+    }
+
+    // Extract triggers from first phase (usually user request)
+    if let Some(first_msg) = session.messages.first() {
+        if first_msg.role == "user" && !first_msg.content.is_empty() {
+            triggers.push(truncate(&first_msg.content, 200));
+        }
+    }
+
+    // Extract outcomes from last phase (usually completion message)
+    if let Some(last_segment) = segmented.segments.last() {
+        if last_segment.phase == SessionPhase::WrapUp {
+            outcomes.push("Task completed successfully".to_string());
+        }
+    }
+
+    // Compute overall confidence based on segment confidences
+    let avg_confidence = segmented
+        .segments
+        .iter()
+        .map(|s| s.confidence)
+        .sum::<f32>()
+        / segmented.segments.len() as f32;
+
+    Some(ExtractedPattern {
+        id: format!("workflow_{}", &session.id[..8.min(session.id.len())]),
+        pattern_type: PatternType::WorkflowPattern {
+            steps,
+            triggers,
+            outcomes,
+        },
+        evidence,
+        confidence: avg_confidence * 0.8, // Discount for auto-extraction
+        frequency: 1,
+        tags: vec!["auto-extracted".to_string(), "workflow".to_string()],
+        description: Some("Workflow pattern extracted from session phases".to_string()),
+    })
+}
+
+/// Collect representative actions from a session segment
+fn collect_phase_actions(session: &Session, segment: &SessionSegment) -> Vec<String> {
+    let mut actions = Vec::new();
+
+    for idx in segment.start_idx..segment.end_idx {
+        if let Some(msg) = session.messages.get(idx) {
+            for tool in &msg.tool_calls {
+                match tool.name.as_str() {
+                    "Bash" | "bash" => {
+                        if let Some(cmd) = tool.arguments.get("command").and_then(|v| v.as_str()) {
+                            actions.push(format!("Run: {}", truncate(cmd, 50)));
+                        }
+                    }
+                    "Edit" | "edit" => {
+                        if let Some(path) =
+                            tool.arguments.get("file_path").and_then(|v| v.as_str())
+                        {
+                            actions.push(format!("Edit: {}", path_basename(path)));
+                        }
+                    }
+                    "Read" | "read" => {
+                        if let Some(path) =
+                            tool.arguments.get("file_path").and_then(|v| v.as_str())
+                        {
+                            actions.push(format!("Read: {}", path_basename(path)));
+                        }
+                    }
+                    "Write" | "write" => {
+                        if let Some(path) =
+                            tool.arguments.get("file_path").and_then(|v| v.as_str())
+                        {
+                            actions.push(format!("Write: {}", path_basename(path)));
+                        }
+                    }
+                    "Glob" | "glob" => {
+                        if let Some(pattern) =
+                            tool.arguments.get("pattern").and_then(|v| v.as_str())
+                        {
+                            actions.push(format!("Search: {}", pattern));
+                        }
+                    }
+                    "Grep" | "grep" => {
+                        if let Some(pattern) =
+                            tool.arguments.get("pattern").and_then(|v| v.as_str())
+                        {
+                            actions.push(format!("Grep: {}", truncate(pattern, 30)));
+                        }
+                    }
+                    _ => {}
+                }
+            }
+        }
+    }
+
+    actions
+}
+
+/// Summarize phase actions into a description
+fn summarize_phase_actions(actions: &[String], phase: SessionPhase) -> String {
+    if actions.is_empty() {
+        return format!("{:?} phase", phase);
+    }
+
+    let prefix = match phase {
+        SessionPhase::Reconnaissance => "Explored",
+        SessionPhase::Change => "Modified",
+        SessionPhase::Validation => "Verified",
+        SessionPhase::WrapUp => "Finalized",
+    };
+
+    if actions.len() == 1 {
+        format!("{}: {}", prefix, actions[0])
+    } else {
+        format!("{} {} items: {}", prefix, actions.len(), actions[0])
+    }
+}
+
+/// Extract basename from a path
+fn path_basename(path: &str) -> &str {
+    path.rsplit('/').next().unwrap_or(path)
+}
+
+/// Extract error handling patterns from session
+fn extract_error_patterns(session: &Session) -> Vec<ExtractedPattern> {
+    let mut patterns = Vec::new();
+    let mut current_error: Option<ErrorContext> = None;
+
+    for (idx, msg) in session.messages.iter().enumerate() {
+        // Look for error indicators in tool results
+        for result in &msg.tool_results {
+            let result_lower = result.content.to_lowercase();
+            if result_lower.contains("error")
+                || result_lower.contains("failed")
+                || result_lower.contains("panic")
+                || result_lower.contains("exception")
+            {
+                // Found an error - start tracking
+                current_error = Some(ErrorContext {
+                    error_idx: idx,
+                    error_text: truncate(&result.content, 200),
+                    symptoms: extract_error_symptoms(&result.content),
+                    resolution_steps: Vec::new(),
+                });
+            }
+        }
+
+        // If we're tracking an error, look for resolution
+        if let Some(ref mut err_ctx) = current_error {
+            // Check if this message contains resolution steps
+            for tool in &msg.tool_calls {
+                match tool.name.as_str() {
+                    "Edit" | "edit" | "Write" | "write" => {
+                        if let Some(path) =
+                            tool.arguments.get("file_path").and_then(|v| v.as_str())
+                        {
+                            err_ctx
+                                .resolution_steps
+                                .push(format!("Fix in {}", path_basename(path)));
+                        }
+                    }
+                    "Bash" | "bash" => {
+                        if let Some(cmd) = tool.arguments.get("command").and_then(|v| v.as_str()) {
+                            if !classify_bash_command(cmd).eq(&SessionPhase::Reconnaissance) {
+                                err_ctx
+                                    .resolution_steps
+                                    .push(format!("Run: {}", truncate(cmd, 50)));
+                            }
+                        }
+                    }
+                    _ => {}
+                }
+            }
+
+            // Check for success indicators (error resolved)
+            let content_lower = msg.content.to_lowercase();
+            if content_lower.contains("fixed")
+                || content_lower.contains("resolved")
+                || content_lower.contains("works")
+                || content_lower.contains("passing")
+            {
+                // Error was resolved - emit pattern
+                if !err_ctx.resolution_steps.is_empty() {
+                    let error_type = classify_error_type(&err_ctx.error_text);
+                    patterns.push(ExtractedPattern {
+                        id: format!(
+                            "error_{}_{}_{}",
+                            &session.id[..8.min(session.id.len())],
+                            err_ctx.error_idx,
+                            patterns.len()
+                        ),
+                        pattern_type: PatternType::ErrorPattern {
+                            error_type,
+                            symptoms: err_ctx.symptoms.clone(),
+                            resolution_steps: err_ctx.resolution_steps.clone(),
+                            prevention: None,
+                        },
+                        evidence: vec![EvidenceRef {
+                            session_id: session.id.clone(),
+                            message_indices: (err_ctx.error_idx..=idx).collect(),
+                            relevance: 0.7,
+                            snippet: Some(truncate(&err_ctx.error_text, 100)),
+                        }],
+                        confidence: compute_error_pattern_confidence(err_ctx),
+                        frequency: 1,
+                        tags: vec!["auto-extracted".to_string(), "error-handling".to_string()],
+                        description: Some("Error handling pattern from session".to_string()),
+                    });
+                }
+                current_error = None;
+            }
+        }
+    }
+
+    patterns
+}
+
+/// Context for tracking an error through resolution
+struct ErrorContext {
+    error_idx: usize,
+    error_text: String,
+    symptoms: Vec<String>,
+    resolution_steps: Vec<String>,
+}
+
+/// Extract symptoms from an error message
+fn extract_error_symptoms(error_text: &str) -> Vec<String> {
+    let mut symptoms = Vec::new();
+
+    // Look for common error patterns
+    if error_text.contains("not found") || error_text.contains("No such file") {
+        symptoms.push("Missing file or module".to_string());
+    }
+    if error_text.contains("undefined") || error_text.contains("undeclared") {
+        symptoms.push("Undefined identifier".to_string());
+    }
+    if error_text.contains("type") && (error_text.contains("mismatch") || error_text.contains("expected")) {
+        symptoms.push("Type mismatch".to_string());
+    }
+    if error_text.contains("borrow") || error_text.contains("lifetime") {
+        symptoms.push("Borrow/lifetime issue".to_string());
+    }
+    if error_text.contains("syntax") || error_text.contains("parse") {
+        symptoms.push("Syntax error".to_string());
+    }
+    if error_text.contains("permission") || error_text.contains("denied") {
+        symptoms.push("Permission denied".to_string());
+    }
+    if error_text.contains("timeout") || error_text.contains("timed out") {
+        symptoms.push("Operation timed out".to_string());
+    }
+
+    // If no specific symptoms detected, add generic one
+    if symptoms.is_empty() {
+        symptoms.push("Build/runtime error".to_string());
+    }
+
+    symptoms
+}
+
+/// Classify error into a type
+fn classify_error_type(error_text: &str) -> String {
+    let text_lower = error_text.to_lowercase();
+
+    if text_lower.contains("compile") || text_lower.contains("build") {
+        "compilation".to_string()
+    } else if text_lower.contains("test") {
+        "test_failure".to_string()
+    } else if text_lower.contains("import") || text_lower.contains("module") {
+        "module_resolution".to_string()
+    } else if text_lower.contains("type") {
+        "type_error".to_string()
+    } else if text_lower.contains("permission") || text_lower.contains("access") {
+        "permission".to_string()
+    } else if text_lower.contains("network") || text_lower.contains("connection") {
+        "network".to_string()
+    } else {
+        "runtime".to_string()
+    }
+}
+
+/// Compute confidence for an error pattern
+fn compute_error_pattern_confidence(ctx: &ErrorContext) -> f32 {
+    let mut confidence: f32 = 0.4; // Base confidence
+
+    // More resolution steps = higher confidence
+    if ctx.resolution_steps.len() >= 2 {
+        confidence += 0.2;
+    }
+    if ctx.resolution_steps.len() >= 4 {
+        confidence += 0.1;
+    }
+
+    // More symptoms identified = higher confidence
+    if ctx.symptoms.len() >= 2 {
+        confidence += 0.1;
+    }
+
+    // Cap at 0.85 for auto-extracted patterns
+    confidence.min(0.85_f32)
+}
+
+/// Normalize patterns for consistency
+fn normalize_patterns(patterns: Vec<ExtractedPattern>) -> Vec<ExtractedPattern> {
+    patterns
+        .into_iter()
+        .map(|mut p| {
+            // Normalize tags to lowercase
+            p.tags = p.tags.iter().map(|t| t.to_lowercase()).collect();
+
+            // Ensure confidence is in valid range
+            p.confidence = p.confidence.clamp(0.0, 1.0);
+
+            // Ensure description is present
+            if p.description.is_none() {
+                p.description = Some(generate_pattern_description(&p.pattern_type));
+            }
+
+            p
+        })
+        .collect()
+}
+
+/// Generate a description for a pattern type
+fn generate_pattern_description(pattern_type: &PatternType) -> String {
+    match pattern_type {
+        PatternType::CommandPattern { commands, .. } => {
+            format!("Command sequence with {} commands", commands.len())
+        }
+        PatternType::CodePattern { language, .. } => {
+            format!("Code pattern in {}", language)
+        }
+        PatternType::WorkflowPattern { steps, .. } => {
+            format!("Workflow with {} steps", steps.len())
+        }
+        PatternType::ErrorPattern { error_type, .. } => {
+            format!("Error handling for {}", error_type)
+        }
+        PatternType::DecisionPattern { .. } => "Decision tree pattern".to_string(),
+        PatternType::RefactorPattern { .. } => "Refactoring pattern".to_string(),
+        PatternType::ConfigPattern { config_type, .. } => {
+            format!("Configuration for {}", config_type)
+        }
+        PatternType::ToolPattern { tool_name, .. } => {
+            format!("Tool usage pattern for {}", tool_name)
+        }
+    }
+}
+
+/// Deduplicate patterns based on similarity
+fn deduplicate_patterns(patterns: Vec<ExtractedPattern>) -> Vec<ExtractedPattern> {
+    if patterns.len() <= 1 {
+        return patterns;
+    }
+
+    let mut unique: Vec<ExtractedPattern> = Vec::new();
+
+    for pattern in patterns {
+        // Check if a similar pattern already exists
+        let is_duplicate = unique.iter().any(|existing| {
+            patterns_are_similar(existing, &pattern)
+        });
+
+        if !is_duplicate {
+            unique.push(pattern);
+        } else {
+            // Merge with existing similar pattern - increase frequency
+            if let Some(existing) = unique.iter_mut().find(|e| patterns_are_similar(e, &pattern)) {
+                existing.frequency += pattern.frequency;
+                existing.evidence.extend(pattern.evidence);
+                // Boost confidence when pattern is seen multiple times
+                existing.confidence = (existing.confidence + 0.1).min(0.95);
+            }
+        }
+    }
+
+    unique
+}
+
+/// Check if two patterns are similar enough to be deduplicated
+fn patterns_are_similar(a: &ExtractedPattern, b: &ExtractedPattern) -> bool {
+    // Must be same pattern type category
+    match (&a.pattern_type, &b.pattern_type) {
+        (
+            PatternType::CommandPattern { commands: ca, .. },
+            PatternType::CommandPattern { commands: cb, .. },
+        ) => {
+            // Similar if >70% command overlap
+            let overlap = ca.iter().filter(|c| cb.contains(c)).count();
+            let total = ca.len().max(cb.len());
+            total > 0 && overlap as f32 / total as f32 > 0.7
+        }
+        (
+            PatternType::CodePattern {
+                language: la,
+                code: ca,
+                ..
+            },
+            PatternType::CodePattern {
+                language: lb,
+                code: cb,
+                ..
+            },
+        ) => {
+            // Similar if same language and code starts similarly
+            la == lb && ca.len() > 20 && cb.len() > 20 && ca[..20.min(ca.len())] == cb[..20.min(cb.len())]
+        }
+        (
+            PatternType::ErrorPattern {
+                error_type: ta,
+                symptoms: sa,
+                ..
+            },
+            PatternType::ErrorPattern {
+                error_type: tb,
+                symptoms: sb,
+                ..
+            },
+        ) => {
+            // Similar if same error type and overlapping symptoms
+            ta == tb && sa.iter().any(|s| sb.contains(s))
+        }
+        (
+            PatternType::WorkflowPattern { steps: sa, .. },
+            PatternType::WorkflowPattern { steps: sb, .. },
+        ) => {
+            // Similar if same number of steps with matching phases
+            sa.len() == sb.len()
+                && sa
+                    .iter()
+                    .zip(sb.iter())
+                    .all(|(a, b)| a.action == b.action)
+        }
+        _ => false,
+    }
+}
+
 fn code_passes_ubs(client: &UbsClient, language: &str, code: &str) -> bool {
     let ext = extension_for_language(language);
     if ext == "txt" {
@@ -640,13 +1132,14 @@ fn code_passes_ubs(client: &UbsClient, language: &str, code: &str) -> bool {
     }
 
     let suffix = format!(".{ext}");
-    let mut temp: tempfile::NamedTempFile = match Builder::new().prefix("ms-ubs-").suffix(&suffix).tempfile() {
-        Ok(file) => file,
-        Err(err) => {
-            warn!("ubs temp file error: {err}");
-            return true;
-        }
-    };
+    let mut temp: tempfile::NamedTempFile =
+        match Builder::new().prefix("ms-ubs-").suffix(&suffix).tempfile() {
+            Ok(file) => file,
+            Err(err) => {
+                warn!("ubs temp file error: {err}");
+                return true;
+            }
+        };
 
     if let Err(err) = temp.write_all(code.as_bytes()) {
         warn!("ubs temp write error: {err}");
@@ -765,7 +1258,10 @@ fn truncate(s: &str, max_len: usize) -> String {
     }
     if s.chars().count() > max_len {
         if max_len >= 3 {
-            let trimmed = out.chars().take(max_len.saturating_sub(3)).collect::<String>();
+            let trimmed = out
+                .chars()
+                .take(max_len.saturating_sub(3))
+                .collect::<String>();
             format!("{trimmed}...")
         } else {
             "...".to_string()
@@ -840,32 +1336,65 @@ And more text.
 
     #[test]
     fn test_classify_bash_command_validation() {
-        assert_eq!(classify_bash_command("cargo test"), SessionPhase::Validation);
-        assert_eq!(classify_bash_command("npm run test"), SessionPhase::Validation);
+        assert_eq!(
+            classify_bash_command("cargo test"),
+            SessionPhase::Validation
+        );
+        assert_eq!(
+            classify_bash_command("npm run test"),
+            SessionPhase::Validation
+        );
         assert_eq!(classify_bash_command("pytest"), SessionPhase::Validation);
-        assert_eq!(classify_bash_command("cargo check"), SessionPhase::Validation);
-        assert_eq!(classify_bash_command("git status"), SessionPhase::Validation);
+        assert_eq!(
+            classify_bash_command("cargo check"),
+            SessionPhase::Validation
+        );
+        assert_eq!(
+            classify_bash_command("git status"),
+            SessionPhase::Validation
+        );
     }
 
     #[test]
     fn test_classify_bash_command_wrapup() {
-        assert_eq!(classify_bash_command("git commit -m 'fix'"), SessionPhase::WrapUp);
-        assert_eq!(classify_bash_command("git push origin main"), SessionPhase::WrapUp);
+        assert_eq!(
+            classify_bash_command("git commit -m 'fix'"),
+            SessionPhase::WrapUp
+        );
+        assert_eq!(
+            classify_bash_command("git push origin main"),
+            SessionPhase::WrapUp
+        );
     }
 
     #[test]
     fn test_classify_bash_command_recon() {
-        assert_eq!(classify_bash_command("ls -la"), SessionPhase::Reconnaissance);
-        assert_eq!(classify_bash_command("cat file.txt"), SessionPhase::Reconnaissance);
-        assert_eq!(classify_bash_command("git log --oneline"), SessionPhase::Reconnaissance);
-        assert_eq!(classify_bash_command("rg pattern"), SessionPhase::Reconnaissance);
+        assert_eq!(
+            classify_bash_command("ls -la"),
+            SessionPhase::Reconnaissance
+        );
+        assert_eq!(
+            classify_bash_command("cat file.txt"),
+            SessionPhase::Reconnaissance
+        );
+        assert_eq!(
+            classify_bash_command("git log --oneline"),
+            SessionPhase::Reconnaissance
+        );
+        assert_eq!(
+            classify_bash_command("rg pattern"),
+            SessionPhase::Reconnaissance
+        );
     }
 
     #[test]
     fn test_classify_bash_command_change() {
         assert_eq!(classify_bash_command("mkdir new_dir"), SessionPhase::Change);
         assert_eq!(classify_bash_command("rm old_file"), SessionPhase::Change);
-        assert_eq!(classify_bash_command("cargo build --release"), SessionPhase::Validation); // build is validation
+        assert_eq!(
+            classify_bash_command("cargo build --release"),
+            SessionPhase::Validation
+        ); // build is validation
     }
 
     #[test]
@@ -932,5 +1461,268 @@ And more text.
         };
 
         assert_eq!(session.dominant_phase(), Some(SessionPhase::Change));
+    }
+
+    #[test]
+    fn test_extract_error_symptoms() {
+        let symptoms = extract_error_symptoms("error: file not found");
+        assert!(symptoms.contains(&"Missing file or module".to_string()));
+
+        let symptoms = extract_error_symptoms("type mismatch: expected u32");
+        assert!(symptoms.contains(&"Type mismatch".to_string()));
+
+        let symptoms = extract_error_symptoms("syntax error on line 5");
+        assert!(symptoms.contains(&"Syntax error".to_string()));
+
+        let symptoms = extract_error_symptoms("cannot borrow as mutable");
+        assert!(symptoms.contains(&"Borrow/lifetime issue".to_string()));
+
+        // Default case
+        let symptoms = extract_error_symptoms("unknown problem");
+        assert!(symptoms.contains(&"Build/runtime error".to_string()));
+    }
+
+    #[test]
+    fn test_classify_error_type() {
+        assert_eq!(classify_error_type("compile error"), "compilation");
+        assert_eq!(classify_error_type("build failed"), "compilation");
+        assert_eq!(classify_error_type("test failure"), "test_failure");
+        assert_eq!(classify_error_type("module not found"), "module_resolution");
+        assert_eq!(classify_error_type("type error"), "type_error");
+        assert_eq!(classify_error_type("permission denied"), "permission");
+        assert_eq!(classify_error_type("network error"), "network");
+        assert_eq!(classify_error_type("something else"), "runtime");
+    }
+
+    #[test]
+    fn test_compute_error_pattern_confidence() {
+        // Minimal context
+        let ctx = ErrorContext {
+            error_idx: 0,
+            error_text: "error".to_string(),
+            symptoms: vec!["s1".to_string()],
+            resolution_steps: vec!["r1".to_string()],
+        };
+        assert!((compute_error_pattern_confidence(&ctx) - 0.4).abs() < 0.01);
+
+        // More resolution steps
+        let ctx = ErrorContext {
+            error_idx: 0,
+            error_text: "error".to_string(),
+            symptoms: vec!["s1".to_string()],
+            resolution_steps: vec!["r1".to_string(), "r2".to_string()],
+        };
+        assert!((compute_error_pattern_confidence(&ctx) - 0.6).abs() < 0.01);
+
+        // Many resolution steps and symptoms
+        let ctx = ErrorContext {
+            error_idx: 0,
+            error_text: "error".to_string(),
+            symptoms: vec!["s1".to_string(), "s2".to_string()],
+            resolution_steps: vec![
+                "r1".to_string(),
+                "r2".to_string(),
+                "r3".to_string(),
+                "r4".to_string(),
+            ],
+        };
+        assert!((compute_error_pattern_confidence(&ctx) - 0.8).abs() < 0.01);
+    }
+
+    #[test]
+    fn test_normalize_patterns() {
+        let patterns = vec![ExtractedPattern {
+            id: "test".to_string(),
+            pattern_type: PatternType::CommandPattern {
+                commands: vec!["cmd".to_string()],
+                frequency: 1,
+                contexts: vec![],
+            },
+            evidence: vec![],
+            confidence: 1.5, // Invalid - should be clamped
+            frequency: 1,
+            tags: vec!["TEST".to_string(), "Mixed".to_string()],
+            description: None, // Should be auto-generated
+        }];
+
+        let normalized = normalize_patterns(patterns);
+        assert_eq!(normalized.len(), 1);
+        assert_eq!(normalized[0].confidence, 1.0); // Clamped
+        assert!(normalized[0].tags.iter().all(|t| t == &t.to_lowercase())); // Lowercase
+        assert!(normalized[0].description.is_some()); // Generated
+    }
+
+    #[test]
+    fn test_path_basename() {
+        assert_eq!(path_basename("/foo/bar/baz.rs"), "baz.rs");
+        assert_eq!(path_basename("simple.txt"), "simple.txt");
+        assert_eq!(path_basename("/"), "");
+        assert_eq!(path_basename("a/b/c"), "c");
+    }
+
+    #[test]
+    fn test_patterns_are_similar_commands() {
+        let p1 = ExtractedPattern {
+            id: "1".to_string(),
+            pattern_type: PatternType::CommandPattern {
+                commands: vec!["cargo build".to_string(), "cargo test".to_string()],
+                frequency: 1,
+                contexts: vec![],
+            },
+            evidence: vec![],
+            confidence: 0.8,
+            frequency: 1,
+            tags: vec![],
+            description: None,
+        };
+
+        let p2 = ExtractedPattern {
+            id: "2".to_string(),
+            pattern_type: PatternType::CommandPattern {
+                commands: vec!["cargo build".to_string(), "cargo test".to_string()],
+                frequency: 1,
+                contexts: vec![],
+            },
+            evidence: vec![],
+            confidence: 0.8,
+            frequency: 1,
+            tags: vec![],
+            description: None,
+        };
+
+        assert!(patterns_are_similar(&p1, &p2));
+
+        // Different commands - not similar
+        let p3 = ExtractedPattern {
+            id: "3".to_string(),
+            pattern_type: PatternType::CommandPattern {
+                commands: vec!["npm install".to_string()],
+                frequency: 1,
+                contexts: vec![],
+            },
+            evidence: vec![],
+            confidence: 0.8,
+            frequency: 1,
+            tags: vec![],
+            description: None,
+        };
+
+        assert!(!patterns_are_similar(&p1, &p3));
+    }
+
+    #[test]
+    fn test_patterns_are_similar_errors() {
+        let p1 = ExtractedPattern {
+            id: "1".to_string(),
+            pattern_type: PatternType::ErrorPattern {
+                error_type: "compilation".to_string(),
+                symptoms: vec!["Type mismatch".to_string()],
+                resolution_steps: vec!["Fix type".to_string()],
+                prevention: None,
+            },
+            evidence: vec![],
+            confidence: 0.8,
+            frequency: 1,
+            tags: vec![],
+            description: None,
+        };
+
+        let p2 = ExtractedPattern {
+            id: "2".to_string(),
+            pattern_type: PatternType::ErrorPattern {
+                error_type: "compilation".to_string(),
+                symptoms: vec!["Type mismatch".to_string(), "Other".to_string()],
+                resolution_steps: vec!["Other fix".to_string()],
+                prevention: None,
+            },
+            evidence: vec![],
+            confidence: 0.8,
+            frequency: 1,
+            tags: vec![],
+            description: None,
+        };
+
+        assert!(patterns_are_similar(&p1, &p2));
+
+        // Different error type - not similar
+        let p3 = ExtractedPattern {
+            id: "3".to_string(),
+            pattern_type: PatternType::ErrorPattern {
+                error_type: "runtime".to_string(),
+                symptoms: vec!["Type mismatch".to_string()],
+                resolution_steps: vec!["Fix".to_string()],
+                prevention: None,
+            },
+            evidence: vec![],
+            confidence: 0.8,
+            frequency: 1,
+            tags: vec![],
+            description: None,
+        };
+
+        assert!(!patterns_are_similar(&p1, &p3));
+    }
+
+    #[test]
+    fn test_deduplicate_patterns() {
+        let patterns = vec![
+            ExtractedPattern {
+                id: "1".to_string(),
+                pattern_type: PatternType::CommandPattern {
+                    commands: vec!["cargo build".to_string()],
+                    frequency: 1,
+                    contexts: vec![],
+                },
+                evidence: vec![],
+                confidence: 0.6,
+                frequency: 1,
+                tags: vec![],
+                description: None,
+            },
+            ExtractedPattern {
+                id: "2".to_string(),
+                pattern_type: PatternType::CommandPattern {
+                    commands: vec!["cargo build".to_string()],
+                    frequency: 1,
+                    contexts: vec![],
+                },
+                evidence: vec![],
+                confidence: 0.6,
+                frequency: 1,
+                tags: vec![],
+                description: None,
+            },
+        ];
+
+        let deduped = deduplicate_patterns(patterns);
+        assert_eq!(deduped.len(), 1);
+        assert_eq!(deduped[0].frequency, 2); // Merged
+        assert!(deduped[0].confidence > 0.6); // Boosted
+    }
+
+    #[test]
+    fn test_generate_pattern_description() {
+        assert!(generate_pattern_description(&PatternType::CommandPattern {
+            commands: vec!["a".to_string(), "b".to_string()],
+            frequency: 2,
+            contexts: vec![],
+        })
+        .contains("2 commands"));
+
+        assert!(generate_pattern_description(&PatternType::CodePattern {
+            language: "rust".to_string(),
+            code: "".to_string(),
+            purpose: "".to_string(),
+            frequency: 1,
+        })
+        .contains("rust"));
+
+        assert!(generate_pattern_description(&PatternType::ErrorPattern {
+            error_type: "compilation".to_string(),
+            symptoms: vec![],
+            resolution_steps: vec![],
+            prevention: None,
+        })
+        .contains("compilation"));
     }
 }

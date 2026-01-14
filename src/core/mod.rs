@@ -5,6 +5,7 @@ pub mod disclosure;
 pub mod layering;
 pub mod overlay;
 pub mod packing;
+pub mod recovery;
 pub mod registry;
 pub mod requirements;
 pub mod safety;
@@ -26,4 +27,8 @@ pub use packing::{
     PackError, PackResult,
 };
 pub use skill::{BlockType, Skill, SkillBlock, SkillMetadata, SkillSection, SkillSpec};
+pub use recovery::{
+    with_retry, with_retry_if, Checkpoint, FailureMode, RecoveryIssue, RecoveryManager,
+    RecoveryReport, RetryConfig,
+};
 pub use slicing::{SkillSliceIndex, SkillSlicer};

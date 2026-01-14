@@ -157,7 +157,7 @@ fn score_content(spec: &SkillSpec) -> f32 {
         }
     }
 
-    let base = if chars > 2000 {
+    let base: f32 = if chars > 2000 {
         1.0
     } else if chars > 1000 {
         0.8
@@ -169,7 +169,7 @@ fn score_content(spec: &SkillSpec) -> f32 {
         0.2
     };
 
-    let bonus = if code_blocks > 0 { 0.1 } else { 0.0 };
+    let bonus: f32 = if code_blocks > 0 { 0.1 } else { 0.0 };
     (base + bonus).min(1.0)
 }
 

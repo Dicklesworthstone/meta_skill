@@ -18,9 +18,9 @@ pub struct TestCase<I, E> {
 /// Run table-driven tests with detailed logging.
 pub fn run_table_tests<I, E, F>(cases: Vec<TestCase<I, E>>, test_fn: F)
 where
-    I: std::fmt::Debug + Clone,
+    I: std::fmt::Debug + Clone + std::panic::RefUnwindSafe,
     E: std::fmt::Debug + PartialEq,
-    F: Fn(I) -> E + std::panic::UnwindSafe,
+    F: Fn(I) -> E + std::panic::UnwindSafe + std::panic::RefUnwindSafe,
 {
     for case in cases {
         let start = std::time::Instant::now();

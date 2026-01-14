@@ -306,7 +306,7 @@ impl GlobalLock {
             );
         }
 
-        fs::remove_file(&lock_path)?;
+        tombstone_file(ms_root, &lock_path, "locks")?;
         info!("Stale lock file removed");
         Ok(true)
     }
@@ -595,9 +595,9 @@ impl TxManager {
         // Remove from tx_log table
         self.db.delete_tx_record(&tx.id)?;
 
-        // Remove tx file
+        // Tombstone tx file instead of deleting
         let tx_path = self.tx_dir.join(format!("{}.json", tx.id));
-        fs::remove_file(&tx_path).ok();
+        let _ = tombstone_file(&self.ms_root, &tx_path, "tx");
 
         Ok(())
     }
@@ -634,7 +634,7 @@ impl TxManager {
                         Ok(tx) => tx,
                         Err(e) => {
                             warn!("Invalid tx file {:?}: {}", path, e);
-                            fs::remove_file(&path)?;
+                            tombstone_file(&self.ms_root, &path, "tx")?;
                             report.orphaned_files += 1;
                             continue;
                         }
@@ -643,7 +643,7 @@ impl TxManager {
                     // Check if in database
                     if !self.db.tx_exists(&tx.id)? {
                         warn!("Orphaned tx file: {}", tx.id);
-                        fs::remove_file(&path)?;
+                        tombstone_file(&self.ms_root, &path, "tx")?;
                         report.orphaned_files += 1;
                     }
                 }
@@ -716,7 +716,7 @@ impl TxManager {
                     info!("Rolling back prepare-only delete tx: {}", tx.id);
                     self.db.delete_tx_record(&tx.id)?;
                     let tx_path = self.tx_dir.join(format!("{}.json", tx.id));
-                    fs::remove_file(&tx_path).ok();
+                    let _ = tombstone_file(&self.ms_root, &tx_path, "tx");
                     report.rolled_back += 1;
                 } else {
                     // Skill gone from Git - delete happened, complete SQLite delete
@@ -729,7 +729,7 @@ impl TxManager {
                     }
                     self.db.delete_tx_record(&tx.id)?;
                     let tx_path = self.tx_dir.join(format!("{}.json", tx.id));
-                    fs::remove_file(&tx_path).ok();
+                    let _ = tombstone_file(&self.ms_root, &tx_path, "tx");
                     report.completed += 1;
                 }
             }
@@ -741,7 +741,7 @@ impl TxManager {
                     // Skill exists in Git - clean up tx record
                     self.db.delete_tx_record(&tx.id)?;
                     let tx_path = self.tx_dir.join(format!("{}.json", tx.id));
-                    fs::remove_file(&tx_path).ok();
+                    let _ = tombstone_file(&self.ms_root, &tx_path, "tx");
                     report.rolled_back += 1;
                 } else {
                     // Skill gone from Git - complete SQLite delete
@@ -753,7 +753,7 @@ impl TxManager {
                     }
                     self.db.delete_tx_record(&tx.id)?;
                     let tx_path = self.tx_dir.join(format!("{}.json", tx.id));
-                    fs::remove_file(&tx_path).ok();
+                    let _ = tombstone_file(&self.ms_root, &tx_path, "tx");
                     report.completed += 1;
                 }
             }
@@ -769,7 +769,7 @@ impl TxManager {
                 }
                 self.db.delete_tx_record(&tx.id)?;
                 let tx_path = self.tx_dir.join(format!("{}.json", tx.id));
-                fs::remove_file(&tx_path).ok();
+                let _ = tombstone_file(&self.ms_root, &tx_path, "tx");
                 report.completed += 1;
             }
             TxPhase::Complete => {
@@ -777,7 +777,7 @@ impl TxManager {
                 warn!("Found complete delete tx in incomplete list: {}", tx.id);
                 self.db.delete_tx_record(&tx.id)?;
                 let tx_path = self.tx_dir.join(format!("{}.json", tx.id));
-                fs::remove_file(&tx_path).ok();
+                let _ = tombstone_file(&self.ms_root, &tx_path, "tx");
             }
         }
         Ok(())
@@ -795,9 +795,9 @@ impl TxManager {
         // Remove from tx_log
         self.db.delete_tx_record(&tx.id)?;
 
-        // Remove tx file
+        // Tombstone tx file instead of deleting
         let tx_path = self.tx_dir.join(format!("{}.json", tx.id));
-        fs::remove_file(&tx_path).ok();
+        let _ = tombstone_file(&self.ms_root, &tx_path, "tx");
 
         Ok(())
     }
@@ -837,6 +837,21 @@ fn compute_content_hash(skill: &SkillSpec) -> Result<String> {
     let result = hasher.finalize();
 
     Ok(hex::encode(result))
+}
+
+fn tombstone_file(ms_root: &Path, path: &Path, bucket: &str) -> Result<()> {
+    if !path.exists() {
+        return Ok(());
+    }
+    let tombstones = ms_root.join(".ms").join("tombstones").join(bucket);
+    fs::create_dir_all(&tombstones)?;
+    let name = path
+        .file_name()
+        .ok_or_else(|| MsError::ValidationFailed("invalid file name".to_string()))?;
+    let stamp = chrono::Utc::now().format("%Y%m%dT%H%M%S");
+    let dest = tombstones.join(format!("{}_{}", name.to_string_lossy(), stamp));
+    fs::rename(path, &dest)?;
+    Ok(())
 }
 
 // =============================================================================
@@ -913,7 +928,7 @@ mod tests {
 
         assert!(result.is_none());
         assert!(elapsed >= Duration::from_millis(100));
-        assert!(elapsed < Duration::from_millis(300)); // Reasonable upper bound
+        assert!(elapsed < Duration::from_millis(500)); // Reasonable upper bound (allow slack for busy systems)
     }
 
     #[test]

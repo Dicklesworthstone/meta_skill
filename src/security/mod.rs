@@ -7,4 +7,4 @@ pub use acip::{
     AcipAnalysis, AcipClassification, AcipConfig, AcipEngine, ContentSource, QuarantineRecord,
     TrustBoundaryConfig, TrustLevel,
 };
-pub use command_safety::{CommandSafetyEvent, SafetyGate};
+pub use command_safety::{CommandSafetyEvent, SafetyGate, SafetyStatus};

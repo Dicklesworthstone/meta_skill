@@ -83,6 +83,9 @@ pub enum Commands {
     /// Check for and apply updates
     Update(commands::update::UpdateArgs),
 
+    /// Suggestion bandit controls
+    Bandit(commands::bandit::BanditArgs),
+
     /// Health checks and repairs
     Doctor(commands::doctor::DoctorArgs),
 
@@ -97,6 +100,9 @@ pub enum Commands {
 
     /// Security and prompt-injection defenses
     Security(commands::security::SecurityArgs),
+
+    /// Command safety (DCG) logs and status
+    Safety(commands::safety::SafetyArgs),
 
     /// Validate skill specs
     Validate(commands::validate::ValidateArgs),

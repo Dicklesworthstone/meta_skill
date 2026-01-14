@@ -1,16 +1,23 @@
 //! ms doctor - Health checks and repairs
 
 use std::path::Path;
+use std::sync::Arc;
 
 use clap::Args;
 use colored::Colorize;
 
 use crate::app::AppContext;
+use crate::core::recovery::{RecoveryManager, RecoveryReport};
 use crate::error::Result;
+use crate::security::SafetyGate;
 use crate::storage::tx::GlobalLock;
 
 #[derive(Args, Debug)]
 pub struct DoctorArgs {
+    /// Run a specific check only (e.g. safety, recovery)
+    #[arg(long)]
+    pub check: Option<String>,
+
     /// Attempt to fix issues automatically
     #[arg(long)]
     pub fix: bool,
@@ -26,6 +33,10 @@ pub struct DoctorArgs {
     /// Break a stale lock (use with caution)
     #[arg(long)]
     pub break_lock: bool,
+
+    /// Run comprehensive recovery diagnostics
+    #[arg(long)]
+    pub comprehensive: bool,
 }
 
 pub fn run(ctx: &AppContext, args: &DoctorArgs) -> Result<()> {
@@ -35,13 +46,19 @@ pub fn run(ctx: &AppContext, args: &DoctorArgs) -> Result<()> {
     println!("{}", "ms doctor - Health Checks".bold());
     println!();
 
+    let run_only = args.check.as_deref();
+
     // Check lock status if requested or as part of general health check
-    if args.check_lock || !args.break_lock {
+    if run_only.is_none() && (args.check_lock || !args.break_lock) {
         issues_found += check_lock_status(ctx, args.verbose)?;
     }
 
     // Break lock if requested
-    if args.break_lock {
+    if run_only.is_none() && args.break_lock {
+        let gate = SafetyGate::from_context(ctx);
+        let lock_path = ctx.ms_root.join("ms.lock");
+        let command_str = format!("rm -f {}", lock_path.display());
+        gate.enforce(&command_str, None)?;
         if break_stale_lock(ctx)? {
             issues_fixed += 1;
             println!("{} Stale lock broken", "✓".green());
@@ -49,13 +66,36 @@ pub fn run(ctx: &AppContext, args: &DoctorArgs) -> Result<()> {
     }
 
     // Check database integrity
-    issues_found += check_database(ctx, args.verbose)?;
+    if run_only.is_none() {
+        issues_found += check_database(ctx, args.verbose)?;
+    }
 
     // Check Git archive integrity
-    issues_found += check_git_archive(ctx, args.verbose)?;
+    if run_only.is_none() {
+        issues_found += check_git_archive(ctx, args.verbose)?;
+    }
 
     // Check for incomplete transactions
-    issues_found += check_transactions(ctx, args.fix, args.verbose, &mut issues_fixed)?;
+    if run_only.is_none() {
+        issues_found += check_transactions(ctx, args.fix, args.verbose, &mut issues_fixed)?;
+    }
+
+    // Run comprehensive recovery diagnostics if requested
+    if run_only.is_none() && args.comprehensive {
+        issues_found += run_comprehensive_check(ctx, args.fix, args.verbose, &mut issues_fixed)?;
+    }
+
+    // Run a specific check if requested
+    if let Some(check) = run_only {
+        issues_found += match check {
+            "safety" => check_safety(ctx, args.verbose)?,
+            "recovery" => run_comprehensive_check(ctx, args.fix, args.verbose, &mut issues_fixed)?,
+            other => {
+                println!("{} Unknown check: {}", "!".yellow(), other);
+                1
+            }
+        };
+    }
 
     // Summary
     println!();
@@ -228,6 +268,31 @@ fn check_git_archive(ctx: &AppContext, verbose: bool) -> Result<usize> {
     }
 }
 
+/// Check command safety (DCG) availability
+fn check_safety(ctx: &AppContext, verbose: bool) -> Result<usize> {
+    print!("Checking command safety... ");
+
+    let gate = SafetyGate::from_context(ctx);
+    let status = gate.status();
+
+    match status.dcg_version {
+        Some(version) => {
+            println!("{} dcg {}", "✓".green(), version);
+            if verbose {
+                println!("  dcg_bin: {}", status.dcg_bin.display());
+                if !status.packs.is_empty() {
+                    println!("  packs: {}", status.packs.join(", "));
+                }
+            }
+            Ok(0)
+        }
+        None => {
+            println!("{} dcg not available", "!".yellow());
+            Ok(1)
+        }
+    }
+}
+
 /// Check for incomplete transactions
 fn check_transactions(
     ctx: &AppContext,
@@ -298,6 +363,108 @@ fn check_transactions(
             }
             println!("  Run with --fix to recover transactions");
             Ok(incomplete.len())
+        }
+    }
+}
+
+/// Run comprehensive recovery diagnostics using RecoveryManager.
+fn run_comprehensive_check(
+    ctx: &AppContext,
+    fix: bool,
+    verbose: bool,
+    issues_fixed: &mut usize,
+) -> Result<usize> {
+    println!();
+    println!("{}", "Comprehensive Recovery Diagnostics".bold());
+    println!("{}", "─".repeat(35));
+
+    let db_path = ctx.ms_root.join("ms.db");
+    let archive_path = ctx.ms_root.join("archive");
+
+    // Build RecoveryManager with available resources
+    let mut manager = RecoveryManager::new(&ctx.ms_root);
+
+    if let Ok(db) = crate::storage::Database::open(&db_path) {
+        manager = manager.with_db(Arc::new(db));
+    }
+
+    if let Ok(git) = crate::storage::GitArchive::open(&archive_path) {
+        manager = manager.with_git(Arc::new(git));
+    }
+
+    // Run diagnosis or recovery
+    let report = manager.recover(fix)?;
+    print_recovery_report(&report, verbose);
+
+    // Update fixed count
+    *issues_fixed += report.fixed;
+
+    Ok(report.issues.len())
+}
+
+/// Print a formatted recovery report.
+fn print_recovery_report(report: &RecoveryReport, verbose: bool) {
+    if report.issues.is_empty() {
+        println!("{} No issues detected", "✓".green());
+    } else {
+        println!(
+            "{} Found {} issues:",
+            if report.has_critical_issues() {
+                "✗".red()
+            } else {
+                "!".yellow()
+            },
+            report.issues.len()
+        );
+
+        for issue in &report.issues {
+            let severity_marker = match issue.severity {
+                1 => "CRITICAL".red().bold(),
+                2 => "MAJOR".yellow(),
+                _ => "MINOR".dimmed(),
+            };
+
+            println!(
+                "  {} [{}] {}",
+                if issue.auto_recoverable {
+                    "→".green()
+                } else {
+                    "→".red()
+                },
+                severity_marker,
+                issue.description
+            );
+
+            if verbose {
+                println!("    Mode: {:?}", issue.mode);
+                if let Some(fix) = &issue.suggested_fix {
+                    println!("    Fix: {}", fix);
+                }
+            }
+        }
+    }
+
+    if report.had_work() {
+        println!();
+        println!("{}", "Recovery actions:".bold());
+        if report.rolled_back > 0 {
+            println!("  {} Rolled back {} transactions", "✓".green(), report.rolled_back);
+        }
+        if report.completed > 0 {
+            println!("  {} Completed {} transactions", "✓".green(), report.completed);
+        }
+        if report.orphaned_files > 0 {
+            println!("  {} Cleaned {} orphaned files", "✓".green(), report.orphaned_files);
+        }
+        if report.cache_invalidated > 0 {
+            println!("  {} Invalidated {} cache entries", "✓".green(), report.cache_invalidated);
+        }
+    }
+
+    if let Some(duration) = report.duration {
+        if verbose {
+            println!();
+            println!("  Duration: {:?}", duration);
         }
     }
 }

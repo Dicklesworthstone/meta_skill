@@ -21,6 +21,17 @@ pub struct CommandSafetyEvent {
     pub created_at: String,
 }
 
+/// Status of the safety gate and DCG availability.
+#[derive(Debug, Clone)]
+pub struct SafetyStatus {
+    /// DCG version if available.
+    pub dcg_version: Option<String>,
+    /// Path to dcg binary.
+    pub dcg_bin: PathBuf,
+    /// Loaded packs.
+    pub packs: Vec<String>,
+}
+
 #[derive(Debug, Clone)]
 pub struct SafetyGate {
     guard: DcgGuard,
@@ -61,6 +72,15 @@ impl SafetyGate {
             require_verbatim_approval: config.safety.require_verbatim_approval,
             db,
         })
+    }
+
+    /// Get the current status of the safety gate.
+    pub fn status(&self) -> SafetyStatus {
+        SafetyStatus {
+            dcg_version: self.dcg_version.clone(),
+            dcg_bin: self.guard.dcg_bin.clone(),
+            packs: self.guard.packs.clone(),
+        }
     }
 
     pub fn enforce(&self, command: &str, session_id: Option<&str>) -> Result<()> {
@@ -121,6 +141,7 @@ impl SafetyGate {
         };
         db.insert_command_safety_event(&event)
     }
+
 }
 
 fn approval_matches(command: &str) -> bool {

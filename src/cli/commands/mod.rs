@@ -14,6 +14,7 @@ use crate::cli::Commands;
 use crate::error::Result;
 
 pub mod alias;
+pub mod bandit;
 pub mod build;
 pub mod bundle;
 pub mod config;
@@ -31,6 +32,7 @@ pub mod quality;
 pub mod requirements;
 pub mod search;
 pub mod security;
+pub mod safety;
 pub mod show;
 pub mod suggest;
 pub mod test;
@@ -55,11 +57,13 @@ pub fn run(ctx: &AppContext, command: &Commands) -> Result<()> {
         Commands::Build(args) => build::run(ctx, args),
         Commands::Bundle(args) => bundle::run(ctx, args),
         Commands::Update(args) => update::run(ctx, args),
+        Commands::Bandit(args) => bandit::run(ctx, args),
         Commands::Doctor(args) => doctor::run(ctx, args),
         Commands::PreCommit(args) => pre_commit::run(ctx, args),
         Commands::Prune(args) => prune::run(ctx, args),
         Commands::Config(args) => config::run(ctx, args),
         Commands::Security(args) => security::run(ctx, args),
+        Commands::Safety(args) => safety::run(ctx, args),
         Commands::Validate(args) => validate::run(ctx, args),
         Commands::Test(args) => test::run(ctx, args),
         Commands::Quality(args) => quality::run(ctx, args),

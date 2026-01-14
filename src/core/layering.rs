@@ -413,13 +413,13 @@ impl LayeredRegistry {
         spec: &mut SkillSpec,
         context: &OverlayContext,
     ) -> Vec<OverlayApplicationResult> {
-        let overlays = match self.overlays.get(id) {
+        let overlays: &Vec<SkillOverlay> = match self.overlays.get(id) {
             Some(overlays) => overlays,
             None => return Vec::new(),
         };
 
         let mut sorted = overlays.clone();
-        sorted.sort_by(|a, b| a.layer.cmp(&b.layer));
+        sorted.sort_by(|a, b| a.priority.cmp(&b.priority));
 
         let mut results = Vec::new();
         for overlay in &sorted {
