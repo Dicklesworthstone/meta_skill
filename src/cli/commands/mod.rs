@@ -4,6 +4,11 @@
 //! - Args struct for command-line arguments
 //! - run() function to execute the command
 
+use std::collections::HashSet;
+use std::path::{Path, PathBuf};
+
+use walkdir::WalkDir;
+
 use crate::app::AppContext;
 use crate::cli::Commands;
 use crate::error::Result;
@@ -53,4 +58,83 @@ pub fn run(ctx: &AppContext, command: &Commands) -> Result<()> {
         Commands::Security(args) => security::run(ctx, args),
         Commands::Test(args) => test::run(ctx, args),
     }
+}
+
+pub(crate) fn discover_skill_markdowns(ctx: &AppContext) -> Result<Vec<PathBuf>> {
+    let mut seen = HashSet::new();
+    let mut out = Vec::new();
+    for root in skill_roots(ctx) {
+        if !root.exists() {
+            continue;
+        }
+        for entry in WalkDir::new(root).follow_links(true) {
+            let entry = entry.map_err(|err| {
+                crate::error::MsError::Config(format!("walk skill paths: {err}"))
+            })?;
+            if !entry.file_type().is_file() {
+                continue;
+            }
+            if entry.file_name() == "SKILL.md" {
+                let path = entry.path().to_path_buf();
+                if seen.insert(path.clone()) {
+                    out.push(path);
+                }
+            }
+        }
+    }
+    Ok(out)
+}
+
+pub(crate) fn resolve_skill_markdown(ctx: &AppContext, input: &str) -> Result<PathBuf> {
+    let direct = expand_path(input);
+    if direct.exists() {
+        if direct.is_file() {
+            return Ok(direct);
+        }
+        let candidate = direct.join("SKILL.md");
+        if candidate.exists() {
+            return Ok(candidate);
+        }
+    }
+
+    for root in skill_roots(ctx) {
+        let candidate = root.join(input);
+        if candidate.is_file() {
+            return Ok(candidate);
+        }
+        let skill_md = candidate.join("SKILL.md");
+        if skill_md.exists() {
+            return Ok(skill_md);
+        }
+    }
+
+    Err(crate::error::MsError::SkillNotFound(format!(
+        "skill not found: {input}"
+    )))
+}
+
+fn skill_roots(ctx: &AppContext) -> Vec<PathBuf> {
+    let paths = ctx
+        .config
+        .skill_paths
+        .global
+        .iter()
+        .chain(ctx.config.skill_paths.project.iter())
+        .chain(ctx.config.skill_paths.community.iter())
+        .chain(ctx.config.skill_paths.local.iter());
+    paths.map(|path| expand_path(path)).collect()
+}
+
+fn expand_path(input: &str) -> PathBuf {
+    if let Some(stripped) = input.strip_prefix("~/") {
+        if let Some(home) = dirs::home_dir() {
+            return home.join(stripped);
+        }
+    }
+    if input == "~" {
+        if let Some(home) = dirs::home_dir() {
+            return home;
+        }
+    }
+    PathBuf::from(input)
 }

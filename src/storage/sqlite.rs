@@ -6,6 +6,7 @@ use rusqlite::{params, Connection, Row};
 use serde_json::Value as JsonValue;
 
 use crate::error::Result;
+use crate::security::QuarantineRecord;
 use crate::storage::migrations;
 
 /// SQLite database wrapper for skill registry
@@ -213,6 +214,45 @@ impl Database {
         Ok(ids)
     }
 
+    pub fn insert_quarantine_record(&self, record: &QuarantineRecord) -> Result<()> {
+        let classification_json = serde_json::to_string(&record.acip_classification)
+            .map_err(|err| crate::error::MsError::Config(format!("encode classification: {err}")))?;
+        self.conn.execute(
+            "INSERT INTO injection_quarantine (
+                quarantine_id, session_id, message_index, content_hash, safe_excerpt,
+                classification_json, audit_tag, created_at, replay_command
+             ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            params![
+                record.quarantine_id,
+                record.session_id,
+                record.message_index as i64,
+                record.content_hash,
+                record.safe_excerpt,
+                classification_json,
+                record.audit_tag,
+                record.created_at,
+                record.replay_command,
+            ],
+        )?;
+        Ok(())
+    }
+
+    pub fn list_quarantine_records(&self, limit: usize) -> Result<Vec<QuarantineRecord>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT quarantine_id, session_id, message_index, content_hash, safe_excerpt,
+                    classification_json, audit_tag, created_at, replay_command
+             FROM injection_quarantine
+             ORDER BY created_at DESC
+             LIMIT ?",
+        )?;
+        let rows = stmt.query_map(params![limit as i64], |row| quarantine_from_row(row))?;
+        let mut out = Vec::new();
+        for row in rows {
+            out.push(row?);
+        }
+        Ok(out)
+    }
+
     fn configure_pragmas(conn: &Connection) -> Result<()> {
         conn.execute_batch(
             "PRAGMA journal_mode = WAL;
@@ -247,6 +287,26 @@ fn skill_from_row(row: &Row<'_>) -> rusqlite::Result<SkillRecord> {
         modified_at: row.get(16)?,
         is_deprecated: row.get::<_, i64>(17)? != 0,
         deprecation_reason: row.get(18)?,
+    })
+}
+
+fn quarantine_from_row(row: &Row<'_>) -> Result<QuarantineRecord> {
+    let classification_json: String = row.get(5)?;
+    let classification: JsonValue = serde_json::from_str(&classification_json)
+        .map_err(|err| crate::error::MsError::Config(format!("invalid classification json: {err}")))?;
+    let acip_classification = serde_json::from_value(classification)
+        .map_err(|err| crate::error::MsError::Config(format!("decode classification: {err}")))?;
+
+    Ok(QuarantineRecord {
+        quarantine_id: row.get(0)?,
+        session_id: row.get(1)?,
+        message_index: row.get::<_, i64>(2)? as usize,
+        content_hash: row.get(3)?,
+        safe_excerpt: row.get(4)?,
+        acip_classification,
+        audit_tag: row.get(6)?,
+        created_at: row.get(7)?,
+        replay_command: row.get(8)?,
     })
 }
 
@@ -291,6 +351,7 @@ mod tests {
             "uncertainty_queue",
             "redaction_reports",
             "injection_reports",
+            "injection_quarantine",
             "command_safety_events",
             "skill_usage",
             "skill_usage_events",
