@@ -34,6 +34,7 @@ pub mod show;
 pub mod suggest;
 pub mod test;
 pub mod update;
+pub mod validate;
 
 /// Dispatch a command to its handler
 pub fn run(ctx: &AppContext, command: &Commands) -> Result<()> {
@@ -58,6 +59,7 @@ pub fn run(ctx: &AppContext, command: &Commands) -> Result<()> {
         Commands::Prune(args) => prune::run(ctx, args),
         Commands::Config(args) => config::run(ctx, args),
         Commands::Security(args) => security::run(ctx, args),
+        Commands::Validate(args) => validate::run(ctx, args),
         Commands::Test(args) => test::run(ctx, args),
     }
 }

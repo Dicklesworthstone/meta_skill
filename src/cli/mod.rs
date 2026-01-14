@@ -98,6 +98,9 @@ pub enum Commands {
     /// Security and prompt-injection defenses
     Security(commands::security::SecurityArgs),
 
+    /// Validate skill specs
+    Validate(commands::validate::ValidateArgs),
+
     /// Run skill tests
     Test(commands::test::TestArgs),
 }
