@@ -1,0 +1,13 @@
+[project]
+name = "my-project"
+description = "Project-specific skill configuration"
+
+[skill_paths]
+local = ["./skills"]
+
+[layers]
+project_overrides = true
+
+[requirements]
+rust_version = "1.70"
+node_version = "18"

@@ -1,0 +1,39 @@
+[skill_paths]
+global = ["~/.local/share/ms/skills"]
+project = [".ms/skills"]
+community = ["~/.local/share/ms/community"]
+
+[layers]
+priority = ["project", "global", "community"]
+auto_detect = true
+
+[disclosure]
+default_level = "moderate"
+token_budget = 800
+auto_suggest = true
+cooldown_seconds = 300
+
+[search]
+use_embeddings = true
+embedding_backend = "hash"
+bm25_weight = 0.5
+semantic_weight = 0.5
+
+[cass]
+auto_detect = true
+cass_path = null
+session_pattern = "*.jsonl"
+
+[cache]
+enabled = true
+max_size_mb = 100
+ttl_seconds = 3600
+
+[update]
+auto_check = true
+check_interval_hours = 24
+channel = "stable"
+
+[robot]
+format = "json"
+include_metadata = true
