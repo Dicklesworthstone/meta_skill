@@ -291,6 +291,7 @@ pub fn arb_config() -> impl Strategy<Value = Config> {
                     disclosure,
                     search,
                     cass,
+                    cm: crate::config::CmConfig::default(),
                     cache,
                     update,
                     robot,

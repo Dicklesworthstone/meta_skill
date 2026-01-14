@@ -59,7 +59,14 @@ impl SafetyGate {
     pub fn from_env() -> Result<Self> {
         let ms_root = find_ms_root()?;
         let config = Config::load(None, &ms_root)?;
-        let db = Database::open(ms_root.join("ms.db")).ok().map(Arc::new);
+        let db_path = ms_root.join("ms.db");
+        let db = match Database::open(&db_path) {
+            Ok(db) => Some(Arc::new(db)),
+            Err(err) => {
+                warn!("safety gate: could not open database at {}: {err}", db_path.display());
+                None
+            }
+        };
         let guard = DcgGuard::new(
             config.safety.dcg_bin.clone(),
             config.safety.dcg_packs.clone(),

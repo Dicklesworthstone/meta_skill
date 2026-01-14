@@ -116,7 +116,13 @@ impl Bm25Index {
         doc.add_text(self.fields.tags, &tags);
         doc.add_text(self.fields.aliases, &aliases);
         doc.add_text(self.fields.layer, &skill.source_layer);
-        doc.add_u64(self.fields.quality_score, (skill.quality_score * 100.0) as u64);
+        // Safely convert quality_score to u64, handling NaN/Inf/negative values
+        let quality_u64 = if skill.quality_score.is_nan() || skill.quality_score.is_infinite() {
+            0u64
+        } else {
+            (skill.quality_score.clamp(0.0, 100.0) * 100.0) as u64
+        };
+        doc.add_u64(self.fields.quality_score, quality_u64);
         doc.add_bool(self.fields.deprecated, skill.is_deprecated);
 
         // Delete any existing document with this ID first

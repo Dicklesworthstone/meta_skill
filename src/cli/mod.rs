@@ -83,6 +83,9 @@ pub enum Commands {
     /// Check for and apply updates
     Update(commands::update::UpdateArgs),
 
+    /// CM (cass-memory) integration
+    Cm(commands::cm::CmArgs),
+
     /// Suggestion bandit controls
     Bandit(commands::bandit::BanditArgs),
 

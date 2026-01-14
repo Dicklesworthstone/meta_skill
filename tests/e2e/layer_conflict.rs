@@ -50,8 +50,9 @@ Project-specific content here.
     fixture.checkpoint("post_index");
 
     // Step 4: Load skill
+    // Note: skill ID is derived from the H1 heading "Project Layer Skill" -> "project-layer-skill"
     fixture.log_step("Load skill");
-    let output = fixture.run_ms(&["--robot", "load", "project-skill"]);
+    let output = fixture.run_ms(&["--robot", "load", "project-layer-skill"]);
     fixture.assert_success(&output, "load");
     // Load command returns skill body content, just verify it succeeded
     fixture.checkpoint("post_load");

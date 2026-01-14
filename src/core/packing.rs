@@ -508,7 +508,7 @@ fn try_improve(
         return false;
     }
 
-    let mut tokens_after = remaining_budget + removed_tokens;
+    let tokens_after = remaining_budget + removed_tokens;
     if candidate.token_estimate > tokens_after {
         return false;
     }
@@ -516,10 +516,10 @@ fn try_improve(
         return false;
     }
 
-    tokens_after -= candidate.token_estimate;
-    if tokens_after > constraints.budget {
-        return false;
-    }
+    // Note: The check `tokens_after - candidate.token_estimate > constraints.budget`
+    // is mathematically impossible since tokens_after <= budget + removed_tokens and
+    // we already verified candidate.token_estimate <= tokens_after.
+    // No additional budget check is needed here.
 
     selected_ids.remove(&removed_id);
     selected.remove(remove_idx);

@@ -19,6 +19,8 @@ pub struct Config {
     #[serde(default)]
     pub cass: CassConfig,
     #[serde(default)]
+    pub cm: CmConfig,
+    #[serde(default)]
     pub cache: CacheConfig,
     #[serde(default)]
     pub update: UpdateConfig,
@@ -38,6 +40,7 @@ impl Default for Config {
             disclosure: DisclosureConfig::default(),
             search: SearchConfig::default(),
             cass: CassConfig::default(),
+            cm: CmConfig::default(),
             cache: CacheConfig::default(),
             update: UpdateConfig::default(),
             robot: RobotConfig::default(),
@@ -112,6 +115,9 @@ impl Config {
         }
         if let Some(patch) = patch.cass {
             self.cass.merge(patch);
+        }
+        if let Some(patch) = patch.cm {
+            self.cm.merge(patch);
         }
         if let Some(patch) = patch.cache {
             self.cache.merge(patch);
@@ -199,6 +205,15 @@ impl Config {
         }
         if let Some(value) = env_string("MS_CASS_SESSION_PATTERN") {
             self.cass.session_pattern = value;
+        }
+        if let Some(value) = env_bool("MS_CM_ENABLED") {
+            self.cm.enabled = value;
+        }
+        if let Some(value) = env_string("MS_CM_PATH") {
+            self.cm.cm_path = Some(value);
+        }
+        if let Some(values) = env_list("MS_CM_DEFAULT_FLAGS")? {
+            self.cm.default_flags = values;
         }
 
         if let Some(value) = env_bool("MS_CACHE_ENABLED") {
@@ -468,6 +483,40 @@ impl CassConfig {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CmConfig {
+    #[serde(default)]
+    pub enabled: bool,
+    #[serde(default)]
+    pub cm_path: Option<String>,
+    #[serde(default)]
+    pub default_flags: Vec<String>,
+}
+
+impl Default for CmConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            cm_path: None,
+            default_flags: Vec::new(),
+        }
+    }
+}
+
+impl CmConfig {
+    fn merge(&mut self, patch: CmPatch) {
+        if let Some(value) = patch.enabled {
+            self.enabled = value;
+        }
+        if let Some(value) = patch.cm_path {
+            self.cm_path = Some(value);
+        }
+        if let Some(values) = patch.default_flags {
+            self.default_flags = values;
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CacheConfig {
     #[serde(default)]
     pub enabled: bool,
@@ -632,6 +681,7 @@ struct ConfigPatch {
     pub disclosure: Option<DisclosurePatch>,
     pub search: Option<SearchPatch>,
     pub cass: Option<CassPatch>,
+    pub cm: Option<CmPatch>,
     pub cache: Option<CachePatch>,
     pub update: Option<UpdatePatch>,
     pub robot: Option<RobotPatch>,
@@ -676,6 +726,13 @@ struct CassPatch {
     pub auto_detect: Option<bool>,
     pub cass_path: Option<String>,
     pub session_pattern: Option<String>,
+}
+
+#[derive(Debug, Clone, Default, Deserialize)]
+struct CmPatch {
+    pub enabled: Option<bool>,
+    pub cm_path: Option<String>,
+    pub default_flags: Option<Vec<String>>,
 }
 
 #[derive(Debug, Clone, Default, Deserialize)]

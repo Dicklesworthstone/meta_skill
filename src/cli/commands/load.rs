@@ -3,7 +3,7 @@
 use clap::Args;
 
 use crate::app::AppContext;
-use crate::error::Result;
+use crate::error::{MsError, Result};
 
 #[derive(Args, Debug)]
 pub struct LoadArgs {
@@ -23,7 +23,34 @@ pub struct LoadArgs {
     pub deps: bool,
 }
 
-pub fn run(_ctx: &AppContext, _args: &LoadArgs) -> Result<()> {
-    // TODO: Implement load command
+pub fn run(ctx: &AppContext, args: &LoadArgs) -> Result<()> {
+    // Look up the skill (basic implementation)
+    let skill = ctx
+        .db
+        .get_skill(&args.skill)?
+        .or_else(|| {
+            // Try alias resolution
+            ctx.db
+                .resolve_alias(&args.skill)
+                .ok()
+                .flatten()
+                .and_then(|res| ctx.db.get_skill(&res.canonical_id).ok().flatten())
+        })
+        .ok_or_else(|| MsError::SkillNotFound(format!("skill not found: {}", args.skill)))?;
+
+    // For now, just output the skill body (basic implementation)
+    // TODO: Implement progressive disclosure levels and packing
+    if ctx.robot_mode {
+        let output = serde_json::json!({
+            "status": "ok",
+            "skill_id": skill.id,
+            "name": skill.name,
+            "body": skill.body,
+        });
+        println!("{}", serde_json::to_string_pretty(&output)?);
+    } else {
+        println!("{}", skill.body);
+    }
+
     Ok(())
 }

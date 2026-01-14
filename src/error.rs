@@ -37,6 +37,9 @@ pub enum MsError {
     #[error("CASS not available: {0}")]
     CassUnavailable(String),
 
+    #[error("CM not available: {0}")]
+    CmUnavailable(String),
+
     #[error("Mining failed: {0}")]
     MiningFailed(String),
 

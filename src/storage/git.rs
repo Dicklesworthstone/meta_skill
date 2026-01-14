@@ -57,13 +57,21 @@ impl GitArchive {
     }
 
     /// Get the path to a skill directory in the archive
-    pub fn skill_path(&self, skill_id: &str) -> PathBuf {
-        self.root.join("skills/by-id").join(skill_id)
+    ///
+    /// Returns None if skill_id contains path traversal sequences.
+    pub fn skill_path(&self, skill_id: &str) -> Option<PathBuf> {
+        // Prevent path traversal attacks
+        if skill_id.contains("..") || skill_id.contains('/') || skill_id.contains('\\') {
+            return None;
+        }
+        Some(self.root.join("skills/by-id").join(skill_id))
     }
 
     /// Check if a skill exists in the archive (has spec file)
     pub fn skill_exists(&self, skill_id: &str) -> bool {
-        self.skill_path(skill_id).join("skill.spec.json").exists()
+        self.skill_path(skill_id)
+            .map(|p| p.join("skill.spec.json").exists())
+            .unwrap_or(false)
     }
 
     pub fn list_skill_ids(&self) -> Result<Vec<String>> {
@@ -128,6 +136,12 @@ impl GitArchive {
                 "skill id must be non-empty".to_string(),
             ));
         }
+        // Prevent path traversal attacks
+        if skill_id.contains("..") || skill_id.contains('/') || skill_id.contains('\\') {
+            return Err(MsError::ValidationFailed(
+                "skill id must not contain path traversal sequences".to_string(),
+            ));
+        }
 
         let skill_dir = self.root.join("skills/by-id").join(skill_id);
         fs::create_dir_all(&skill_dir)?;
@@ -173,11 +187,10 @@ impl GitArchive {
 
     /// Read a skill spec from the archive.
     pub fn read_skill(&self, skill_id: &str) -> Result<SkillSpec> {
-        let spec_path = self
-            .root
-            .join("skills/by-id")
-            .join(skill_id)
-            .join("skill.spec.json");
+        let skill_path = self.skill_path(skill_id).ok_or_else(|| {
+            MsError::ValidationFailed("skill id contains path traversal sequences".to_string())
+        })?;
+        let spec_path = skill_path.join("skill.spec.json");
         let contents = fs::read_to_string(spec_path)?;
         let spec = serde_json::from_str(&contents)?;
         Ok(spec)
@@ -185,11 +198,10 @@ impl GitArchive {
 
     /// Read skill metadata from the archive.
     pub fn read_metadata(&self, skill_id: &str) -> Result<SkillMetadata> {
-        let metadata_path = self
-            .root
-            .join("skills/by-id")
-            .join(skill_id)
-            .join("metadata.yaml");
+        let skill_path = self.skill_path(skill_id).ok_or_else(|| {
+            MsError::ValidationFailed("skill id contains path traversal sequences".to_string())
+        })?;
+        let metadata_path = skill_path.join("metadata.yaml");
         let contents = fs::read_to_string(metadata_path)?;
         let metadata = serde_yaml::from_str(&contents)?;
         Ok(metadata)
@@ -197,7 +209,9 @@ impl GitArchive {
 
     /// Delete a skill directory and commit the removal.
     pub fn delete_skill(&self, skill_id: &str) -> Result<SkillCommit> {
-        let skill_dir = self.root.join("skills/by-id").join(skill_id);
+        let skill_dir = self.skill_path(skill_id).ok_or_else(|| {
+            MsError::ValidationFailed("skill id contains path traversal sequences".to_string())
+        })?;
         if !skill_dir.exists() {
             return Err(MsError::SkillNotFound(skill_id.to_string()));
         }
@@ -268,7 +282,7 @@ fn render_skill_markdown(spec: &SkillSpec) -> String {
             match block.block_type {
                 crate::core::BlockType::Code => {
                     let content = block.content.trim_end();
-                    if content.starts_with("```") {
+                    if content.trim_start().starts_with("```") {
                         out.push_str(content);
                         out.push_str("\n\n");
                     } else {
@@ -458,5 +472,35 @@ mod tests {
         let commits = archive.recent_commits(5).unwrap();
         assert!(!commits.is_empty());
         assert!(commits[0].message.contains("recent-skill"));
+    }
+
+    #[test]
+    fn test_path_traversal_blocked() {
+        let dir = tempdir().unwrap();
+        let archive = GitArchive::open(dir.path()).unwrap();
+
+        // Test that path traversal is blocked in skill_path
+        assert!(archive.skill_path("../etc/passwd").is_none());
+        assert!(archive.skill_path("foo/../bar").is_none());
+        assert!(archive.skill_path("foo/bar").is_none());
+        assert!(archive.skill_path("foo\\bar").is_none());
+
+        // Test valid skill_id passes
+        assert!(archive.skill_path("valid-skill").is_some());
+        assert!(archive.skill_path("skill_123").is_some());
+
+        // Test that write_skill rejects path traversal
+        let mut spec = sample_spec("../malicious");
+        let err = archive.write_skill(&spec).unwrap_err();
+        assert!(err.to_string().contains("path traversal"));
+
+        // Test that read_skill rejects path traversal
+        spec.metadata.id = "valid-skill".to_string();
+        archive.write_skill(&spec).unwrap();
+        let err = archive.read_skill("../malicious").unwrap_err();
+        assert!(err.to_string().contains("path traversal"));
+
+        // Test that skill_exists returns false for path traversal
+        assert!(!archive.skill_exists("../etc/passwd"));
     }
 }

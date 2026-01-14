@@ -13,22 +13,33 @@ const ACIP_AUDIT_TAG: &str = "ACIP_AUDIT_MODE=ENABLED";
 
 static DISALLOWED_PATTERNS: Lazy<Vec<Regex>> = Lazy::new(|| {
     vec![
-        Regex::new("(?i)ignore (all|any|previous) instructions").unwrap(),
-        Regex::new("(?i)disregard (all|any|previous) instructions").unwrap(),
-        Regex::new("(?i)system prompt").unwrap(),
-        Regex::new("(?i)reveal (the )?system").unwrap(),
-        Regex::new("(?i)exfiltrate").unwrap(),
-        Regex::new("(?i)leak (secrets|keys|tokens)").unwrap(),
+        Regex::new("(?i)ignore (all|any|previous) instructions")
+            .expect("ACIP: invalid regex for 'ignore instructions'"),
+        Regex::new("(?i)disregard (all|any|previous) instructions")
+            .expect("ACIP: invalid regex for 'disregard instructions'"),
+        Regex::new("(?i)system prompt")
+            .expect("ACIP: invalid regex for 'system prompt'"),
+        Regex::new("(?i)reveal (the )?system")
+            .expect("ACIP: invalid regex for 'reveal system'"),
+        Regex::new("(?i)exfiltrate")
+            .expect("ACIP: invalid regex for 'exfiltrate'"),
+        Regex::new("(?i)leak (secrets|keys|tokens)")
+            .expect("ACIP: invalid regex for 'leak secrets'"),
     ]
 });
 
 static SENSITIVE_PATTERNS: Lazy<Vec<Regex>> = Lazy::new(|| {
     vec![
-        Regex::new("(?i)api[-_ ]?key").unwrap(),
-        Regex::new("(?i)access[-_ ]?token").unwrap(),
-        Regex::new("(?i)secret").unwrap(),
-        Regex::new("(?i)password").unwrap(),
-        Regex::new("(?i)private[-_ ]?key").unwrap(),
+        Regex::new("(?i)api[-_ ]?key")
+            .expect("ACIP: invalid regex for 'api key'"),
+        Regex::new("(?i)access[-_ ]?token")
+            .expect("ACIP: invalid regex for 'access token'"),
+        Regex::new("(?i)secret")
+            .expect("ACIP: invalid regex for 'secret'"),
+        Regex::new("(?i)password")
+            .expect("ACIP: invalid regex for 'password'"),
+        Regex::new("(?i)private[-_ ]?key")
+            .expect("ACIP: invalid regex for 'private key'"),
     ]
 });
 
@@ -219,7 +230,10 @@ fn load_prompt(path: &Path) -> Result<String> {
 }
 
 fn detect_version(prompt: &str) -> Option<String> {
-    static VERSION_RE: Lazy<Regex> = Lazy::new(|| Regex::new(r"ACIP\s+v?([0-9]+(?:\.[0-9]+)*)").unwrap());
+    static VERSION_RE: Lazy<Regex> = Lazy::new(|| {
+        Regex::new(r"ACIP\s+v?([0-9]+(?:\.[0-9]+)*)")
+            .expect("ACIP: invalid regex for version detection")
+    });
     VERSION_RE
         .captures(prompt)
         .and_then(|caps| caps.get(1).map(|m| m.as_str().to_string()))

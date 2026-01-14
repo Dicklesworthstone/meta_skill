@@ -1,6 +1,7 @@
 pub mod app;
 pub mod bundler;
 pub mod cass;
+pub mod cm;
 pub mod cli;
 pub mod config;
 pub mod context;

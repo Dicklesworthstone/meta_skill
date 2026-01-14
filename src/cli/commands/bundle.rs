@@ -133,7 +133,9 @@ fn run_create(ctx: &AppContext, args: &BundleCreateArgs) -> Result<()> {
 
     let mut entries = Vec::new();
     for skill_id in skills {
-        let skill_dir = ctx.git.skill_path(&skill_id);
+        let skill_dir = ctx.git.skill_path(&skill_id).ok_or_else(|| {
+            MsError::SkillNotFound(format!("invalid skill id: {}", skill_id))
+        })?;
         if !skill_dir.exists() {
             return Err(MsError::SkillNotFound(format!(
                 "skill not found in archive: {}",

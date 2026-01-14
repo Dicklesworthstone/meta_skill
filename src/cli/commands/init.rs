@@ -233,6 +233,12 @@ embedding_dims = 384
 bm25_weight = 0.5
 semantic_weight = 0.5
 
+[cm]
+# cass-memory (cm) integration
+enabled = true
+# cm_path = "cm"
+# default_flags = []
+
 [robot]
 # Default robot mode format
 format = "json"
@@ -262,6 +268,12 @@ embedding_backend = "hash"
 embedding_dims = 384
 bm25_weight = 0.5
 semantic_weight = 0.5
+
+[cm]
+# cass-memory (cm) integration
+enabled = true
+# cm_path = "cm"
+# default_flags = []
 
 [safety]
 # Destructive Command Guard configuration

@@ -17,6 +17,7 @@ pub mod alias;
 pub mod bandit;
 pub mod build;
 pub mod bundle;
+pub mod cm;
 pub mod config;
 pub mod diff;
 pub mod doctor;
@@ -56,6 +57,7 @@ pub fn run(ctx: &AppContext, command: &Commands) -> Result<()> {
         Commands::Requirements(args) => requirements::run(ctx, args),
         Commands::Build(args) => build::run(ctx, args),
         Commands::Bundle(args) => bundle::run(ctx, args),
+        Commands::Cm(args) => cm::run(ctx, args),
         Commands::Update(args) => update::run(ctx, args),
         Commands::Bandit(args) => bandit::run(ctx, args),
         Commands::Doctor(args) => doctor::run(ctx, args),

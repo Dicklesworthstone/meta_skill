@@ -210,7 +210,8 @@ Initial content.
     fixture.assert_success(&output, "index v1");
 
     fixture.log_step("Load initial version");
-    let output = fixture.run_ms(&["--robot", "load", "evolving-skill"]);
+    // Note: skill ID is derived from the H1 heading "Evolving Skill v1" -> "evolving-skill-v1"
+    let output = fixture.run_ms(&["--robot", "load", "evolving-skill-v1"]);
     fixture.assert_success(&output, "load v1");
     // Load returns skill body, just verify it succeeded
     fixture.checkpoint("v1_loaded");
@@ -240,7 +241,8 @@ This section was added in v2.
     fixture.assert_success(&output, "index v2");
 
     fixture.log_step("Load updated version");
-    let output = fixture.run_ms(&["--robot", "load", "evolving-skill"]);
+    // Note: skill ID is derived from the H1 heading "Evolving Skill v2" -> "evolving-skill-v2"
+    let output = fixture.run_ms(&["--robot", "load", "evolving-skill-v2"]);
     fixture.assert_success(&output, "load v2");
     // Just verify it loaded successfully - the load command returns skill body
     fixture.checkpoint("v2_loaded");
