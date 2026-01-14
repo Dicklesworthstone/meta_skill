@@ -25,6 +25,7 @@ pub mod index;
 pub mod init;
 pub mod list;
 pub mod load;
+pub mod pre_commit;
 pub mod prune;
 pub mod requirements;
 pub mod search;
@@ -53,6 +54,7 @@ pub fn run(ctx: &AppContext, command: &Commands) -> Result<()> {
         Commands::Bundle(args) => bundle::run(ctx, args),
         Commands::Update(args) => update::run(ctx, args),
         Commands::Doctor(args) => doctor::run(ctx, args),
+        Commands::PreCommit(args) => pre_commit::run(ctx, args),
         Commands::Prune(args) => prune::run(ctx, args),
         Commands::Config(args) => config::run(ctx, args),
         Commands::Security(args) => security::run(ctx, args),

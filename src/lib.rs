@@ -5,6 +5,7 @@ pub mod cli;
 pub mod config;
 pub mod core;
 pub mod error;
+pub mod quality;
 pub mod search;
 pub mod security;
 pub mod storage;

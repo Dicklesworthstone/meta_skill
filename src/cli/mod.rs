@@ -86,6 +86,9 @@ pub enum Commands {
     /// Health checks and repairs
     Doctor(commands::doctor::DoctorArgs),
 
+    /// Pre-commit hook: run UBS on staged files
+    PreCommit(commands::pre_commit::PreCommitArgs),
+
     /// Prune tombstoned/outdated data
     Prune(commands::prune::PruneArgs),
 
