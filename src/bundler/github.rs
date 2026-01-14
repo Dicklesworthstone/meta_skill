@@ -478,20 +478,26 @@ mod tests {
     }
 
     #[test]
-    fn parse_repo_rejects_invalid() {
+    fn parse_repo_rejects_invalid() -> Result<()> {
         let err = parse_repo("invalid").unwrap_err();
         match err {
-            MsError::ValidationFailed(msg) => assert!(msg.contains("invalid repo")),
-            _ => panic!("unexpected error"),
+            MsError::ValidationFailed(msg) => {
+                assert!(msg.contains("invalid repo"));
+                Ok(())
+            }
+            other => Err(other),
         }
     }
 
     #[test]
-    fn parse_repo_rejects_extra_segments() {
+    fn parse_repo_rejects_extra_segments() -> Result<()> {
         let err = parse_repo("owner/repo/extra").unwrap_err();
         match err {
-            MsError::ValidationFailed(msg) => assert!(msg.contains("invalid repo")),
-            _ => panic!("unexpected error"),
+            MsError::ValidationFailed(msg) => {
+                assert!(msg.contains("invalid repo"));
+                Ok(())
+            }
+            other => Err(other),
         }
     }
 
@@ -524,7 +530,7 @@ mod tests {
     }
 
     #[test]
-    fn select_asset_requires_single_msb() {
+    fn select_asset_requires_single_msb() -> Result<()> {
         let assets = vec![
             ReleaseAsset {
                 id: 1,
@@ -539,8 +545,11 @@ mod tests {
         ];
         let err = select_asset(&assets, None).unwrap_err();
         match err {
-            MsError::ValidationFailed(msg) => assert!(msg.contains("multiple .msb assets")),
-            _ => panic!("unexpected error"),
+            MsError::ValidationFailed(msg) => {
+                assert!(msg.contains("multiple .msb assets"));
+                Ok(())
+            }
+            other => Err(other),
         }
     }
 

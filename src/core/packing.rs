@@ -624,7 +624,7 @@ mod tests {
     }
 
     #[test]
-    fn test_mandatory_budget_failure() {
+    fn test_mandatory_budget_failure() -> Result<(), PackError> {
         let slices = vec![
             make_slice("policy-1", SliceType::Policy, 40, 0.2, "policy"),
             make_slice("policy-2", SliceType::Policy, 40, 0.2, "policy"),
@@ -637,9 +637,10 @@ mod tests {
         let err = packer
             .pack(&slices, &constraints, PackMode::Balanced)
             .unwrap_err();
-        match err {
-            PackError::MandatorySliceOmitted { .. } => {}
-            _ => panic!("Expected mandatory omission error"),
+        if matches!(err, PackError::MandatorySliceOmitted { .. }) {
+            Ok(())
+        } else {
+            Err(err)
         }
     }
 

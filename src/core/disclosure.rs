@@ -700,19 +700,22 @@ mod tests {
     }
 
     #[test]
-    fn test_optimal_disclosure_explicit() {
+    fn test_optimal_disclosure_explicit() -> Result<(), String> {
         let ctx = DisclosureContext {
             explicit_level: Some(DisclosureLevel::Full),
             ..Default::default()
         };
         match optimal_disclosure(&ctx) {
-            DisclosurePlan::Level(level) => assert_eq!(level, DisclosureLevel::Full),
-            _ => panic!("Expected Level plan"),
+            DisclosurePlan::Level(level) => {
+                assert_eq!(level, DisclosureLevel::Full);
+                Ok(())
+            }
+            other => Err(format!("Expected Level plan, got {:?}", other)),
         }
     }
 
     #[test]
-    fn test_optimal_disclosure_pack_budget() {
+    fn test_optimal_disclosure_pack_budget() -> Result<(), String> {
         let ctx = DisclosureContext {
             pack_budget: Some(800),
             pack_mode: Some(PackMode::UtilityFirst),
@@ -722,33 +725,40 @@ mod tests {
             DisclosurePlan::Pack(budget) => {
                 assert_eq!(budget.tokens, 800);
                 assert_eq!(budget.mode, PackMode::UtilityFirst);
+                Ok(())
             }
-            _ => panic!("Expected Pack plan"),
+            other => Err(format!("Expected Pack plan, got {:?}", other)),
         }
     }
 
     #[test]
-    fn test_optimal_disclosure_low_tokens() {
+    fn test_optimal_disclosure_low_tokens() -> Result<(), String> {
         let ctx = DisclosureContext {
             remaining_tokens: 500,
             ..Default::default()
         };
         match optimal_disclosure(&ctx) {
-            DisclosurePlan::Level(level) => assert_eq!(level, DisclosureLevel::Minimal),
-            _ => panic!("Expected Level plan"),
+            DisclosurePlan::Level(level) => {
+                assert_eq!(level, DisclosureLevel::Minimal);
+                Ok(())
+            }
+            other => Err(format!("Expected Level plan, got {:?}", other)),
         }
     }
 
     #[test]
-    fn test_optimal_disclosure_direct_request() {
+    fn test_optimal_disclosure_direct_request() -> Result<(), String> {
         let ctx = DisclosureContext {
             request_type: RequestType::Direct,
             remaining_tokens: 10000,
             ..Default::default()
         };
         match optimal_disclosure(&ctx) {
-            DisclosurePlan::Level(level) => assert_eq!(level, DisclosureLevel::Full),
-            _ => panic!("Expected Level plan"),
+            DisclosurePlan::Level(level) => {
+                assert_eq!(level, DisclosureLevel::Full);
+                Ok(())
+            }
+            other => Err(format!("Expected Level plan, got {:?}", other)),
         }
     }
 
