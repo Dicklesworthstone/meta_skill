@@ -15994,15 +15994,15 @@ Every operation creates artifacts:
 |------|---|-------|--------|
 | meta_skill-4d7 | P0 | Inner Truth/Abstract Principles | ✓ Complete |
 | meta_skill-hzg | P1 | APR Iterative Refinement | ✓ Complete |
-| meta_skill-897 | P1 | Optimization Patterns | Pending |
+| meta_skill-897 | P1 | Optimization Patterns | ✓ Complete |
 | meta_skill-z2r | P1 | Performance Profiling | ✓ Complete |
-| meta_skill-aku | P1 | Security Vulnerability Assessment | Pending |
-| meta_skill-dag | P2 | Error Handling | Pending |
-| meta_skill-f8s | P2 | CI/CD Automation | Pending |
-| meta_skill-hax | P2 | Caching/Memoization | Pending |
-| meta_skill-36x | P2 | Debugging Workflows | Pending |
-| meta_skill-avs | P2 | Refactoring Patterns | Pending |
-| meta_skill-cbx | P2 | Testing Patterns | Pending |
+| meta_skill-aku | P1 | Security Vulnerability Assessment | ✓ Complete |
+| meta_skill-dag | P2 | Error Handling | ✓ Complete |
+| meta_skill-f8s | P2 | CI/CD Automation | ✓ Complete |
+| meta_skill-hax | P2 | Caching/Memoization | ✓ Complete |
+| meta_skill-36x | P2 | Debugging Workflows | ✓ Complete |
+| meta_skill-avs | P2 | Refactoring Patterns | ✓ Complete |
+| meta_skill-cbx | P2 | Testing Patterns | ✓ Complete |
 | meta_skill-6st | P2 | REST API Design | Pending |
 
 ## Section 30: Performance Profiling Patterns
@@ -16850,6 +16850,12 @@ impl SegmentTree {
 ```
 
 ### 31.4 Advanced Algorithmic Techniques
+
+> **Speculative Section**: The techniques below (Convex Hull Trick, Matrix Exponentiation)
+> are included for completeness but are unlikely to be needed for typical CLI tool workloads.
+> These are competitive programming techniques that apply to specific mathematical structures.
+> Profile before implementing - premature optimization with these patterns adds complexity
+> with no benefit if the problem structure doesn't match.
 
 #### Convex Hull Trick for DP Optimization
 
@@ -17882,14 +17888,30 @@ pub fn validate_path(base_dir: &Path, user_path: &str) -> Result<PathBuf, PathEr
     if Path::new(user_path).is_absolute() {
         return Err(PathError::AbsolutePathNotAllowed);
     }
-    
+
     // 2. Normalize and check for traversal attempts
+    // NOTE: canonicalize() fails for non-existent paths. For new file creation,
+    // canonicalize the parent directory instead:
     let requested = base_dir.join(user_path);
-    let canonical = requested.canonicalize()
-        .map_err(|_| PathError::InvalidPath)?;
-    
+    let canonical = match requested.canonicalize() {
+        Ok(p) => p,
+        Err(_) => {
+            // Path doesn't exist - canonicalize parent and append filename
+            let parent = requested.parent()
+                .ok_or(PathError::InvalidPath)?;
+            let filename = requested.file_name()
+                .ok_or(PathError::InvalidPath)?;
+            let canonical_parent = parent.canonicalize()
+                .map_err(|_| PathError::InvalidPath)?;
+            canonical_parent.join(filename)
+        }
+    };
+
     // 3. Verify path is still within base directory
-    if !canonical.starts_with(base_dir) {
+    // NOTE: Use canonical form of base_dir too, to prevent symlink escapes
+    let canonical_base = base_dir.canonicalize()
+        .map_err(|_| PathError::InvalidPath)?;
+    if !canonical.starts_with(&canonical_base) {
         return Err(PathError::TraversalAttempt);
     }
     
@@ -18032,7 +18054,9 @@ pub fn validate_access_token(
     issuer: &str,
     audience: &str,
 ) -> Result<AccessTokenClaims, TokenError> {
-    let mut validation = Validation::default();
+    // SECURITY: Explicitly pin allowed algorithms to prevent algorithm confusion attacks.
+    // Never accept tokens with "none" algorithm or mismatched algorithm types.
+    let mut validation = Validation::new(Algorithm::HS256);
     validation.set_issuer(&[issuer]);
     validation.set_audience(&[audience]);
     validation.set_required_spec_claims(&["sub", "exp", "iat", "iss", "aud"]);
@@ -18099,8 +18123,13 @@ pub fn validate_redirect_url(url: &str, allowed_origins: &[&str]) -> Result<Url,
         return Err(OAuthError::InsecureRedirect);
     }
     
-    // 2. Check against allowed origins
-    let origin = format!("{}://{}", parsed.scheme(), parsed.host_str().unwrap_or(""));
+    // 2. Check against allowed origins (include port if non-default)
+    // SECURITY: Origin must include port to prevent redirects to attacker-controlled ports.
+    // e.g., if "https://example.com" is allowed, "https://example.com:8080" must not be.
+    let origin = match parsed.port() {
+        Some(port) => format!("{}://{}:{}", parsed.scheme(), parsed.host_str().unwrap_or(""), port),
+        None => format!("{}://{}", parsed.scheme(), parsed.host_str().unwrap_or("")),
+    };
     if !allowed_origins.contains(&origin.as_str()) {
         return Err(OAuthError::UnauthorizedOrigin);
     }
@@ -18171,9 +18200,13 @@ impl RateLimiter {
     pub fn check(&self, key: &str) -> Result<(), RateLimitError> {
         let mut limits = self.limits.lock();
         let now = Instant::now();
-        
-        // Cleanup expired entries periodically
-        if limits.len() > self.max_entries {
+
+        // Cleanup expired entries probabilistically (1% chance per request)
+        // This bounds memory growth without expensive cleanup on every call.
+        // Also force cleanup if we're approaching max_entries.
+        let should_cleanup = limits.len() > self.max_entries * 3 / 4
+            || rand::random::<f32>() < 0.01;
+        if should_cleanup {
             limits.retain(|_, entry| {
                 now.duration_since(entry.window_start) < self.window
             });
@@ -18937,7 +18970,8 @@ use tokio::time::sleep;
 /// Retry configuration
 #[derive(Debug, Clone)]
 pub struct RetryConfig {
-    /// Maximum number of retry attempts
+    /// Maximum number of retry attempts (not counting initial attempt).
+    /// Example: max_retries=3 means up to 4 total attempts (1 initial + 3 retries).
     pub max_retries: u32,
     /// Initial delay before first retry
     pub initial_delay: Duration,
@@ -19026,7 +19060,9 @@ pub struct CircuitBreaker {
 enum CircuitState {
     Closed { failures: u32 },
     Open { opened_at: std::time::Instant },
-    HalfOpen,
+    /// HalfOpen allows exactly one probe request to test if service recovered.
+    /// `probing: true` means a probe is in flight; reject additional requests.
+    HalfOpen { probing: bool },
 }
 
 impl CircuitBreaker {
@@ -19045,13 +19081,22 @@ impl CircuitBreaker {
             CircuitState::Closed { .. } => true,
             CircuitState::Open { opened_at } => {
                 if opened_at.elapsed() >= self.reset_timeout {
-                    *state = CircuitState::HalfOpen;
+                    // Transition to HalfOpen with probe starting
+                    *state = CircuitState::HalfOpen { probing: true };
                     true
                 } else {
                     false
                 }
             }
-            CircuitState::HalfOpen => true,
+            CircuitState::HalfOpen { probing } => {
+                // Only allow one probe at a time in HalfOpen state
+                if probing {
+                    false  // Probe already in flight, reject
+                } else {
+                    *state = CircuitState::HalfOpen { probing: true };
+                    true
+                }
+            }
         }
     }
     
@@ -19075,7 +19120,8 @@ impl CircuitBreaker {
                     *state = CircuitState::Closed { failures: new_failures };
                 }
             }
-            CircuitState::HalfOpen => {
+            CircuitState::HalfOpen { .. } => {
+                // Probe failed, go back to Open
                 *state = CircuitState::Open {
                     opened_at: std::time::Instant::now(),
                 };
@@ -20256,7 +20302,10 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: ludeeus/action-shellcheck@master
+      # NOTE: Pin third-party actions to a SHA or release tag, not @master.
+      # @master is a supply chain risk - the action could be compromised.
+      # Use: ludeeus/action-shellcheck@2.0.0 or pin to specific commit SHA
+      - uses: ludeeus/action-shellcheck@2.0.0
         with:
           severity: warning
           scandir: '.'
@@ -22863,3 +22912,394 @@ After fixing:
 - [ ] Have you added a regression test?
 - [ ] Have you removed debug code?
 - [ ] Have you documented the fix in commit message?
+
+## Section 38: Refactoring Patterns and Methodology
+
+*Source: CASS mining of local coding agent sessions - refactoring workflows, clippy-driven improvements, code modernization*
+
+### 38.1 Introduction
+
+Refactoring is the disciplined technique of restructuring existing code without changing its external behavior. This section synthesizes patterns from real-world refactoring sessions across Rust, Go, Python, and TypeScript projects.
+
+**Key Principle**: Refactoring should be incremental, testable, and driven by concrete signals (linter warnings, performance data, maintainability concerns) rather than aesthetic preferences.
+
+### 38.2 Linter-Driven Refactoring (Clippy Workflow)
+
+One of the most effective refactoring triggers is linter feedback. The clippy workflow demonstrates systematic improvement:
+
+#### 38.2.1 The Clippy Fix Cycle
+
+```bash
+# Step 1: Run clippy with strict settings
+cargo clippy --all-targets -- -D warnings
+
+# Step 2: If many errors, try auto-fix first
+cargo clippy --fix --allow-dirty --all-targets
+
+# Step 3: Manually fix remaining issues
+# Step 4: Re-run to verify clean state
+cargo clippy --all-targets -- -D warnings
+```
+
+#### 38.2.2 Common Clippy Fixes
+
+| Lint | Issue | Fix Pattern |
+|------|-------|-------------|
+| `format_push_string` | `push_str(&format!(...))` | Use `write!(buf, ...)` instead |
+| `manual_let_else` | Match that can be `let else` | Convert to `let Some(x) = expr else { return }` |
+| `needless_pass_by_value` | Owned type passed but not consumed | Take `&T` instead of `T` |
+| `cast_possible_truncation` | `u128` to `u64` without check | Add explicit truncation handling |
+| `single_match` | Match with one arm + wildcard | Convert to `if let` |
+| `map_unwrap_or` | `.map(...).unwrap_or(...)` | Use `.map_or(default, \|x\| ...)` |
+| `too_many_lines` | Function exceeds line limit | Extract helper functions |
+
+#### 38.2.3 Example: Fresh Eyes Review
+
+From a real session (destructive_command_guard):
+
+```rust
+// BEFORE: Benchmark with type annotation errors (Rust 2024 edition)
+c.bench_function("heredoc_scan", |b| {
+    b.iter(|| scan_heredoc(&cmd))
+});
+
+// AFTER: Explicit type annotations for Criterion closures
+c.bench_function("heredoc_scan", |b: &mut criterion::Bencher<'_>| {
+    b.iter(|| scan_heredoc(&cmd))
+});
+
+// BEFORE: Inefficient string building
+result.push_str(&format!("Line: {}\n", line));
+
+// AFTER: Efficient write macro
+use std::fmt::Write as _;
+writeln!(result, "Line: {}", line).unwrap();
+
+// BEFORE: Verbose pattern matching
+if let Some(before) = trimmed.strip_suffix('\\') {
+    process(before)
+} else {
+    process(trimmed)
+}
+
+// AFTER: Functional style with map_or
+trimmed.strip_suffix('\\').map_or(trimmed, |before| before)
+```
+
+### 38.3 Dead Code Removal
+
+#### 38.3.1 Detection Strategies
+
+1. **Compiler warnings**: `#[warn(dead_code)]` in Rust, unused import warnings
+2. **IDE analysis**: Gray/faded code indicating unused symbols
+3. **Search verification**: `rg "symbol_name"` to confirm no usages
+4. **Comment archaeology**: Check if code is referenced only in comments
+
+#### 38.3.2 Safe Removal Process
+
+```bash
+# 1. Search for all usages
+rg "function_name" --type rust
+
+# 2. Check if only in comments or definitions
+rg "function_name" --type rust | grep -v "^.*\.rs\.bak:"
+
+# 3. If truly unused, remove (or add #[allow(dead_code)] with comment)
+# 4. Run tests to verify nothing broke
+cargo test
+```
+
+#### 38.3.3 Example: Orphaned File Detection
+
+From a real session (brenner_bot):
+
+```
+**Note:** There's an orphaned `apps/web/src/lib/prompt-builder.ts` file 
+(285 lines) that was created but never integrated. Per AGENTS.md Rule 1, 
+I cannot delete it without explicit permission. Would you like me to 
+delete it?
+```
+
+**Key Pattern**: Always flag orphaned files explicitly rather than silently removing them.
+
+### 38.4 Unused Variable Handling
+
+#### 38.4.1 The Underscore Convention
+
+```typescript
+// BEFORE: Unused parameter warning
+const logger = ({ page }, useFixture, testInfo) => { ... }
+
+// AFTER: Underscore prefix signals intentional non-use
+const logger = ({ page: _page }, useFixture, testInfo) => { ... }
+
+// ALTERNATIVE: Destructure to empty object if fixture expects structure
+const logger = ({ }, useFixture, testInfo) => { ... }
+```
+
+#### 38.4.2 Rust-Specific Patterns
+
+```rust
+// Unused but required by trait
+fn unused_callback(_ctx: &Context) { }
+
+// Unused in tests but needed for setup
+let _guard = setup_test_env();
+
+// Suppress with attribute when intentional
+#[allow(unused_variables)]
+fn handler(request: Request, _response: Response) { ... }
+```
+
+### 38.5 Function Extraction
+
+#### 38.5.1 When to Extract
+
+| Signal | Action |
+|--------|--------|
+| Function exceeds ~50 lines | Extract logical subsections |
+| Repeated code blocks | Extract shared helper |
+| Deep nesting (>3 levels) | Extract inner logic |
+| Comments explaining "what" | Code should be self-documenting via function name |
+| Multiple responsibilities | One function = one purpose |
+
+#### 38.5.2 Extraction Process
+
+1. **Identify boundaries**: Find natural cut points (after setup, before cleanup, between phases)
+2. **Name the concept**: The function name should explain "what", not "how"
+3. **Extract with parameters**: Pass only what's needed, return only what's used
+4. **Test both caller and extracted function**
+
+#### 38.5.3 Example: Too Many Lines Fix
+
+From clippy warning in dcg:
+
+```rust
+// BEFORE: 200-line run_command function
+fn run_command(cmd: &Command) -> Result<Output> {
+    // ... 200 lines of logic
+}
+
+// AFTER: Decomposed into focused helpers
+fn run_command(cmd: &Command) -> Result<Output> {
+    let config = load_config()?;
+    let validated = validate_command(cmd, &config)?;
+    let result = execute_validated(validated)?;
+    format_output(result)
+}
+
+// Or use allow attribute if decomposition hurts readability
+#[allow(clippy::too_many_lines)]
+fn run_command(cmd: &Command) -> Result<Output> {
+    // Long but cohesive function - splitting would obscure logic
+}
+```
+
+### 38.6 Code Organization Patterns
+
+#### 38.6.1 Module Structure (Rust Example)
+
+From beads_viewer architecture:
+
+```
+pkg/
+├── analysis/              # Graph analysis engine (45+ files)
+│   ├── graph.go          # Core graph algorithms
+│   ├── config.go         # Analysis configuration
+│   ├── triage.go         # Unified output format
+│   └── [specialized modules]
+├── ui/                    # TUI components (60+ files)
+│   ├── model.go          # Master state machine
+│   └── [view-specific modules]
+├── loader/               # Data loading
+├── model/                # Data types
+└── export/               # Output formats
+```
+
+**Key Principles**:
+1. **Clear separation of concerns**: loader, analysis, UI, export are independent
+2. **Flat-ish structure**: Avoid deep nesting of modules
+3. **Test files colocated**: `foo_test.go` next to `foo.go`
+4. **Shared types in `model/`**: Prevents circular dependencies
+
+#### 38.6.2 Layered Architecture
+
+```
+┌─────────────────────────────────────┐
+│           CLI / TUI Layer           │  ← User interaction
+├─────────────────────────────────────┤
+│         Business Logic Layer        │  ← Core algorithms
+├─────────────────────────────────────┤
+│          Data Access Layer          │  ← File I/O, DB
+├─────────────────────────────────────┤
+│           Model / Types             │  ← Shared data structures
+└─────────────────────────────────────┘
+```
+
+### 38.7 Consistency Improvements
+
+#### 38.7.1 Pattern Normalization
+
+From mcp_agent_mail code review:
+
+```python
+# BEFORE: Inconsistent path normalization
+spec = _compile_pathspec(existing.path_pattern)  # Raw pattern
+return spec.match_file(_normalize(candidate_path))  # Normalized path
+
+# AFTER: Consistent normalization on both sides
+spec = _compile_pathspec(_normalize_pathspec_pattern(existing.path_pattern))
+return spec.match_file(_normalize(candidate_path))
+```
+
+**Impact**: Cache key consistency improved (4 different path formats → 1 cache entry)
+
+#### 38.7.2 Error Handling Consistency
+
+```go
+// BEFORE: Mixed error handling styles
+if err != nil {
+    return err
+}
+// ... later ...
+if err != nil {
+    log.Printf("error: %v", err)
+    return nil
+}
+
+// AFTER: Consistent error propagation
+if err != nil {
+    return fmt.Errorf("operation failed: %w", err)
+}
+```
+
+### 38.8 Defensive Refactoring
+
+#### 38.8.1 Redundant But Safe Checks
+
+From code review:
+
+```python
+# The `if spec is not None:` check is technically redundant (since we 
+# check PathSpec availability in the outer condition), but it's defensive 
+# coding that provides robustness if `_compile_pathspec` is ever modified
+
+if PathSpec is not None and GitWildMatchPattern is not None:
+    spec = _compile_pathspec(...)
+    if spec is not None:  # Defensive - protects against future changes
+        return spec.match_file(...)
+```
+
+**Principle**: Accept minor redundancy when it protects against future regressions.
+
+#### 38.8.2 Array Mutation Prevention
+
+From brenner_bot bug fix:
+
+```typescript
+// BEFORE: Array mutation bug - .sort() mutates in place
+const hasCustomizations = value.sort() !== DEFAULT_OPERATORS.sort();
+
+// AFTER: Create copies before sorting
+const hasCustomizations = 
+    [...value].sort().join(',') !== [...DEFAULT_OPERATORS].sort().join(',');
+```
+
+### 38.9 Type System Improvements
+
+#### 38.9.1 Strengthening Types
+
+```rust
+// BEFORE: Stringly-typed
+fn set_status(status: &str) { ... }
+
+// AFTER: Enum-typed
+enum Status { Open, InProgress, Blocked, Closed }
+fn set_status(status: Status) { ... }
+```
+
+#### 38.9.2 Narrowing Generic Constraints
+
+```rust
+// BEFORE: Overly generic
+fn process<T>(item: T) { ... }
+
+// AFTER: Constrained to what's actually needed
+fn process<T: Display + Clone>(item: T) { ... }
+```
+
+### 38.10 Refactoring Triggers
+
+| Trigger | Response |
+|---------|----------|
+| Clippy/linter warnings | Fix systematically (see 38.2) |
+| Failing tests after change | Understand coupling, extract shared logic |
+| Performance bottleneck | Profile first, then optimize hot path |
+| New feature difficult to add | Refactor to make feature easy, then add |
+| Bug in complex function | Simplify first, then fix |
+| Code review feedback | Address systematically |
+| Upgrade to new language edition | Run migration tools, then fix manually |
+
+### 38.11 Refactoring Anti-Patterns
+
+#### 38.11.1 Big Bang Refactoring
+
+**Problem**: Attempting massive restructuring in one commit  
+**Solution**: Incremental changes, each tested and committed
+
+#### 38.11.2 Refactoring Without Tests
+
+**Problem**: Changing code without test coverage  
+**Solution**: Write characterization tests first, then refactor
+
+#### 38.11.3 Premature Abstraction
+
+**Problem**: Creating abstractions for single use cases  
+**Solution**: Wait for repetition (Rule of Three)
+
+#### 38.11.4 Aesthetic-Only Changes
+
+**Problem**: Reformatting working code for "cleanliness"  
+**Solution**: Only refactor when there's a concrete benefit (performance, maintainability, bug fix)
+
+### 38.12 Application to meta_skill
+
+| Refactoring Area | Pattern | meta_skill Application |
+|------------------|---------|------------------------|
+| **Linter compliance** | Clippy workflow | Run `cargo clippy` in CI, fix before merge |
+| **Dead code** | Detection + removal | Flag unused skills, orphaned templates |
+| **Function extraction** | Too-many-lines fix | Keep skill handlers focused |
+| **Module structure** | Clear separation | skills/, templates/, search/, cli/ |
+| **Type safety** | Enum over strings | SkillType, TemplateKind as enums |
+| **Consistency** | Normalize paths | Consistent skill path resolution |
+
+### 38.13 Refactoring Workflow Checklist
+
+Before refactoring:
+- [ ] Do you have test coverage for the code being changed?
+- [ ] Is there a concrete trigger (lint, perf, bug, feature)?
+- [ ] Have you identified the smallest useful change?
+
+During refactoring:
+- [ ] Are you making one logical change per commit?
+- [ ] Are tests passing after each change?
+- [ ] Are you avoiding behavior changes (pure restructuring)?
+
+After refactoring:
+- [ ] Does the code pass all linters?
+- [ ] Are there any new warnings?
+- [ ] Is the code more readable/maintainable?
+- [ ] Have you updated documentation if needed?
+
+### 38.14 Tool Reference
+
+| Task | Tool | Command |
+|------|------|---------|
+| Rust linting | clippy | `cargo clippy --all-targets -- -D warnings` |
+| Rust auto-fix | clippy | `cargo clippy --fix --allow-dirty` |
+| Go linting | golangci-lint | `golangci-lint run` |
+| Python linting | ruff | `ruff check .` |
+| TypeScript linting | eslint | `eslint --fix .` |
+| Dead code (Rust) | cargo | `cargo build 2>&1 \| grep "warning: unused"` |
+| Symbol search | ripgrep | `rg "symbol_name" --type rust` |
+| AST refactoring | ast-grep | `ast-grep run -p 'old_pattern' -r 'new_pattern'` |
