@@ -19,13 +19,104 @@ pub struct CmContext {
     #[serde(default)]
     pub task: String,
     #[serde(rename = "relevantBullets", default)]
-    pub relevant_bullets: Vec<serde_json::Value>,
+    pub relevant_bullets: Vec<PlaybookRule>,
     #[serde(rename = "antiPatterns", default)]
-    pub anti_patterns: Vec<serde_json::Value>,
+    pub anti_patterns: Vec<AntiPattern>,
     #[serde(rename = "historySnippets", default)]
-    pub history_snippets: Vec<serde_json::Value>,
+    pub history_snippets: Vec<HistorySnippet>,
     #[serde(rename = "suggestedCassQueries", default)]
     pub suggested_cass_queries: Vec<String>,
+}
+
+/// A playbook rule from CM.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PlaybookRule {
+    #[serde(default)]
+    pub id: String,
+    #[serde(default)]
+    pub content: String,
+    #[serde(default)]
+    pub category: String,
+    #[serde(default)]
+    pub confidence: f32,
+    #[serde(default)]
+    pub maturity: String,
+    #[serde(rename = "helpfulCount", default)]
+    pub helpful_count: u32,
+    #[serde(rename = "harmfulCount", default)]
+    pub harmful_count: u32,
+    #[serde(default)]
+    pub scope: Option<String>,
+}
+
+/// An anti-pattern from CM context.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AntiPattern {
+    #[serde(default)]
+    pub id: String,
+    #[serde(default)]
+    pub content: String,
+    #[serde(default)]
+    pub reason: String,
+    #[serde(default)]
+    pub severity: String,
+}
+
+/// A history snippet from CM context.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct HistorySnippet {
+    #[serde(rename = "sessionId", default)]
+    pub session_id: String,
+    #[serde(default)]
+    pub summary: String,
+    #[serde(default)]
+    pub relevance: f32,
+}
+
+/// Similar rule match result.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SimilarMatch {
+    #[serde(default)]
+    pub id: String,
+    #[serde(default)]
+    pub content: String,
+    #[serde(default)]
+    pub similarity: f32,
+    #[serde(default)]
+    pub category: String,
+}
+
+/// Result from `cm playbook list`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PlaybookListResult {
+    #[serde(default)]
+    pub success: bool,
+    #[serde(default)]
+    pub rules: Vec<PlaybookRule>,
+    #[serde(default)]
+    pub count: usize,
+}
+
+/// Result from `cm similar`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SimilarResult {
+    #[serde(default)]
+    pub success: bool,
+    #[serde(default)]
+    pub matches: Vec<SimilarMatch>,
+    #[serde(default)]
+    pub query: String,
+}
+
+/// Result from `cm playbook add`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AddRuleResult {
+    #[serde(default)]
+    pub success: bool,
+    #[serde(default)]
+    pub id: String,
+    #[serde(default)]
+    pub content: String,
 }
 
 /// Client for interacting with CM (cass-memory).
@@ -99,6 +190,73 @@ impl CmClient {
         let output = self.run_command(&["context", task, "--json"])?;
         serde_json::from_slice(&output)
             .map_err(|e| MsError::CmUnavailable(format!("Failed to parse cm context: {e}")))
+    }
+
+    /// Get playbook rules, optionally filtered by category.
+    pub fn get_rules(&self, category: Option<&str>) -> Result<Vec<PlaybookRule>> {
+        let mut args = vec!["playbook", "list", "--json"];
+        let cat_arg;
+        if let Some(cat) = category {
+            args.push("--category");
+            cat_arg = cat.to_string();
+            args.push(&cat_arg);
+        }
+        let output = self.run_command(&args)?;
+        let result: PlaybookListResult = serde_json::from_slice(&output)
+            .map_err(|e| MsError::CmUnavailable(format!("Failed to parse playbook list: {e}")))?;
+        Ok(result.rules)
+    }
+
+    /// Find similar rules in the playbook.
+    pub fn similar(&self, query: &str, threshold: Option<f32>) -> Result<Vec<SimilarMatch>> {
+        let mut args = vec!["similar", query, "--json"];
+        let threshold_arg;
+        if let Some(t) = threshold {
+            args.push("--threshold");
+            threshold_arg = t.to_string();
+            args.push(&threshold_arg);
+        }
+        let output = self.run_command(&args)?;
+        let result: SimilarResult = serde_json::from_slice(&output)
+            .map_err(|e| MsError::CmUnavailable(format!("Failed to parse similar result: {e}")))?;
+        Ok(result.matches)
+    }
+
+    /// Check if a rule with similar content already exists.
+    /// Returns the matching rule if found with similarity >= threshold.
+    pub fn rule_exists(&self, content: &str, threshold: f32) -> Result<Option<PlaybookRule>> {
+        let matches = self.similar(content, Some(threshold))?;
+        if let Some(m) = matches.first() {
+            // Fetch full rule details
+            let rules = self.get_rules(None)?;
+            let rule = rules.into_iter().find(|r| r.id == m.id);
+            Ok(rule)
+        } else {
+            Ok(None)
+        }
+    }
+
+    /// Add a new rule to the playbook.
+    pub fn add_rule(&self, content: &str, category: Option<&str>) -> Result<AddRuleResult> {
+        let mut args = vec!["playbook", "add", content, "--json"];
+        let cat_arg;
+        if let Some(cat) = category {
+            args.push("--category");
+            cat_arg = cat.to_string();
+            args.push(&cat_arg);
+        }
+        let output = self.run_command(&args)?;
+        serde_json::from_slice(&output)
+            .map_err(|e| MsError::CmUnavailable(format!("Failed to parse add rule result: {e}")))
+    }
+
+    /// Validate a proposed rule against CASS history.
+    pub fn validate_rule(&self, rule: &str) -> Result<bool> {
+        let output = self.run_command(&["validate", rule, "--json"])?;
+        // cm validate returns success field
+        let result: serde_json::Value = serde_json::from_slice(&output)
+            .map_err(|e| MsError::CmUnavailable(format!("Failed to parse validate result: {e}")))?;
+        Ok(result.get("valid").and_then(|v| v.as_bool()).unwrap_or(false))
     }
 
     fn run_command(&self, args: &[&str]) -> Result<Vec<u8>> {

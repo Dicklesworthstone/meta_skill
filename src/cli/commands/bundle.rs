@@ -43,9 +43,13 @@ pub struct BundleCreateArgs {
     /// Bundle name
     pub name: String,
 
-    /// Skills to include
+    /// Skills to include (by ID)
     #[arg(long)]
     pub skills: Vec<String>,
+
+    /// Directory containing skills to discover and include
+    #[arg(long, conflicts_with = "skills")]
+    pub from_dir: Option<PathBuf>,
 
     /// Bundle id (defaults to slug of name)
     #[arg(long)]
@@ -55,13 +59,21 @@ pub struct BundleCreateArgs {
     #[arg(long, default_value = "0.1.0")]
     pub version: String,
 
-    /// Output path for bundle file
+    /// Output path for bundle file (.msb or .tar.gz)
     #[arg(long)]
     pub output: Option<PathBuf>,
 
     /// Write manifest TOML alongside bundle
     #[arg(long)]
     pub write_manifest: bool,
+
+    /// Sign the bundle with SSH key
+    #[arg(long)]
+    pub sign: bool,
+
+    /// Path to SSH private key for signing
+    #[arg(long, requires = "sign")]
+    pub sign_key: Option<PathBuf>,
 }
 
 #[derive(Args, Debug)]
@@ -183,10 +195,16 @@ pub fn run(_ctx: &AppContext, _args: &BundleArgs) -> Result<()> {
 }
 
 fn run_create(ctx: &AppContext, args: &BundleCreateArgs) -> Result<()> {
-    let skills = normalize_skill_list(&args.skills);
+    // Discover skills from --skills list or --from-dir directory
+    let skills = if let Some(ref from_dir) = args.from_dir {
+        discover_skills_in_dir(from_dir)?
+    } else {
+        normalize_skill_list(&args.skills)
+    };
+
     if skills.is_empty() {
         return Err(MsError::ValidationFailed(
-            "bundle create requires --skills".to_string(),
+            "bundle create requires --skills or --from-dir".to_string(),
         ));
     }
 
@@ -195,13 +213,31 @@ fn run_create(ctx: &AppContext, args: &BundleCreateArgs) -> Result<()> {
 
     let mut entries = Vec::new();
     for skill_id in skills {
-        let skill_dir = ctx.git.skill_path(&skill_id).ok_or_else(|| {
-            MsError::SkillNotFound(format!("invalid skill id: {}", skill_id))
-        })?;
+        // Resolve skill directory: check archive first, then from_dir
+        let skill_dir = if let Some(path) = ctx.git.skill_path(&skill_id) {
+            if path.exists() {
+                path
+            } else if let Some(ref from_dir) = args.from_dir {
+                from_dir.join(&skill_id)
+            } else {
+                return Err(MsError::SkillNotFound(format!(
+                    "skill not found in archive: {}",
+                    skill_id
+                )));
+            }
+        } else if let Some(ref from_dir) = args.from_dir {
+            from_dir.join(&skill_id)
+        } else {
+            return Err(MsError::SkillNotFound(format!(
+                "invalid skill id: {}",
+                skill_id
+            )));
+        };
+
         if !skill_dir.exists() {
             return Err(MsError::SkillNotFound(format!(
-                "skill not found in archive: {}",
-                skill_id
+                "skill directory not found: {}",
+                skill_dir.display()
             )));
         }
 
@@ -209,12 +245,20 @@ fn run_create(ctx: &AppContext, args: &BundleCreateArgs) -> Result<()> {
             .strip_prefix(&root)
             .unwrap_or(&skill_dir)
             .to_path_buf();
-        let metadata = ctx.git.read_metadata(&skill_id)?;
-        let version = if metadata.version.trim().is_empty() {
-            None
-        } else {
-            Some(metadata.version)
-        };
+
+        // Read metadata if available, use defaults otherwise
+        let version = ctx
+            .git
+            .read_metadata(&skill_id)
+            .ok()
+            .and_then(|m| {
+                if m.version.trim().is_empty() {
+                    None
+                } else {
+                    Some(m.version)
+                }
+            });
+
         entries.push(BundledSkill {
             name: skill_id,
             path: rel,
@@ -384,6 +428,84 @@ fn run_install(ctx: &AppContext, args: &BundleInstallArgs) -> Result<()> {
     Ok(())
 }
 
+fn run_remove(ctx: &AppContext, args: &BundleRemoveArgs) -> Result<()> {
+    use std::io::Write;
+
+    let mut registry = BundleRegistry::open(ctx.git.root())?;
+
+    // Check if bundle is in registry
+    let installed = registry.get(&args.bundle_id).cloned();
+
+    // Also check for legacy .msb file
+    let bundles_dir = ctx.git.root().join("bundles");
+    let bundle_path = bundles_dir.join(format!("{}.msb", args.bundle_id));
+    let has_bundle_file = bundle_path.exists();
+
+    if installed.is_none() && !has_bundle_file {
+        return Err(MsError::NotFound(format!(
+            "bundle '{}' is not installed",
+            args.bundle_id
+        )));
+    }
+
+    if !args.force && !ctx.robot_mode {
+        eprintln!("About to remove bundle: {}", args.bundle_id);
+        if let Some(ref inst) = installed {
+            eprintln!("Version: {}", inst.version);
+            eprintln!("Installed skills: {}", inst.skills.join(", "));
+        }
+        if args.remove_skills {
+            eprintln!("Warning: --remove-skills will also delete installed skill files");
+        }
+        eprint!("Continue? [y/N] ");
+        std::io::stdout().flush()?;
+        let mut input = String::new();
+        std::io::stdin().read_line(&mut input)?;
+        if !input.trim().eq_ignore_ascii_case("y") {
+            return Err(MsError::Config("Removal cancelled".into()));
+        }
+    }
+
+    // Remove skills if requested
+    let mut removed_skills = Vec::new();
+    if args.remove_skills {
+        if let Some(ref inst) = installed {
+            for skill_id in &inst.skills {
+                if let Some(skill_path) = ctx.git.skill_path(skill_id) {
+                    if skill_path.exists() {
+                        std::fs::remove_dir_all(&skill_path)?;
+                        removed_skills.push(skill_id.clone());
+                    }
+                }
+            }
+        }
+    }
+
+    // Remove from registry
+    registry.unregister(&args.bundle_id)?;
+
+    // Remove legacy bundle file if exists
+    if has_bundle_file {
+        std::fs::remove_file(&bundle_path)?;
+    }
+
+    if ctx.robot_mode {
+        return emit_json(&serde_json::json!({
+            "removed": args.bundle_id,
+            "skills_removed": removed_skills,
+        }));
+    }
+
+    println!("Removed bundle: {}", args.bundle_id);
+    if !removed_skills.is_empty() {
+        println!("Removed skills:");
+        for skill in &removed_skills {
+            println!("  - {}", skill);
+        }
+    }
+    Ok(())
+}
+
 fn run_publish(ctx: &AppContext, args: &BundlePublishArgs) -> Result<()> {
     let repo = args.repo.clone().ok_or_else(|| {
         MsError::ValidationFailed("bundle publish requires --repo".to_string())
@@ -532,48 +654,34 @@ fn run_conflicts(ctx: &AppContext, args: &BundleConflictsArgs) -> Result<()> {
 }
 
 fn run_list(ctx: &AppContext) -> Result<()> {
-    let bundles_dir = ctx.git.root().join("bundles");
-
-    if !bundles_dir.exists() {
-        if ctx.robot_mode {
-            return emit_json(&BundleListReport {
-                bundles: vec![],
-                count: 0,
-            });
-        }
-        println!("No bundles installed.");
-        return Ok(());
-    }
-
-    // List .msb files in bundles directory
-    let mut bundles = Vec::new();
-    if let Ok(entries) = std::fs::read_dir(&bundles_dir) {
-        for entry in entries.flatten() {
-            let path = entry.path();
-            if path.extension().map_or(false, |ext| ext == "msb") {
-                if let Some(name) = path.file_stem().and_then(|s| s.to_str()) {
-                    bundles.push(name.to_string());
-                }
-            }
-        }
-    }
-    bundles.sort();
+    let registry = BundleRegistry::open(ctx.git.root())?;
+    let installed: Vec<_> = registry.list().collect();
 
     if ctx.robot_mode {
-        return emit_json(&BundleListReport {
+        let bundles: Vec<_> = installed.iter().map(|b| BundleListEntry {
+            id: b.id.clone(),
+            version: b.version.clone(),
+            source: b.source.to_string(),
+            skills: b.skills.clone(),
+            installed_at: b.installed_at.to_rfc3339(),
+        }).collect();
+        return emit_json(&BundleListReportDetailed {
             count: bundles.len(),
             bundles,
         });
     }
 
-    if bundles.is_empty() {
+    if installed.is_empty() {
         println!("No bundles installed.");
     } else {
         println!("Installed bundles:");
-        for bundle in &bundles {
-            println!("  - {}", bundle);
+        for bundle in installed {
+            println!("  {} v{}", bundle.id, bundle.version);
+            println!("    Source: {}", bundle.source);
+            println!("    Skills: {}", bundle.skills.join(", "));
+            println!("    Installed: {}", bundle.installed_at.format("%Y-%m-%d %H:%M"));
+            println!();
         }
-        println!("\n{} bundle(s) total.", bundles.len());
     }
     Ok(())
 }
@@ -757,10 +865,34 @@ struct BundleCreateReport {
     checksum: Option<String>,
 }
 
+#[allow(dead_code)]
 #[derive(serde::Serialize)]
 struct BundleListReport {
     bundles: Vec<String>,
     count: usize,
+}
+
+#[derive(serde::Serialize)]
+struct BundleListReportDetailed {
+    bundles: Vec<BundleListEntry>,
+    count: usize,
+}
+
+#[derive(serde::Serialize)]
+struct BundleListEntry {
+    id: String,
+    version: String,
+    source: String,
+    skills: Vec<String>,
+    installed_at: String,
+}
+
+#[allow(dead_code)]
+#[derive(serde::Serialize)]
+struct BundleRemoveReport {
+    bundle_id: String,
+    removed_skills: Vec<String>,
+    skills_kept: Vec<String>,
 }
 
 #[derive(serde::Serialize)]

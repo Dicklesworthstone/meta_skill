@@ -55,43 +55,48 @@ pub struct TestDefinition {
 /// Alias for backward compatibility
 pub type TestSpec = TestDefinition;
 
-fn default_timeout() -> Duration {
-    Duration::from_secs(60)
-}
-
 /// A single test step
+///
+/// Uses untagged serde representation to support YAML format like:
+/// ```yaml
+/// - load_skill:
+///     level: standard
+/// ```
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
+#[serde(untagged)]
 pub enum TestStep {
     /// Load a skill
-    LoadSkill(LoadSkillStep),
+    LoadSkill { load_skill: LoadSkillStep },
 
     /// Run a shell command
-    Run(RunStep),
+    Run { run: RunStep },
 
     /// Assert conditions
-    Assert(AssertStep),
+    Assert { assert: AssertStep },
 
     /// Write a file
-    WriteFile(WriteFileStep),
+    WriteFile { write_file: WriteFileStep },
 
     /// Create a directory
-    Mkdir(MkdirStep),
+    Mkdir { mkdir: MkdirStep },
 
     /// Remove a file or directory
-    Remove(RemoveStep),
+    Remove { remove: RemoveStep },
 
     /// Copy a file
-    Copy(CopyStep),
+    Copy { copy: CopyStep },
 
     /// Sleep for a duration
-    Sleep(SleepStep),
+    Sleep { sleep: SleepStep },
 
     /// Set a variable
-    Set(SetStep),
+    Set { set: SetStep },
 
     /// Conditional execution
-    If(IfStep),
+    If {
+        #[serde(rename = "if")]
+        if_step: IfStep,
+    },
 }
 
 /// Load a skill step
@@ -428,9 +433,9 @@ steps:
 "#;
         let spec = TestSpec::from_yaml(yaml).unwrap();
         match &spec.steps[0] {
-            TestStep::LoadSkill(s) => {
-                assert_eq!(s.level, "comprehensive");
-                assert_eq!(s.budget, Some(2000));
+            TestStep::LoadSkill { load_skill } => {
+                assert_eq!(load_skill.level, "comprehensive");
+                assert_eq!(load_skill.budget, Some(2000));
             }
             _ => panic!("expected LoadSkill step"),
         }
@@ -451,11 +456,11 @@ steps:
 "#;
         let spec = TestSpec::from_yaml(yaml).unwrap();
         match &spec.steps[0] {
-            TestStep::Run(s) => {
-                assert_eq!(s.cmd, "cargo build");
-                assert_eq!(s.cwd, Some("/tmp".to_string()));
-                assert_eq!(s.env.get("RUST_BACKTRACE"), Some(&"1".to_string()));
-                assert_eq!(s.timeout, Some(Duration::from_secs(10)));
+            TestStep::Run { run } => {
+                assert_eq!(run.cmd, "cargo build");
+                assert_eq!(run.cwd, Some("/tmp".to_string()));
+                assert_eq!(run.env.get("RUST_BACKTRACE"), Some(&"1".to_string()));
+                assert_eq!(run.timeout, Some(Duration::from_secs(10)));
             }
             _ => panic!("expected Run step"),
         }
@@ -474,10 +479,10 @@ steps:
 "#;
         let spec = TestSpec::from_yaml(yaml).unwrap();
         match &spec.steps[0] {
-            TestStep::Assert(s) => {
-                assert_eq!(s.exit_code, Some(0));
-                assert_eq!(s.stdout_contains, Some("success".to_string()));
-                assert_eq!(s.file_exists, Some("/tmp/output.txt".to_string()));
+            TestStep::Assert { assert } => {
+                assert_eq!(assert.exit_code, Some(0));
+                assert_eq!(assert.stdout_contains, Some("success".to_string()));
+                assert_eq!(assert.file_exists, Some("/tmp/output.txt".to_string()));
             }
             _ => panic!("expected Assert step"),
         }

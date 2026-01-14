@@ -20,6 +20,25 @@ pub enum CmCommand {
         /// Task or query string
         task: String,
     },
+    /// List playbook rules
+    Rules {
+        /// Filter by category
+        #[arg(long)]
+        category: Option<String>,
+        /// Maximum number of rules to show
+        #[arg(long, default_value = "20")]
+        limit: usize,
+    },
+    /// Find similar rules in the playbook
+    Similar {
+        /// Query text to match against playbook
+        query: String,
+        /// Minimum similarity threshold (0.0-1.0)
+        #[arg(long, default_value = "0.7")]
+        threshold: f32,
+    },
+    /// Check CM status and availability
+    Status,
 }
 
 pub fn run(ctx: &AppContext, args: &CmArgs) -> Result<()> {
@@ -68,6 +87,84 @@ pub fn run(ctx: &AppContext, args: &CmArgs) -> Result<()> {
                     for q in &context.suggested_cass_queries {
                         println!("- {}", q);
                     }
+                }
+            }
+        }
+
+        CmCommand::Rules { category, limit } => {
+            let rules = client.get_rules(category.as_deref())?;
+            let rules: Vec<_> = rules.into_iter().take(*limit).collect();
+
+            if ctx.robot_mode {
+                println!(
+                    "{}",
+                    serde_json::json!({
+                        "rules": rules,
+                        "count": rules.len()
+                    })
+                );
+            } else {
+                if rules.is_empty() {
+                    println!("No rules found");
+                } else {
+                    println!("Playbook rules ({} shown):\n", rules.len());
+                    for rule in &rules {
+                        println!("[{}] {} ({})", rule.id, rule.content, rule.category);
+                        println!(
+                            "    confidence: {:.2}, helpful: {}, harmful: {}",
+                            rule.confidence, rule.helpful_count, rule.harmful_count
+                        );
+                        println!();
+                    }
+                }
+            }
+        }
+
+        CmCommand::Similar { query, threshold } => {
+            let matches = client.similar(query, Some(*threshold))?;
+
+            if ctx.robot_mode {
+                println!(
+                    "{}",
+                    serde_json::json!({
+                        "query": query,
+                        "matches": matches
+                    })
+                );
+            } else {
+                if matches.is_empty() {
+                    println!("No similar rules found for: {}", query);
+                } else {
+                    println!("Similar rules for: {}\n", query);
+                    for m in &matches {
+                        println!(
+                            "[{}] {} (similarity: {:.2})",
+                            m.id, m.content, m.similarity
+                        );
+                    }
+                }
+            }
+        }
+
+        CmCommand::Status => {
+            let available = client.is_available();
+            if ctx.robot_mode {
+                println!(
+                    "{}",
+                    serde_json::json!({
+                        "available": available,
+                        "cm_path": ctx.config.cm.cm_path.as_deref().unwrap_or("cm"),
+                        "enabled": ctx.config.cm.enabled
+                    })
+                );
+            } else {
+                if available {
+                    println!("✓ CM is available");
+                } else {
+                    println!("✗ CM is not available");
+                }
+                if let Some(path) = &ctx.config.cm.cm_path {
+                    println!("  path: {}", path);
                 }
             }
         }

@@ -4,4 +4,7 @@
 
 pub mod client;
 
-pub use client::{CmClient, CmContext};
+pub use client::{
+    AddRuleResult, AntiPattern, CmClient, CmContext, HistorySnippet, PlaybookListResult,
+    PlaybookRule, SimilarMatch, SimilarResult,
+};

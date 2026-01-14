@@ -2,6 +2,7 @@
 //!
 //! Mines CASS sessions to extract patterns and generate skills.
 
+pub mod brenner;
 pub mod client;
 pub mod mining;
 pub mod quality;
@@ -30,4 +31,9 @@ pub use uncertainty::{
     Resolution, ResolutionAttempt, ResolutionResult, SuggestedQuery, UncertaintyCounts,
     UncertaintyConfig, UncertaintyId, UncertaintyItem, UncertaintyQueue, UncertaintyReason,
     UncertaintyResolver, UncertaintyStatus,
+};
+pub use brenner::{
+    BrennerConfig, BrennerSkillDraft, BrennerWizard, CognitiveMove, CognitiveMoveTag,
+    MoveDecision, MoveEvidence, SelectedSession, SkillExample, SkillRule, TestResults,
+    WizardCheckpoint, WizardOutput, WizardState,
 };

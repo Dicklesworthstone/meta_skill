@@ -85,16 +85,16 @@ impl TestContext {
 /// Execute a single test step
 pub fn execute_step(step: &TestStep, ctx: &mut TestContext, verbose: bool) -> Result<()> {
     match step {
-        TestStep::LoadSkill(s) => execute_load_skill(s, ctx, verbose),
-        TestStep::Run(s) => execute_run(s, ctx, verbose),
-        TestStep::Assert(s) => execute_assert(s, ctx, verbose),
-        TestStep::WriteFile(s) => execute_write_file(s, ctx, verbose),
-        TestStep::Mkdir(s) => execute_mkdir(s, ctx, verbose),
-        TestStep::Remove(s) => execute_remove(s, ctx, verbose),
-        TestStep::Copy(s) => execute_copy(s, ctx, verbose),
-        TestStep::Sleep(s) => execute_sleep(s, ctx, verbose),
-        TestStep::Set(s) => execute_set(s, ctx, verbose),
-        TestStep::If(s) => execute_if(s, ctx, verbose),
+        TestStep::LoadSkill { load_skill } => execute_load_skill(load_skill, ctx, verbose),
+        TestStep::Run { run } => execute_run(run, ctx, verbose),
+        TestStep::Assert { assert } => execute_assert(assert, ctx, verbose),
+        TestStep::WriteFile { write_file } => execute_write_file(write_file, ctx, verbose),
+        TestStep::Mkdir { mkdir } => execute_mkdir(mkdir, ctx, verbose),
+        TestStep::Remove { remove } => execute_remove(remove, ctx, verbose),
+        TestStep::Copy { copy } => execute_copy(copy, ctx, verbose),
+        TestStep::Sleep { sleep } => execute_sleep(sleep, ctx, verbose),
+        TestStep::Set { set } => execute_set(set, ctx, verbose),
+        TestStep::If { if_step } => execute_if(if_step, ctx, verbose),
     }
 }
 
