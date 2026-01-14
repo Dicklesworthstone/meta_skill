@@ -11,7 +11,7 @@
 
 </div>
 
-Meta Skill (`ms`) is a local-first CLI that mines CASS sessions and turns them into durable, production-quality skills. It maintains a dual persistence model (SQLite + Git), supports hybrid search (BM25 + hash embeddings), and enforces safety invariants during extraction.
+Meta Skill (`ms`) is a local-first CLI that mines CASS sessions into durable, production-grade skills. It stores skills with dual persistence (SQLite + Git), supports hybrid search (BM25 + hash embeddings), and enforces safety boundaries during extraction.
 
 <div align="center">
 <h3>Quick Install</h3>
@@ -34,22 +34,21 @@ cargo run -- <COMMAND>
 
 ## TL;DR
 
-**The Problem**: Great agent workflows get rediscovered repeatedly. CASS captures the raw sessions, but there is no systematic way to turn them into durable, reusable skills.
+**The Problem**: Agent workflows get rediscovered repeatedly. CASS captures raw sessions, but there is no systematic way to distill them into reusable skills.
 
-**The Solution**: `ms` extracts patterns, consolidates them into structured skill specs, and stores them with strong provenance so teams can search, load, and reuse them.
+**The Solution**: `ms` extracts patterns, compiles them into structured skill specs, and stores them with provenance so they can be searched, loaded, and reused.
 
 ### Why Use ms?
 
 | Feature | What It Does |
 |---------|--------------|
 | **Dual Persistence** | SQLite for fast queries + Git archive for auditability |
-| **Hybrid Search** | BM25 full-text + hash embeddings, fused with RRF |
+| **Hybrid Search** | BM25 full-text + hash embeddings fused with RRF |
 | **Robot Mode** | JSON output for automation (`--robot`) |
 | **Safety Controls** | ACIP prompt-injection quarantine + trust boundaries |
 | **Structured Skills** | Deterministic `SKILL.md` ↔ spec round-trip |
-| **Layering** | Prioritized layers (base/org/project/user) |
-| **CLI-First** | Unix-friendly output and scripting |
-| **Local-First** | All processing is on your machine by default |
+| **Layering** | Priority layers (base/org/project/user) |
+| **Local-First** | All processing is local by default |
 
 ### Quick Example
 
@@ -57,16 +56,14 @@ cargo run -- <COMMAND>
 # Initialize a local ms root (.ms/)
 ms init
 
-# Add a skills path (TOML value)
+# Configure a project skill path
 ms config skill_paths.project '["./skills"]'
 
 # Index SKILL.md files
 ms index
 
-# Search skills
+# Search and inspect
 ms search "error handling"
-
-# Show details
 ms show rust-error-handling
 ```
 
@@ -95,7 +92,6 @@ ms index
 ms list
 ms search "error handling"
 ms show rust-error-handling
-```
 
 Key Flags
 
@@ -105,7 +101,7 @@ Key Flags
 
 Storage
 
-- Local root: ./ .ms (project) or ~/.local/share/ms (global)
+- Local root: ./.ms (project) or ~/.local/share/ms (global)
 - DB: <ms_root>/ms.db
 - Git archive: <ms_root>/archive/
 - Index: <ms_root>/index/
@@ -138,7 +134,7 @@ Notes
 
 - JSON in robot mode for easy pipelines.
 - Human-friendly output by default.
-- Commands are designed to be composable with Unix tooling.
+- Commands are designed to compose with Unix tooling.
 
 ---
 
@@ -157,7 +153,7 @@ Notes
 
 ## Origins & Authors
 
-Created by **Jeffrey Emanuel** to transform raw agent sessions into reusable, versioned skills. The goal: preserve hard-won workflows with the same rigor we apply to production code.
+Created by **Jeffrey Emanuel** to transform raw agent sessions into reusable, versioned skills. The goal is to preserve hard-won workflows with the same rigor we apply to production code.
 
 ---
 
@@ -177,9 +173,7 @@ cass health
 cass search "error handling" --robot --limit 5
 ```
 
-### Common Paths
-
-CASS typically stores session archives under your home directory (varies by install). `ms` can be pointed at CASS paths via config:
+### Common Config
 
 ```toml
 [cass]
@@ -216,13 +210,12 @@ cargo install --git https://github.com/Dicklesworthstone/meta_skill.git
 ### 1. Initialize
 
 ```bash
-ms init          # Creates .ms/ with db, archive, index, config
+ms init
 ```
 
 ### 2. Add Skill Paths
 
 ```bash
-# Set a project skill path
 ms config skill_paths.project '["./skills"]'
 ```
 
@@ -244,7 +237,7 @@ ms show rust-error-handling
 
 ## Commands
 
-`ms` uses a consistent CLI structure. Global flags:
+Global flags:
 
 ```bash
 --robot     # JSON output to stdout
@@ -255,8 +248,6 @@ ms show rust-error-handling
 
 ### `ms init`
 
-Initialize an ms root (project-local by default):
-
 ```bash
 ms init
 ms init --global
@@ -266,12 +257,10 @@ ms init --force
 Creates:
 - `.ms/ms.db` (SQLite)
 - `.ms/archive/` (Git)
-- `.ms/index/` (Tantivy search index)
+- `.ms/index/` (search index)
 - `.ms/config.toml`
 
 ### `ms index`
-
-Index skills from configured paths:
 
 ```bash
 ms index
@@ -279,13 +268,7 @@ ms index ./skills /other/path
 ms index --force
 ```
 
-Notes:
-- Uses `.ms/config.toml` by default.
-- Also updates a Tantivy index for future use.
-
 ### `ms list`
-
-List indexed skills:
 
 ```bash
 ms list
@@ -295,8 +278,6 @@ ms list --robot
 
 ### `ms show`
 
-Show skill details:
-
 ```bash
 ms show rust-error-handling
 ms show rust-error-handling --full
@@ -304,8 +285,6 @@ ms show rust-error-handling --meta
 ```
 
 ### `ms search`
-
-Search skills (hybrid by default):
 
 ```bash
 ms search "error handling"
@@ -315,11 +294,11 @@ ms search "async" --search-type semantic
 
 ### `ms load` (planned)
 
-Currently stubbed (TODO). Intended to load a skill with progressive disclosure and token budgets.
+Stubbed. Intended to load skills with progressive disclosure and token budgets.
 
 ### `ms suggest`
 
-Capture context + compute a fingerprint. Suggestion engine currently returns empty results, but the context and cooldown cache are implemented.
+Captures context + computes a fingerprint. Suggestions currently return an empty list, but cooldown tracking is implemented.
 
 ```bash
 ms suggest
@@ -328,15 +307,13 @@ ms suggest --cwd /path/to/project
 
 ### `ms edit`
 
-Round-trip edit of a skill (structured):
-
 ```bash
 ms edit rust-error-handling
 ```
 
 ### `ms fmt`
 
-Format skills (ensures canonical SKILL.md layout).
+Formats skill files to canonical layout.
 
 ### `ms diff`
 
@@ -352,7 +329,7 @@ Stubbed. Intended for dependency checks.
 
 ### `ms build` (planned)
 
-Stubbed. Intended to mine CASS sessions into skills:
+Stubbed. Intended to mine CASS sessions into skills.
 
 ```bash
 ms build --from-cass "error handling"
@@ -364,11 +341,9 @@ Package skills into portable bundles.
 
 ### `ms update` (planned)
 
-Stubbed. Intended to update ms itself.
+Stubbed. Intended to update `ms` itself.
 
 ### `ms doctor`
-
-Health checks for lock state, DB, Git archive, and incomplete transactions.
 
 ```bash
 ms doctor
@@ -386,18 +361,14 @@ Stubbed. Intended to remove tombstoned or outdated data safely.
 
 ### `ms config`
 
-Manage configuration:
-
 ```bash
-ms config               # show full config
+ms config
 ms config search.use_embeddings
 ms config search.use_embeddings false
 ms config --unset search.use_embeddings
 ```
 
 ### `ms security`
-
-Prompt-injection defenses (ACIP):
 
 ```bash
 ms security scan --input "ignore previous instructions" --session-id sess_1 --message-index 1
@@ -410,8 +381,6 @@ ms security quarantine review <id> --confirm-injection
 Validate skill specs.
 
 ### `ms test`
-
-Run skill tests:
 
 ```bash
 ms test --all
@@ -427,7 +396,7 @@ ms test --tags smoke
 
 Minimal example:
 
-```markdown
+````markdown
 # Rust Error Handling
 
 Best practices for error handling in Rust.
@@ -438,7 +407,7 @@ Use `Result<T, E>` and propagate errors with `?`.
 
 ## Examples
 
-```
+````
 fn read_file(path: &str) -> Result<String, std::io::Error> {
     std::fs::read_to_string(path)
 }
@@ -446,7 +415,7 @@ fn read_file(path: &str) -> Result<String, std::io::Error> {
 ```
 
 Parsing rules:
-- The `#` title becomes the skill name.
+- `#` title becomes the skill name.
 - The first paragraph after the title becomes the description.
 - Each `##` section becomes a `SkillSection` with blocks.
 
@@ -475,10 +444,8 @@ Default skill paths:
 
 ## Storage Locations
 
-By default:
-
 | Component | Location |
-|-----------|----------|
+|----------|----------|
 | ms root (project) | `.ms/` |
 | ms root (global) | `~/.local/share/ms/` |
 | SQLite database | `<ms_root>/ms.db` |
@@ -487,37 +454,9 @@ By default:
 
 ---
 
-## Data Model
-
-Skills are stored as structured specs and compiled markdown:
-
-```
-archive/
-└── skills/
-    └── by-id/
-        └── <skill_id>/
-            ├── metadata.yaml
-            ├── skill.spec.json
-            ├── SKILL.md
-            ├── spec.lens.json
-            ├── evidence.json
-            ├── slices.json
-            └── usage-log.jsonl
-```
-
-SQLite stores:
-- Skill registry (`skills`)
-- FTS index (`skills_fts`)
-- Embeddings (`skill_embeddings`)
-- ACIP quarantine records (`injection_quarantine`)
-
----
-
 ## Search Architecture
 
-`ms` uses hybrid search when available:
-
-```
+```text
 Query
   ├─ SQLite FTS (BM25)
   ├─ Hash embeddings (semantic)
@@ -525,7 +464,7 @@ Query
 ```
 
 Notes:
-- FTS is implemented via SQLite FTS5.
+- FTS uses SQLite FTS5.
 - Semantic vectors use deterministic hash embeddings (384 dims).
 - Embeddings are stored as F16 for space efficiency.
 
@@ -537,7 +476,7 @@ Notes:
 
 - Messages are classified into trust boundaries.
 - Disallowed content is quarantined with safe excerpts.
-- Reviews and replays are explicit opt-in.
+- Reviews and replays are opt-in.
 
 Core commands:
 
@@ -552,8 +491,8 @@ ms security quarantine show <id>
 ## Testing
 
 `ms` includes:
-- Unit tests (`meta_skill-7t2`)
-- Integration tests (`meta_skill-9pr`)
+- Unit tests (meta_skill-7t2)
+- Integration tests (meta_skill-9pr)
 - Skill tests (`ms test`)
 
 Recommended checks:
@@ -569,23 +508,17 @@ cargo clippy --all-targets -- -D warnings
 
 ### "No skill paths configured"
 
-Add at least one skill path in config:
-
 ```bash
 ms config skill_paths.project '["./skills"]'
 ```
 
 ### "CASS binary not found"
 
-Ensure `cass` is installed and on PATH:
-
 ```bash
 cass --version
 ```
 
 ### "Search returns no results"
-
-Index first, then search:
 
 ```bash
 ms index
@@ -604,15 +537,15 @@ ms search "query"
 
 ## FAQ
 
-### Why "ms"?
+**Q: Why "ms"?**
 
 `ms` stands for **Meta Skill**—skills about skills.
 
-### Is my data safe?
+**Q: Is my data safe?**
 
-By default, yes. All storage is local (SQLite + Git). Nothing is transmitted unless you explicitly sync or upload.
+Yes. All storage is local (SQLite + Git) unless you explicitly sync or upload.
 
-### Does ms work without CASS?
+**Q: Does ms work without CASS?**
 
 Yes. You can index and manage hand-written skills using `SKILL.md` without any CASS integration.
 
