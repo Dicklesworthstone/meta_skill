@@ -12,7 +12,7 @@ use tracing::warn;
 
 use crate::error::Result;
 use crate::quality::ubs::UbsClient;
-use crate::security::SafetyGate;
+use crate::security::{contains_injection_patterns, contains_sensitive_data, SafetyGate};
 
 use super::client::Session;
 
@@ -586,6 +586,50 @@ enum MessageTaint {
     Sensitive,
 }
 
+/// Check if content contains prompt injection patterns.
+fn contains_injection_patterns(content: &str) -> bool {
+    let lower = content.to_lowercase();
+    let markers = [
+        "ignore previous instructions",
+        "ignore all previous",
+        "disregard prior",
+        "new instructions:",
+        "system prompt:",
+        "you are now",
+        "forget everything",
+        "override:",
+        "admin mode",
+        "sudo mode",
+        "jailbreak",
+        "developer mode",
+        "dan mode",
+        "</system>",
+        "<|im_start|>",
+        "<|endoftext|>",
+    ];
+    markers.iter().any(|m| lower.contains(m))
+}
+
+/// Check if content contains sensitive data patterns.
+fn contains_sensitive_data(content: &str) -> bool {
+    if content.contains("sk-")
+        || content.contains("api_key")
+        || content.contains("apikey")
+        || content.contains("secret_key")
+        || content.contains("access_token")
+        || content.contains("bearer ")
+        || content.contains("AKIA")
+        || content.contains("aws_secret")
+    {
+        return true;
+    }
+    if content.contains("-----BEGIN") && content.contains("PRIVATE KEY") {
+        return true;
+    }
+    let lower = content.to_lowercase();
+    lower.contains("password=") || lower.contains("passwd=") || lower.contains("pwd=")
+}
+
 /// Scan session messages for injection and sensitive content patterns.
 fn scan_for_tainted_messages(session: &Session) -> std::collections::HashMap<usize, MessageTaint> {
     let mut tainted = std::collections::HashMap::new();
@@ -711,6 +755,7 @@ fn extract_command_patterns(session: &Session) -> Option<ExtractedPattern> {
         frequency,
         tags: vec!["auto-extracted".to_string(), "commands".to_string()],
         description: Some("Command sequence extracted from session".to_string()),
+        taint_label: None,
     })
 }
 
@@ -755,6 +800,7 @@ fn extract_code_patterns(session: &Session) -> Vec<ExtractedPattern> {
                         frequency: 1,
                         tags: vec!["auto-extracted".to_string(), lang],
                         description: None,
+                        taint_label: None,
                     });
                 }
             }
@@ -844,6 +890,7 @@ fn extract_workflow_pattern(
         frequency: 1,
         tags: vec!["auto-extracted".to_string(), "workflow".to_string()],
         description: Some("Workflow pattern extracted from session phases".to_string()),
+        taint_label: None,
     })
 }
 
@@ -1013,6 +1060,7 @@ fn extract_error_patterns(session: &Session) -> Vec<ExtractedPattern> {
                         frequency: 1,
                         tags: vec!["auto-extracted".to_string(), "error-handling".to_string()],
                         description: Some("Error handling pattern from session".to_string()),
+                        taint_label: None,
                     });
                 }
                 current_error = None;
@@ -1431,6 +1479,7 @@ And more text.
             frequency: 1,
             tags: vec!["test".to_string()],
             description: None,
+            taint_label: None,
         };
 
         let json = serde_json::to_string(&pattern).unwrap();
@@ -1661,6 +1710,7 @@ And more text.
             frequency: 1,
             tags: vec!["TEST".to_string(), "Mixed".to_string()],
             description: None, // Should be auto-generated
+            taint_label: None,
         }];
 
         let normalized = normalize_patterns(patterns);
