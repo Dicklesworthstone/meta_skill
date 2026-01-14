@@ -290,7 +290,7 @@ fn skill_from_row(row: &Row<'_>) -> rusqlite::Result<SkillRecord> {
     })
 }
 
-fn quarantine_from_row(row: &Row<'_>) -> Result<QuarantineRecord> {
+fn quarantine_from_row(row: &Row<'_>) -> std::result::Result<QuarantineRecord, rusqlite::Error> {
     let classification_json: String = row.get(5)?;
     let classification: JsonValue = serde_json::from_str(&classification_json)
         .map_err(|err| crate::error::MsError::Config(format!("invalid classification json: {err}")))?;

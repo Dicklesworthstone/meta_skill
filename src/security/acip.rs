@@ -184,8 +184,9 @@ pub fn build_quarantine_record(
     message_index: usize,
     content_hash: &str,
 ) -> QuarantineRecord {
+    let quarantine_id = format!("q_{}", Uuid::new_v4());
     QuarantineRecord {
-        quarantine_id: format!("q_{}", Uuid::new_v4()),
+        quarantine_id: quarantine_id.clone(),
         session_id: session_id.to_string(),
         message_index,
         content_hash: content_hash.to_string(),
@@ -195,7 +196,7 @@ pub fn build_quarantine_record(
         created_at: chrono::Utc::now().to_rfc3339(),
         replay_command: format!(
             "ms security quarantine replay {} --i-understand-the-risks",
-            session_id
+            quarantine_id
         ),
     }
 }
