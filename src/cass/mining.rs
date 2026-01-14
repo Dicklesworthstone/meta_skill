@@ -137,6 +137,22 @@ pub struct ExtractedPattern {
 
     /// Human-readable description
     pub description: Option<String>,
+
+    /// Taint label from ACIP analysis (None = safe, Some = requires review)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub taint_label: Option<TaintLabel>,
+}
+
+/// Taint label indicating content safety status from ACIP analysis
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum TaintLabel {
+    /// Content from untrusted source, may contain sensitive data
+    Sensitive,
+    /// Content was redacted
+    Redacted,
+    /// Content requires manual review before use
+    RequiresReview,
 }
 
 /// Reference to evidence in a session
@@ -523,6 +539,9 @@ pub fn extract_patterns(_session_path: &str) -> Result<Vec<Pattern>> {
 
 /// Extract patterns from a parsed session
 pub fn extract_from_session(session: &Session) -> Result<Vec<ExtractedPattern>> {
+    // ACIP pre-scan: identify messages with injection or sensitive content
+    let tainted_indices = scan_for_tainted_messages(session);
+
     let mut patterns = Vec::new();
 
     // Segment the session into phases
@@ -548,11 +567,97 @@ pub fn extract_from_session(session: &Session) -> Result<Vec<ExtractedPattern>> 
     let error_patterns = extract_error_patterns(session);
     patterns.extend(error_patterns);
 
+    // Apply ACIP taint labels based on evidence from tainted messages
+    let patterns = apply_taint_labels(patterns, &tainted_indices);
+
     // Normalize and deduplicate patterns
     let patterns = normalize_patterns(patterns);
     let patterns = deduplicate_patterns(patterns);
 
     Ok(patterns)
+}
+
+/// Message taint status from ACIP analysis
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum MessageTaint {
+    /// Contains prompt injection patterns - exclude from extraction
+    Injection,
+    /// Contains sensitive data patterns - flag for review
+    Sensitive,
+}
+
+/// Scan session messages for injection and sensitive content patterns.
+fn scan_for_tainted_messages(session: &Session) -> std::collections::HashMap<usize, MessageTaint> {
+    let mut tainted = std::collections::HashMap::new();
+
+    for msg in &session.messages {
+        // Check message content
+        if contains_injection_patterns(&msg.content) {
+            tainted.insert(msg.index, MessageTaint::Injection);
+            continue;
+        }
+        if contains_sensitive_data(&msg.content) {
+            tainted.insert(msg.index, MessageTaint::Sensitive);
+            continue;
+        }
+
+        // Check tool results (untrusted external data)
+        for result in &msg.tool_results {
+            if contains_injection_patterns(&result.content) {
+                tainted.insert(msg.index, MessageTaint::Injection);
+                break;
+            }
+            if contains_sensitive_data(&result.content) {
+                tainted.entry(msg.index).or_insert(MessageTaint::Sensitive);
+            }
+        }
+    }
+
+    tainted
+}
+
+/// Apply taint labels to patterns based on their evidence sources.
+fn apply_taint_labels(
+    patterns: Vec<ExtractedPattern>,
+    tainted: &std::collections::HashMap<usize, MessageTaint>,
+) -> Vec<ExtractedPattern> {
+    if tainted.is_empty() {
+        return patterns;
+    }
+
+    patterns
+        .into_iter()
+        .filter_map(|mut pattern| {
+            let mut has_injection = false;
+            let mut has_sensitive = false;
+
+            for evidence in &pattern.evidence {
+                for &idx in &evidence.message_indices {
+                    match tainted.get(&idx) {
+                        Some(MessageTaint::Injection) => has_injection = true,
+                        Some(MessageTaint::Sensitive) => has_sensitive = true,
+                        None => {}
+                    }
+                }
+            }
+
+            // Exclude patterns with injection-tainted evidence entirely
+            if has_injection {
+                warn!(
+                    pattern_id = %pattern.id,
+                    "Excluding pattern due to injection-tainted evidence"
+                );
+                return None;
+            }
+
+            // Mark patterns with sensitive-tainted evidence
+            if has_sensitive && pattern.taint_label.is_none() {
+                pattern.taint_label = Some(TaintLabel::RequiresReview);
+            }
+
+            Some(pattern)
+        })
+        .collect()
 }
 
 /// Extract command patterns from session tool calls
