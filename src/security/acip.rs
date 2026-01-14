@@ -318,13 +318,3 @@ mod tests {
         ));
     }
 }
-
-/// Quick check for prompt injection patterns in content.
-pub fn contains_injection_patterns(content: &str) -> bool {
-    DISALLOWED_PATTERNS.iter().any(|re| re.is_match(content))
-}
-
-/// Quick check for sensitive data patterns in content.
-pub fn contains_sensitive_data(content: &str) -> bool {
-    SENSITIVE_PATTERNS.iter().any(|re| re.is_match(content))
-}
