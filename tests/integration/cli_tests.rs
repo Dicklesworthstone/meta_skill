@@ -201,3 +201,147 @@ fn test_search_finds_matching_skills() {
         "Search should not alter indexed skills",
     );
 }
+
+// =============================================================================
+// Build Command Tests
+// =============================================================================
+
+#[test]
+fn test_build_requires_source() {
+    let fixture = TestFixture::new("test_build_requires_source");
+
+    // Build without --from-cass should show help
+    let output = fixture.run_ms(&["build"]);
+
+    // Should succeed but show interactive help since no source specified
+    assert!(output.success, "build command should show help");
+    assert!(
+        output.stdout.contains("Usage:") || output.stdout.contains("--from-cass"),
+        "Should show usage information"
+    );
+}
+
+#[test]
+fn test_build_guided_and_auto_mutually_exclusive() {
+    let mut fixture = TestFixture::new("test_build_guided_and_auto_mutually_exclusive");
+    let init = fixture.init();
+    assert!(init.success, "init failed");
+
+    // --guided and --auto should fail
+    let output = fixture.run_ms(&["build", "--guided", "--auto", "--from-cass", "test"]);
+
+    assert!(!output.success, "guided and auto should be mutually exclusive");
+    assert!(
+        output.stderr.contains("mutually exclusive") || output.stderr.contains("error"),
+        "Should report mutual exclusivity"
+    );
+}
+
+#[test]
+fn test_build_auto_requires_from_cass() {
+    let mut fixture = TestFixture::new("test_build_auto_requires_from_cass");
+    let init = fixture.init();
+    assert!(init.success, "init failed");
+
+    // --auto without --from-cass should fail
+    let output = fixture.run_ms(&["--robot", "build", "--auto"]);
+
+    assert!(!output.success, "auto build without --from-cass should fail");
+
+    let json: Value = serde_json::from_str(&output.stdout).unwrap_or_default();
+    assert!(
+        json.get("error").is_some()
+            || output.stderr.contains("--from-cass")
+            || output.stderr.contains("required"),
+        "Should report missing --from-cass"
+    );
+}
+
+#[test]
+fn test_build_resolve_uncertainties_empty() {
+    let mut fixture = TestFixture::new("test_build_resolve_uncertainties_empty");
+    let init = fixture.init();
+    assert!(init.success, "init failed");
+
+    // Resolve uncertainties with no queue
+    let output = fixture.run_ms(&["--robot", "build", "--resolve-uncertainties"]);
+
+    assert!(output.success, "resolve-uncertainties should succeed");
+
+    let json: Value = serde_json::from_str(&output.stdout).expect("Invalid JSON output");
+
+    // Should report queue status
+    assert!(
+        json.get("status").is_some(),
+        "Should have status field: {}",
+        output.stdout
+    );
+}
+
+#[test]
+fn test_build_resume_nonexistent() {
+    let mut fixture = TestFixture::new("test_build_resume_nonexistent");
+    let init = fixture.init();
+    assert!(init.success, "init failed");
+
+    // Resume with nonexistent checkpoint
+    let output = fixture.run_ms(&["--robot", "build", "--resume", "nonexistent-session-id"]);
+
+    assert!(output.success, "resume should handle missing checkpoint gracefully");
+
+    let json: Value = serde_json::from_str(&output.stdout).expect("Invalid JSON output");
+
+    assert!(
+        json.get("error").is_some() || json.get("status").is_some(),
+        "Should report error or status: {}",
+        output.stdout
+    );
+}
+
+#[test]
+fn test_build_auto_no_cass_available() {
+    let mut fixture = TestFixture::new("test_build_auto_no_cass_available");
+    let init = fixture.init();
+    assert!(init.success, "init failed");
+
+    // Auto build with a query - CASS is not available so should report error
+    let output = fixture.run_ms(&["--robot", "build", "--auto", "--from-cass", "test-query"]);
+
+    // May succeed or fail depending on CASS availability
+    // The important thing is it doesn't crash and produces structured output
+    // Output may be multiple JSON objects separated by newlines
+    let has_output = output.stdout.contains("status") || output.stdout.contains("error");
+
+    assert!(
+        has_output || !output.stderr.is_empty(),
+        "Should produce some output"
+    );
+}
+
+#[test]
+fn test_build_safety_warning_flags() {
+    let mut fixture = TestFixture::new("test_build_safety_warning_flags");
+    let init = fixture.init();
+    assert!(init.success, "init failed");
+
+    // In robot mode, safety warnings should be bypassed
+    // This tests that --no-redact and --no-injection-filter don't cause issues
+    let output = fixture.run_ms(&[
+        "--robot",
+        "build",
+        "--auto",
+        "--from-cass",
+        "test",
+        "--no-redact",
+        "--no-injection-filter",
+    ]);
+
+    // Should produce structured output even with safety flags
+    // Output may be multiple JSON objects separated by newlines
+    let has_json = output.stdout.contains("{") && output.stdout.contains("}");
+
+    assert!(
+        has_json,
+        "Should produce JSON output even with safety flags bypassed"
+    );
+}
