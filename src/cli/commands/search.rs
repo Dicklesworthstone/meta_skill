@@ -302,14 +302,15 @@ fn display_results(
                 skill.quality_score
             );
 
-            // Show description (truncated)
+            // Show description (truncated safely for UTF-8)
             if !skill.description.is_empty() {
-                let desc = if skill.description.len() > 80 {
-                    format!("{}...", &skill.description[..77])
+                let desc = truncate_str(&skill.description, 77);
+                let suffix = if skill.description.chars().count() > 77 {
+                    "..."
                 } else {
-                    skill.description.clone()
+                    ""
                 };
-                println!("     {}", desc.dimmed());
+                println!("     {}{}", desc.dimmed(), suffix);
             }
 
             if args.snippets && !skill.body.is_empty() {

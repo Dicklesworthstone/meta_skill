@@ -8,7 +8,7 @@ use std::collections::HashMap;
 
 use serde::{Deserialize, Serialize};
 
-use crate::error::{MsError, Result};
+use crate::error::Result;
 
 use super::skill::{SkillLayer, SkillSection, SkillSpec};
 
@@ -317,8 +317,18 @@ impl LayeredRegistry {
             }
         }
 
+        // Apply merge strategy - merge non-overlapping sections from higher layers
+        let spec = match merge_strategy {
+            MergeStrategy::Replace => winner.spec.clone(),
+            MergeStrategy::Auto | MergeStrategy::PreferSections => {
+                // Pass reversed slice (ascending order) - merge_specs will start with
+                // winner (lowest layer) and merge in sections from higher layers
+                merge_specs(&reversed, merge_strategy)
+            }
+        };
+
         Ok(Some(ResolvedSkill {
-            spec: winner.spec.clone(),
+            spec,
             source_layer: *winner_layer,
             candidate_layers,
             conflicts,
@@ -783,5 +793,46 @@ mod tests {
         assert!(removed.is_some());
 
         assert!(registry.effective("test").unwrap().is_none());
+    }
+
+    #[test]
+    fn test_prefer_lower_with_auto_merge() {
+        // PreferLower + Auto should take base layer but merge in non-overlapping sections from user
+        let mut registry =
+            LayeredRegistry::with_strategies(ConflictStrategy::PreferLower, MergeStrategy::Auto);
+
+        let base_spec = make_skill_spec(
+            "test",
+            "Base Skill",
+            vec![make_section("rules", "Rules", vec![("r1", "base rule")])],
+        );
+        let user_spec = make_skill_spec(
+            "test",
+            "User Skill",
+            vec![make_section(
+                "examples",
+                "Examples",
+                vec![("e1", "user example")],
+            )],
+        );
+
+        registry.register(SkillCandidate {
+            spec: base_spec,
+            layer: SkillLayer::Base,
+            source_path: "base".to_string(),
+        });
+        registry.register(SkillCandidate {
+            spec: user_spec,
+            layer: SkillLayer::User,
+            source_path: "user".to_string(),
+        });
+
+        let resolved = registry.effective("test").unwrap().unwrap();
+        // Source layer should be Base (lower wins)
+        assert_eq!(resolved.source_layer, SkillLayer::Base);
+        // But should have both sections merged (non-overlapping)
+        assert_eq!(resolved.spec.sections.len(), 2);
+        // Name should be from base layer
+        assert_eq!(resolved.spec.metadata.name, "Base Skill");
     }
 }

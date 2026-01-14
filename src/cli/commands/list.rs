@@ -126,9 +126,9 @@ fn list_human(_ctx: &AppContext, skills: &[crate::storage::sqlite::SkillRecord],
             String::new()
         };
 
-        // Truncate ID if too long
-        let id_display = if skill.id.len() > 38 {
-            format!("{}…", &skill.id[..37])
+        // Truncate ID if too long (use char count for UTF-8 safety)
+        let id_display = if skill.id.chars().count() > 38 {
+            format!("{}…", skill.id.chars().take(37).collect::<String>())
         } else {
             skill.id.clone()
         };

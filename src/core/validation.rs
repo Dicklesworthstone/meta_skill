@@ -1,6 +1,5 @@
 //! Skill validation
 
-use std::path::PathBuf;
 
 use crate::error::{MsError, Result};
 use crate::quality::ubs::{UbsClient, UbsResult};

@@ -122,7 +122,7 @@ impl Bm25Index {
         // Delete any existing document with this ID first
         let id_term = tantivy::Term::from_field_text(self.fields.id, &skill.id);
 
-        let mut writer = self.writer.write().map_err(|e| {
+        let writer = self.writer.write().map_err(|e| {
             MsError::SearchIndex(tantivy::TantivyError::InternalError(
                 format!("Failed to acquire write lock: {e}"),
             ))
@@ -163,7 +163,7 @@ impl Bm25Index {
     pub fn delete_skill(&self, skill_id: &str) -> Result<()> {
         let id_term = tantivy::Term::from_field_text(self.fields.id, skill_id);
 
-        let mut writer = self.writer.write().map_err(|e| {
+        let writer = self.writer.write().map_err(|e| {
             MsError::SearchIndex(tantivy::TantivyError::InternalError(
                 format!("Failed to acquire write lock: {e}"),
             ))

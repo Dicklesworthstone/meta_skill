@@ -7,7 +7,7 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
 use crate::bundler::blob::BlobStore;
-use crate::bundler::manifest::{BundleManifest, BundledSkill, SignatureVerifier};
+use crate::bundler::manifest::{BundleManifest, SignatureVerifier};
 use crate::error::{MsError, Result};
 
 /// A skill bundle definition with a source root.
@@ -287,7 +287,7 @@ fn read_slice<'a>(input: &'a [u8], cursor: &mut usize, len: usize) -> Result<&'a
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::bundler::manifest::{BundleDependency, BundleInfo};
+    use crate::bundler::manifest::{BundleDependency, BundleInfo, BundledSkill};
     use crate::bundler::BlobStore;
     use tempfile::tempdir;
 

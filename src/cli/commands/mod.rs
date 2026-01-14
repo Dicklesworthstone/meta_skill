@@ -5,7 +5,7 @@
 //! - run() function to execute the command
 
 use std::collections::HashSet;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 use walkdir::WalkDir;
 

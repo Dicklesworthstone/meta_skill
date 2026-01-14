@@ -44,7 +44,7 @@ pub fn parse_markdown(content: &str) -> Result<SkillSpec> {
     let mut code_lines: Vec<String> = Vec::new();
     let mut paragraph_lines: Vec<String> = Vec::new();
 
-    let mut flush_paragraph = |section: &mut SkillSection, lines: &mut Vec<String>| {
+    let flush_paragraph = |section: &mut SkillSection, lines: &mut Vec<String>| {
         if lines.is_empty() {
             return;
         }

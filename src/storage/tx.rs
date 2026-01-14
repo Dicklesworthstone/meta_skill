@@ -22,6 +22,21 @@ use super::git::GitArchive;
 use super::sqlite::Database;
 
 // =============================================================================
+// FSYNC HELPER
+// =============================================================================
+
+/// Write content to a file and fsync to ensure data is persisted to disk.
+/// This is critical for crash safety in 2PC - without fsync, data could be
+/// lost if the system crashes before the OS flushes buffers.
+fn write_and_sync(path: &Path, content: &str) -> std::io::Result<()> {
+    use std::io::Write;
+    let mut file = File::create(path)?;
+    file.write_all(content.as_bytes())?;
+    file.sync_all()?;
+    Ok(())
+}
+
+// =============================================================================
 // TRANSACTION RECORD
 // =============================================================================
 
@@ -117,17 +132,8 @@ impl GlobalLock {
             .lock_exclusive()
             .map_err(|e| MsError::TransactionFailed(format!("acquire exclusive lock: {e}")))?;
 
-        // Write lock holder info
-        let holder = LockHolder {
-            pid: std::process::id(),
-            acquired_at: Utc::now(),
-            hostname: hostname::get()
-                .ok()
-                .and_then(|h| h.into_string().ok())
-                .unwrap_or_else(|| "unknown".to_string()),
-        };
-        let holder_json = serde_json::to_string(&holder).unwrap_or_default();
-        fs::write(&lock_path, holder_json).ok();
+        // Write lock holder info through the locked file handle
+        Self::write_holder_info(&lock_file)?;
 
         debug!("Acquired global lock at {:?}", lock_path);
         Ok(Self {
@@ -165,17 +171,8 @@ impl GlobalLock {
             }
         }
 
-        // Write lock holder info
-        let holder = LockHolder {
-            pid: std::process::id(),
-            acquired_at: Utc::now(),
-            hostname: hostname::get()
-                .ok()
-                .and_then(|h| h.into_string().ok())
-                .unwrap_or_else(|| "unknown".to_string()),
-        };
-        let holder_json = serde_json::to_string(&holder).unwrap_or_default();
-        fs::write(&lock_path, holder_json).ok();
+        // Write lock holder info through the locked file handle
+        Self::write_holder_info(&lock_file)?;
 
         debug!("Acquired global lock (non-blocking) at {:?}", lock_path);
         Ok(Some(Self {
@@ -203,7 +200,11 @@ impl GlobalLock {
         Ok(None)
     }
 
-    /// Check lock status without acquiring
+    /// Check lock status without acquiring.
+    ///
+    /// **Note**: This returns cached holder info from the lock file, which may
+    /// be stale. The actual OS-level flock is authoritative - use `is_locked()`
+    /// for a definitive check of whether the lock is currently held.
     pub fn status(ms_root: &Path) -> Result<Option<LockHolder>> {
         let lock_path = ms_root.join(Self::LOCK_FILENAME);
         if !lock_path.exists() {
@@ -234,24 +235,112 @@ impl GlobalLock {
         Ok(Some(holder))
     }
 
-    /// Break a stale lock (use with caution)
+    /// Check if the lock is currently held (authoritative check).
+    ///
+    /// Returns true if another process holds the lock, false if it's available.
+    /// This performs an actual flock check rather than reading cached info.
+    pub fn is_locked(ms_root: &Path) -> Result<bool> {
+        let lock_path = ms_root.join(Self::LOCK_FILENAME);
+        if !lock_path.exists() {
+            return Ok(false);
+        }
+
+        let lock_file = match OpenOptions::new().read(true).write(true).open(&lock_path) {
+            Ok(f) => f,
+            Err(_) => return Ok(false),
+        };
+
+        // Try to acquire lock non-blocking
+        match lock_file.try_lock_exclusive() {
+            Ok(()) => {
+                // We got the lock - it wasn't held. Release it.
+                lock_file.unlock().ok();
+                Ok(false)
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {
+                // Lock is held by another process
+                Ok(true)
+            }
+            Err(_) => {
+                // Some other error - assume not locked
+                Ok(false)
+            }
+        }
+    }
+
+    /// Break a stale lock.
+    ///
+    /// # Safety
+    ///
+    /// **WARNING**: This is dangerous and should only be used as a last resort!
+    ///
+    /// Removing the lock file while another process holds an flock on it can
+    /// lead to split-brain scenarios: the original holder still has a valid
+    /// flock on the (now deleted) inode, and a new process can create a new
+    /// file and get a lock on a different inode.
+    ///
+    /// Only use this when you are CERTAIN the holder process is dead and the
+    /// lock is truly stale. Prefer letting the OS release the lock naturally
+    /// when the holder process terminates.
     pub fn break_lock(ms_root: &Path) -> Result<bool> {
         let lock_path = ms_root.join(Self::LOCK_FILENAME);
         if !lock_path.exists() {
             return Ok(false);
         }
 
-        // Check if holder process is alive
+        // Safety check: verify the lock isn't currently held
+        if Self::is_locked(ms_root)? {
+            warn!(
+                "Refusing to break lock - it is currently held by another process. \
+                 Wait for the holder to release it or terminate the holder process."
+            );
+            return Ok(false);
+        }
+
+        // Get holder info for logging (may be stale but useful for audit)
         if let Some(holder) = Self::status(ms_root)? {
             warn!(
-                "Breaking lock held by PID {} since {}",
+                "Breaking stale lock (holder PID {} since {} appears dead)",
                 holder.pid, holder.acquired_at
             );
         }
 
         fs::remove_file(&lock_path)?;
-        info!("Lock file removed");
+        info!("Stale lock file removed");
         Ok(true)
+    }
+
+    /// Write lock holder info through the given file handle.
+    fn write_holder_info(file: &File) -> Result<()> {
+        use std::io::{Seek, SeekFrom, Write};
+
+        let holder = LockHolder {
+            pid: std::process::id(),
+            acquired_at: Utc::now(),
+            hostname: hostname::get()
+                .ok()
+                .and_then(|h| h.into_string().ok())
+                .unwrap_or_else(|| "unknown".to_string()),
+        };
+        let holder_json = serde_json::to_string(&holder)
+            .map_err(|e| MsError::TransactionFailed(format!("serialize holder: {e}")))?;
+
+        // Write through the locked handle (truncate and write)
+        let mut file_ref = file;
+        file_ref
+            .set_len(0)
+            .map_err(|e| MsError::TransactionFailed(format!("truncate lock file: {e}")))?;
+        file_ref
+            .seek(SeekFrom::Start(0))
+            .map_err(|e| MsError::TransactionFailed(format!("seek lock file: {e}")))?;
+        file_ref
+            .write_all(holder_json.as_bytes())
+            .map_err(|e| MsError::TransactionFailed(format!("write lock holder: {e}")))?;
+        file_ref
+            .sync_all()
+            .map_err(|e| MsError::TransactionFailed(format!("sync lock file: {e}")))?;
+
+        Ok(())
     }
 }
 
@@ -359,12 +448,45 @@ impl TxManager {
                 MsError::TransactionFailed("timeout waiting for global lock".to_string())
             })?;
 
-        // Delete from Git first (this creates a commit)
+        // Create delete transaction record
+        let tx = TxRecord {
+            id: Uuid::new_v4().to_string(),
+            entity_type: "delete_skill".to_string(),
+            entity_id: skill_id.to_string(),
+            phase: TxPhase::Prepare,
+            payload_json: "{}".to_string(), // No payload needed for delete
+            created_at: Utc::now(),
+        };
+        debug!(
+            "Starting 2PC delete transaction {} for skill {}",
+            tx.id, skill_id
+        );
+
+        // Phase 1: Prepare - write intent
+        self.write_tx_record(&tx)?;
+
+        // Phase 2: Commit - delete from Git (creates commit)
         self.git.delete_skill(skill_id)?;
+        let mut tx = tx;
+        tx.phase = TxPhase::Committed;
+        self.db.update_tx_phase(&tx.id, TxPhase::Committed)?;
+        let tx_path = self.tx_dir.join(format!("{}.json", tx.id));
+        let tx_json = serde_json::to_string_pretty(&tx)
+            .map_err(|e| MsError::TransactionFailed(format!("serialize tx: {e}")))?;
+        write_and_sync(&tx_path, &tx_json)?;
 
-        // Then delete from SQLite
+        // Phase 3: Complete - delete from SQLite
         self.db.delete_skill(skill_id)?;
+        tx.phase = TxPhase::Complete;
+        self.db.update_tx_phase(&tx.id, TxPhase::Complete)?;
 
+        // Cleanup
+        self.cleanup_tx(&tx)?;
+
+        info!(
+            "2PC delete transaction {} completed for skill {}",
+            tx.id, skill_id
+        );
         Ok(())
     }
 
@@ -379,11 +501,11 @@ impl TxManager {
         // Write to SQLite tx_log
         self.db.insert_tx_record(tx)?;
 
-        // Write to filesystem for crash recovery
+        // Write to filesystem for crash recovery (with fsync for durability)
         let tx_path = self.tx_dir.join(format!("{}.json", tx.id));
         let tx_json = serde_json::to_string_pretty(tx)
             .map_err(|e| MsError::TransactionFailed(format!("serialize tx: {e}")))?;
-        fs::write(&tx_path, tx_json)?;
+        write_and_sync(&tx_path, &tx_json)?;
 
         Ok(())
     }
@@ -403,11 +525,11 @@ impl TxManager {
         tx.phase = TxPhase::Pending;
         self.db.update_tx_phase(&tx.id, TxPhase::Pending)?;
 
-        // Update filesystem tx record
+        // Update filesystem tx record (with fsync for durability)
         let tx_path = self.tx_dir.join(format!("{}.json", tx.id));
         let tx_json = serde_json::to_string_pretty(&tx)
             .map_err(|e| MsError::TransactionFailed(format!("serialize tx: {e}")))?;
-        fs::write(&tx_path, tx_json)?;
+        write_and_sync(&tx_path, &tx_json)?;
 
         Ok(tx)
     }
@@ -427,11 +549,11 @@ impl TxManager {
         tx.phase = TxPhase::Committed;
         self.db.update_tx_phase(&tx.id, TxPhase::Committed)?;
 
-        // Update filesystem tx record
+        // Update filesystem tx record (with fsync for durability)
         let tx_path = self.tx_dir.join(format!("{}.json", tx.id));
         let tx_json = serde_json::to_string_pretty(&tx)
             .map_err(|e| MsError::TransactionFailed(format!("serialize tx: {e}")))?;
-        fs::write(&tx_path, tx_json)?;
+        write_and_sync(&tx_path, &tx_json)?;
 
         Ok(tx)
     }
@@ -489,31 +611,11 @@ impl TxManager {
         let txs = self.db.list_incomplete_transactions()?;
 
         for tx in txs {
-            match tx.phase {
-                TxPhase::Prepare => {
-                    // Transaction never started - roll back
-                    info!("Rolling back prepare-only tx: {}", tx.id);
-                    self.rollback_tx(&tx)?;
-                    report.rolled_back += 1;
-                }
-                TxPhase::Pending => {
-                    // SQLite written but Git not committed - roll back
-                    info!("Rolling back pending tx: {}", tx.id);
-                    self.rollback_tx(&tx)?;
-                    report.rolled_back += 1;
-                }
-                TxPhase::Committed => {
-                    // Git committed but not marked complete - complete it
-                    info!("Completing committed tx: {}", tx.id);
-                    let tx = self.db_mark_committed(&tx)?;
-                    self.cleanup_tx(&tx)?;
-                    report.completed += 1;
-                }
-                TxPhase::Complete => {
-                    // Should not be in incomplete list, but cleanup if found
-                    warn!("Found complete tx in incomplete list: {}", tx.id);
-                    self.cleanup_tx(&tx)?;
-                }
+            // Handle delete_skill transactions differently from write transactions
+            if tx.entity_type == "delete_skill" {
+                self.recover_delete_tx(&tx, &mut report)?;
+            } else {
+                self.recover_write_tx(&tx, &mut report)?;
             }
         }
 
@@ -554,6 +656,93 @@ impl TxManager {
         }
 
         Ok(report)
+    }
+
+    /// Recover a write transaction (entity_type = "skill")
+    fn recover_write_tx(&self, tx: &TxRecord, report: &mut RecoveryReport) -> Result<()> {
+        match tx.phase {
+            TxPhase::Prepare => {
+                // Transaction never started - roll back
+                info!("Rolling back prepare-only tx: {}", tx.id);
+                self.rollback_tx(tx)?;
+                report.rolled_back += 1;
+            }
+            TxPhase::Pending => {
+                // SQLite written but phase still pending - need to check Git state.
+                // If Git already has the skill (from a partial git_commit where
+                // write_skill succeeded but update_tx_phase failed), complete the tx.
+                // Otherwise, Git doesn't have it and we can safely roll back.
+                if self.git.skill_exists(&tx.entity_id) {
+                    info!("Completing pending tx with existing Git data: {}", tx.id);
+                    let tx = self.db_mark_committed(tx)?;
+                    self.cleanup_tx(&tx)?;
+                    report.completed += 1;
+                } else {
+                    info!("Rolling back pending tx: {}", tx.id);
+                    self.rollback_tx(tx)?;
+                    report.rolled_back += 1;
+                }
+            }
+            TxPhase::Committed => {
+                // Git committed but not marked complete - complete it
+                info!("Completing committed tx: {}", tx.id);
+                let tx = self.db_mark_committed(tx)?;
+                self.cleanup_tx(&tx)?;
+                report.completed += 1;
+            }
+            TxPhase::Complete => {
+                // Should not be in incomplete list, but cleanup if found
+                warn!("Found complete tx in incomplete list: {}", tx.id);
+                self.cleanup_tx(tx)?;
+            }
+        }
+        Ok(())
+    }
+
+    /// Recover a delete transaction (entity_type = "delete_skill")
+    fn recover_delete_tx(&self, tx: &TxRecord, report: &mut RecoveryReport) -> Result<()> {
+        match tx.phase {
+            TxPhase::Prepare => {
+                // Delete never started - just clean up tx record, skill is unchanged
+                info!("Rolling back prepare-only delete tx: {}", tx.id);
+                self.db.delete_tx_record(&tx.id)?;
+                let tx_path = self.tx_dir.join(format!("{}.json", tx.id));
+                fs::remove_file(&tx_path).ok();
+                report.rolled_back += 1;
+            }
+            TxPhase::Pending => {
+                // Delete transactions skip Pending phase, but handle just in case
+                // Treat same as Prepare - skill should be unchanged
+                warn!("Unexpected Pending phase for delete tx: {}", tx.id);
+                self.db.delete_tx_record(&tx.id)?;
+                let tx_path = self.tx_dir.join(format!("{}.json", tx.id));
+                fs::remove_file(&tx_path).ok();
+                report.rolled_back += 1;
+            }
+            TxPhase::Committed => {
+                // Git deleted, SQLite not yet - complete the SQLite delete
+                info!("Completing committed delete tx: {}", tx.id);
+                // Try to delete from SQLite (may already be gone, that's ok)
+                if let Err(e) = self.db.delete_skill(&tx.entity_id) {
+                    debug!(
+                        "SQLite delete during recovery (may already be gone): {}",
+                        e
+                    );
+                }
+                self.db.delete_tx_record(&tx.id)?;
+                let tx_path = self.tx_dir.join(format!("{}.json", tx.id));
+                fs::remove_file(&tx_path).ok();
+                report.completed += 1;
+            }
+            TxPhase::Complete => {
+                // Should not be in incomplete list, but cleanup if found
+                warn!("Found complete delete tx in incomplete list: {}", tx.id);
+                self.db.delete_tx_record(&tx.id)?;
+                let tx_path = self.tx_dir.join(format!("{}.json", tx.id));
+                fs::remove_file(&tx_path).ok();
+            }
+        }
+        Ok(())
     }
 
     /// Roll back a transaction
@@ -780,5 +969,60 @@ mod tests {
 
         // Hash should be hex string of SHA256 (64 chars)
         assert_eq!(hash1.len(), 64);
+    }
+
+    #[test]
+    fn test_is_locked() {
+        let dir = tempdir().unwrap();
+        let ms_root = dir.path().to_path_buf();
+
+        // No lock file - should return false
+        assert!(!GlobalLock::is_locked(&ms_root).unwrap());
+
+        // Acquire lock
+        let lock = GlobalLock::acquire(&ms_root).unwrap();
+
+        // Should now be locked
+        assert!(GlobalLock::is_locked(&ms_root).unwrap());
+
+        // Release lock
+        drop(lock);
+
+        // Should no longer be locked
+        assert!(!GlobalLock::is_locked(&ms_root).unwrap());
+    }
+
+    #[test]
+    fn test_break_lock_refuses_held_lock() {
+        let dir = tempdir().unwrap();
+        let ms_root = dir.path().to_path_buf();
+
+        // Acquire lock
+        let _lock = GlobalLock::acquire(&ms_root).unwrap();
+
+        // break_lock should refuse to break a held lock
+        let result = GlobalLock::break_lock(&ms_root).unwrap();
+        assert!(!result, "break_lock should refuse when lock is held");
+
+        // Lock file should still exist
+        assert!(ms_root.join("ms.lock").exists());
+    }
+
+    #[test]
+    fn test_break_lock_removes_stale_lock() {
+        let dir = tempdir().unwrap();
+        let ms_root = dir.path().to_path_buf();
+
+        // Create a lock file manually (simulating a stale lock from a dead process)
+        let lock_path = ms_root.join("ms.lock");
+        fs::create_dir_all(&ms_root).unwrap();
+        fs::write(&lock_path, r#"{"pid":999999,"acquired_at":"2020-01-01T00:00:00Z","hostname":"test"}"#).unwrap();
+
+        // break_lock should remove it (no flock is held)
+        let result = GlobalLock::break_lock(&ms_root).unwrap();
+        assert!(result, "break_lock should remove stale lock");
+
+        // Lock file should be gone
+        assert!(!lock_path.exists());
     }
 }

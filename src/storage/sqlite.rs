@@ -65,6 +65,17 @@ pub struct AliasRecord {
     pub created_at: String,
 }
 
+/// Cached session quality score
+#[derive(Debug, Clone, PartialEq)]
+pub struct SessionQualityRecord {
+    pub session_id: String,
+    pub content_hash: String,
+    pub score: f32,
+    pub signals: Vec<String>,
+    pub missing: Vec<String>,
+    pub computed_at: String,
+}
+
 impl Database {
     /// Open database at the given path
     pub fn open(path: impl AsRef<Path>) -> Result<Self> {
@@ -575,15 +586,29 @@ impl Database {
         Ok(txs)
     }
 
-    /// Upsert a skill with pending source_path marker
+    /// Insert or update a skill during 2PC pending phase.
+    ///
+    /// For NEW skills: inserts with source_path='pending' marker.
+    /// For EXISTING skills: updates only metadata fields, preserving the original
+    /// source_path and content_hash. This ensures rollback won't corrupt committed data.
+    ///
+    /// The source_path and content_hash are only finalized by `finalize_skill_commit`
+    /// after Git commit succeeds.
     pub fn upsert_skill_pending(&self, skill: &crate::core::SkillSpec) -> Result<()> {
         self.conn.execute(
-            "INSERT OR REPLACE INTO skills
+            "INSERT INTO skills
              (id, name, description, version, author, source_path, source_layer,
               content_hash, body, metadata_json, assets_json, token_count, quality_score,
               indexed_at, modified_at)
-             VALUES (?, ?, ?, ?, ?, 'pending', 'user', 'pending', '', ?, '{}', 0, 0.0,
-                     datetime('now'), datetime('now'))",
+             VALUES (?, ?, ?, ?, ?, 'pending', 'project', 'pending', '', ?, '{}', 0, 0.0,
+                     datetime('now'), datetime('now'))
+             ON CONFLICT(id) DO UPDATE SET
+                name=excluded.name,
+                description=excluded.description,
+                version=excluded.version,
+                author=excluded.author,
+                metadata_json=excluded.metadata_json,
+                modified_at=excluded.modified_at",
             params![
                 skill.metadata.id,
                 skill.metadata.name,
@@ -615,6 +640,52 @@ impl Database {
     pub fn integrity_check(&self) -> Result<bool> {
         let result: String = self.conn.query_row("PRAGMA integrity_check", [], |row| row.get(0))?;
         Ok(result == "ok")
+    }
+
+    // =========================================================================
+    // SESSION QUALITY CACHE METHODS
+    // =========================================================================
+
+    /// Get cached session quality by session_id
+    pub fn get_session_quality(&self, session_id: &str) -> Result<Option<SessionQualityRecord>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT session_id, content_hash, score, signals_json, missing_json, computed_at
+             FROM session_quality
+             WHERE session_id = ?",
+        )?;
+        let mut rows = stmt.query([session_id])?;
+        if let Some(row) = rows.next()? {
+            return Ok(Some(session_quality_from_row(row)?));
+        }
+        Ok(None)
+    }
+
+    /// Upsert session quality record
+    pub fn upsert_session_quality(&self, record: &SessionQualityRecord) -> Result<()> {
+        let signals_json = serde_json::to_string(&record.signals)
+            .map_err(|err| MsError::Config(format!("encode signals: {err}")))?;
+        let missing_json = serde_json::to_string(&record.missing)
+            .map_err(|err| MsError::Config(format!("encode missing: {err}")))?;
+
+        self.conn.execute(
+            "INSERT INTO session_quality (session_id, content_hash, score, signals_json, missing_json, computed_at)
+             VALUES (?, ?, ?, ?, ?, ?)
+             ON CONFLICT(session_id) DO UPDATE SET
+                content_hash=excluded.content_hash,
+                score=excluded.score,
+                signals_json=excluded.signals_json,
+                missing_json=excluded.missing_json,
+                computed_at=excluded.computed_at",
+            params![
+                record.session_id,
+                record.content_hash,
+                record.score as f64,
+                signals_json,
+                missing_json,
+                record.computed_at,
+            ],
+        )?;
+        Ok(())
     }
 
     fn configure_pragmas(conn: &Connection) -> Result<()> {
@@ -736,6 +807,25 @@ pub struct QuarantineReview {
     pub action: String,
     pub reason: Option<String>,
     pub created_at: String,
+}
+
+fn session_quality_from_row(row: &Row<'_>) -> Result<SessionQualityRecord> {
+    let signals_json: String = row.get(3)?;
+    let missing_json: String = row.get(4)?;
+
+    let signals: Vec<String> = serde_json::from_str(&signals_json)
+        .map_err(|err| MsError::Config(format!("decode signals: {err}")))?;
+    let missing: Vec<String> = serde_json::from_str(&missing_json)
+        .map_err(|err| MsError::Config(format!("decode missing: {err}")))?;
+
+    Ok(SessionQualityRecord {
+        session_id: row.get(0)?,
+        content_hash: row.get(1)?,
+        score: row.get::<_, f64>(2)? as f32,
+        signals,
+        missing,
+        computed_at: row.get(5)?,
+    })
 }
 
 #[cfg(test)]

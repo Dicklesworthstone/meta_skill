@@ -3,7 +3,7 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use git2::{Commit, ErrorCode, IndexAddOption, Oid, Repository, Signature};
+use git2::{Commit, ErrorCode, Oid, Repository, Signature};
 use serde::{Deserialize, Serialize};
 
 use crate::core::{SkillMetadata, SkillSpec};
@@ -59,6 +59,11 @@ impl GitArchive {
     /// Get the path to a skill directory in the archive
     pub fn skill_path(&self, skill_id: &str) -> PathBuf {
         self.root.join("skills/by-id").join(skill_id)
+    }
+
+    /// Check if a skill exists in the archive (has spec file)
+    pub fn skill_exists(&self, skill_id: &str) -> bool {
+        self.skill_path(skill_id).join("skill.spec.json").exists()
     }
 
     pub fn list_skill_ids(&self) -> Result<Vec<String>> {

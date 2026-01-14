@@ -8,7 +8,7 @@ use std::collections::{HashMap, HashSet, VecDeque};
 
 use serde::{Deserialize, Serialize};
 
-use crate::error::{MsError, Result};
+use crate::error::Result;
 
 /// Mode for loading dependencies
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
@@ -366,7 +366,7 @@ impl<'a> DependencyResolver<'a> {
     }
 
     /// Topological sort using Kahn's algorithm
-    fn topological_sort(&self, closure: &HashSet<String>, root: &str) -> Result<Vec<String>> {
+    fn topological_sort(&self, closure: &HashSet<String>, _root: &str) -> Result<Vec<String>> {
         let mut in_degree: HashMap<&str, usize> = HashMap::new();
         let mut adj: HashMap<&str, Vec<&str>> = HashMap::new();
 

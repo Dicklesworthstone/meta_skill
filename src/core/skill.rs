@@ -369,11 +369,12 @@ pub enum VersionOp {
 // EVIDENCE AND PROVENANCE
 // =============================================================================
 
-/// Rule-level evidence index for provenance and auditing
+/// Rule-level evidence index for provenance and auditing.
+/// Uses BTreeMap for deterministic serialization (consistent JSON output).
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct SkillEvidenceIndex {
     /// Map of rule ID to evidence references
-    pub rules: std::collections::HashMap<String, Vec<EvidenceRef>>,
+    pub rules: std::collections::BTreeMap<String, Vec<EvidenceRef>>,
     /// Coverage statistics
     pub coverage: EvidenceCoverage,
 }
@@ -503,9 +504,11 @@ pub struct PackContract {
 // SPEC LENS (MARKDOWN MAPPING)
 // =============================================================================
 
-/// Mapping from compiled markdown back to spec blocks
+/// Mapping from compiled markdown back to spec blocks.
+/// Note: Named SpecLensMapping to avoid collision with the SpecLens
+/// converter type in spec_lens.rs.
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct SpecLens {
+pub struct SpecLensMapping {
     /// Format version
     pub format_version: String,
     /// Block mappings

@@ -492,18 +492,23 @@ fn try_improve(
     }
     removable.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(Ordering::Equal));
     let (_score, remove_idx) = removable[0];
-    let removed = &selected[remove_idx];
+
+    // Extract fields before removal to satisfy borrow checker
+    let removed_id = selected[remove_idx].id.clone();
+    let removed_tokens = selected[remove_idx].token_estimate;
+    let removed_group = selected[remove_idx].coverage_group.clone();
+
     if selected
         .iter()
-        .any(|slice| slice.requires.contains(&removed.id))
+        .any(|slice| slice.requires.contains(&removed_id))
     {
         return false;
     }
-    if candidate.requires.iter().any(|req| req == &removed.id) {
+    if candidate.requires.iter().any(|req| *req == removed_id) {
         return false;
     }
 
-    let mut tokens_after = remaining_budget + removed.token_estimate;
+    let mut tokens_after = remaining_budget + removed_tokens;
     if candidate.token_estimate > tokens_after {
         return false;
     }
@@ -516,9 +521,9 @@ fn try_improve(
         return false;
     }
 
-    selected_ids.remove(&removed.id);
+    selected_ids.remove(&removed_id);
     selected.remove(remove_idx);
-    if let Some(group) = &removed.coverage_group {
+    if let Some(group) = &removed_group {
         if let Some(count) = group_counts.get_mut(group) {
             *count = count.saturating_sub(1);
         }

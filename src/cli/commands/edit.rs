@@ -25,10 +25,7 @@ pub struct EditArgs {
     pub meta: bool,
 }
 
-pub fn run(_ctx: &AppContext, _args: &EditArgs) -> Result<()> {
-    let ctx = _ctx;
-    let args = _args;
-
+pub fn run(ctx: &AppContext, args: &EditArgs) -> Result<()> {
     let skill_md = resolve_skill_markdown(ctx, &args.skill)?;
     let skill_dir = skill_md
         .parent()
