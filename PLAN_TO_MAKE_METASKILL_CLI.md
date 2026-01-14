@@ -21522,3 +21522,618 @@ Before implementing caching:
 - [ ] For large datasets, consider parallel processing with thread-local heaps
 - [ ] Test cache behavior under memory pressure
 - [ ] Add metrics for cache hit rate monitoring
+
+---
+
+## Section 37: Debugging Workflows and Methodologies
+
+**Source**: CASS mining of brenner_bot, coding_agent_session_search, coding_agent_account_manager, mcp_agent_mail, fix_my_documents_backend, and agentic_coding_flywheel_setup debugging sessions
+
+### 37.1 Debugging Philosophy
+
+#### The Systematic Approach
+
+Effective debugging follows a methodical process rather than random experimentation:
+
+| Phase | Action | Outcome |
+|-------|--------|---------|
+| **1. Reproduce** | Create minimal, reliable reproduction | Consistent failure on demand |
+| **2. Isolate** | Narrow scope to smallest unit | Single function or data path |
+| **3. Hypothesize** | Form testable theory | "If X, then Y should happen" |
+| **4. Verify** | Test hypothesis with evidence | Log output, debugger, or test |
+| **5. Fix** | Apply minimal change | Targeted correction |
+| **6. Validate** | Confirm fix works | Tests pass, behavior correct |
+| **7. Prevent** | Add regression test | Future protection |
+
+#### Debugging Anti-Patterns
+
+```
+❌ Random changes hoping something works
+❌ Fixing symptoms instead of root cause
+❌ Skipping reproduction step
+❌ Adding debug code without removing it
+❌ Assuming the bug is where you first looked
+❌ Ignoring intermittent failures ("it works now")
+```
+
+### 37.2 Systematic Code Review for Bug Classes
+
+**Source**: CASS mining of coding_agent_account_manager sync package review
+
+#### Race Condition Hunting
+
+```go
+// BEFORE: Race condition on map access
+for _, m := range s.state.Pool.Machines {  // No lock!
+    // Another goroutine could modify Machines during iteration
+}
+
+// AFTER: Proper locking
+s.state.Pool.mu.RLock()
+machines := make([]*Machine, 0, len(s.state.Pool.Machines))
+for _, m := range s.state.Pool.Machines {
+    machines = append(machines, m)
+}
+s.state.Pool.mu.RUnlock()
+
+for _, m := range machines {
+    // Safe iteration over snapshot
+}
+```
+
+**Race Condition Detection Checklist:**
+- [ ] Map access from multiple goroutines → needs mutex
+- [ ] Pointer/slice assignment without sync → data race
+- [ ] Check-then-act without lock → TOCTOU vulnerability
+- [ ] Shared mutable state in struct → needs sync primitives
+
+#### Go Race Detector Usage
+
+```bash
+# Run tests with race detection
+go test -race ./...
+
+# Run specific package with race detection
+go test -race -v ./internal/sync/...
+
+# Run benchmarks with race detection (slower but catches races)
+go test -race -bench=. ./...
+```
+
+**Example race condition fix:**
+
+```go
+// Race in OutputCapture - bytes.Buffer isn't thread-safe
+type safeBuffer struct {
+    mu  sync.Mutex
+    buf bytes.Buffer
+}
+
+func (s *safeBuffer) Write(p []byte) (int, error) {
+    s.mu.Lock()
+    defer s.mu.Unlock()
+    return s.buf.Write(p)
+}
+
+func (s *safeBuffer) String() string {
+    s.mu.Lock()
+    defer s.mu.Unlock()
+    return s.buf.String()
+}
+```
+
+### 37.3 Error Handling Issue Detection
+
+**Source**: CASS mining of coding_agent_account_manager ssh.go review
+
+#### Error Handling Bug Patterns
+
+| Pattern | Issue | Fix |
+|---------|-------|-----|
+| **Swallowed error** | `if err != nil { /* ignore */ }` | Log or propagate |
+| **Missing defer Close** | Resource opened but not closed on error | Add `defer f.Close()` after open |
+| **Half-handled error** | Error checked but not all paths covered | Complete error path coverage |
+| **Silent fallback** | Error replaced with default without logging | Log original error before fallback |
+
+```go
+// BEFORE: Swallowed error
+if err := c.MkdirAll(dir); err != nil {
+    // Directory might already exist, continue
+}
+
+// AFTER: Proper error handling
+if err := c.MkdirAll(dir); err != nil {
+    // Check if error is "already exists" (acceptable)
+    if !os.IsExist(err) {
+        return fmt.Errorf("failed to create directory %s: %w", dir, err)
+    }
+    // Log for debugging
+    log.Debug("directory already exists", "path", dir)
+}
+```
+
+#### Resource Leak Detection
+
+```go
+// BEFORE: Connection leak on error
+conn, err := net.Dial("unix", socket)
+if err != nil {
+    return nil, err
+}
+client := agent.NewClient(conn)  // If this fails, conn leaks!
+
+// AFTER: Proper cleanup
+conn, err := net.Dial("unix", socket)
+if err != nil {
+    return nil, err
+}
+defer func() {
+    if client == nil {
+        conn.Close()  // Only close if we're not returning successfully
+    }
+}()
+client := agent.NewClient(conn)
+if client == nil {
+    return nil, fmt.Errorf("failed to create agent client")
+}
+```
+
+### 37.4 Performance Debugging Methodology
+
+**Source**: CASS mining of beads_viewer pkg/ui performance analysis
+
+#### Profiling Hot Paths
+
+**Step 1: Identify the hot path**
+```bash
+# CPU profiling
+go test -cpuprofile=cpu.prof -bench=BenchmarkRender
+go tool pprof cpu.prof
+
+# Memory profiling
+go test -memprofile=mem.prof -bench=BenchmarkRender
+go tool pprof -alloc_space mem.prof
+
+# Trace for latency analysis
+go test -trace=trace.out -bench=BenchmarkRender
+go tool trace trace.out
+```
+
+**Step 2: Measure allocation pressure**
+
+| Allocation Source | Count/Frame | Impact |
+|-------------------|-------------|--------|
+| `Renderer.NewStyle()` | 16 per item | High - 800 allocs at 50 items |
+| `fmt.Sprintf()` | 6 per item | Medium - string allocations |
+| `append()` to slice | 8-12 per item | Low with pre-allocation |
+
+**Step 3: Apply targeted fixes**
+
+```go
+// BEFORE: Allocation in hot path
+func (d *Delegate) Render(i Item) string {
+    style := d.renderer.NewStyle().Foreground(color)  // Allocates every call!
+    return style.Render(text)
+}
+
+// AFTER: Reuse styles
+type Delegate struct {
+    // Pre-computed styles
+    normalStyle  lipgloss.Style
+    selectedStyle lipgloss.Style
+}
+
+func NewDelegate(r *lipgloss.Renderer) *Delegate {
+    return &Delegate{
+        normalStyle:   r.NewStyle().Foreground(normalColor),
+        selectedStyle: r.NewStyle().Foreground(selectedColor),
+    }
+}
+
+func (d *Delegate) Render(i Item, selected bool) string {
+    if selected {
+        return d.selectedStyle.Render(text)  // No allocation!
+    }
+    return d.normalStyle.Render(text)
+}
+```
+
+### 37.5 N+1 Query Pattern Detection
+
+**Source**: CASS mining of mcp_agent_mail app.py N+1 analysis
+
+#### Identifying N+1 Patterns
+
+```python
+# BEFORE: N+1 query pattern
+async def _deliver_message(project, to_names, cc_names, bcc_names):
+    # Each _get_agent() executes a separate query!
+    to_agents = [await _get_agent(project, name) for name in to_names]    # N queries
+    cc_agents = [await _get_agent(project, name) for name in cc_names]    # M queries
+    bcc_agents = [await _get_agent(project, name) for name in bcc_names]  # K queries
+    # Total: 1 + N + M + K queries instead of 2 queries
+
+# AFTER: Batch query
+async def _deliver_message(project, to_names, cc_names, bcc_names):
+    all_names = list(set(to_names + cc_names + bcc_names))
+    agents_by_name = await _get_agents_batch(project, all_names)  # 1 query!
+
+    to_agents = [agents_by_name[n] for n in to_names]
+    cc_agents = [agents_by_name[n] for n in cc_names]
+    bcc_agents = [agents_by_name[n] for n in bcc_names]
+```
+
+```python
+# Batch fetch implementation
+async def _get_agents_batch(project: Project, names: list[str]) -> dict[str, Agent]:
+    async with get_session() as session:
+        stmt = select(Agent).where(
+            Agent.project_id == project.id,
+            Agent.name.in_(names)
+        )
+        result = await session.execute(stmt)
+        agents = result.scalars().all()
+        return {a.name: a for a in agents}
+```
+
+#### N+1 Detection Checklist
+
+- [ ] Loop containing database query → batch outside loop
+- [ ] Repeated function calls with single ID → batch with list
+- [ ] ORM lazy loading in loop → eager load with joins
+- [ ] HTTP request per item → batch API call
+
+### 37.6 Test Failure Debugging
+
+**Source**: CASS mining of coding_agent_session_search cli.rs test debugging
+
+#### Analyzing Test Failures
+
+```rust
+// Test failure output analysis
+// assertion `left == right` failed
+//   left: "hi..."
+//  right: "hi👋"
+
+// Step 1: Understand what the test expected vs got
+// Expected: "hi👋" (4 chars: h, i, 👋 where 👋 is 4 bytes)
+// Got: "hi..." (5 chars: h, i, ., ., .)
+
+// Step 2: Analyze the function under test
+fn truncate_for_markdown(text: &str, max_bytes: usize) -> String {
+    // Truncates at byte boundary, not character boundary
+    // "hi👋" is 6 bytes (h=1, i=1, 👋=4)
+    // truncate to 5 bytes → "hi" + "..." (can't fit 👋)
+}
+
+// Step 3: Determine if test expectation is wrong or code is wrong
+// In this case: the function IS correct, test expectation was wrong
+// Fix: Update test to expect "hi..."
+```
+
+#### Test Debugging Workflow
+
+```bash
+# 1. Run single failing test with verbose output
+cargo test test_name -- --nocapture
+
+# 2. Add debugging output to test
+#[test]
+fn my_test() {
+    let result = function_under_test(input);
+    eprintln!("Input: {:?}", input);
+    eprintln!("Result: {:?}", result);
+    eprintln!("Result bytes: {:?}", result.as_bytes());
+    assert_eq!(result, expected);
+}
+
+# 3. Use RUST_BACKTRACE for panic location
+RUST_BACKTRACE=1 cargo test test_name
+
+# 4. Run with specific feature flags if needed
+cargo test --features "test-utils" test_name
+```
+
+### 37.7 Comprehensive Investigation Report Format
+
+**Source**: CASS mining of mcp_agent_mail manifest validation investigation
+
+When debugging complex issues, use a structured report format:
+
+```markdown
+## Investigation Report: [Component Name]
+
+### Executive Summary
+[1-2 sentence overview of findings]
+
+### CRITICAL ISSUES (Must fix before release)
+
+#### Issue 1: [Descriptive Title]
+**File:** `path/to/file.ts:line`
+**Issue:** [Clear description of the problem]
+**Impact:** [What breaks if not fixed]
+**Code:**
+```typescript
+// Current problematic code
+```
+**Suggested Fix:**
+```typescript
+// Corrected code
+```
+
+### HIGH-PRIORITY ISSUES (Should fix soon)
+[Same format]
+
+### MEDIUM-PRIORITY ISSUES (Fix when convenient)
+[Same format]
+
+### LOW-PRIORITY ISSUES (Nice to have)
+[Same format]
+
+### Summary Table
+| Priority | Issue | Impact | Location |
+|----------|-------|--------|----------|
+| Critical | ... | ... | file:line |
+| High | ... | ... | file:line |
+```
+
+### 37.8 Print Debugging Best Practices
+
+**Source**: CASS mining of coding_agent_session_search CLI normalization debugging
+
+#### Strategic Debug Output
+
+```rust
+// Instead of random println!, use structured debug output
+#[cfg(debug_assertions)]
+macro_rules! debug_trace {
+    ($($arg:tt)*) => {
+        if std::env::var("CASS_DEBUG").is_ok() {
+            eprintln!("[DEBUG {}:{}] {}", file!(), line!(), format!($($arg)*));
+        }
+    };
+}
+
+// Usage in code
+fn normalize_args(args: &[String]) -> Vec<String> {
+    debug_trace!("Input args: {:?}", args);
+
+    let result = args.iter()
+        .map(|arg| {
+            let normalized = normalize_single_arg(arg);
+            debug_trace!("  {} -> {}", arg, normalized);
+            normalized
+        })
+        .collect();
+
+    debug_trace!("Output args: {:?}", result);
+    result
+}
+```
+
+#### Structured Logging for Debugging
+
+```go
+// Go: Use structured logging instead of fmt.Println
+import "log/slog"
+
+func processItem(item Item) error {
+    logger := slog.With(
+        "item_id", item.ID,
+        "item_type", item.Type,
+    )
+
+    logger.Debug("starting processing")
+
+    result, err := doWork(item)
+    if err != nil {
+        logger.Error("processing failed",
+            "error", err,
+            "stage", "doWork",
+        )
+        return err
+    }
+
+    logger.Debug("processing complete",
+        "result_size", len(result),
+        "duration_ms", elapsed.Milliseconds(),
+    )
+    return nil
+}
+```
+
+```python
+# Python: Use structlog for debugging
+import structlog
+
+logger = structlog.get_logger()
+
+async def process_message(msg: Message) -> None:
+    log = logger.bind(
+        message_id=msg.id,
+        sender=msg.sender,
+    )
+
+    log.debug("processing_started")
+
+    try:
+        result = await deliver(msg)
+        log.debug("processing_complete", recipients=len(result.delivered))
+    except DeliveryError as e:
+        log.error("delivery_failed", error=str(e), stage="deliver")
+        raise
+```
+
+### 37.9 Concurrency Debugging
+
+**Source**: CASS mining of mcp_agent_mail rate limit debugging
+
+#### Detecting Race Conditions in Async Code
+
+```python
+# BEFORE: Race condition in rate limiter
+class TokenBucket:
+    def __init__(self, rate: float, burst: int):
+        self._buckets: dict[str, tuple[float, float]] = {}
+
+    async def acquire(self, key: str) -> bool:
+        now = time.monotonic()
+        tokens, ts = self._buckets.get(key, (float(self.burst), now))
+        # Race: Two coroutines can read same tokens, both succeed
+        tokens = min(self.burst, tokens + (now - ts) * self.rate)
+        if tokens >= 1:
+            self._buckets[key] = (tokens - 1, now)  # Race: lost update
+            return True
+        return False
+
+# AFTER: Thread-safe with lock
+class TokenBucket:
+    def __init__(self, rate: float, burst: int):
+        self._buckets: dict[str, tuple[float, float]] = {}
+        self._lock = asyncio.Lock()
+
+    async def acquire(self, key: str) -> bool:
+        async with self._lock:
+            now = time.monotonic()
+            tokens, ts = self._buckets.get(key, (float(self.burst), now))
+            tokens = min(self.burst, tokens + (now - ts) * self.rate)
+            if tokens >= 1:
+                self._buckets[key] = (tokens - 1, now)
+                return True
+            return False
+```
+
+#### Deadlock Prevention
+
+```go
+// Lock ordering to prevent deadlock
+// Always acquire locks in consistent order: A before B
+
+// WRONG: Inconsistent lock order
+func transfer1(a, b *Account, amount int) {
+    a.mu.Lock()
+    b.mu.Lock()  // Thread 1 holds A, wants B
+    // ...
+}
+
+func transfer2(a, b *Account, amount int) {
+    b.mu.Lock()
+    a.mu.Lock()  // Thread 2 holds B, wants A → DEADLOCK
+    // ...
+}
+
+// CORRECT: Consistent lock order by ID
+func transfer(a, b *Account, amount int) {
+    first, second := a, b
+    if a.ID > b.ID {
+        first, second = b, a
+    }
+    first.mu.Lock()
+    second.mu.Lock()
+    defer second.mu.Unlock()
+    defer first.mu.Unlock()
+    // ...
+}
+```
+
+### 37.10 Timeout and Context Deadline Debugging
+
+**Source**: CASS mining of coding_agent_account_manager script test handling
+
+```go
+// Debugging timeout issues with context
+func runWithTimeout(ctx context.Context, cmd *exec.Cmd) error {
+    // Create timeout context
+    ctx, cancel := context.WithTimeout(ctx, 2*time.Second)
+    defer cancel()
+
+    cmd.SysProcAttr = &syscall.SysProcAttr{
+        Setpgid: true,  // Create process group for cleanup
+    }
+
+    if err := cmd.Start(); err != nil {
+        return fmt.Errorf("start failed: %w", err)
+    }
+
+    done := make(chan error, 1)
+    go func() {
+        done <- cmd.Wait()
+    }()
+
+    select {
+    case err := <-done:
+        return err
+    case <-ctx.Done():
+        // Kill entire process group
+        if cmd.Process != nil {
+            syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
+        }
+        return fmt.Errorf("command timed out: %w", ctx.Err())
+    }
+}
+```
+
+### 37.11 Debugging Checklist by Bug Type
+
+#### Crash/Panic Debugging
+- [ ] Check for nil pointer dereference
+- [ ] Check for out-of-bounds array/slice access
+- [ ] Check for division by zero
+- [ ] Check for stack overflow (deep recursion)
+- [ ] Check for race conditions (use `-race` flag)
+- [ ] Enable stack traces (`RUST_BACKTRACE=1` or equivalent)
+
+#### Memory Leak Debugging
+- [ ] Check for unclosed file handles
+- [ ] Check for unclosed database connections
+- [ ] Check for unclosed HTTP response bodies
+- [ ] Check for growing maps without cleanup
+- [ ] Check for goroutines that never exit
+- [ ] Profile with memory profiler
+
+#### Performance Debugging
+- [ ] Profile CPU usage to find hot spots
+- [ ] Profile memory allocation
+- [ ] Check for N+1 query patterns
+- [ ] Check for O(n²) algorithms
+- [ ] Check for unnecessary allocations in loops
+- [ ] Check for synchronous I/O blocking async code
+
+#### Logic Bug Debugging
+- [ ] Add assertions for preconditions
+- [ ] Log input/output at function boundaries
+- [ ] Check boundary conditions (empty, one, many)
+- [ ] Check error handling paths
+- [ ] Use debugger to step through logic
+- [ ] Write failing test first
+
+### 37.12 Application to meta_skill
+
+| Debugging Area | Pattern | meta_skill Application |
+|----------------|---------|------------------------|
+| **Race conditions** | Run with `-race` flag | Test skill loading concurrency |
+| **N+1 queries** | Batch lookups | Load related skills together |
+| **Performance** | Profile hot paths | Optimize skill rendering |
+| **Test failures** | Structured investigation | Categorize by severity |
+| **Error handling** | Check all paths | Ensure cleanup on failure |
+| **Logging** | Structured with context | Add skill_id to all logs |
+
+### 37.13 Debugging Workflow Checklist
+
+Before diving into debugging:
+- [ ] Can you reproduce the bug reliably?
+- [ ] Do you have a minimal reproduction case?
+- [ ] Have you checked error logs?
+- [ ] Have you checked recent code changes (git bisect)?
+
+During investigation:
+- [ ] Have you isolated the failing component?
+- [ ] Have you formed a testable hypothesis?
+- [ ] Have you verified hypothesis with evidence?
+- [ ] Have you checked related code for same issue?
+
+After fixing:
+- [ ] Does the fix address root cause (not just symptom)?
+- [ ] Have you added a regression test?
+- [ ] Have you removed debug code?
+- [ ] Have you documented the fix in commit message?
