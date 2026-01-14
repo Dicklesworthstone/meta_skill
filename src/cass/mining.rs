@@ -12,7 +12,7 @@ use tracing::warn;
 
 use crate::error::Result;
 use crate::quality::ubs::UbsClient;
-use crate::security::{contains_injection_patterns, contains_sensitive_data, SafetyGate};
+use crate::security::SafetyGate;
 
 use super::client::Session;
 
@@ -1742,6 +1742,7 @@ And more text.
             frequency: 1,
             tags: vec![],
             description: None,
+            taint_label: None,
         };
 
         let p2 = ExtractedPattern {
@@ -1756,6 +1757,7 @@ And more text.
             frequency: 1,
             tags: vec![],
             description: None,
+            taint_label: None,
         };
 
         assert!(patterns_are_similar(&p1, &p2));
@@ -1773,6 +1775,7 @@ And more text.
             frequency: 1,
             tags: vec![],
             description: None,
+            taint_label: None,
         };
 
         assert!(!patterns_are_similar(&p1, &p3));

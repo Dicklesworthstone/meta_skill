@@ -4,7 +4,7 @@ pub mod acip;
 pub mod command_safety;
 
 pub use acip::{
-    AcipAnalysis, AcipClassification, AcipConfig, AcipEngine, ContentSource, QuarantineRecord,
-    TrustBoundaryConfig, TrustLevel,
+    contains_injection_patterns, contains_sensitive_data, AcipAnalysis, AcipClassification,
+    AcipConfig, AcipEngine, ContentSource, QuarantineRecord, TrustBoundaryConfig, TrustLevel,
 };
 pub use command_safety::{CommandSafetyEvent, SafetyGate, SafetyStatus};

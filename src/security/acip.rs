@@ -253,6 +253,16 @@ fn detect_sensitive(content: &str) -> bool {
     SENSITIVE_PATTERNS.iter().any(|re| re.is_match(content))
 }
 
+/// Check if content contains prompt injection patterns.
+pub fn contains_injection_patterns(content: &str) -> bool {
+    detect_disallowed(content)
+}
+
+/// Check if content contains sensitive data patterns (API keys, secrets, etc.).
+pub fn contains_sensitive_data(content: &str) -> bool {
+    detect_sensitive(content)
+}
+
 fn redact_sensitive(content: &str) -> String {
     let mut redacted = content.to_string();
     for re in SENSITIVE_PATTERNS.iter() {
