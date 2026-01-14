@@ -355,4 +355,217 @@ checksum = "sha256:abc123"
         let err = manifest.validate().unwrap_err();
         assert!(err.to_string().contains("dependencies.version"));
     }
+
+    // --- Ed25519 signature verification tests ---
+
+    /// Generate a test Ed25519 keypair and return (public_key_bytes, sign_fn)
+    fn generate_test_keypair() -> (Vec<u8>, impl Fn(&[u8]) -> Vec<u8>) {
+        use ring::rand::SystemRandom;
+        use ring::signature::{Ed25519KeyPair, KeyPair};
+
+        let rng = SystemRandom::new();
+        let pkcs8_bytes = Ed25519KeyPair::generate_pkcs8(&rng).unwrap();
+        let keypair = Ed25519KeyPair::from_pkcs8(pkcs8_bytes.as_ref()).unwrap();
+        let public_key = keypair.public_key().as_ref().to_vec();
+
+        // Return a closure that can sign data
+        // We need to recreate the keypair in the closure since Ed25519KeyPair isn't Clone
+        let pkcs8_owned = pkcs8_bytes.as_ref().to_vec();
+        let sign_fn = move |data: &[u8]| -> Vec<u8> {
+            let kp = Ed25519KeyPair::from_pkcs8(&pkcs8_owned).unwrap();
+            kp.sign(data).as_ref().to_vec()
+        };
+
+        (public_key, sign_fn)
+    }
+
+    #[test]
+    fn ed25519_verifier_accepts_valid_signature() {
+        let (public_key, sign) = generate_test_keypair();
+        let payload = b"test payload for bundle verification";
+        let signature_bytes = sign(payload);
+
+        let mut verifier = Ed25519Verifier::new();
+        verifier.add_key("test-key-1", public_key);
+
+        let bundle_sig = BundleSignature {
+            signer: "Test Signer".to_string(),
+            key_id: "test-key-1".to_string(),
+            algorithm: "ed25519".to_string(),
+            signature: hex::encode(&signature_bytes),
+            timestamp: None,
+        };
+
+        // Should succeed
+        let result = verifier.verify(payload, &bundle_sig);
+        assert!(result.is_ok(), "Expected valid signature to verify: {:?}", result);
+    }
+
+    #[test]
+    fn ed25519_verifier_rejects_unknown_key() {
+        let (public_key, sign) = generate_test_keypair();
+        let payload = b"test payload";
+        let signature_bytes = sign(payload);
+
+        let mut verifier = Ed25519Verifier::new();
+        verifier.add_key("known-key", public_key);
+
+        let bundle_sig = BundleSignature {
+            signer: "Test Signer".to_string(),
+            key_id: "unknown-key".to_string(), // Not in verifier's trusted keys
+            algorithm: "ed25519".to_string(),
+            signature: hex::encode(&signature_bytes),
+            timestamp: None,
+        };
+
+        let result = verifier.verify(payload, &bundle_sig);
+        assert!(result.is_err());
+        let err_msg = result.unwrap_err().to_string();
+        assert!(err_msg.contains("unknown signing key"));
+        assert!(err_msg.contains("unknown-key"));
+    }
+
+    #[test]
+    fn ed25519_verifier_rejects_invalid_signature() {
+        let (public_key, sign) = generate_test_keypair();
+        let payload = b"test payload";
+        let signature_bytes = sign(payload);
+
+        let mut verifier = Ed25519Verifier::new();
+        verifier.add_key("test-key", public_key);
+
+        // Corrupt the signature
+        let mut corrupted_sig = signature_bytes.clone();
+        corrupted_sig[0] ^= 0xff;
+
+        let bundle_sig = BundleSignature {
+            signer: "Test Signer".to_string(),
+            key_id: "test-key".to_string(),
+            algorithm: "ed25519".to_string(),
+            signature: hex::encode(&corrupted_sig),
+            timestamp: None,
+        };
+
+        let result = verifier.verify(payload, &bundle_sig);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("verification failed"));
+    }
+
+    #[test]
+    fn ed25519_verifier_rejects_wrong_payload() {
+        let (public_key, sign) = generate_test_keypair();
+        let original_payload = b"original payload";
+        let signature_bytes = sign(original_payload);
+
+        let mut verifier = Ed25519Verifier::new();
+        verifier.add_key("test-key", public_key);
+
+        let bundle_sig = BundleSignature {
+            signer: "Test Signer".to_string(),
+            key_id: "test-key".to_string(),
+            algorithm: "ed25519".to_string(),
+            signature: hex::encode(&signature_bytes),
+            timestamp: None,
+        };
+
+        // Verify against different payload
+        let tampered_payload = b"tampered payload";
+        let result = verifier.verify(tampered_payload, &bundle_sig);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("verification failed"));
+    }
+
+    #[test]
+    fn ed25519_verifier_rejects_invalid_hex_encoding() {
+        let (public_key, _sign) = generate_test_keypair();
+        let payload = b"test payload";
+
+        let mut verifier = Ed25519Verifier::new();
+        verifier.add_key("test-key", public_key);
+
+        let bundle_sig = BundleSignature {
+            signer: "Test Signer".to_string(),
+            key_id: "test-key".to_string(),
+            algorithm: "ed25519".to_string(),
+            signature: "not-valid-hex!@#$".to_string(),
+            timestamp: None,
+        };
+
+        let result = verifier.verify(payload, &bundle_sig);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("invalid signature encoding"));
+    }
+
+    #[test]
+    fn ed25519_verifier_from_keys_constructor() {
+        let (public_key1, _) = generate_test_keypair();
+        let (public_key2, sign2) = generate_test_keypair();
+
+        let verifier = Ed25519Verifier::from_keys([
+            ("key1", public_key1),
+            ("key2", public_key2.clone()),
+        ]);
+
+        // Verify that key2 works
+        let payload = b"test";
+        let sig = sign2(payload);
+        let bundle_sig = BundleSignature {
+            signer: "Signer 2".to_string(),
+            key_id: "key2".to_string(),
+            algorithm: "ed25519".to_string(),
+            signature: hex::encode(&sig),
+            timestamp: None,
+        };
+
+        assert!(verifier.verify(payload, &bundle_sig).is_ok());
+    }
+
+    #[test]
+    fn manifest_verify_signatures_all_valid() {
+        let (public_key, sign) = generate_test_keypair();
+        let payload = b"manifest content";
+        let sig = sign(payload);
+
+        let mut manifest = BundleManifest::from_toml_str(SAMPLE_TOML).unwrap();
+        manifest.signatures.push(BundleSignature {
+            signer: "Publisher".to_string(),
+            key_id: "publisher-key".to_string(),
+            signature: hex::encode(&sig),
+        });
+
+        let mut verifier = Ed25519Verifier::new();
+        verifier.add_key("publisher-key", public_key);
+
+        assert!(manifest.verify_signatures(payload, &verifier).is_ok());
+    }
+
+    #[test]
+    fn manifest_verify_signatures_fails_if_any_invalid() {
+        let (public_key, sign) = generate_test_keypair();
+        let payload = b"manifest content";
+        let valid_sig = sign(payload);
+
+        let mut manifest = BundleManifest::from_toml_str(SAMPLE_TOML).unwrap();
+
+        // First signature is valid
+        manifest.signatures.push(BundleSignature {
+            signer: "Publisher".to_string(),
+            key_id: "publisher-key".to_string(),
+            signature: hex::encode(&valid_sig),
+        });
+
+        // Second signature has unknown key
+        manifest.signatures.push(BundleSignature {
+            signer: "Unknown".to_string(),
+            key_id: "unknown-key".to_string(),
+            signature: hex::encode(&valid_sig),
+        });
+
+        let mut verifier = Ed25519Verifier::new();
+        verifier.add_key("publisher-key", public_key);
+
+        let result = manifest.verify_signatures(payload, &verifier);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("unknown signing key"));
+    }
 }
