@@ -364,3 +364,378 @@ fn compute_spec_hash(spec: &crate::core::SkillSpec) -> Result<String> {
     let result = hasher.finalize();
     Ok(hex::encode(result))
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::fs;
+    use tempfile::TempDir;
+
+    // ==================== Expand Path Tests ====================
+
+    #[test]
+    fn test_expand_path_relative() {
+        let result = expand_path("./relative/path");
+        assert_eq!(result, PathBuf::from("./relative/path"));
+    }
+
+    #[test]
+    fn test_expand_path_absolute() {
+        let result = expand_path("/absolute/path");
+        assert_eq!(result, PathBuf::from("/absolute/path"));
+    }
+
+    #[test]
+    fn test_expand_path_tilde_only() {
+        let result = expand_path("~");
+        if let Some(home) = dirs::home_dir() {
+            assert_eq!(result, home);
+        } else {
+            assert_eq!(result, PathBuf::from("~"));
+        }
+    }
+
+    #[test]
+    fn test_expand_path_tilde_subpath() {
+        let result = expand_path("~/subpath/file");
+        if let Some(home) = dirs::home_dir() {
+            assert_eq!(result, home.join("subpath/file"));
+        } else {
+            assert_eq!(result, PathBuf::from("~/subpath/file"));
+        }
+    }
+
+    #[test]
+    fn test_expand_path_no_tilde_prefix() {
+        // Paths like "~user/path" should not be expanded
+        let result = expand_path("~user/path");
+        assert_eq!(result, PathBuf::from("~user/path"));
+    }
+
+    #[test]
+    fn test_expand_path_empty() {
+        let result = expand_path("");
+        assert_eq!(result, PathBuf::from(""));
+    }
+
+    // ==================== Argument Parsing Tests ====================
+
+    #[test]
+    fn test_index_args_defaults() {
+        use clap::Parser;
+
+        #[derive(Parser)]
+        struct TestCli {
+            #[command(flatten)]
+            args: IndexArgs,
+        }
+
+        let cli = TestCli::parse_from(["test"]);
+        assert!(cli.args.paths.is_empty());
+        assert!(!cli.args.watch);
+        assert!(!cli.args.force);
+        assert!(!cli.args.all);
+    }
+
+    #[test]
+    fn test_index_args_with_paths() {
+        use clap::Parser;
+
+        #[derive(Parser)]
+        struct TestCli {
+            #[command(flatten)]
+            args: IndexArgs,
+        }
+
+        let cli = TestCli::parse_from(["test", "./skills", "./more-skills"]);
+        assert_eq!(cli.args.paths, vec!["./skills", "./more-skills"]);
+    }
+
+    #[test]
+    fn test_index_args_watch_flag() {
+        use clap::Parser;
+
+        #[derive(Parser)]
+        struct TestCli {
+            #[command(flatten)]
+            args: IndexArgs,
+        }
+
+        let cli = TestCli::parse_from(["test", "--watch"]);
+        assert!(cli.args.watch);
+    }
+
+    #[test]
+    fn test_index_args_force_long() {
+        use clap::Parser;
+
+        #[derive(Parser)]
+        struct TestCli {
+            #[command(flatten)]
+            args: IndexArgs,
+        }
+
+        let cli = TestCli::parse_from(["test", "--force"]);
+        assert!(cli.args.force);
+    }
+
+    #[test]
+    fn test_index_args_force_short() {
+        use clap::Parser;
+
+        #[derive(Parser)]
+        struct TestCli {
+            #[command(flatten)]
+            args: IndexArgs,
+        }
+
+        let cli = TestCli::parse_from(["test", "-f"]);
+        assert!(cli.args.force);
+    }
+
+    #[test]
+    fn test_index_args_all_flag() {
+        use clap::Parser;
+
+        #[derive(Parser)]
+        struct TestCli {
+            #[command(flatten)]
+            args: IndexArgs,
+        }
+
+        let cli = TestCli::parse_from(["test", "--all"]);
+        assert!(cli.args.all);
+    }
+
+    #[test]
+    fn test_index_args_combined() {
+        use clap::Parser;
+
+        #[derive(Parser)]
+        struct TestCli {
+            #[command(flatten)]
+            args: IndexArgs,
+        }
+
+        let cli = TestCli::parse_from(["test", "--force", "--all", "./path"]);
+        assert!(cli.args.force);
+        assert!(cli.args.all);
+        assert_eq!(cli.args.paths, vec!["./path"]);
+    }
+
+    // ==================== Discover Skill Files Tests ====================
+
+    #[test]
+    fn test_discover_skill_files_empty_root() {
+        let temp = TempDir::new().unwrap();
+        let roots = vec![SkillRoot {
+            path: temp.path().to_path_buf(),
+            layer: SkillLayer::Project,
+        }];
+
+        let result = discover_skill_files(&roots);
+        assert!(result.is_empty());
+    }
+
+    #[test]
+    fn test_discover_skill_files_single_skill() {
+        let temp = TempDir::new().unwrap();
+        let skill_dir = temp.path().join("my-skill");
+        fs::create_dir(&skill_dir).unwrap();
+        fs::write(skill_dir.join("SKILL.md"), "# My Skill").unwrap();
+
+        let roots = vec![SkillRoot {
+            path: temp.path().to_path_buf(),
+            layer: SkillLayer::Project,
+        }];
+
+        let result = discover_skill_files(&roots);
+        assert_eq!(result.len(), 1);
+        assert!(result[0].path.ends_with("SKILL.md"));
+        assert_eq!(result[0].layer, SkillLayer::Project);
+    }
+
+    #[test]
+    fn test_discover_skill_files_multiple_skills() {
+        let temp = TempDir::new().unwrap();
+
+        for name in ["skill1", "skill2", "skill3"] {
+            let skill_dir = temp.path().join(name);
+            fs::create_dir(&skill_dir).unwrap();
+            fs::write(skill_dir.join("SKILL.md"), format!("# {}", name)).unwrap();
+        }
+
+        let roots = vec![SkillRoot {
+            path: temp.path().to_path_buf(),
+            layer: SkillLayer::User,
+        }];
+
+        let result = discover_skill_files(&roots);
+        assert_eq!(result.len(), 3);
+        assert!(result.iter().all(|s| s.layer == SkillLayer::User));
+    }
+
+    #[test]
+    fn test_discover_skill_files_nested_directory() {
+        let temp = TempDir::new().unwrap();
+
+        let nested_path = temp.path().join("nested").join("deep").join("skill");
+        fs::create_dir_all(&nested_path).unwrap();
+        fs::write(nested_path.join("SKILL.md"), "# Nested Skill").unwrap();
+
+        let roots = vec![SkillRoot {
+            path: temp.path().to_path_buf(),
+            layer: SkillLayer::Base,
+        }];
+
+        let result = discover_skill_files(&roots);
+        assert_eq!(result.len(), 1);
+        assert!(result[0].path.to_string_lossy().contains("nested"));
+    }
+
+    #[test]
+    fn test_discover_skill_files_ignores_non_skill() {
+        let temp = TempDir::new().unwrap();
+
+        // Create a skill directory
+        let skill_dir = temp.path().join("real-skill");
+        fs::create_dir(&skill_dir).unwrap();
+        fs::write(skill_dir.join("SKILL.md"), "# Real Skill").unwrap();
+
+        // Create a non-skill directory with README.md instead
+        let non_skill_dir = temp.path().join("not-a-skill");
+        fs::create_dir(&non_skill_dir).unwrap();
+        fs::write(non_skill_dir.join("README.md"), "# Not a skill").unwrap();
+
+        // Create a file named SKILL.md at root (not in a subdirectory)
+        fs::write(temp.path().join("SKILL.md"), "# Root Level").unwrap();
+
+        let roots = vec![SkillRoot {
+            path: temp.path().to_path_buf(),
+            layer: SkillLayer::Project,
+        }];
+
+        let result = discover_skill_files(&roots);
+        // Should find both the nested skill and the root-level SKILL.md
+        assert_eq!(result.len(), 2);
+    }
+
+    #[test]
+    fn test_discover_skill_files_nonexistent_root() {
+        let roots = vec![SkillRoot {
+            path: PathBuf::from("/nonexistent/path/12345"),
+            layer: SkillLayer::Project,
+        }];
+
+        let result = discover_skill_files(&roots);
+        assert!(result.is_empty());
+    }
+
+    #[test]
+    fn test_discover_skill_files_multiple_roots() {
+        let temp1 = TempDir::new().unwrap();
+        let temp2 = TempDir::new().unwrap();
+
+        // Create skills in each root
+        let skill1 = temp1.path().join("skill1");
+        fs::create_dir(&skill1).unwrap();
+        fs::write(skill1.join("SKILL.md"), "# Skill 1").unwrap();
+
+        let skill2 = temp2.path().join("skill2");
+        fs::create_dir(&skill2).unwrap();
+        fs::write(skill2.join("SKILL.md"), "# Skill 2").unwrap();
+
+        let roots = vec![
+            SkillRoot {
+                path: temp1.path().to_path_buf(),
+                layer: SkillLayer::Project,
+            },
+            SkillRoot {
+                path: temp2.path().to_path_buf(),
+                layer: SkillLayer::User,
+            },
+        ];
+
+        let result = discover_skill_files(&roots);
+        assert_eq!(result.len(), 2);
+
+        let project_skills: Vec<_> = result
+            .iter()
+            .filter(|s| s.layer == SkillLayer::Project)
+            .collect();
+        let user_skills: Vec<_> = result
+            .iter()
+            .filter(|s| s.layer == SkillLayer::User)
+            .collect();
+
+        assert_eq!(project_skills.len(), 1);
+        assert_eq!(user_skills.len(), 1);
+    }
+
+    // ==================== Compute Spec Hash Tests ====================
+
+    #[test]
+    fn test_compute_spec_hash_deterministic() {
+        use crate::core::SkillSpec;
+
+        let spec = SkillSpec::new("test-skill", "Test Skill");
+
+        let hash1 = compute_spec_hash(&spec).unwrap();
+        let hash2 = compute_spec_hash(&spec).unwrap();
+
+        assert_eq!(hash1, hash2);
+    }
+
+    #[test]
+    fn test_compute_spec_hash_different_for_different_specs() {
+        use crate::core::SkillSpec;
+
+        let spec1 = SkillSpec::new("spec1", "Spec One");
+        let spec2 = SkillSpec::new("spec2", "Spec Two");
+
+        let hash1 = compute_spec_hash(&spec1).unwrap();
+        let hash2 = compute_spec_hash(&spec2).unwrap();
+
+        assert_ne!(hash1, hash2);
+    }
+
+    #[test]
+    fn test_compute_spec_hash_is_sha256() {
+        use crate::core::SkillSpec;
+
+        let spec = SkillSpec::new("test-skill", "Test");
+        let hash = compute_spec_hash(&spec).unwrap();
+
+        // SHA256 produces 64 hex characters
+        assert_eq!(hash.len(), 64);
+
+        // Should only contain hex characters
+        assert!(hash.chars().all(|c| c.is_ascii_hexdigit()));
+    }
+
+    // ==================== SkillRoot Tests ====================
+
+    #[test]
+    fn test_skill_root_struct() {
+        let root = SkillRoot {
+            path: PathBuf::from("/test/path"),
+            layer: SkillLayer::Org,
+        };
+
+        assert_eq!(root.path, PathBuf::from("/test/path"));
+        assert_eq!(root.layer, SkillLayer::Org);
+    }
+
+    // ==================== DiscoveredSkill Tests ====================
+
+    #[test]
+    fn test_discovered_skill_struct() {
+        let skill = DiscoveredSkill {
+            path: PathBuf::from("/test/skill/SKILL.md"),
+            layer: SkillLayer::Base,
+        };
+
+        assert_eq!(skill.path, PathBuf::from("/test/skill/SKILL.md"));
+        assert_eq!(skill.layer, SkillLayer::Base);
+    }
+}
