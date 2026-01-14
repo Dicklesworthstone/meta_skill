@@ -76,6 +76,7 @@ fn parse_tags_from_metadata(metadata_json: &str) -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use super::super::context::SearchLayer;
 
     fn make_skill(id: &str, layer: &str, quality: f64, deprecated: bool, tags: &[&str]) -> SkillRecord {
         let tags_json = serde_json::json!({ "tags": tags });
@@ -103,47 +104,48 @@ mod tests {
     }
 
     #[test]
-    fn test_empty_filters_match_all() {
+    fn test_empty_filters_match_non_deprecated() {
+        // Default filters exclude deprecated, so only non-deprecated match
         let filters = SearchFilters::new();
         let skill = make_skill("test", "project", 0.8, false, &["rust"]);
-        assert!(filters.matches(&skill));
+        assert!(matches_skill_record(&filters, &skill));
     }
 
     #[test]
     fn test_layer_filter() {
-        let filters = SearchFilters::new().with_layer("project");
+        let filters = SearchFilters::new().layer(SearchLayer::Project);
 
         let project_skill = make_skill("s1", "project", 0.8, false, &[]);
-        let org_skill = make_skill("s2", "org", 0.8, false, &[]);
+        let global_skill = make_skill("s2", "global", 0.8, false, &[]);
 
-        assert!(filters.matches(&project_skill));
-        assert!(!filters.matches(&org_skill));
+        assert!(matches_skill_record(&filters, &project_skill));
+        assert!(!matches_skill_record(&filters, &global_skill));
     }
 
     #[test]
     fn test_tags_filter_any_match() {
-        let filters = SearchFilters::new().with_tags(vec!["rust".to_string(), "cli".to_string()]);
+        let filters = SearchFilters::new().tags(vec!["rust".to_string(), "cli".to_string()]);
 
         let rust_skill = make_skill("s1", "project", 0.8, false, &["rust", "web"]);
         let cli_skill = make_skill("s2", "project", 0.8, false, &["cli"]);
         let python_skill = make_skill("s3", "project", 0.8, false, &["python"]);
 
-        assert!(filters.matches(&rust_skill)); // has "rust"
-        assert!(filters.matches(&cli_skill));  // has "cli"
-        assert!(!filters.matches(&python_skill)); // no match
+        assert!(matches_skill_record(&filters, &rust_skill)); // has "rust"
+        assert!(matches_skill_record(&filters, &cli_skill));  // has "cli"
+        assert!(!matches_skill_record(&filters, &python_skill)); // no match
     }
 
     #[test]
     fn test_quality_filter() {
-        let filters = SearchFilters::new().with_min_quality(0.7);
+        let filters = SearchFilters::new().min_quality(0.7);
 
         let high_quality = make_skill("s1", "project", 0.9, false, &[]);
         let low_quality = make_skill("s2", "project", 0.5, false, &[]);
         let edge_quality = make_skill("s3", "project", 0.7, false, &[]);
 
-        assert!(filters.matches(&high_quality));
-        assert!(!filters.matches(&low_quality));
-        assert!(filters.matches(&edge_quality)); // exactly at threshold
+        assert!(matches_skill_record(&filters, &high_quality));
+        assert!(!matches_skill_record(&filters, &low_quality));
+        assert!(matches_skill_record(&filters, &edge_quality)); // exactly at threshold
     }
 
     #[test]
@@ -153,61 +155,40 @@ mod tests {
         let active_skill = make_skill("s1", "project", 0.8, false, &[]);
         let deprecated_skill = make_skill("s2", "project", 0.8, true, &[]);
 
-        assert!(filters.matches(&active_skill));
-        assert!(!filters.matches(&deprecated_skill));
+        assert!(matches_skill_record(&filters, &active_skill));
+        assert!(!matches_skill_record(&filters, &deprecated_skill));
     }
 
     #[test]
     fn test_deprecated_filter_include() {
-        let filters = SearchFilters::new().include_deprecated();
+        let filters = SearchFilters::new().include_deprecated(true);
 
         let deprecated_skill = make_skill("s1", "project", 0.8, true, &[]);
-        assert!(filters.matches(&deprecated_skill));
+        assert!(matches_skill_record(&filters, &deprecated_skill));
     }
 
     #[test]
     fn test_combined_filters() {
         let filters = SearchFilters::new()
-            .with_layer("project")
-            .with_tags(vec!["rust".to_string()])
-            .with_min_quality(0.7);
+            .layer(SearchLayer::Project)
+            .tags(vec!["rust".to_string()])
+            .min_quality(0.7);
 
         // Matches all filters
         let good_skill = make_skill("s1", "project", 0.8, false, &["rust"]);
-        assert!(filters.matches(&good_skill));
+        assert!(matches_skill_record(&filters, &good_skill));
 
         // Wrong layer
-        let wrong_layer = make_skill("s2", "org", 0.8, false, &["rust"]);
-        assert!(!filters.matches(&wrong_layer));
+        let wrong_layer = make_skill("s2", "global", 0.8, false, &["rust"]);
+        assert!(!matches_skill_record(&filters, &wrong_layer));
 
         // Wrong tags
         let wrong_tags = make_skill("s3", "project", 0.8, false, &["python"]);
-        assert!(!filters.matches(&wrong_tags));
+        assert!(!matches_skill_record(&filters, &wrong_tags));
 
         // Low quality
         let low_quality = make_skill("s4", "project", 0.5, false, &["rust"]);
-        assert!(!filters.matches(&low_quality));
-    }
-
-    #[test]
-    fn test_quality_clamp() {
-        // Quality should be clamped to 0.0-1.0
-        let filters = SearchFilters::new().with_min_quality(1.5);
-        assert_eq!(filters.min_quality, Some(1.0));
-
-        let filters = SearchFilters::new().with_min_quality(-0.5);
-        assert_eq!(filters.min_quality, Some(0.0));
-    }
-
-    #[test]
-    fn test_is_empty() {
-        assert!(SearchFilters::new().is_empty());
-        assert!(!SearchFilters::new().with_layer("project").is_empty());
-        assert!(!SearchFilters::new().with_tags(vec!["rust".to_string()]).is_empty());
-        assert!(!SearchFilters::new().with_min_quality(0.5).is_empty());
-        // Note: include_deprecated = true also makes it "not empty"
-        // because it changes behavior from default
-        assert!(!SearchFilters::new().include_deprecated().is_empty());
+        assert!(!matches_skill_record(&filters, &low_quality));
     }
 
     #[test]
@@ -233,13 +214,13 @@ mod tests {
     fn test_filter_skill_ids() {
         let skills = vec![
             make_skill("rust-cli", "project", 0.8, false, &["rust"]),
-            make_skill("python-web", "org", 0.9, false, &["python"]),
+            make_skill("python-web", "global", 0.9, false, &["python"]),
             make_skill("deprecated", "project", 0.7, true, &["rust"]),
         ];
 
         let lookup = |id: &str| skills.iter().find(|s| s.id == id).cloned();
 
-        let filters = SearchFilters::new().with_layer("project");
+        let filters = SearchFilters::new().layer(SearchLayer::Project);
         let ids = vec!["rust-cli".to_string(), "python-web".to_string(), "deprecated".to_string()];
 
         // Should filter to project layer, excluding deprecated

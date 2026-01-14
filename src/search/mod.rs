@@ -27,6 +27,7 @@
 
 pub mod context;
 pub mod embeddings;
+pub mod filters;
 pub mod hybrid;
 pub mod tantivy;
 pub mod tantivy_index;
@@ -34,6 +35,7 @@ pub mod tantivy_index;
 // Re-export main types
 pub use context::{FilterResult, SearchContext, SearchFilters, SearchLayer};
 pub use embeddings::{Embedder, HashEmbedder, VectorIndex};
+pub use filters::{filter_hybrid_results, filter_skill_ids, matches_skill_record};
 pub use hybrid::{fuse_results, fuse_simple, fuse_with_limit, HybridResult, RrfConfig};
 pub use tantivy::{Bm25Index, Bm25Result};
 pub use tantivy_index::SearchIndex;

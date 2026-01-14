@@ -314,16 +314,17 @@ fn extract_command_patterns(session: &Session) -> Option<ExtractedPattern> {
         return None;
     }
 
+    let frequency = evidence.len();
     Some(ExtractedPattern {
         id: format!("cmd_{}", &session.id[..8.min(session.id.len())]),
         pattern_type: PatternType::CommandPattern {
             commands,
-            frequency: evidence.len(),
+            frequency,
             contexts: vec![session.metadata.project.clone().unwrap_or_default()],
         },
         evidence,
         confidence: 0.6,
-        frequency: 1,
+        frequency,
         tags: vec!["auto-extracted".to_string(), "commands".to_string()],
         description: Some("Command sequence extracted from session".to_string()),
     })

@@ -256,11 +256,17 @@ impl Bm25Index {
                 self.fields.description,
                 self.fields.body,
                 self.fields.tags,
+                self.fields.aliases,
             ],
         );
 
         // Combine text query with layer filter
-        let filter_query = format!("{query} AND layer:{layer}");
+        let normalized_layer = normalize_layer(layer);
+        let filter_query = if query.trim().is_empty() {
+            format!("layer:{normalized_layer}")
+        } else {
+            format!("{query} AND layer:{normalized_layer}")
+        };
         let parsed_query = query_parser.parse_query(&filter_query).map_err(|e| {
             MsError::QueryParse(format!("Failed to parse query: {e}"))
         })?;
@@ -309,6 +315,21 @@ impl Bm25Index {
     /// Check if index is empty
     pub fn is_empty(&self) -> bool {
         self.num_docs() == 0
+    }
+}
+
+fn normalize_layer(input: &str) -> &'static str {
+    let lower = input.to_lowercase();
+    match lower.as_str() {
+        "system" => "base",
+        "global" => "org",
+        "local" => "user",
+        // For other values, return as-is (with valid static mappings)
+        "base" => "base",
+        "org" => "org",
+        "project" => "project",
+        "user" => "user",
+        _ => "project", // Default fallback
     }
 }
 
