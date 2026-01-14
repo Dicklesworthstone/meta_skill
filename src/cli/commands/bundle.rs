@@ -787,6 +787,46 @@ fn normalize_skill_list(values: &[String]) -> Vec<String> {
     out
 }
 
+/// Discover skills in a directory by looking for subdirectories containing SKILL.md
+fn discover_skills_in_dir(dir: &std::path::Path) -> Result<Vec<String>> {
+    if !dir.exists() {
+        return Err(MsError::ValidationFailed(format!(
+            "directory not found: {}",
+            dir.display()
+        )));
+    }
+
+    if !dir.is_dir() {
+        return Err(MsError::ValidationFailed(format!(
+            "not a directory: {}",
+            dir.display()
+        )));
+    }
+
+    let mut skills = Vec::new();
+    let entries = std::fs::read_dir(dir).map_err(|err| {
+        MsError::Config(format!("read {}: {err}", dir.display()))
+    })?;
+
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if !path.is_dir() {
+            continue;
+        }
+
+        // Check if this directory contains SKILL.md (indicating it's a skill)
+        let skill_md = path.join("SKILL.md");
+        if skill_md.exists() {
+            if let Some(name) = path.file_name().and_then(|s| s.to_str()) {
+                skills.push(name.to_string());
+            }
+        }
+    }
+
+    skills.sort();
+    Ok(skills)
+}
+
 fn slugify(input: &str) -> String {
     let mut out = String::new();
     let mut prev_dash = false;
