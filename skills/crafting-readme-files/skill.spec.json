@@ -1,0 +1,131 @@
+{
+  "id": "crafting-readme-files",
+  "version": "1.0.0",
+  "name": "Crafting README.md Files",
+  "description": "Craft professional README.md files for GitHub open source projects. Generates hero sections, installation instructions, feature tables, and architecture diagrams. Use when creating or revising a README, documenting a CLI tool, library, or open source project, or when user asks about README structure, badges, or project documentation.",
+  "metadata": {
+    "author": "Jeffrey Emanuel",
+    "created": "2026-01-14",
+    "updated": "2026-01-14",
+    "tags": ["documentation", "github", "readme", "markdown", "open-source"],
+    "layer": "base",
+    "quality_score": 0.95,
+    "token_estimate": {
+      "minimal": 100,
+      "overview": 500,
+      "standard": 1800,
+      "full": 4500,
+      "complete": 7000
+    },
+    "platforms": ["any"],
+    "network_requirement": "none",
+    "triggers": [
+      "readme",
+      "README.md",
+      "documentation",
+      "project documentation",
+      "github readme",
+      "open source documentation",
+      "write readme",
+      "create readme",
+      "revise readme",
+      "improve readme",
+      "badges",
+      "installation section",
+      "troubleshooting section"
+    ]
+  },
+  "sections": [
+    {
+      "id": "why-this-matters",
+      "title": "Why This Matters",
+      "type": "overview",
+      "priority": 1
+    },
+    {
+      "id": "exact-prompt",
+      "title": "THE EXACT PROMPT",
+      "type": "prompt",
+      "priority": 1
+    },
+    {
+      "id": "golden-structure",
+      "title": "Golden Structure",
+      "type": "reference",
+      "priority": 2
+    },
+    {
+      "id": "section-templates",
+      "title": "Section Templates",
+      "type": "template",
+      "priority": 2
+    },
+    {
+      "id": "critical-rules",
+      "title": "Critical Rules",
+      "type": "rules",
+      "priority": 1
+    },
+    {
+      "id": "anti-patterns",
+      "title": "Anti-Patterns",
+      "type": "pitfalls",
+      "priority": 2
+    },
+    {
+      "id": "agents-md-blurb",
+      "title": "AGENTS.md Blurb Template",
+      "type": "template",
+      "priority": 3
+    },
+    {
+      "id": "checklist",
+      "title": "Checklist",
+      "type": "checklist",
+      "priority": 2
+    },
+    {
+      "id": "badge-reference",
+      "title": "Badge Reference",
+      "type": "reference",
+      "priority": 3
+    },
+    {
+      "id": "real-world-examples",
+      "title": "Real-World Examples",
+      "type": "examples",
+      "priority": 3
+    },
+    {
+      "id": "progressive-disclosure",
+      "title": "Progressive Disclosure for Long READMEs",
+      "type": "advanced",
+      "priority": 3
+    }
+  ],
+  "references": [
+    {
+      "path": "references/section-templates.md",
+      "description": "Extended templates for Performance, Security, API Reference, Migration, Contributing, and other specialized sections"
+    }
+  ],
+  "evidence": {
+    "sources": [
+      {
+        "type": "experience",
+        "description": "Patterns extracted from revising ms README following xf README model",
+        "session_id": null
+      },
+      {
+        "type": "reference",
+        "description": "xf README at /data/projects/xf/README.md",
+        "url": "https://github.com/Dicklesworthstone/xf"
+      },
+      {
+        "type": "reference",
+        "description": "ripgrep, bat, starship READMEs",
+        "url": null
+      }
+    ]
+  }
+}
