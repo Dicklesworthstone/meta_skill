@@ -687,19 +687,24 @@ impl Database {
     ///
     /// The source_path and content_hash are only finalized by `finalize_skill_commit`
     /// after Git commit succeeds.
-    pub fn upsert_skill_pending(&self, skill: &crate::core::SkillSpec) -> Result<()> {
+    pub fn upsert_skill_pending(
+        &self,
+        skill: &crate::core::SkillSpec,
+        layer: crate::core::SkillLayer,
+    ) -> Result<()> {
         self.conn.execute(
             "INSERT INTO skills
              (id, name, description, version, author, source_path, source_layer,
               content_hash, body, metadata_json, assets_json, token_count, quality_score,
               indexed_at, modified_at)
-             VALUES (?, ?, ?, ?, ?, 'pending', 'project', 'pending', '', ?, '{}', 0, 0.0,
+             VALUES (?, ?, ?, ?, ?, 'pending', ?, 'pending', '', ?, '{}', 0, 0.0,
                      datetime('now'), datetime('now'))
              ON CONFLICT(id) DO UPDATE SET
                 name=excluded.name,
                 description=excluded.description,
                 version=excluded.version,
                 author=excluded.author,
+                source_layer=excluded.source_layer,
                 metadata_json=excluded.metadata_json,
                 modified_at=excluded.modified_at",
             params![
@@ -708,6 +713,7 @@ impl Database {
                 skill.metadata.description,
                 skill.metadata.version,
                 skill.metadata.author,
+                layer.as_str(),
                 serde_json::to_string(&skill.metadata).unwrap_or_default(),
             ],
         )?;

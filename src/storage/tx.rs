@@ -15,8 +15,7 @@ use serde::{Deserialize, Serialize};
 use tracing::{debug, info, warn};
 use uuid::Uuid;
 
-use crate::core::spec_lens::compile_markdown;
-use crate::core::SkillSpec;
+use crate::core::{spec_lens::compile_markdown, SkillLayer, SkillSpec};
 use crate::error::{MsError, Result};
 
 use super::git::GitArchive;
@@ -395,6 +394,11 @@ impl TxManager {
 
     /// Write a skill with 2PC guarantees (without global lock)
     pub fn write_skill(&self, skill: &SkillSpec) -> Result<()> {
+        self.write_skill_with_layer(skill, SkillLayer::Project)
+    }
+
+    /// Write a skill with 2PC guarantees and an explicit layer
+    pub fn write_skill_with_layer(&self, skill: &SkillSpec, layer: SkillLayer) -> Result<()> {
         let tx = TxRecord::prepare("skill", &skill.metadata.id, skill)?;
         debug!("Starting 2PC transaction {} for skill {}", tx.id, skill.metadata.id);
 
@@ -402,7 +406,7 @@ impl TxManager {
         self.write_tx_record(&tx)?;
 
         // Phase 2: Pending - write to SQLite
-        let tx = self.db_write_pending(&tx)?;
+        let tx = self.db_write_pending(&tx, layer)?;
 
         // Phase 3: Commit - write to Git
         let tx = self.git_commit(&tx)?;
@@ -424,7 +428,7 @@ impl TxManager {
                 MsError::TransactionFailed("timeout waiting for global lock".to_string())
             })?;
 
-        self.write_skill(skill)
+        self.write_skill_with_layer(skill, SkillLayer::Project)
     }
 
     /// Batch write skills with a single lock acquisition
@@ -436,7 +440,7 @@ impl TxManager {
         let _lock = GlobalLock::acquire(&self.ms_root)?;
 
         for skill in skills {
-            self.write_skill(skill)?;
+            self.write_skill_with_layer(skill, SkillLayer::Project)?;
         }
 
         Ok(())
@@ -512,14 +516,14 @@ impl TxManager {
     }
 
     /// Write to SQLite in pending state
-    fn db_write_pending(&self, tx: &TxRecord) -> Result<TxRecord> {
+    fn db_write_pending(&self, tx: &TxRecord, layer: SkillLayer) -> Result<TxRecord> {
         debug!("Phase: pending (tx={})", tx.id);
 
         let skill: SkillSpec = serde_json::from_str(&tx.payload_json)
             .map_err(|e| MsError::TransactionFailed(format!("deserialize skill: {e}")))?;
 
         // Upsert skill with pending marker
-        self.db.upsert_skill_pending(&skill)?;
+        self.db.upsert_skill_pending(&skill, layer)?;
 
         // Update phase
         let mut tx = tx.clone();
@@ -843,12 +847,17 @@ fn tombstone_file(ms_root: &Path, path: &Path, bucket: &str) -> Result<()> {
     if !path.exists() {
         return Ok(());
     }
-    let tombstones = ms_root.join(".ms").join("tombstones").join(bucket);
+    let tombstones = ms_root.join("tombstones").join(bucket);
     fs::create_dir_all(&tombstones)?;
     let name = path
         .file_name()
         .ok_or_else(|| MsError::ValidationFailed("invalid file name".to_string()))?;
-    let stamp = chrono::Utc::now().format("%Y%m%dT%H%M%S");
+    let now = chrono::Utc::now();
+    let stamp = format!(
+        "{}{:09}",
+        now.format("%Y%m%dT%H%M%S"),
+        now.timestamp_subsec_nanos()
+    );
     let dest = tombstones.join(format!("{}_{}", name.to_string_lossy(), stamp));
     fs::rename(path, &dest)?;
     Ok(())
