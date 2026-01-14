@@ -170,6 +170,70 @@ impl SignatureVerifier for NoopSignatureVerifier {
     }
 }
 
+/// Ed25519 signature verifier using the ring crate.
+pub struct Ed25519Verifier {
+    /// Map of key_id -> public key bytes (32 bytes)
+    trusted_keys: std::collections::HashMap<String, Vec<u8>>,
+}
+
+impl Ed25519Verifier {
+    /// Create a new verifier with no trusted keys.
+    pub fn new() -> Self {
+        Self {
+            trusted_keys: std::collections::HashMap::new(),
+        }
+    }
+
+    /// Add a trusted public key.
+    pub fn add_key(&mut self, key_id: impl Into<String>, public_key: Vec<u8>) {
+        self.trusted_keys.insert(key_id.into(), public_key);
+    }
+
+    /// Create a verifier from an iterator of (key_id, public_key) pairs.
+    pub fn from_keys<I, K>(keys: I) -> Self
+    where
+        I: IntoIterator<Item = (K, Vec<u8>)>,
+        K: Into<String>,
+    {
+        let mut verifier = Self::new();
+        for (key_id, public_key) in keys {
+            verifier.add_key(key_id, public_key);
+        }
+        verifier
+    }
+}
+
+impl Default for Ed25519Verifier {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl SignatureVerifier for Ed25519Verifier {
+    fn verify(&self, payload: &[u8], signature: &BundleSignature) -> Result<()> {
+        let public_key_bytes = self.trusted_keys.get(&signature.key_id).ok_or_else(|| {
+            MsError::ValidationFailed(format!(
+                "unknown signing key: {} (signer: {})",
+                signature.key_id, signature.signer
+            ))
+        })?;
+
+        let signature_bytes = hex::decode(&signature.signature).map_err(|err| {
+            MsError::ValidationFailed(format!("invalid signature encoding: {err}"))
+        })?;
+
+        let public_key =
+            ring::signature::UnparsedPublicKey::new(&ring::signature::ED25519, public_key_bytes);
+
+        public_key.verify(payload, &signature_bytes).map_err(|_| {
+            MsError::ValidationFailed(format!(
+                "signature verification failed for signer {}",
+                signature.signer
+            ))
+        })
+    }
+}
+
 impl BundleManifest {
     pub fn verify_signatures(
         &self,

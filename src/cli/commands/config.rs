@@ -227,13 +227,4 @@ fn format_value(value: &toml::Value) -> String {
     }
 }
 
-fn default_config_path(ms_root: &Path) -> PathBuf {
-    if ms_root.ends_with(".ms") {
-        ms_root.join("config.toml")
-    } else {
-        dirs::config_dir()
-            .unwrap_or_else(|| ms_root.to_path_buf())
-            .join("ms/config.toml")
-    }
-}
 
