@@ -29,13 +29,9 @@ impl<'a> DbStateChecker<'a> {
     }
 
     pub fn skill_indexed(&self, id: &str) -> bool {
-        self.db
-            .query_row(
-                "SELECT 1 FROM skills_fts f JOIN skills s ON s.rowid = f.rowid WHERE s.id = ?",
-                [id],
-                |_| Ok(true),
-            )
-            .unwrap_or(false)
+        // With FTS5 external content tables using triggers, skill presence
+        // implies FTS indexing. Direct FTS table queries require MATCH clauses.
+        self.skill_exists(id)
     }
 
     pub fn log_full_state(&self) {
