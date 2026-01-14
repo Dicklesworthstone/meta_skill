@@ -116,10 +116,10 @@ mod tests {
         let filters = SearchFilters::new().layer(SearchLayer::Project);
 
         let project_skill = make_skill("s1", "project", 0.8, false, &[]);
-        let global_skill = make_skill("s2", "global", 0.8, false, &[]);
+        let org_skill = make_skill("s2", "org", 0.8, false, &[]);
 
         assert!(matches_skill_record(&filters, &project_skill));
-        assert!(!matches_skill_record(&filters, &global_skill));
+        assert!(!matches_skill_record(&filters, &org_skill));
     }
 
     #[test]
@@ -179,7 +179,7 @@ mod tests {
         assert!(matches_skill_record(&filters, &good_skill));
 
         // Wrong layer
-        let wrong_layer = make_skill("s2", "global", 0.8, false, &["rust"]);
+        let wrong_layer = make_skill("s2", "org", 0.8, false, &["rust"]);
         assert!(!matches_skill_record(&filters, &wrong_layer));
 
         // Wrong tags
@@ -214,7 +214,7 @@ mod tests {
     fn test_filter_skill_ids() {
         let skills = vec![
             make_skill("rust-cli", "project", 0.8, false, &["rust"]),
-            make_skill("python-web", "global", 0.9, false, &["python"]),
+            make_skill("python-web", "org", 0.9, false, &["python"]),
             make_skill("deprecated", "project", 0.7, true, &["rust"]),
         ];
 

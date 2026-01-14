@@ -26,7 +26,7 @@ pub use packing::{
     ConstrainedPacker, CoverageQuota, MandatoryPredicate, MandatorySlice, PackConstraints,
     PackError, PackResult,
 };
-pub use skill::{BlockType, Skill, SkillBlock, SkillMetadata, SkillSection, SkillSpec};
+pub use skill::{BlockType, Skill, SkillBlock, SkillLayer, SkillMetadata, SkillSection, SkillSpec};
 pub use recovery::{
     with_retry, with_retry_if, Checkpoint, FailureMode, RecoveryIssue, RecoveryManager,
     RecoveryReport, RetryConfig,

@@ -57,7 +57,7 @@ impl DisclosureLevel {
         match s.to_lowercase().as_str() {
             "minimal" | "0" => Some(DisclosureLevel::Minimal),
             "overview" | "1" => Some(DisclosureLevel::Overview),
-            "standard" | "2" => Some(DisclosureLevel::Standard),
+            "standard" | "moderate" | "2" => Some(DisclosureLevel::Standard),
             "full" | "3" => Some(DisclosureLevel::Full),
             "complete" | "4" => Some(DisclosureLevel::Complete),
             "auto" => Some(DisclosureLevel::Auto),

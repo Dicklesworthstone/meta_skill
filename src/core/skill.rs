@@ -158,6 +158,23 @@ pub enum SkillLayer {
     User,
 }
 
+impl SkillLayer {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            SkillLayer::Base => "base",
+            SkillLayer::Org => "org",
+            SkillLayer::Project => "project",
+            SkillLayer::User => "user",
+        }
+    }
+}
+
+impl std::fmt::Display for SkillLayer {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.as_str())
+    }
+}
+
 // =============================================================================
 // SKILL ASSETS
 // =============================================================================

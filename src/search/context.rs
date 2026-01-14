@@ -20,24 +20,24 @@ pub struct SearchContext {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum SearchLayer {
-    /// System-provided skills (built-in)
-    System,
-    /// Global user skills
-    Global,
+    /// Base/system skills (built-in)
+    Base,
+    /// Organization/global skills
+    Org,
     /// Project-specific skills
     Project,
-    /// Local session skills
-    Local,
+    /// User/local skills
+    User,
 }
 
 impl SearchLayer {
     /// Parse from string
     pub fn from_str(s: &str) -> Option<Self> {
         match s.to_lowercase().as_str() {
-            "system" => Some(Self::System),
-            "global" => Some(Self::Global),
+            "base" | "system" => Some(Self::Base),
+            "org" | "global" => Some(Self::Org),
             "project" => Some(Self::Project),
-            "local" => Some(Self::Local),
+            "user" | "local" => Some(Self::User),
             _ => None,
         }
     }
@@ -45,10 +45,10 @@ impl SearchLayer {
     /// Convert to string
     pub fn as_str(&self) -> &'static str {
         match self {
-            Self::System => "system",
-            Self::Global => "global",
+            Self::Base => "base",
+            Self::Org => "org",
             Self::Project => "project",
-            Self::Local => "local",
+            Self::User => "user",
         }
     }
 }
@@ -165,7 +165,15 @@ impl SearchFilters {
 
         // Check layer filter
         if let Some(ref layer) = self.layer {
-            if skill_layer != layer.as_str() {
+            let layer_lc = skill_layer.to_lowercase();
+            let normalized_layer = match layer_lc.as_str() {
+                "base" | "system" => "base",
+                "org" | "global" => "org",
+                "project" => "project",
+                "user" | "local" => "user",
+                _ => layer_lc.as_str(),
+            };
+            if normalized_layer != layer.as_str() {
                 return false;
             }
         }
@@ -263,7 +271,7 @@ mod tests {
     fn test_matches_no_filters() {
         let filters = SearchFilters::new().include_deprecated(true); // Override default exclusion
         assert!(filters.matches(&[], "project", 0.5, false));
-        assert!(filters.matches(&["git".to_string()], "global", 0.9, true));
+        assert!(filters.matches(&["git".to_string()], "org", 0.9, true));
     }
 
     #[test]
@@ -296,8 +304,8 @@ mod tests {
         let filters = SearchFilters::with_layer(SearchLayer::Project);
 
         assert!(filters.matches(&[], "project", 0.5, false));
-        assert!(!filters.matches(&[], "global", 0.5, false));
-        assert!(!filters.matches(&[], "system", 0.5, false));
+        assert!(!filters.matches(&[], "org", 0.5, false));
+        assert!(!filters.matches(&[], "base", 0.5, false));
     }
 
     #[test]
@@ -338,7 +346,7 @@ mod tests {
         assert!(!filters.matches(&["rust".to_string()], "project", 0.8, false));
 
         // Fails layer filter
-        assert!(!filters.matches(&["git".to_string()], "global", 0.8, false));
+        assert!(!filters.matches(&["git".to_string()], "org", 0.8, false));
 
         // Fails quality filter
         assert!(!filters.matches(&["git".to_string()], "project", 0.5, false));
@@ -373,19 +381,22 @@ mod tests {
 
     #[test]
     fn test_search_layer_from_str() {
-        assert_eq!(SearchLayer::from_str("system"), Some(SearchLayer::System));
-        assert_eq!(SearchLayer::from_str("GLOBAL"), Some(SearchLayer::Global));
+        assert_eq!(SearchLayer::from_str("system"), Some(SearchLayer::Base));
+        assert_eq!(SearchLayer::from_str("base"), Some(SearchLayer::Base));
+        assert_eq!(SearchLayer::from_str("GLOBAL"), Some(SearchLayer::Org));
+        assert_eq!(SearchLayer::from_str("org"), Some(SearchLayer::Org));
         assert_eq!(SearchLayer::from_str("Project"), Some(SearchLayer::Project));
-        assert_eq!(SearchLayer::from_str("local"), Some(SearchLayer::Local));
+        assert_eq!(SearchLayer::from_str("local"), Some(SearchLayer::User));
+        assert_eq!(SearchLayer::from_str("user"), Some(SearchLayer::User));
         assert_eq!(SearchLayer::from_str("invalid"), None);
     }
 
     #[test]
     fn test_search_layer_as_str() {
-        assert_eq!(SearchLayer::System.as_str(), "system");
-        assert_eq!(SearchLayer::Global.as_str(), "global");
+        assert_eq!(SearchLayer::Base.as_str(), "base");
+        assert_eq!(SearchLayer::Org.as_str(), "org");
         assert_eq!(SearchLayer::Project.as_str(), "project");
-        assert_eq!(SearchLayer::Local.as_str(), "local");
+        assert_eq!(SearchLayer::User.as_str(), "user");
     }
 
     #[test]

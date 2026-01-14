@@ -135,12 +135,17 @@ impl Bm25Index {
     }
 
     /// Index multiple skills in a batch
+    ///
+    /// This method commits changes at the end, making all indexed skills
+    /// visible to subsequent searches.
     pub fn index_skills(&self, skills: &[SkillRecord]) -> Result<usize> {
         let mut count = 0;
         for skill in skills {
             self.index_skill(skill)?;
             count += 1;
         }
+        // Commit to ensure changes are visible to readers
+        self.commit()?;
         Ok(count)
     }
 
@@ -319,13 +324,12 @@ impl Bm25Index {
 }
 
 fn normalize_layer(input: &str) -> &'static str {
-    // Normalize layer names to match SearchLayer enum values
-    // stored in the database: system, global, project, local
+    // Normalize layer names to match stored values: base, org, project, user
     match input.to_lowercase().as_str() {
-        "system" | "base" => "system",
-        "global" | "org" => "global",
+        "base" | "system" => "base",
+        "org" | "global" => "org",
         "project" => "project",
-        "local" | "user" => "local",
+        "user" | "local" => "user",
         _ => "project", // Default fallback
     }
 }
