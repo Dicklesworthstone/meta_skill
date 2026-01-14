@@ -18168,3 +18168,918 @@ Before shipping error handling:
 - [ ] Panics only occur for programming errors, not user input
 - [ ] Circuit breakers protect against cascading failures
 - [ ] Retry logic includes jitter and backoff
+
+## Section 34: Testing Patterns and Methodology
+
+### 34.1 Testing Philosophy
+
+#### The "NO Mocks" Principle
+
+**Source**: CASS mining of brenner_bot testing landscape analysis
+
+The observed philosophy is: **"NO mocks - test real implementations with real data fixtures."**
+
+```
+| Category           | Approach                      | Rationale                           |
+|--------------------|-------------------------------|-------------------------------------|
+| External APIs      | Real (or conditional skip)    | Tests reflect actual behavior       |
+| Animations         | Mocked (framer-motion)        | Need predictable test execution     |
+| Network requests   | Stubbed selectively           | Only for isolated client tests      |
+| File system        | Real with temp directories    | Tests actual fs operations          |
+| Database/Crypto    | Real implementations          | Test actual algorithms              |
+| DOM APIs           | Real via happy-dom            | Tests actual rendering              |
+| React hooks        | Real via vitest               | Tests real hook behavior            |
+```
+
+**When to mock**:
+1. **Animations**: Mock framer-motion to avoid flaky timing-dependent tests
+2. **External APIs**: Stub fetch only when testing HTTP client behavior, not when testing business logic
+3. **Time-dependent operations**: Use fakeable clocks, not mocked functions
+
+**When NOT to mock**:
+1. File system operations - use `t.TempDir()` (Go) or `mkdtempSync()` (JS)
+2. Database operations - use in-memory SQLite or real temp databases
+3. Internal functions - if you need to mock internal functions, the design needs refactoring
+
+### 34.2 Test Organization Patterns
+
+#### JavaScript/TypeScript (Vitest/Jest/Bun)
+
+```typescript
+import { describe, it, expect, beforeEach, afterEach } from "bun:test";
+
+// Capture and restore globals
+let output: string[] = [];
+let errors: string[] = [];
+let exitCode: number | undefined;
+
+const originalLog = console.log;
+const originalError = console.error;
+const originalExit = process.exit;
+
+beforeEach(() => {
+  output = [];
+  errors = [];
+  exitCode = undefined;
+
+  console.log = (...args: unknown[]) => {
+    output.push(args.join(" "));
+  };
+  console.error = (...args: unknown[]) => {
+    errors.push(args.join(" "));
+  };
+  process.exit = ((code?: number) => {
+    exitCode = code ?? 0;
+    throw new Error("process.exit");
+  }) as never;
+});
+
+afterEach(() => {
+  console.log = originalLog;
+  console.error = originalError;
+  process.exit = originalExit;
+});
+
+describe("commandHandler", () => {
+  it("handles valid input with JSON output", async () => {
+    try {
+      await commandHandler("valid-input", { json: true });
+    } catch (e) {
+      if ((e as Error).message !== "process.exit") throw e;
+    }
+
+    const allOutput = output.join("\n");
+    const parsed = JSON.parse(allOutput);
+    expect(parsed.success).toBe(true);
+  });
+
+  it("exits with error for missing input", async () => {
+    try {
+      await commandHandler("nonexistent", { json: true });
+    } catch (e) {
+      if ((e as Error).message !== "process.exit") throw e;
+    }
+
+    expect(exitCode).toBe(1);
+    expect(output.join("\n")).toContain("not_found");
+  });
+});
+```
+
+#### Go Table-Driven Tests
+
+```go
+func TestEvaluateCommand(t *testing.T) {
+    tests := []struct {
+        name     string
+        command  string
+        config   *Config
+        want     EvaluationResult
+    }{
+        {
+            name:    "allowed_simple_command",
+            command: "ls -la",
+            config:  DefaultConfig(),
+            want:    EvaluationResult{Allowed: true},
+        },
+        {
+            name:    "blocked_destructive_command",
+            command: "rm -rf /",
+            config:  DefaultConfig(),
+            want:    EvaluationResult{Allowed: false, Reason: "destructive"},
+        },
+        {
+            name:    "config_override_allows",
+            command: "git push --force",
+            config:  ConfigWithOverride("allow", "git push"),
+            want:    EvaluationResult{Allowed: true, Via: "override"},
+        },
+    }
+
+    for _, tt := range tests {
+        t.Run(tt.name, func(t *testing.T) {
+            got := EvaluateCommand(tt.command, tt.config)
+            if got != tt.want {
+                t.Errorf("EvaluateCommand(%q) = %v, want %v",
+                    tt.command, got, tt.want)
+            }
+        })
+    }
+}
+```
+
+#### Test File Naming Conventions
+
+| Language | Pattern | Example |
+|----------|---------|---------|
+| **TypeScript** | `*.test.ts`, `*.test.tsx` | `copy.test.ts`, `Button.test.tsx` |
+| **Go** | `*_test.go` | `evaluator_test.go` |
+| **Rust** | `mod tests` in same file, or `/tests/*.rs` | `mod tests { ... }` |
+| **Bash** | `*.bats` (BATS framework) | `test_utils.bats` |
+
+### 34.3 Test Fixture Patterns
+
+#### Real Filesystem Fixtures
+
+```typescript
+import { mkdtempSync, rmSync, existsSync, readFileSync, writeFileSync, mkdirSync } from "fs";
+import { join } from "path";
+import { tmpdir } from "os";
+
+let testDir: string;
+let originalCwd: string;
+
+beforeAll(() => {
+  testDir = mkdtempSync(join(tmpdir(), "myapp-test-"));
+  originalCwd = process.cwd();
+});
+
+afterAll(() => {
+  try {
+    rmSync(testDir, { recursive: true, force: true });
+  } catch (e) {
+    console.error("Failed to cleanup test dir:", e);
+  }
+});
+
+beforeEach(() => {
+  process.chdir(testDir);
+});
+
+afterEach(() => {
+  process.chdir(originalCwd);
+});
+
+// Helper to create test fixtures
+function writeManifest(dir: string, entries: Array<Record<string, string>>) {
+  const manifest = {
+    generatedAt: "2026-01-01T00:00:00.000Z",
+    version: "1.0.0",
+    entries,
+  };
+  mkdirSync(dir, { recursive: true });
+  writeFileSync(join(dir, "manifest.json"), JSON.stringify(manifest));
+}
+```
+
+#### Go Test Fixtures with t.TempDir()
+
+```go
+func TestFileOperations(t *testing.T) {
+    // t.TempDir() automatically cleans up after test
+    testDir := t.TempDir()
+
+    // Create test fixture
+    configPath := filepath.Join(testDir, "config.yaml")
+    err := os.WriteFile(configPath, []byte("key: value"), 0644)
+    if err != nil {
+        t.Fatalf("failed to create fixture: %v", err)
+    }
+
+    // Test the operation
+    result, err := LoadConfig(configPath)
+    if err != nil {
+        t.Fatalf("LoadConfig() error = %v", err)
+    }
+
+    if result.Key != "value" {
+        t.Errorf("LoadConfig().Key = %q, want %q", result.Key, "value")
+    }
+}
+```
+
+#### Environment Variable Isolation
+
+```typescript
+// Store original env before tests
+let originalEnv: string | undefined;
+
+beforeAll(() => {
+  originalEnv = process.env.MY_APP_HOME;
+  // Redirect app config to temp directory
+  process.env.MY_APP_HOME = testDir;
+});
+
+afterAll(() => {
+  if (originalEnv === undefined) {
+    delete process.env.MY_APP_HOME;
+  } else {
+    process.env.MY_APP_HOME = originalEnv;
+  }
+});
+```
+
+### 34.4 Property-Based Testing
+
+#### Rust with proptest
+
+**Source**: CASS mining of destructive_command_guard property tests
+
+```rust
+#[cfg(test)]
+mod proptest_invariants {
+    use super::*;
+    use proptest::prelude::*;
+
+    /// Generate realistic command strings for testing
+    fn command_strategy() -> impl Strategy<Value = String> {
+        prop_oneof![
+            // Simple commands
+            "[a-zA-Z][a-zA-Z0-9_\\-]{0,50}( [a-zA-Z0-9_\\-./]+){0,10}",
+            // Commands with pipes
+            "[a-z]+ [a-z]+ \\| [a-z]+",
+            // Commands with redirects
+            "[a-z]+ [a-z]+ > [a-z]+\\.txt",
+            // Edge cases
+            Just(String::new()),
+            Just(" ".to_string()),
+            Just("\t\n".to_string()),
+        ]
+    }
+
+    proptest! {
+        /// Normalization should be idempotent: normalize(normalize(x)) == normalize(x)
+        #[test]
+        fn normalization_is_idempotent(cmd in command_strategy()) {
+            let once = normalize_command(&cmd);
+            let twice = normalize_command(&once);
+            prop_assert_eq!(once, twice, "normalization not idempotent");
+        }
+
+        /// Same input should always produce same output
+        #[test]
+        fn evaluation_is_deterministic(cmd in command_strategy()) {
+            let config = Config::default();
+            let compiled = config.compile_overrides().unwrap();
+
+            let result1 = evaluate_command(&cmd, &config, &[], &compiled);
+            let result2 = evaluate_command(&cmd, &config, &[], &compiled);
+
+            prop_assert_eq!(result1, result2, "evaluation not deterministic");
+        }
+
+        /// Function should never panic, regardless of input
+        #[test]
+        fn evaluation_never_panics(cmd in ".*") {
+            let config = Config::default();
+            let compiled = config.compile_overrides().unwrap();
+
+            // If this completes without panic, test passes
+            let _ = evaluate_command(&cmd, &config, &[], &compiled);
+        }
+
+        /// Large inputs should be handled gracefully
+        #[test]
+        fn handles_large_inputs(size in 1000usize..10000) {
+            let cmd = "x".repeat(size);
+            let config = Config::default();
+            let compiled = config.compile_overrides().unwrap();
+
+            // Should complete in reasonable time, not hang
+            let _ = evaluate_command(&cmd, &config, &[], &compiled);
+        }
+    }
+}
+```
+
+#### Key Property Test Categories
+
+| Property | What it tests | Example assertion |
+|----------|---------------|-------------------|
+| **Idempotence** | `f(f(x)) == f(x)` | Normalization, formatting |
+| **Determinism** | Same input → same output | Evaluation, parsing |
+| **Safety** | Never panics on any input | Error handling |
+| **Bounds** | Handles edge sizes gracefully | Large inputs, empty inputs |
+| **Commutativity** | Order doesn't matter | Set operations |
+| **Invertibility** | `decode(encode(x)) == x` | Serialization |
+
+### 34.5 Test Coverage Analysis
+
+#### Comprehensive Coverage Report Pattern
+
+**Source**: CASS mining of Go codebase coverage analysis
+
+```markdown
+## Test Coverage Analysis Report
+
+### Executive Summary
+- **Total Packages**: 23
+- **Total Test Files**: 55
+- **Overall Coverage**: ~70%
+- **Test Strategy**: Real implementations > mocks
+
+### Package Coverage
+
+| Package | Files | Test Files | Coverage | Gaps |
+|---------|-------|------------|----------|------|
+| authfile | 1 | 3 | 100% | None |
+| config | 2 | 2 | 100% | None |
+| refresh | 5 | 3 | 40% | orchestration untested |
+| sync | 9 | 5 | 30% | pool.go, connpool.go |
+
+### Gap Analysis
+
+**Critical Gaps** (test immediately):
+- `sync/pool.go` - 20+ untested methods
+- `bundle/encrypt.go` - security-critical, untested
+
+**High Priority** (test within sprint):
+- `refresh/refresh.go` - core orchestration
+- `tui/sync_panel.go` - user-facing UI
+
+**Recommendations**:
+1. Continue using real implementations
+2. Use temp directories for file operations
+3. Add e2e tests for complex workflows
+4. Use table-driven tests for validation
+```
+
+### 34.6 Snapshot Testing
+
+#### Vitest/Jest Snapshot Pattern
+
+```typescript
+import { describe, it, expect } from "vitest";
+
+describe("Renderer", () => {
+  it("renders skill card correctly", () => {
+    const result = renderSkillCard({
+      title: "Test Skill",
+      description: "A test description",
+      tags: ["rust", "cli"],
+    });
+
+    expect(result).toMatchSnapshot();
+  });
+
+  it("renders empty state correctly", () => {
+    const result = renderSkillCard(null);
+    expect(result).toMatchSnapshot();
+  });
+});
+```
+
+#### Managing Snapshot Updates
+
+```bash
+# Update snapshots when intentional changes occur
+bun run test -- --update-snapshots
+
+# Review changes in version control
+git diff __snapshots__/
+
+# Common issues:
+# - Obsolete snapshots: tests renamed but snapshots not deleted
+# - Different runner formats: bun test vs vitest produce different keys
+# - Timestamp drift: ensure deterministic dates in tests
+```
+
+### 34.7 E2E Testing Patterns
+
+#### Playwright Configuration
+
+**Source**: CASS mining of brenner_bot E2E test infrastructure
+
+```typescript
+// playwright.config.ts
+import { defineConfig, devices } from '@playwright/test';
+
+export default defineConfig({
+  testDir: './e2e',
+  fullyParallel: true,
+  forbidOnly: !!process.env.CI,
+  retries: process.env.CI ? 2 : 0,
+  workers: process.env.CI ? 1 : undefined,
+  reporter: 'html',
+
+  use: {
+    baseURL: 'http://localhost:3000',
+    trace: 'on-first-retry',
+  },
+
+  projects: [
+    {
+      name: 'chromium',
+      use: { ...devices['Desktop Chrome'] },
+    },
+    {
+      name: 'firefox',
+      use: { ...devices['Desktop Firefox'] },
+    },
+    {
+      name: 'webkit',
+      use: { ...devices['Desktop Safari'] },
+    },
+    {
+      name: 'Mobile Chrome',
+      use: { ...devices['Pixel 5'] },
+    },
+    {
+      name: 'Mobile Safari',
+      use: { ...devices['iPhone 12'] },
+    },
+  ],
+
+  webServer: {
+    command: 'bun run dev',
+    url: 'http://localhost:3000',
+    reuseExistingServer: !process.env.CI,
+  },
+});
+```
+
+#### E2E Test Structure
+
+```typescript
+import { test, expect } from '@playwright/test';
+
+test.describe('Skill Browser', () => {
+  test.beforeEach(async ({ page }) => {
+    await page.goto('/skills');
+  });
+
+  test('displays skill list', async ({ page }) => {
+    await expect(page.getByRole('heading', { name: 'Skills' })).toBeVisible();
+    await expect(page.locator('.skill-card')).toHaveCount(10);
+  });
+
+  test('filters skills by category', async ({ page }) => {
+    await page.getByRole('button', { name: 'CLI' }).click();
+
+    // Wait for filter to apply
+    await expect(page.locator('.skill-card')).toHaveCountLessThan(10);
+
+    // All visible cards should have CLI tag
+    const cards = page.locator('.skill-card');
+    for (const card of await cards.all()) {
+      await expect(card.locator('.tag-cli')).toBeVisible();
+    }
+  });
+
+  test('opens skill detail on click', async ({ page }) => {
+    await page.locator('.skill-card').first().click();
+    await expect(page).toHaveURL(/\/skills\/[\w-]+/);
+    await expect(page.getByRole('heading', { level: 1 })).toBeVisible();
+  });
+});
+```
+
+### 34.8 BATS Framework for Shell Testing
+
+**Source**: CASS mining of APR BATS test infrastructure
+
+#### Test Helper Structure
+
+```bash
+# tests/helpers/test_helper.bash
+
+# Load BATS libraries
+load '../libs/bats-support/load'
+load '../libs/bats-assert/load'
+
+# Setup isolated test environment
+setup_test_environment() {
+    export TEST_DIR="$(mktemp -d)"
+    export HOME="$TEST_DIR/home"
+    export XDG_CONFIG_HOME="$TEST_DIR/.config"
+    mkdir -p "$HOME" "$XDG_CONFIG_HOME"
+
+    # Disable interactive features
+    export NO_COLOR=1
+    export CI=true
+    export APR_NO_GUM=1
+}
+
+teardown_test_environment() {
+    rm -rf "$TEST_DIR"
+}
+
+# Helper to capture both streams
+capture_streams() {
+    local cmd="$1"
+    STDOUT_FILE="$(mktemp)"
+    STDERR_FILE="$(mktemp)"
+
+    eval "$cmd" > "$STDOUT_FILE" 2> "$STDERR_FILE"
+    EXIT_CODE=$?
+
+    CAPTURED_STDOUT="$(cat "$STDOUT_FILE")"
+    CAPTURED_STDERR="$(cat "$STDERR_FILE")"
+
+    rm -f "$STDOUT_FILE" "$STDERR_FILE"
+}
+```
+
+#### Custom Assertions
+
+```bash
+# tests/helpers/assertions.bash
+
+# Assert output went to stderr only (for human-readable output)
+assert_stderr_only() {
+    assert [ -z "$CAPTURED_STDOUT" ]
+    assert [ -n "$CAPTURED_STDERR" ]
+}
+
+# Assert output went to stdout only (for robot mode)
+assert_stdout_only() {
+    assert [ -n "$CAPTURED_STDOUT" ]
+    assert [ -z "$CAPTURED_STDERR" ]
+}
+
+# Assert valid JSON in stdout
+assert_valid_json() {
+    echo "$CAPTURED_STDOUT" | jq . > /dev/null 2>&1
+    assert_success
+}
+
+# Assert JSON field value
+assert_json_value() {
+    local field="$1"
+    local expected="$2"
+    local actual
+    actual=$(echo "$CAPTURED_STDOUT" | jq -r "$field")
+    assert_equal "$actual" "$expected"
+}
+
+# Assert no ANSI escape codes
+assert_no_ansi() {
+    refute_output --partial $'\033['
+}
+```
+
+#### Unit Test Example
+
+```bash
+# tests/unit/test_utils.bats
+
+setup() {
+    load '../helpers/test_helper'
+    load '../helpers/assertions'
+    setup_test_environment
+
+    # Source the functions we're testing
+    source "$(dirname "$BATS_TEST_DIRNAME")/../lib/utils.sh"
+}
+
+teardown() {
+    teardown_test_environment
+}
+
+@test "version_gt: 1.2.0 > 1.1.0" {
+    run version_gt "1.2.0" "1.1.0"
+    assert_success
+}
+
+@test "version_gt: 1.1.0 > 1.2.0 fails" {
+    run version_gt "1.1.0" "1.2.0"
+    assert_failure
+}
+
+@test "iso_timestamp: returns valid format" {
+    run iso_timestamp
+    assert_success
+    assert_output --regexp '^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$'
+}
+
+@test "check_gum: respects APR_NO_GUM" {
+    export APR_NO_GUM=1
+    run check_gum
+    assert_failure
+}
+```
+
+### 34.9 Real Clipboard Testing
+
+**Source**: CASS mining of jeffreysprompts.com copy command tests
+
+```typescript
+describe("Real Clipboard Tests", () => {
+  // Detect if clipboard is available
+  const isCI = process.env.CI === "true";
+  const platform = process.platform;
+
+  function hasClipboardTool(): boolean {
+    if (platform === "darwin") {
+      return spawnSync("which", ["pbcopy"]).status === 0;
+    } else if (platform === "win32") {
+      return true; // clip.exe always available
+    } else {
+      // Linux: check for wl-paste or xclip
+      const hasWlPaste = spawnSync("which", ["wl-paste"]).status === 0;
+      const hasXclip = spawnSync("which", ["xclip"]).status === 0;
+      const hasDisplay = !!(process.env.WAYLAND_DISPLAY || process.env.DISPLAY);
+      return (hasWlPaste || hasXclip) && hasDisplay;
+    }
+  }
+
+  async function readClipboard(): Promise<string | null> {
+    return new Promise((resolve) => {
+      let cmd: string;
+      let args: string[] = [];
+
+      if (platform === "darwin") {
+        cmd = "pbpaste";
+      } else if (platform === "win32") {
+        cmd = "powershell";
+        args = ["-command", "Get-Clipboard"];
+      } else {
+        const hasWlPaste = spawnSync("which", ["wl-paste"]).status === 0;
+        if (hasWlPaste) {
+          cmd = "wl-paste";
+        } else {
+          cmd = "xclip";
+          args = ["-selection", "clipboard", "-o"];
+        }
+      }
+
+      const proc = spawn(cmd, args);
+      let output = "";
+
+      proc.stdout.on("data", (data) => {
+        output += data.toString();
+      });
+
+      proc.on("error", () => resolve(null));
+      proc.on("close", (code) => {
+        resolve(code === 0 ? output : null);
+      });
+    });
+  }
+
+  const shouldSkip = isCI || !hasClipboardTool();
+  const itOrSkip = shouldSkip ? it.skip : it;
+
+  if (shouldSkip) {
+    it("skipped - no clipboard available", () => {
+      console.log("Clipboard tests skipped:", {
+        isCI,
+        hasClipboardTool: hasClipboardTool(),
+        platform,
+        DISPLAY: process.env.DISPLAY,
+      });
+      expect(true).toBe(true);
+    });
+  }
+
+  itOrSkip("copies content and verifies round-trip", async () => {
+    await copyCommand("test-content", { json: true });
+
+    const clipboardContent = await readClipboard();
+    expect(clipboardContent).not.toBeNull();
+    expect(clipboardContent).toContain("expected content");
+  });
+});
+```
+
+### 34.10 Test Harness Pattern
+
+**Source**: CASS mining of Go testutil.Harness pattern
+
+```go
+// internal/testutil/harness.go
+
+// Harness provides structured test execution with logging
+type Harness struct {
+    t       *testing.T
+    tempDir string
+    steps   []string
+    cleanup []func()
+}
+
+func NewHarness(t *testing.T) *Harness {
+    t.Helper()
+    tempDir := t.TempDir()
+
+    return &Harness{
+        t:       t,
+        tempDir: tempDir,
+        steps:   []string{},
+        cleanup: []func(){},
+    }
+}
+
+// SetStep logs the current test step for debugging failures
+func (h *Harness) SetStep(step string) {
+    h.t.Helper()
+    h.steps = append(h.steps, step)
+    h.t.Logf("STEP: %s", step)
+}
+
+// CreateFile creates a test file in the temp directory
+func (h *Harness) CreateFile(name, content string) string {
+    h.t.Helper()
+    h.SetStep(fmt.Sprintf("creating file: %s", name))
+
+    path := filepath.Join(h.tempDir, name)
+    dir := filepath.Dir(path)
+
+    if err := os.MkdirAll(dir, 0755); err != nil {
+        h.t.Fatalf("failed to create directory: %v", err)
+    }
+
+    if err := os.WriteFile(path, []byte(content), 0644); err != nil {
+        h.t.Fatalf("failed to write file: %v", err)
+    }
+
+    return path
+}
+
+// OnCleanup registers a cleanup function
+func (h *Harness) OnCleanup(fn func()) {
+    h.cleanup = append(h.cleanup, fn)
+}
+
+// Cleanup runs all registered cleanup functions
+func (h *Harness) Cleanup() {
+    for i := len(h.cleanup) - 1; i >= 0; i-- {
+        h.cleanup[i]()
+    }
+}
+
+// Usage in tests
+func TestComplexWorkflow(t *testing.T) {
+    h := testutil.NewHarness(t)
+    defer h.Cleanup()
+
+    h.SetStep("setting up config")
+    configPath := h.CreateFile("config.yaml", "key: value")
+
+    h.SetStep("loading config")
+    cfg, err := LoadConfig(configPath)
+    if err != nil {
+        t.Fatalf("failed at step %v: %v", h.steps, err)
+    }
+
+    h.SetStep("processing")
+    result := Process(cfg)
+
+    h.SetStep("verifying output")
+    if result.Status != "ok" {
+        t.Errorf("unexpected status: %s", result.Status)
+    }
+}
+```
+
+### 34.11 CI Integration Patterns
+
+#### JUnit XML Output for CI
+
+```bash
+#!/bin/bash
+# tests/ci_runner.sh
+
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+cd "$SCRIPT_DIR"
+
+# Preflight checks
+preflight_check() {
+    echo "Running preflight checks..."
+
+    # Check BATS is available
+    if [[ ! -x "./libs/bats-core/bin/bats" ]]; then
+        echo "ERROR: BATS not found. Run 'git submodule update --init'"
+        exit 1
+    fi
+
+    # Check helper files exist
+    for helper in helpers/test_helper.bash helpers/assertions.bash; do
+        if [[ ! -f "$helper" ]]; then
+            echo "ERROR: Missing $helper"
+            exit 1
+        fi
+    done
+
+    echo "Preflight checks passed"
+}
+
+# Run tests with JUnit output
+run_tests() {
+    local junit_output="test-results.xml"
+    local tap_output="test-results.tap"
+
+    echo "Running tests..."
+    ./libs/bats-core/bin/bats \
+        --formatter junit \
+        --output "$junit_output" \
+        --tap \
+        unit/*.bats integration/*.bats \
+        | tee "$tap_output"
+
+    local exit_code=${PIPESTATUS[0]}
+
+    echo ""
+    echo "Results saved to: $junit_output, $tap_output"
+
+    return $exit_code
+}
+
+preflight_check
+run_tests
+```
+
+#### GitHub Actions Integration
+
+```yaml
+# .github/workflows/test.yml
+name: Tests
+
+on: [push, pull_request]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v1
+
+      - name: Install dependencies
+        run: bun install
+
+      - name: Run unit tests
+        run: bun run test
+
+      - name: Run E2E tests
+        run: bun run test:e2e
+
+      - name: Upload test results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-results
+          path: |
+            test-results.xml
+            playwright-report/
+```
+
+### 34.12 Application to meta_skill
+
+| Test Type | Pattern | Example |
+|-----------|---------|---------|
+| **Unit Tests** | Table-driven, real fixtures | Skill parsing, template rendering |
+| **Integration Tests** | Real filesystem, temp dirs | Skill installation, config loading |
+| **Property Tests** | proptest invariants | Template normalization, path handling |
+| **E2E Tests** | CLI subprocess | Full workflow: search → select → copy |
+| **Snapshot Tests** | Output verification | Rendered skill content |
+
+### 34.13 Testing Checklist
+
+Before shipping tests:
+- [ ] Tests use real implementations, not mocks (except for animations/network)
+- [ ] File operations use temp directories (`t.TempDir()` or `mkdtempSync()`)
+- [ ] Environment variables are isolated and restored
+- [ ] Tests are deterministic (no reliance on timing, random values, or external state)
+- [ ] Property tests cover invariants (idempotence, determinism, safety)
+- [ ] Table-driven tests cover edge cases systematically
+- [ ] E2E tests run on multiple browsers/platforms if applicable
+- [ ] CI produces JUnit/TAP output for test reporting
+- [ ] Flaky tests are marked or fixed (use `it.skip` with explanation)
+- [ ] Test coverage gaps are documented and prioritized
+- [ ] Snapshot tests are reviewed when updated
+- [ ] Tests are organized by type (unit/, integration/, e2e/)
