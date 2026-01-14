@@ -299,3 +299,135 @@ fn command_string(cmd: &Command) -> String {
     }
     parts.join(" ")
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_cm_client_default() {
+        let client = CmClient::new();
+        assert_eq!(client.cm_bin, PathBuf::from("cm"));
+        assert!(client.default_flags.is_empty());
+        assert!(client.safety.is_none());
+    }
+
+    #[test]
+    fn test_cm_client_with_binary() {
+        let client = CmClient::with_binary("/usr/local/bin/cm");
+        assert_eq!(client.cm_bin, PathBuf::from("/usr/local/bin/cm"));
+    }
+
+    #[test]
+    fn test_cm_client_with_flags() {
+        let client = CmClient::new().with_default_flags(vec!["--verbose".to_string()]);
+        assert_eq!(client.default_flags, vec!["--verbose"]);
+    }
+
+    #[test]
+    fn test_playbook_rule_deserialization() {
+        let json = r#"{
+            "id": "rule-001",
+            "content": "Test rule content",
+            "category": "general",
+            "confidence": 0.85,
+            "maturity": "established",
+            "helpfulCount": 10,
+            "harmfulCount": 2
+        }"#;
+
+        let rule: PlaybookRule = serde_json::from_str(json).unwrap();
+        assert_eq!(rule.id, "rule-001");
+        assert_eq!(rule.content, "Test rule content");
+        assert_eq!(rule.category, "general");
+        assert_eq!(rule.confidence, 0.85);
+        assert_eq!(rule.helpful_count, 10);
+        assert_eq!(rule.harmful_count, 2);
+    }
+
+    #[test]
+    fn test_cm_context_deserialization() {
+        let json = r#"{
+            "success": true,
+            "task": "test task",
+            "relevantBullets": [],
+            "antiPatterns": [],
+            "historySnippets": [],
+            "suggestedCassQueries": ["query1", "query2"]
+        }"#;
+
+        let ctx: CmContext = serde_json::from_str(json).unwrap();
+        assert!(ctx.success);
+        assert_eq!(ctx.task, "test task");
+        assert!(ctx.relevant_bullets.is_empty());
+        assert_eq!(ctx.suggested_cass_queries, vec!["query1", "query2"]);
+    }
+
+    #[test]
+    fn test_similar_match_deserialization() {
+        let json = r#"{
+            "id": "match-001",
+            "content": "Similar content",
+            "similarity": 0.92,
+            "category": "debugging"
+        }"#;
+
+        let m: SimilarMatch = serde_json::from_str(json).unwrap();
+        assert_eq!(m.id, "match-001");
+        assert_eq!(m.content, "Similar content");
+        assert_eq!(m.similarity, 0.92);
+        assert_eq!(m.category, "debugging");
+    }
+
+    #[test]
+    fn test_playbook_list_result_deserialization() {
+        let json = r#"{
+            "success": true,
+            "rules": [
+                {
+                    "id": "rule-1",
+                    "content": "Rule one",
+                    "category": "general",
+                    "confidence": 0.9,
+                    "maturity": "proven"
+                }
+            ],
+            "count": 1
+        }"#;
+
+        let result: PlaybookListResult = serde_json::from_str(json).unwrap();
+        assert!(result.success);
+        assert_eq!(result.rules.len(), 1);
+        assert_eq!(result.count, 1);
+    }
+
+    #[test]
+    fn test_anti_pattern_deserialization() {
+        let json = r#"{
+            "id": "ap-001",
+            "content": "Don't do this",
+            "reason": "Causes issues",
+            "severity": "high"
+        }"#;
+
+        let ap: AntiPattern = serde_json::from_str(json).unwrap();
+        assert_eq!(ap.id, "ap-001");
+        assert_eq!(ap.content, "Don't do this");
+        assert_eq!(ap.severity, "high");
+    }
+
+    #[test]
+    fn test_from_config() {
+        use crate::config::CmConfig;
+
+        let config = CmConfig {
+            enabled: true,
+            cm_path: Some("/custom/cm".to_string()),
+            default_flags: vec!["--json".to_string()],
+        };
+
+        let client = CmClient::from_config(&config);
+        assert_eq!(client.cm_bin, PathBuf::from("/custom/cm"));
+        assert_eq!(client.default_flags, vec!["--json"]);
+    }
+}
