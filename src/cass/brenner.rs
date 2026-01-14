@@ -220,6 +220,7 @@ pub enum WizardState {
         output_dir: PathBuf,
         skill_path: PathBuf,
         manifest_path: PathBuf,
+        draft: BrennerSkillDraft,
     },
     /// Wizard cancelled
     Cancelled {
@@ -653,7 +654,7 @@ impl BrennerWizard {
 
     /// Complete the wizard
     pub fn complete(&mut self, output_dir: PathBuf) -> Result<WizardOutput> {
-        let _draft = match &self.state {
+        let draft = match &self.state {
             WizardState::MaterializationTest { draft, .. } => draft.clone(),
             WizardState::SkillFormalization { draft, .. } => draft.clone(),
             _ => return Err(MsError::Config("Not ready to complete".into())),
@@ -667,6 +668,7 @@ impl BrennerWizard {
             output_dir: output_dir.clone(),
             skill_path: skill_path.clone(),
             manifest_path: manifest_path.clone(),
+            draft,
         };
         self.checkpoint.update(self.state.clone());
 
@@ -681,6 +683,15 @@ impl BrennerWizard {
     pub fn cancel(&mut self, reason: &str) {
         self.state = WizardState::Cancelled {
             reason: reason.to_string(),
+        };
+        self.checkpoint.update(self.state.clone());
+    }
+
+    /// Return to formalization from materialization test
+    pub fn return_to_formalization(&mut self, draft: BrennerSkillDraft) {
+        self.state = WizardState::SkillFormalization {
+            moves: Vec::new(),
+            draft,
         };
         self.checkpoint.update(self.state.clone());
     }
@@ -1047,7 +1058,6 @@ pub fn run_interactive(
                 let draft_clone = draft.clone();
                 let draft_name = draft_clone.name.clone();
                 let rules_len = draft_clone.rules.len();
-                let _ = draft; // Release the borrow
 
                 println!("\n{}", "=".repeat(60));
                 println!("BRENNER WIZARD - Materialization Test");
@@ -1095,11 +1105,7 @@ pub fn run_interactive(
                         return Ok(output);
                     }
                     "r" => {
-                        // Return to formalization
-                        wizard.state = WizardState::SkillFormalization {
-                            moves: Vec::new(),
-                            draft: draft_clone,
-                        };
+                        wizard.return_to_formalization(draft_clone);
                     }
                     _ => println!("Unknown command"),
                 }

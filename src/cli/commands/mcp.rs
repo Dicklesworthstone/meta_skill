@@ -373,25 +373,29 @@ fn run_stdio_server(ctx: &AppContext, debug: bool) -> Result<()> {
             eprintln!("[ms-mcp] <- {}", line);
         }
 
-        let response = handle_request(ctx, &line, debug);
-        let response_json = serde_json::to_string(&response).unwrap_or_else(|e| {
-            serde_json::to_string(&JsonRpcResponse::error(
-                None,
-                PARSE_ERROR,
-                format!("Failed to serialize response: {}", e),
-                None,
-            ))
-            .unwrap()
-        });
+        // Handle request - returns None for notifications (no response needed)
+        if let Some(response) = handle_request(ctx, &line, debug) {
+            let response_json = serde_json::to_string(&response).unwrap_or_else(|e| {
+                serde_json::to_string(&JsonRpcResponse::error(
+                    None,
+                    PARSE_ERROR,
+                    format!("Failed to serialize response: {}", e),
+                    None,
+                ))
+                .unwrap()
+            });
 
-        if debug {
-            eprintln!("[ms-mcp] -> {}", response_json);
-        }
+            if debug {
+                eprintln!("[ms-mcp] -> {}", response_json);
+            }
 
-        if writeln!(stdout, "{}", response_json).is_err() {
-            break;
+            if writeln!(stdout, "{}", response_json).is_err() {
+                break;
+            }
+            let _ = stdout.flush();
+        } else if debug {
+            eprintln!("[ms-mcp] -> (no response - notification)");
         }
-        let _ = stdout.flush();
     }
 
     if debug {
@@ -401,44 +405,44 @@ fn run_stdio_server(ctx: &AppContext, debug: bool) -> Result<()> {
     Ok(())
 }
 
-fn handle_request(ctx: &AppContext, line: &str, debug: bool) -> JsonRpcResponse {
+fn handle_request(ctx: &AppContext, line: &str, debug: bool) -> Option<JsonRpcResponse> {
     // Parse JSON-RPC request
     let request: JsonRpcRequest = match serde_json::from_str(line) {
         Ok(r) => r,
         Err(e) => {
-            return JsonRpcResponse::error(
+            return Some(JsonRpcResponse::error(
                 None,
                 PARSE_ERROR,
                 format!("Parse error: {}", e),
                 None,
-            );
+            ));
         }
     };
 
     // Validate JSON-RPC version
     if request.jsonrpc != "2.0" {
-        return JsonRpcResponse::error(
+        return Some(JsonRpcResponse::error(
             request.id,
             INVALID_REQUEST,
             "Invalid JSON-RPC version".to_string(),
             None,
-        );
+        ));
     }
 
     // Dispatch method
     match request.method.as_str() {
-        "initialize" => handle_initialize(request.id, &request.params),
+        "initialize" => Some(handle_initialize(request.id, &request.params)),
         "initialized" => handle_initialized(request.id),
-        "tools/list" => handle_tools_list(request.id),
-        "tools/call" => handle_tools_call(ctx, request.id, &request.params, debug),
-        "ping" => handle_ping(request.id),
-        "shutdown" => handle_shutdown(request.id),
-        _ => JsonRpcResponse::error(
+        "tools/list" => Some(handle_tools_list(request.id)),
+        "tools/call" => Some(handle_tools_call(ctx, request.id, &request.params, debug)),
+        "ping" => Some(handle_ping(request.id)),
+        "shutdown" => Some(handle_shutdown(request.id)),
+        _ => Some(JsonRpcResponse::error(
             request.id,
             METHOD_NOT_FOUND,
             format!("Method not found: {}", request.method),
             None,
-        ),
+        )),
     }
 }
 
@@ -456,9 +460,10 @@ fn handle_initialize(id: Option<Value>, _params: &Value) -> JsonRpcResponse {
     JsonRpcResponse::success(id, serde_json::to_value(result).unwrap())
 }
 
-fn handle_initialized(id: Option<Value>) -> JsonRpcResponse {
-    // Notification - no response needed, but we'll ack it
-    JsonRpcResponse::success(id, serde_json::json!({}))
+fn handle_initialized(id: Option<Value>) -> Option<JsonRpcResponse> {
+    // JSON-RPC 2.0: Notifications (no id) MUST NOT receive a response
+    // If id is present, respond (unusual but permitted)
+    id.map(|id| JsonRpcResponse::success(Some(id), serde_json::json!({})))
 }
 
 fn handle_tools_list(id: Option<Value>) -> JsonRpcResponse {

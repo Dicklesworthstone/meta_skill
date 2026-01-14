@@ -867,7 +867,9 @@ fn run_resolve_uncertainties(ctx: &AppContext, args: &BuildArgs) -> Result<()> {
     }
 
     // Display status (only when there are pending items)
-    if ctx.robot_mode {
+    // In robot mode with --auto, we skip the initial status output since
+    // we'll output a comprehensive result after resolution completes.
+    if ctx.robot_mode && !args.auto {
         let output = json!({
             "status": "uncertainty_queue",
             "counts": {
@@ -883,7 +885,7 @@ fn run_resolve_uncertainties(ctx: &AppContext, args: &BuildArgs) -> Result<()> {
             "path": uncertainties_path.display().to_string(),
         });
         println!("{}", serde_json::to_string_pretty(&output)?);
-    } else {
+    } else if !ctx.robot_mode {
         println!("{}", "Uncertainty Queue Status".bold());
         println!();
         println!(
@@ -1086,10 +1088,30 @@ fn run_resolve_uncertainties(ctx: &AppContext, args: &BuildArgs) -> Result<()> {
 
         // Summary
         if ctx.robot_mode {
+            // Recount after updates
+            let final_counts = count_uncertainties(&updated_items);
             let output = json!({
                 "status": "resolution_complete",
                 "resolved": resolved_count,
                 "escalated": escalated_count,
+                "counts_before": {
+                    "pending": counts.pending,
+                    "in_progress": counts.in_progress,
+                    "resolved": counts.resolved,
+                    "rejected": counts.rejected,
+                    "needs_human": counts.needs_human,
+                    "expired": counts.expired,
+                    "total": counts.total(),
+                },
+                "counts_after": {
+                    "pending": final_counts.pending,
+                    "in_progress": final_counts.in_progress,
+                    "resolved": final_counts.resolved,
+                    "rejected": final_counts.rejected,
+                    "needs_human": final_counts.needs_human,
+                    "expired": final_counts.expired,
+                    "total": final_counts.total(),
+                },
                 "path": uncertainties_path.display().to_string(),
             });
             println!("{}", serde_json::to_string_pretty(&output)?);
@@ -1099,8 +1121,30 @@ fn run_resolve_uncertainties(ctx: &AppContext, args: &BuildArgs) -> Result<()> {
             println!("  Resolved:  {}", resolved_count);
             println!("  Escalated: {}", escalated_count);
         }
-    } else if !args.auto && !ctx.robot_mode {
-        // Interactive mode hint
+    } else if args.auto && pending_items.is_empty() {
+        // Auto-resolution requested but no pending items (e.g., only in_progress)
+        if ctx.robot_mode {
+            let output = json!({
+                "status": "no_pending_for_auto",
+                "message": "Auto-resolution requested but no pending items to process",
+                "counts": {
+                    "pending": counts.pending,
+                    "in_progress": counts.in_progress,
+                    "resolved": counts.resolved,
+                    "rejected": counts.rejected,
+                    "needs_human": counts.needs_human,
+                    "expired": counts.expired,
+                    "total": counts.total(),
+                },
+                "path": uncertainties_path.display().to_string(),
+            });
+            println!("{}", serde_json::to_string_pretty(&output)?);
+        } else {
+            println!("{} No pending items to auto-resolve", "Info:".cyan());
+            println!("  {} items are in-progress", counts.in_progress);
+        }
+    } else if !ctx.robot_mode {
+        // Interactive mode hint (non-auto, non-robot)
         println!("{}", "Options:".bold());
         println!("  Run with --auto to attempt automatic resolution");
         println!("  Use: ms uncertainties resolve <id> for manual resolution");
@@ -1200,10 +1244,7 @@ fn get_draft_from_wizard(
     wizard: &BrennerWizard,
 ) -> Option<crate::cass::brenner::BrennerSkillDraft> {
     match wizard.state() {
-        crate::cass::brenner::WizardState::Complete { .. } => {
-            // Get from last formalization state through checkpoint
-            None // Would need to track this differently
-        }
+        crate::cass::brenner::WizardState::Complete { draft, .. } => Some(draft.clone()),
         crate::cass::brenner::WizardState::SkillFormalization { draft, .. } => Some(draft.clone()),
         crate::cass::brenner::WizardState::MaterializationTest { draft, .. } => Some(draft.clone()),
         _ => None,
