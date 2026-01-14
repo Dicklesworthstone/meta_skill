@@ -401,11 +401,30 @@ fn run_install(ctx: &AppContext, args: &BundleInstallArgs) -> Result<()> {
 
     // Check if already installed
     let mut registry = BundleRegistry::open(ctx.git.root())?;
-    if registry.is_installed(&bundle_id) && !args.force {
-        return Err(MsError::ValidationFailed(format!(
-            "bundle {} is already installed; use --force to reinstall or ms bundle remove first",
-            bundle_id
-        )));
+    if registry.is_installed(&bundle_id) {
+        if !args.force {
+            return Err(MsError::ValidationFailed(format!(
+                "bundle {} is already installed; use --force to reinstall or ms bundle remove first",
+                bundle_id
+            )));
+        }
+        // --force: remove existing skill directories before reinstalling
+        if let Some(existing) = registry.get(&bundle_id) {
+            for skill_id in &existing.skills {
+                if let Some(skill_path) = ctx.git.skill_path(skill_id) {
+                    if skill_path.exists() {
+                        std::fs::remove_dir_all(&skill_path).map_err(|err| {
+                            MsError::Config(format!(
+                                "failed to remove existing skill {}: {}",
+                                skill_id, err
+                            ))
+                        })?;
+                    }
+                }
+            }
+        }
+        // Unregister old entry before re-registering
+        registry.unregister(&bundle_id)?;
     }
 
     let only = normalize_skill_list(&args.skills);

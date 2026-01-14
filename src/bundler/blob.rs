@@ -92,14 +92,14 @@ impl BlobStore {
     fn blob_path(&self, hash: &str) -> Result<PathBuf> {
         // Validate hash doesn't contain path traversal sequences
         if hash.contains('/') || hash.contains('\\') || hash.contains('\0') {
-            return Err(MsError::ValidationFailed(format!(
-                "invalid blob hash: contains path separator or null byte"
-            )));
+            return Err(MsError::ValidationFailed(
+                "invalid blob hash: contains path separator or null byte".to_string()
+            ));
         }
         if hash.contains("..") {
-            return Err(MsError::ValidationFailed(format!(
-                "invalid blob hash: contains path traversal sequence"
-            )));
+            return Err(MsError::ValidationFailed(
+                "invalid blob hash: contains path traversal sequence".to_string()
+            ));
         }
         if hash.is_empty() {
             return Err(MsError::ValidationFailed(

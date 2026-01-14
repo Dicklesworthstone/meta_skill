@@ -179,9 +179,27 @@ pub fn download_bundle(
 }
 
 /// Download bytes from a direct URL.
+///
+/// Only sends authentication token if the URL is a GitHub URL to prevent
+/// token leakage to arbitrary servers.
 pub fn download_url(url: &str, token: Option<String>) -> Result<Vec<u8>> {
-    let client = GitHubClient::new(token.or_else(|| token_from_env()));
+    // Security: only send token to GitHub domains to prevent token leakage
+    let safe_token = if is_github_url(url) {
+        token.or_else(token_from_env)
+    } else {
+        None
+    };
+    let client = GitHubClient::new(safe_token);
     client.download_url(url)
+}
+
+/// Check if a URL is a GitHub URL where we should send auth tokens.
+fn is_github_url(url: &str) -> bool {
+    let url_lower = url.to_lowercase();
+    url_lower.starts_with("https://github.com/")
+        || url_lower.starts_with("https://api.github.com/")
+        || url_lower.starts_with("https://raw.githubusercontent.com/")
+        || url_lower.starts_with("https://objects.githubusercontent.com/")
 }
 
 fn select_asset(assets: &[ReleaseAsset], requested: Option<&str>) -> Result<ReleaseAsset> {

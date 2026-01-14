@@ -169,6 +169,9 @@ impl TombstoneManager {
 
     /// Permanently delete a tombstone (requires approval).
     pub fn purge(&self, id: &str) -> Result<PurgeResult> {
+        // Validate ID against path traversal attacks
+        Self::validate_tombstone_id(id)?;
+
         let tombstone_path = self.tombstone_dir.join(id);
         let meta_path = self.tombstone_dir.join(format!("{}.json", id));
 
@@ -180,9 +183,9 @@ impl TombstoneManager {
         let content = fs::read_to_string(&meta_path)?;
         let record: TombstoneRecord = serde_json::from_str(&content)?;
 
-        // Remove the tombstoned content
+        // Remove the tombstoned content - use record.is_directory for correctness
         if tombstone_path.exists() {
-            if tombstone_path.is_dir() {
+            if record.is_directory {
                 fs::remove_dir_all(&tombstone_path)?;
             } else {
                 fs::remove_file(&tombstone_path)?;
@@ -201,6 +204,9 @@ impl TombstoneManager {
 
     /// Restore a tombstoned item to its original location.
     pub fn restore(&self, id: &str) -> Result<RestoreResult> {
+        // Validate ID against path traversal attacks
+        Self::validate_tombstone_id(id)?;
+
         let tombstone_path = self.tombstone_dir.join(id);
         let meta_path = self.tombstone_dir.join(format!("{}.json", id));
 
@@ -286,6 +292,36 @@ impl TombstoneManager {
             } else {
                 fs::copy(&src_path, &dst_path)?;
             }
+        }
+        Ok(())
+    }
+
+    /// Validate a tombstone ID against path traversal attacks.
+    ///
+    /// Tombstone IDs should be UUIDs, so they should only contain
+    /// hexadecimal characters and hyphens.
+    fn validate_tombstone_id(id: &str) -> Result<()> {
+        if id.is_empty() {
+            return Err(MsError::ValidationFailed(
+                "invalid tombstone ID: empty".to_string(),
+            ));
+        }
+        if id.contains('/') || id.contains('\\') || id.contains('\0') {
+            return Err(MsError::ValidationFailed(
+                "invalid tombstone ID: contains path separator or null byte".to_string(),
+            ));
+        }
+        if id.contains("..") {
+            return Err(MsError::ValidationFailed(
+                "invalid tombstone ID: contains path traversal sequence".to_string(),
+            ));
+        }
+        // UUID format: 8-4-4-4-12 hex chars with hyphens
+        // e.g., 550e8400-e29b-41d4-a716-446655440000
+        if !id.chars().all(|c| c.is_ascii_hexdigit() || c == '-') {
+            return Err(MsError::ValidationFailed(format!(
+                "invalid tombstone ID: contains invalid characters (expected UUID format)"
+            )));
         }
         Ok(())
     }
