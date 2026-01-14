@@ -71,7 +71,7 @@ ms show rust-error-handling
 
 ## Prepared Blurb for AGENTS.md Files
 
-```
+````
 ## ms — Meta Skill CLI
 
 Local-first CLI for mining CASS sessions into production-grade skills. Maintains dual persistence (SQLite + Git), supports hybrid search (BM25 + hash embeddings via RRF), and enforces safety boundaries with ACIP prompt-injection quarantine.
@@ -92,25 +92,28 @@ ms index
 ms list
 ms search "error handling"
 ms show rust-error-handling
+```
 
-Key Flags
+### Key Flags
 
+```
 --robot                     # JSON output to stdout
 --verbose                   # More logs
 --config /path/to/config    # Explicit config path
+```
 
-Storage
+### Storage
 
 - Local root: ./.ms (project) or ~/.local/share/ms (global)
 - DB: <ms_root>/ms.db
 - Git archive: <ms_root>/archive/
 - Index: <ms_root>/index/
 
-Notes
+### Notes
 
 - Some commands are implemented as stubs (build, load, requirements, prune, update).
 - ACIP safety scanning is implemented under `ms security`.
-```
+````
 
 ---
 
