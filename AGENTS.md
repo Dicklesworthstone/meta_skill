@@ -417,9 +417,11 @@ git push                # Push to remote
 
 ---
 
-## ms — Meta Skill CLI
+## ms — Meta Skill CLI (PLANNED)
 
-`ms` mines CASS sessions to generate production-quality Claude Code skills. Architecture follows `/data/projects/xf` exactly.
+> **Status:** Not yet implemented. This documents the planned design from `PLAN_TO_MAKE_METASKILL_CLI.md`.
+
+`ms` will mine CASS sessions to generate production-quality Claude Code skills. Architecture will follow `/data/projects/xf` exactly.
 
 ### Core Commands
 
