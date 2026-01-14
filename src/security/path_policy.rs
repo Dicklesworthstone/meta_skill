@@ -354,9 +354,15 @@ pub fn normalize_path(path: &Path) -> PathBuf {
     for component in path.components() {
         match component {
             Component::ParentDir => {
-                // Only pop if we have something to pop and it's not root
-                if normalized.components().count() > 1 {
-                    normalized.pop();
+                // Pop unless we're at root (can't go above root) or already empty
+                let last = normalized.components().last();
+                match last {
+                    None => {} // Empty, nothing to pop
+                    Some(Component::RootDir) => {} // At root, can't go higher
+                    Some(Component::Prefix(_)) => {} // At prefix (Windows), can't go higher
+                    _ => {
+                        normalized.pop();
+                    }
                 }
             }
             Component::CurDir => {} // Skip .
@@ -432,6 +438,7 @@ mod tests {
 
     #[test]
     fn test_normalize_path() {
+        // Absolute paths
         assert_eq!(normalize_path(Path::new("/foo/bar")), PathBuf::from("/foo/bar"));
         assert_eq!(normalize_path(Path::new("/foo/./bar")), PathBuf::from("/foo/bar"));
         assert_eq!(
@@ -442,6 +449,14 @@ mod tests {
             normalize_path(Path::new("/foo/./bar/./../baz")),
             PathBuf::from("/foo/baz")
         );
+        // Can't go above root
+        assert_eq!(normalize_path(Path::new("/foo/..")), PathBuf::from("/"));
+        assert_eq!(normalize_path(Path::new("/foo/bar/../..")), PathBuf::from("/"));
+
+        // Relative paths with .. should correctly normalize
+        assert_eq!(normalize_path(Path::new("foo/..")), PathBuf::from(""));
+        assert_eq!(normalize_path(Path::new("a/b/..")), PathBuf::from("a"));
+        assert_eq!(normalize_path(Path::new("foo/bar/../..")), PathBuf::from(""));
     }
 
     #[test]
