@@ -1,8 +1,10 @@
 //! Binary download
 
-use crate::error::Result;
+use crate::error::{MsError, Result};
 
 /// Download update binary
 pub fn download(_url: &str) -> Result<Vec<u8>> {
-    todo!("download not implemented")
+    Err(MsError::NotImplemented(
+        "binary download is not implemented yet".to_string(),
+    ))
 }
