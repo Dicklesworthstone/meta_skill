@@ -1,0 +1,19 @@
+[skill_paths]
+global = ["/tmp/skills"]
+project = [".ms/skills"]
+community = ["/tmp/community"]
+local = ["/tmp/local"]
+
+[layers]
+priority = ["project", "global"]
+auto_detect = false
+project_overrides = true
+
+[cass]
+auto_detect = false
+cass_path = "/tmp/cass"
+session_pattern = "*.ndjson"
+
+[robot]
+format = "text"
+include_metadata = false

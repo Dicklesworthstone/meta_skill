@@ -10,6 +10,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::error::Result;
 
+use super::overlay::{OverlayApplicationResult, OverlayContext, SkillOverlay};
 use super::skill::{SkillLayer, SkillSection, SkillSpec};
 
 // =============================================================================
@@ -116,6 +117,8 @@ pub struct ResolvedSkill {
     pub conflicts: Vec<ConflictDetail>,
     /// Whether interactive resolution is required
     pub needs_resolution: bool,
+    /// Overlay application results
+    pub overlay_results: Vec<OverlayApplicationResult>,
 }
 
 impl ResolvedSkill {
@@ -127,6 +130,7 @@ impl ResolvedSkill {
             candidate_layers: vec![layer],
             conflicts: vec![],
             needs_resolution: false,
+            overlay_results: vec![],
         }
     }
 
@@ -160,6 +164,8 @@ pub struct SkillCandidate {
 pub struct LayeredRegistry {
     /// Skills indexed by ID, then by layer
     skills: HashMap<String, HashMap<SkillLayer, SkillCandidate>>,
+    /// Overlays indexed by skill ID
+    overlays: HashMap<String, Vec<SkillOverlay>>,
     /// Default conflict strategy
     conflict_strategy: ConflictStrategy,
     /// Default merge strategy
@@ -176,6 +182,7 @@ impl LayeredRegistry {
     pub fn with_strategies(conflict: ConflictStrategy, merge: MergeStrategy) -> Self {
         Self {
             skills: HashMap::new(),
+            overlays: HashMap::new(),
             conflict_strategy: conflict,
             merge_strategy: merge,
         }
@@ -188,6 +195,14 @@ impl LayeredRegistry {
             .entry(id)
             .or_default()
             .insert(candidate.layer, candidate);
+    }
+
+    /// Register an overlay for a skill.
+    pub fn register_overlay(&mut self, overlay: SkillOverlay) {
+        self.overlays
+            .entry(overlay.skill_id.clone())
+            .or_default()
+            .push(overlay);
     }
 
     /// Remove a skill candidate from a specific layer
@@ -237,7 +252,7 @@ impl LayeredRegistry {
         }
 
         // Multiple candidates - resolve conflicts
-        match conflict_strategy {
+        let mut resolved = match conflict_strategy {
             ConflictStrategy::PreferHigher => {
                 self.resolve_prefer_higher(&sorted, merge_strategy, candidate_layers)
             }
@@ -247,7 +262,15 @@ impl LayeredRegistry {
             ConflictStrategy::Interactive => {
                 self.resolve_interactive(&sorted, candidate_layers)
             }
+        }?;
+
+        if let Some(ref mut resolved_skill) = resolved {
+            let overlay_results =
+                self.apply_overlays(id, &mut resolved_skill.spec, &OverlayContext::from_env());
+            resolved_skill.overlay_results = overlay_results;
         }
+
+        Ok(resolved)
     }
 
     /// Resolve by preferring higher layer
@@ -286,6 +309,7 @@ impl LayeredRegistry {
             candidate_layers,
             conflicts,
             needs_resolution: false,
+            overlay_results: vec![],
         }))
     }
 
@@ -333,6 +357,7 @@ impl LayeredRegistry {
             candidate_layers,
             conflicts,
             needs_resolution: false,
+            overlay_results: vec![],
         }))
     }
 
@@ -366,6 +391,7 @@ impl LayeredRegistry {
             candidate_layers,
             conflicts,
             needs_resolution,
+            overlay_results: vec![],
         }))
     }
 
@@ -377,6 +403,29 @@ impl LayeredRegistry {
     /// Get candidate at a specific layer
     pub fn get_at_layer(&self, id: &str, layer: SkillLayer) -> Option<&SkillCandidate> {
         self.skills.get(id).and_then(|by_layer| by_layer.get(&layer))
+    }
+}
+
+impl LayeredRegistry {
+    fn apply_overlays(
+        &self,
+        id: &str,
+        spec: &mut SkillSpec,
+        context: &OverlayContext,
+    ) -> Vec<OverlayApplicationResult> {
+        let overlays = match self.overlays.get(id) {
+            Some(overlays) => overlays,
+            None => return Vec::new(),
+        };
+
+        let mut sorted = overlays.clone();
+        sorted.sort_by(|a, b| a.layer.cmp(&b.layer));
+
+        let mut results = Vec::new();
+        for overlay in &sorted {
+            results.push(overlay.apply_to(spec, context));
+        }
+        results
     }
 }
 

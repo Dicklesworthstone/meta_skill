@@ -10,6 +10,7 @@ use rusqlite::Connection;
 use serde::{Deserialize, Serialize};
 
 use crate::error::{MsError, Result};
+use crate::security::SafetyGate;
 
 /// Client for interacting with CASS (Coding Agent Session Search)
 pub struct CassClient {
@@ -21,6 +22,9 @@ pub struct CassClient {
 
     /// Session fingerprint cache for incremental processing
     fingerprint_cache: Option<FingerprintCache>,
+
+    /// Optional safety gate for command execution
+    safety: Option<SafetyGate>,
 }
 
 impl CassClient {
@@ -30,6 +34,7 @@ impl CassClient {
             cass_bin: PathBuf::from("cass"),
             data_dir: None,
             fingerprint_cache: None,
+            safety: None,
         }
     }
 
@@ -39,6 +44,7 @@ impl CassClient {
             cass_bin: binary.into(),
             data_dir: None,
             fingerprint_cache: None,
+            safety: None,
         }
     }
 
@@ -54,11 +60,22 @@ impl CassClient {
         self
     }
 
+    pub fn with_safety(mut self, safety: SafetyGate) -> Self {
+        self.safety = Some(safety);
+        self
+    }
+
     /// Check if CASS is available and responsive
     pub fn is_available(&self) -> bool {
-        Command::new(&self.cass_bin)
-            .arg("--version")
-            .output()
+        let mut cmd = Command::new(&self.cass_bin);
+        cmd.arg("--version");
+        if let Some(gate) = self.safety.as_ref() {
+            let command_str = command_string(&cmd);
+            if gate.enforce(&command_str, None).is_err() {
+                return false;
+            }
+        }
+        cmd.output()
             .map(|o| o.status.success())
             .unwrap_or(false)
     }
@@ -195,6 +212,11 @@ impl CassClient {
             cmd.args(["--data-dir", &data_dir.to_string_lossy()]);
         }
 
+        if let Some(gate) = self.safety.as_ref() {
+            let command_str = command_string(&cmd);
+            gate.enforce(&command_str, None)?;
+        }
+
         let output = cmd.output()?;
 
         if !output.status.success() {
@@ -206,6 +228,19 @@ impl CassClient {
         }
 
         Ok(output.stdout)
+    }
+}
+
+fn command_string(cmd: &Command) -> String {
+    let program = cmd.get_program().to_string_lossy().to_string();
+    let args = cmd
+        .get_args()
+        .map(|arg| arg.to_string_lossy())
+        .collect::<Vec<_>>();
+    if args.is_empty() {
+        program
+    } else {
+        format!("{program} {}", args.join(" "))
     }
 }
 

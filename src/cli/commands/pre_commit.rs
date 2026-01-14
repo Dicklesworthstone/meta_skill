@@ -8,6 +8,7 @@ use crate::app::AppContext;
 use crate::cli::output;
 use crate::error::{MsError, Result};
 use crate::quality::ubs::UbsClient;
+use crate::security::SafetyGate;
 
 #[derive(Args, Debug)]
 pub struct PreCommitArgs {
@@ -26,7 +27,8 @@ pub fn run(ctx: &AppContext, args: &PreCommitArgs) -> Result<()> {
         .clone()
         .unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")));
 
-    let client = UbsClient::new(None);
+    let gate = SafetyGate::from_context(ctx);
+    let client = UbsClient::new(None).with_safety(gate);
     let result = if let Some(lang) = args.only.as_deref() {
         client.check_dir(&repo, Some(lang))?
     } else {

@@ -10,6 +10,7 @@ use crate::cli::commands::resolve_skill_markdown;
 use crate::core::{SkillMetadata};
 use crate::core::spec_lens::{compile_markdown, parse_markdown};
 use crate::error::Result;
+use crate::security::SafetyGate;
 
 #[derive(Args, Debug)]
 pub struct EditArgs {
@@ -58,7 +59,8 @@ pub fn run(ctx: &AppContext, args: &EditArgs) -> Result<()> {
         .clone()
         .or_else(|| std::env::var("EDITOR").ok())
         .ok_or_else(|| crate::error::MsError::Config("EDITOR not set".to_string()))?;
-    run_editor(&editor, &edit_path)?;
+    let gate = SafetyGate::from_context(ctx);
+    run_editor(&gate, &editor, &edit_path)?;
 
     let updated_yaml = std::fs::read_to_string(&edit_path).map_err(|err| {
         crate::error::MsError::Config(format!("read {}: {err}", edit_path.display()))
@@ -86,11 +88,13 @@ fn edit_spec_path(skill_dir: &std::path::Path) -> PathBuf {
     skill_dir.join(".ms").join("spec_edit.yaml")
 }
 
-fn run_editor(editor: &str, path: &PathBuf) -> Result<()> {
+fn run_editor(gate: &SafetyGate, editor: &str, path: &PathBuf) -> Result<()> {
     let mut parts = editor.split_whitespace();
     let cmd = parts
         .next()
         .ok_or_else(|| crate::error::MsError::Config("invalid editor".to_string()))?;
+    let command_str = format!("{editor} {}", path.display());
+    gate.enforce(&command_str, None)?;
     let mut command = Command::new(cmd);
     for part in parts {
         command.arg(part);

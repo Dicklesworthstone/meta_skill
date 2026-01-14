@@ -7,6 +7,7 @@ use clap::{Args, Subcommand};
 
 use crate::app::AppContext;
 use crate::bundler::{Bundle, BundleInfo, BundleManifest, BundledSkill};
+use crate::bundler::github::{download_bundle, download_url, publish_bundle, GitHubConfig};
 use crate::bundler::install::{install as install_bundle, InstallReport};
 use crate::error::{MsError, Result};
 use crate::cli::output::emit_json;
@@ -63,6 +64,26 @@ pub struct BundlePublishArgs {
     /// GitHub repository
     #[arg(long)]
     pub repo: Option<String>,
+
+    /// GitHub token (overrides env)
+    #[arg(long)]
+    pub token: Option<String>,
+
+    /// Release tag (defaults to v<bundle version>)
+    #[arg(long)]
+    pub tag: Option<String>,
+
+    /// Asset name (defaults to bundle filename)
+    #[arg(long)]
+    pub asset_name: Option<String>,
+
+    /// Create release as draft
+    #[arg(long)]
+    pub draft: bool,
+
+    /// Create release as prerelease
+    #[arg(long)]
+    pub prerelease: bool,
 }
 
 #[derive(Args, Debug)]
@@ -73,6 +94,18 @@ pub struct BundleInstallArgs {
     /// Skills to install (defaults to all)
     #[arg(long)]
     pub skills: Vec<String>,
+
+    /// GitHub token (overrides env)
+    #[arg(long)]
+    pub token: Option<String>,
+
+    /// Release tag (defaults to latest)
+    #[arg(long)]
+    pub tag: Option<String>,
+
+    /// Asset name to download
+    #[arg(long)]
+    pub asset_name: Option<String>,
 }
 
 pub fn run(_ctx: &AppContext, _args: &BundleArgs) -> Result<()> {
@@ -82,6 +115,7 @@ pub fn run(_ctx: &AppContext, _args: &BundleArgs) -> Result<()> {
     match &args.command {
         BundleCommand::Create(create) => run_create(ctx, create),
         BundleCommand::Install(install) => run_install(ctx, install),
+        BundleCommand::Publish(publish) => run_publish(ctx, publish),
         _ => Ok(()),
     }
 }
@@ -202,15 +236,22 @@ fn run_create(ctx: &AppContext, args: &BundleCreateArgs) -> Result<()> {
 }
 
 fn run_install(ctx: &AppContext, args: &BundleInstallArgs) -> Result<()> {
-    if args.source.starts_with("http://") || args.source.starts_with("https://") {
-        return Err(MsError::ValidationFailed(
-            "bundle install only supports local files for now".to_string(),
-        ));
-    }
-
-    let bytes = std::fs::read(&args.source).map_err(|err| {
-        MsError::Config(format!("read {}: {err}", args.source))
-    })?;
+    let bytes = if std::path::Path::new(&args.source).exists() {
+        std::fs::read(&args.source).map_err(|err| {
+            MsError::Config(format!("read {}: {err}", args.source))
+        })?
+    } else if args.source.starts_with("http://") || args.source.starts_with("https://") {
+        download_url(&args.source, args.token.clone())?
+    } else if let Some((repo, tag)) = split_repo_tag(&args.source) {
+        let tag = args.tag.as_deref().or(tag);
+        let download = download_bundle(repo, tag, args.asset_name.as_deref(), args.token.clone())?;
+        download.bytes
+    } else {
+        return Err(MsError::ValidationFailed(format!(
+            "bundle source not found: {}",
+            args.source
+        )));
+    };
     let package = crate::bundler::package::BundlePackage::from_bytes(&bytes)?;
 
     let only = normalize_skill_list(&args.skills);
@@ -221,6 +262,30 @@ fn run_install(ctx: &AppContext, args: &BundleInstallArgs) -> Result<()> {
     }
 
     print_install_report(&report);
+    Ok(())
+}
+
+fn run_publish(ctx: &AppContext, args: &BundlePublishArgs) -> Result<()> {
+    let repo = args.repo.clone().ok_or_else(|| {
+        MsError::ValidationFailed("bundle publish requires --repo".to_string())
+    })?;
+    let config = GitHubConfig {
+        repo,
+        token: args.token.clone(),
+        tag: args.tag.clone(),
+        asset_name: args.asset_name.clone(),
+        draft: args.draft,
+        prerelease: args.prerelease,
+    };
+    let result = publish_bundle(std::path::Path::new(&args.path), &config)?;
+
+    if ctx.robot_mode {
+        return emit_json(&result);
+    }
+
+    println!("Published bundle to {}", result.repo);
+    println!("Release: {}", result.release_url);
+    println!("Asset: {} (tag {})", result.asset_name, result.tag);
     Ok(())
 }
 
@@ -277,6 +342,16 @@ fn print_install_report(report: &InstallReport) {
         }
     }
     println!("Blobs written: {}", report.blobs_written);
+}
+
+fn split_repo_tag(input: &str) -> Option<(&str, Option<&str>)> {
+    if let Some((repo, tag)) = input.split_once('@') {
+        return Some((repo, Some(tag)));
+    }
+    if input.contains('/') {
+        return Some((input, None));
+    }
+    None
 }
 
 #[derive(serde::Serialize)]

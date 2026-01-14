@@ -8,7 +8,7 @@ use serde_json::Value as JsonValue;
 use uuid::Uuid;
 
 use crate::error::{MsError, Result};
-use crate::security::QuarantineRecord;
+use crate::security::{CommandSafetyEvent, QuarantineRecord};
 use crate::storage::migrations;
 
 /// SQLite database wrapper for skill registry
@@ -136,6 +136,39 @@ impl Database {
             results.push(row?);
         }
         Ok(results)
+    }
+
+    /// Update quality score for a skill.
+    pub fn update_skill_quality(&self, skill_id: &str, quality_score: f64) -> Result<()> {
+        self.conn.execute(
+            "UPDATE skills SET quality_score = ? WHERE id = ?",
+            params![quality_score, skill_id],
+        )?;
+        Ok(())
+    }
+
+    /// Count usage events for a skill.
+    pub fn count_skill_usage(&self, skill_id: &str) -> Result<u64> {
+        let count: i64 = self
+            .conn
+            .query_row(
+                "SELECT COUNT(*) FROM skill_usage WHERE skill_id = ?",
+                [skill_id],
+                |row| row.get(0),
+            )?;
+        Ok(count.max(0) as u64)
+    }
+
+    /// Count evidence records for a skill.
+    pub fn count_skill_evidence(&self, skill_id: &str) -> Result<u64> {
+        let count: i64 = self
+            .conn
+            .query_row(
+                "SELECT COUNT(*) FROM skill_evidence WHERE skill_id = ?",
+                [skill_id],
+                |row| row.get(0),
+            )?;
+        Ok(count.max(0) as u64)
     }
 
     pub fn upsert_skill(&self, skill: &SkillRecord) -> Result<()> {
@@ -421,6 +454,25 @@ impl Database {
         Ok(())
     }
 
+    pub fn insert_command_safety_event(&self, event: &CommandSafetyEvent) -> Result<()> {
+        let decision_json = serde_json::to_string(&event.decision)
+            .map_err(|err| crate::error::MsError::Config(format!("encode decision: {err}")))?;
+        self.conn.execute(
+            "INSERT INTO command_safety_events (
+                session_id, command, dcg_version, dcg_pack, decision_json, created_at
+             ) VALUES (?, ?, ?, ?, ?, ?)",
+            params![
+                event.session_id,
+                event.command,
+                event.dcg_version,
+                event.dcg_pack,
+                decision_json,
+                event.created_at,
+            ],
+        )?;
+        Ok(())
+    }
+
     pub fn list_quarantine_records(&self, limit: usize) -> Result<Vec<QuarantineRecord>> {
         let mut stmt = self.conn.prepare(
             "SELECT quarantine_id, session_id, message_index, content_hash, safe_excerpt,
@@ -621,17 +673,21 @@ impl Database {
         Ok(())
     }
 
-    /// Finalize a skill commit by updating source_path and content_hash
+    /// Finalize a skill commit by updating source_path, content_hash, and body.
+    ///
+    /// This is called after Git commit succeeds to populate the full SQLite record
+    /// with searchable content (body for FTS).
     pub fn finalize_skill_commit(
         &self,
         skill_id: &str,
         source_path: &str,
         content_hash: &str,
+        body: &str,
     ) -> Result<()> {
         self.conn.execute(
-            "UPDATE skills SET source_path = ?, content_hash = ?, modified_at = datetime('now')
+            "UPDATE skills SET source_path = ?, content_hash = ?, body = ?, modified_at = datetime('now')
              WHERE id = ?",
-            params![source_path, content_hash, skill_id],
+            params![source_path, content_hash, body, skill_id],
         )?;
         Ok(())
     }

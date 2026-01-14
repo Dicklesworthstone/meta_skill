@@ -237,6 +237,13 @@ semantic_weight = 0.5
 # Default robot mode format
 format = "json"
 include_metadata = true
+
+[safety]
+# Destructive Command Guard configuration
+dcg_bin = "dcg"
+dcg_packs = []
+dcg_explain_format = "json"
+require_verbatim_approval = true
 "#
     } else {
         r#"# ms configuration (project-local)
@@ -255,6 +262,13 @@ embedding_backend = "hash"
 embedding_dims = 384
 bm25_weight = 0.5
 semantic_weight = 0.5
+
+[safety]
+# Destructive Command Guard configuration
+dcg_bin = "dcg"
+dcg_packs = []
+dcg_explain_format = "json"
+require_verbatim_approval = true
 "#
     };
 

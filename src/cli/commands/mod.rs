@@ -27,6 +27,7 @@ pub mod list;
 pub mod load;
 pub mod pre_commit;
 pub mod prune;
+pub mod quality;
 pub mod requirements;
 pub mod search;
 pub mod security;
@@ -61,6 +62,7 @@ pub fn run(ctx: &AppContext, command: &Commands) -> Result<()> {
         Commands::Security(args) => security::run(ctx, args),
         Commands::Validate(args) => validate::run(ctx, args),
         Commands::Test(args) => test::run(ctx, args),
+        Commands::Quality(args) => quality::run(ctx, args),
     }
 }
 

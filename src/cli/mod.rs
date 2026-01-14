@@ -103,4 +103,7 @@ pub enum Commands {
 
     /// Run skill tests
     Test(commands::test::TestArgs),
+
+    /// Compute skill quality scores
+    Quality(commands::quality::QualityArgs),
 }

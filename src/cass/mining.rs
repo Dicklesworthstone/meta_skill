@@ -12,6 +12,7 @@ use tracing::warn;
 
 use crate::error::Result;
 use crate::quality::ubs::UbsClient;
+use crate::security::SafetyGate;
 
 use super::client::Session;
 
@@ -333,7 +334,10 @@ fn extract_command_patterns(session: &Session) -> Option<ExtractedPattern> {
 /// Extract code patterns from session messages
 fn extract_code_patterns(session: &Session) -> Vec<ExtractedPattern> {
     let mut patterns = Vec::new();
-    let ubs_client = UbsClient::new(None);
+    let ubs_client = match SafetyGate::from_env() {
+        Ok(gate) => UbsClient::new(None).with_safety(gate),
+        Err(_) => UbsClient::new(None),
+    };
 
     for msg in &session.messages {
         if msg.role == "assistant" {

@@ -26,6 +26,8 @@ pub struct Config {
     pub robot: RobotConfig,
     #[serde(default)]
     pub security: SecurityConfig,
+    #[serde(default)]
+    pub safety: SafetyConfig,
 }
 
 impl Default for Config {
@@ -40,6 +42,7 @@ impl Default for Config {
             update: UpdateConfig::default(),
             robot: RobotConfig::default(),
             security: SecurityConfig::default(),
+            safety: SafetyConfig::default(),
         }
     }
 }
@@ -121,6 +124,9 @@ impl Config {
         }
         if let Some(patch) = patch.security {
             self.security.merge(patch);
+        }
+        if let Some(patch) = patch.safety {
+            self.safety.merge(patch);
         }
     }
 
@@ -245,6 +251,18 @@ impl Config {
         }
         if let Some(value) = env_string("MS_SECURITY_ACIP_TRUST_FILE_CONTENTS") {
             self.security.acip.trust.file_contents = parse_trust_level(&value)?;
+        }
+        if let Some(value) = env_string("MS_SAFETY_DCG_BIN") {
+            self.safety.dcg_bin = PathBuf::from(value);
+        }
+        if let Some(values) = env_list("MS_SAFETY_DCG_PACKS")? {
+            self.safety.dcg_packs = values;
+        }
+        if let Some(value) = env_string("MS_SAFETY_DCG_EXPLAIN_FORMAT") {
+            self.safety.dcg_explain_format = value;
+        }
+        if let Some(value) = env_bool("MS_SAFETY_REQUIRE_VERBATIM_APPROVAL") {
+            self.safety.require_verbatim_approval = value;
         }
 
         Ok(())
@@ -567,6 +585,46 @@ impl SecurityConfig {
     }
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SafetyConfig {
+    #[serde(default)]
+    pub dcg_bin: PathBuf,
+    #[serde(default)]
+    pub dcg_packs: Vec<String>,
+    #[serde(default)]
+    pub dcg_explain_format: String,
+    #[serde(default)]
+    pub require_verbatim_approval: bool,
+}
+
+impl Default for SafetyConfig {
+    fn default() -> Self {
+        Self {
+            dcg_bin: PathBuf::from("dcg"),
+            dcg_packs: Vec::new(),
+            dcg_explain_format: "json".to_string(),
+            require_verbatim_approval: true,
+        }
+    }
+}
+
+impl SafetyConfig {
+    fn merge(&mut self, patch: SafetyPatch) {
+        if let Some(value) = patch.dcg_bin {
+            self.dcg_bin = value;
+        }
+        if let Some(values) = patch.dcg_packs {
+            self.dcg_packs = values;
+        }
+        if let Some(value) = patch.dcg_explain_format {
+            self.dcg_explain_format = value;
+        }
+        if let Some(value) = patch.require_verbatim_approval {
+            self.require_verbatim_approval = value;
+        }
+    }
+}
+
 #[derive(Debug, Clone, Default, Deserialize)]
 struct ConfigPatch {
     pub skill_paths: Option<SkillPathsPatch>,
@@ -578,6 +636,7 @@ struct ConfigPatch {
     pub update: Option<UpdatePatch>,
     pub robot: Option<RobotPatch>,
     pub security: Option<SecurityPatch>,
+    pub safety: Option<SafetyPatch>,
 }
 
 #[derive(Debug, Clone, Default, Deserialize)]
@@ -642,6 +701,14 @@ struct RobotPatch {
 #[derive(Debug, Clone, Default, Deserialize)]
 struct SecurityPatch {
     pub acip: Option<AcipPatch>,
+}
+
+#[derive(Debug, Clone, Default, Deserialize)]
+struct SafetyPatch {
+    pub dcg_bin: Option<PathBuf>,
+    pub dcg_packs: Option<Vec<String>>,
+    pub dcg_explain_format: Option<String>,
+    pub require_verbatim_approval: Option<bool>,
 }
 
 #[derive(Debug, Clone, Default, Deserialize)]

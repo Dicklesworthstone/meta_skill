@@ -6,17 +6,25 @@ use std::process::Command;
 use regex::Regex;
 
 use crate::error::{MsError, Result};
+use crate::security::SafetyGate;
 
 #[derive(Debug, Clone)]
 pub struct UbsClient {
     ubs_path: PathBuf,
+    safety: Option<SafetyGate>,
 }
 
 impl UbsClient {
     pub fn new(ubs_path: Option<PathBuf>) -> Self {
         Self {
             ubs_path: ubs_path.unwrap_or_else(|| PathBuf::from("ubs")),
+            safety: None,
         }
+    }
+
+    pub fn with_safety(mut self, safety: SafetyGate) -> Self {
+        self.safety = Some(safety);
+        self
     }
 
     pub fn check_files(&self, files: &[PathBuf]) -> Result<UbsResult> {
@@ -28,7 +36,7 @@ impl UbsClient {
         for file in files {
             cmd.arg(file);
         }
-        run_ubs(cmd)
+        run_ubs(cmd, self.safety.as_ref())
     }
 
     pub fn check_dir(&self, dir: &Path, only: Option<&str>) -> Result<UbsResult> {
@@ -37,16 +45,21 @@ impl UbsClient {
             cmd.arg(format!("--only={lang}"));
         }
         cmd.arg(dir);
-        run_ubs(cmd)
+        run_ubs(cmd, self.safety.as_ref())
     }
 
     pub fn check_staged(&self, repo_root: &Path) -> Result<UbsResult> {
-        let output = Command::new("git")
+        let mut git_cmd = Command::new("git");
+        git_cmd
             .arg("diff")
             .arg("--name-only")
             .arg("--cached")
-            .current_dir(repo_root)
-            .output()
+            .current_dir(repo_root);
+        if let Some(gate) = self.safety.as_ref() {
+            let command_str = command_string(&git_cmd);
+            gate.enforce(&command_str, None)?;
+        }
+        let output = git_cmd.output()
             .map_err(|err| MsError::Config(format!("git diff: {err}")))?;
 
         if !output.status.success() {
@@ -108,7 +121,11 @@ pub enum UbsSeverity {
     Contextual,
 }
 
-fn run_ubs(mut cmd: Command) -> Result<UbsResult> {
+fn run_ubs(mut cmd: Command, gate: Option<&SafetyGate>) -> Result<UbsResult> {
+    if let Some(gate) = gate {
+        let command_str = command_string(&cmd);
+        gate.enforce(&command_str, None)?;
+    }
     let output = cmd
         .output()
         .map_err(|err| MsError::Config(format!("run ubs: {err}")))?;
@@ -122,6 +139,19 @@ fn run_ubs(mut cmd: Command) -> Result<UbsResult> {
         stderr,
         findings,
     })
+}
+
+fn command_string(cmd: &Command) -> String {
+    let program = cmd.get_program().to_string_lossy().to_string();
+    let args = cmd
+        .get_args()
+        .map(|arg| arg.to_string_lossy())
+        .collect::<Vec<_>>();
+    if args.is_empty() {
+        program
+    } else {
+        format!("{program} {}", args.join(" "))
+    }
 }
 
 fn parse_findings(output: &str) -> Vec<UbsFinding> {

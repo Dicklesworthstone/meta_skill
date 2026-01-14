@@ -201,18 +201,19 @@ impl GitArchive {
         if !skill_dir.exists() {
             return Err(MsError::SkillNotFound(skill_id.to_string()));
         }
-        fs::remove_dir_all(&skill_dir)?;
+        let tombstone_dir = tombstone_skill_dir(&self.root, &skill_dir)?;
 
         let mut index = self.repo.index()?;
         let rel = skill_dir.strip_prefix(&self.root).map_err(|_| {
             MsError::ValidationFailed("skill path not under archive root".to_string())
         })?;
         index.remove_dir(rel, 0)?;
+        add_dir_recursive(&mut index, &self.root, &tombstone_dir)?;
         index.write()?;
 
         let tree_id = index.write_tree()?;
         let tree = self.repo.find_tree(tree_id)?;
-        let message = format!("Delete skill {}", skill_id);
+        let message = format!("Tombstone skill {}", skill_id);
         let oid = commit_with_parents(&self.repo, &self.signature, &tree, &message)?;
 
         Ok(SkillCommit {
@@ -235,6 +236,18 @@ impl GitArchive {
         }
         Ok(())
     }
+}
+
+fn tombstone_skill_dir(root: &Path, skill_dir: &Path) -> Result<PathBuf> {
+    let tombstones = root.join(".ms").join("tombstones");
+    fs::create_dir_all(&tombstones)?;
+    let name = skill_dir
+        .file_name()
+        .ok_or_else(|| MsError::ValidationFailed("invalid skill directory".to_string()))?;
+    let stamp = chrono::Utc::now().format("%Y%m%dT%H%M%S");
+    let tombstone = tombstones.join(format!("{}_{}", name.to_string_lossy(), stamp));
+    fs::rename(skill_dir, &tombstone)?;
+    Ok(tombstone)
 }
 
 fn render_skill_markdown(spec: &SkillSpec) -> String {
@@ -288,6 +301,16 @@ fn add_path(index: &mut git2::Index, root: &Path, path: &Path) -> Result<()> {
         .strip_prefix(root)
         .map_err(|_| MsError::ValidationFailed("path not under archive root".to_string()))?;
     index.add_path(rel)?;
+    Ok(())
+}
+
+fn add_dir_recursive(index: &mut git2::Index, root: &Path, dir: &Path) -> Result<()> {
+    for entry in walkdir::WalkDir::new(dir).into_iter() {
+        let entry = entry.map_err(|err| MsError::Config(format!("walk tombstone: {err}")))?;
+        if entry.file_type().is_file() {
+            add_path(index, root, entry.path())?;
+        }
+    }
     Ok(())
 }
 

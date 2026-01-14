@@ -1,0 +1,12 @@
+[disclosure]
+default_level = "minimal"
+token_budget = 500
+auto_suggest = false
+cooldown_seconds = 120
+
+[search]
+use_embeddings = true
+embedding_backend = "hash"
+embedding_dims = 384
+bm25_weight = 0.4
+semantic_weight = 0.6

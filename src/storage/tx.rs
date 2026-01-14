@@ -15,6 +15,7 @@ use serde::{Deserialize, Serialize};
 use tracing::{debug, info, warn};
 use uuid::Uuid;
 
+use crate::core::spec_lens::compile_markdown;
 use crate::core::SkillSpec;
 use crate::error::{MsError, Result};
 
@@ -574,7 +575,10 @@ impl TxManager {
         let git_path_str = git_path.to_string_lossy();
         let content_hash = compute_content_hash(&skill)?;
 
-        self.db.finalize_skill_commit(&skill.metadata.id, &git_path_str, &content_hash)?;
+        // Compile skill to markdown for FTS-searchable body
+        let body = compile_markdown(&skill);
+
+        self.db.finalize_skill_commit(&skill.metadata.id, &git_path_str, &content_hash, &body)?;
 
         // Update phase
         let mut tx = tx.clone();
@@ -703,21 +707,55 @@ impl TxManager {
     fn recover_delete_tx(&self, tx: &TxRecord, report: &mut RecoveryReport) -> Result<()> {
         match tx.phase {
             TxPhase::Prepare => {
-                // Delete never started - just clean up tx record, skill is unchanged
-                info!("Rolling back prepare-only delete tx: {}", tx.id);
-                self.db.delete_tx_record(&tx.id)?;
-                let tx_path = self.tx_dir.join(format!("{}.json", tx.id));
-                fs::remove_file(&tx_path).ok();
-                report.rolled_back += 1;
+                // Check if Git delete actually happened (git.delete_skill succeeded but
+                // db.update_tx_phase to Committed failed, leaving us at Prepare phase).
+                // If skill is gone from Git, we need to complete the delete in SQLite.
+                // If skill still exists in Git, delete truly never started.
+                if self.git.skill_exists(&tx.entity_id) {
+                    // Skill exists in Git - delete never started, clean up tx record
+                    info!("Rolling back prepare-only delete tx: {}", tx.id);
+                    self.db.delete_tx_record(&tx.id)?;
+                    let tx_path = self.tx_dir.join(format!("{}.json", tx.id));
+                    fs::remove_file(&tx_path).ok();
+                    report.rolled_back += 1;
+                } else {
+                    // Skill gone from Git - delete happened, complete SQLite delete
+                    info!("Completing delete tx (Git already deleted): {}", tx.id);
+                    if let Err(e) = self.db.delete_skill(&tx.entity_id) {
+                        debug!(
+                            "SQLite delete during recovery (may already be gone): {}",
+                            e
+                        );
+                    }
+                    self.db.delete_tx_record(&tx.id)?;
+                    let tx_path = self.tx_dir.join(format!("{}.json", tx.id));
+                    fs::remove_file(&tx_path).ok();
+                    report.completed += 1;
+                }
             }
             TxPhase::Pending => {
-                // Delete transactions skip Pending phase, but handle just in case
-                // Treat same as Prepare - skill should be unchanged
+                // Delete transactions skip Pending phase, but handle just in case.
+                // Apply same logic as Prepare: check Git state to determine action.
                 warn!("Unexpected Pending phase for delete tx: {}", tx.id);
-                self.db.delete_tx_record(&tx.id)?;
-                let tx_path = self.tx_dir.join(format!("{}.json", tx.id));
-                fs::remove_file(&tx_path).ok();
-                report.rolled_back += 1;
+                if self.git.skill_exists(&tx.entity_id) {
+                    // Skill exists in Git - clean up tx record
+                    self.db.delete_tx_record(&tx.id)?;
+                    let tx_path = self.tx_dir.join(format!("{}.json", tx.id));
+                    fs::remove_file(&tx_path).ok();
+                    report.rolled_back += 1;
+                } else {
+                    // Skill gone from Git - complete SQLite delete
+                    if let Err(e) = self.db.delete_skill(&tx.entity_id) {
+                        debug!(
+                            "SQLite delete during recovery (may already be gone): {}",
+                            e
+                        );
+                    }
+                    self.db.delete_tx_record(&tx.id)?;
+                    let tx_path = self.tx_dir.join(format!("{}.json", tx.id));
+                    fs::remove_file(&tx_path).ok();
+                    report.completed += 1;
+                }
             }
             TxPhase::Committed => {
                 // Git deleted, SQLite not yet - complete the SQLite delete

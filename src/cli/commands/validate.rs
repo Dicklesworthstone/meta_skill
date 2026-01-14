@@ -10,6 +10,7 @@ use crate::core::spec_lens::parse_markdown;
 use crate::core::validation::{validate, validate_with_ubs, ValidationWarning};
 use crate::error::{MsError, Result};
 use crate::quality::ubs::{UbsClient, UbsFinding, UbsResult, UbsSeverity};
+use crate::security::SafetyGate;
 
 #[derive(Args, Debug)]
 pub struct ValidateArgs {
@@ -30,7 +31,8 @@ pub fn run(ctx: &AppContext, args: &ValidateArgs) -> Result<()> {
 
     let warnings = validate(&spec)?;
     let ubs_result = if args.ubs {
-        let client = UbsClient::new(None);
+        let gate = SafetyGate::from_context(ctx);
+        let client = UbsClient::new(None).with_safety(gate);
         Some(validate_with_ubs(&spec, &client)?)
     } else {
         None
