@@ -420,3 +420,163 @@ fn find_snippet(body: &str, query: &str) -> Option<String> {
 fn truncate_str(s: &str, max_chars: usize) -> String {
     s.chars().take(max_chars).collect()
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // ==================== truncate_str Tests ====================
+
+    #[test]
+    fn test_truncate_str_short() {
+        assert_eq!(truncate_str("hello", 10), "hello");
+    }
+
+    #[test]
+    fn test_truncate_str_exact() {
+        assert_eq!(truncate_str("hello", 5), "hello");
+    }
+
+    #[test]
+    fn test_truncate_str_truncated() {
+        assert_eq!(truncate_str("hello world", 5), "hello");
+    }
+
+    #[test]
+    fn test_truncate_str_empty() {
+        assert_eq!(truncate_str("", 10), "");
+    }
+
+    #[test]
+    fn test_truncate_str_unicode() {
+        let emoji_str = "🦀🐍🚀";
+        assert_eq!(truncate_str(emoji_str, 2), "🦀🐍");
+    }
+
+    // ==================== parse_tags_from_metadata Tests ====================
+
+    #[test]
+    fn test_parse_tags_valid_json() {
+        let metadata = r#"{"tags": ["rust", "cli", "testing"]}"#;
+        let tags = parse_tags_from_metadata(metadata);
+        assert_eq!(tags, vec!["rust", "cli", "testing"]);
+    }
+
+    #[test]
+    fn test_parse_tags_empty_array() {
+        let metadata = r#"{"tags": []}"#;
+        let tags = parse_tags_from_metadata(metadata);
+        assert!(tags.is_empty());
+    }
+
+    #[test]
+    fn test_parse_tags_no_tags_field() {
+        let metadata = r#"{"name": "test"}"#;
+        let tags = parse_tags_from_metadata(metadata);
+        assert!(tags.is_empty());
+    }
+
+    #[test]
+    fn test_parse_tags_invalid_json() {
+        let tags = parse_tags_from_metadata("not valid json");
+        assert!(tags.is_empty());
+    }
+
+    // ==================== find_snippet Tests ====================
+
+    #[test]
+    fn test_find_snippet_simple_match() {
+        let body = "This is a test of the search functionality.";
+        let snippet = find_snippet(body, "search");
+        assert!(snippet.is_some());
+        assert!(snippet.unwrap().contains("search"));
+    }
+
+    #[test]
+    fn test_find_snippet_no_match() {
+        let body = "This is a test.";
+        let snippet = find_snippet(body, "notfound");
+        assert!(snippet.is_none());
+    }
+
+    #[test]
+    fn test_find_snippet_case_insensitive() {
+        let body = "This is a TEST of Search functionality.";
+        let snippet = find_snippet(body, "search");
+        assert!(snippet.is_some());
+    }
+
+    // ==================== Argument Parsing Tests ====================
+
+    #[test]
+    fn test_search_args_defaults() {
+        use clap::Parser;
+
+        #[derive(Parser)]
+        struct TestCli {
+            #[command(flatten)]
+            args: SearchArgs,
+        }
+
+        let parsed = TestCli::parse_from(["test", "rust error handling"]);
+        assert_eq!(parsed.args.query, "rust error handling");
+        assert_eq!(parsed.args.limit, 20);
+        assert_eq!(parsed.args.search_type, "hybrid");
+    }
+
+    #[test]
+    fn test_search_args_with_options() {
+        use clap::Parser;
+
+        #[derive(Parser)]
+        struct TestCli {
+            #[command(flatten)]
+            args: SearchArgs,
+        }
+
+        let parsed = TestCli::parse_from([
+            "test", "query", "--limit", "10", "--tags", "rust",
+            "--layer", "base", "--min-quality", "0.5",
+            "--include-deprecated", "--snippets"
+        ]);
+
+        assert_eq!(parsed.args.limit, 10);
+        assert_eq!(parsed.args.tags, Some("rust".to_string()));
+        assert_eq!(parsed.args.layer, Some("base".to_string()));
+        assert_eq!(parsed.args.min_quality, Some(0.5));
+        assert!(parsed.args.include_deprecated);
+        assert!(parsed.args.snippets);
+    }
+
+    #[test]
+    fn test_search_args_search_types() {
+        use clap::Parser;
+
+        #[derive(Parser)]
+        struct TestCli {
+            #[command(flatten)]
+            args: SearchArgs,
+        }
+
+        let bm25 = TestCli::parse_from(["test", "query", "--search-type", "bm25"]);
+        assert_eq!(bm25.args.search_type, "bm25");
+
+        let semantic = TestCli::parse_from(["test", "query", "--search-type", "semantic"]);
+        assert_eq!(semantic.args.search_type, "semantic");
+    }
+
+    #[test]
+    fn test_search_args_short_flags() {
+        use clap::Parser;
+
+        #[derive(Parser)]
+        struct TestCli {
+            #[command(flatten)]
+            args: SearchArgs,
+        }
+
+        let parsed = TestCli::parse_from(["test", "query", "-l", "5", "-t", "testing"]);
+        assert_eq!(parsed.args.limit, 5);
+        assert_eq!(parsed.args.tags, Some("testing".to_string()));
+    }
+}
