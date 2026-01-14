@@ -8,6 +8,7 @@ use std::process::Command;
 
 use crate::app::AppContext;
 use crate::error::{MsError, Result};
+use crate::security::SafetyGate;
 
 use super::definition::{
     Assertions, Condition, CopyStep, IfStep, LoadSkillStep, MkdirStep, RemoveStep,
@@ -20,6 +21,7 @@ pub struct StepExecutor<'a> {
     ctx: &'a AppContext,
     test_ctx: TestContext,
     verbose: bool,
+    safety: Option<SafetyGate>,
 }
 
 impl<'a> StepExecutor<'a> {
@@ -29,12 +31,22 @@ impl<'a> StepExecutor<'a> {
             ctx,
             test_ctx: TestContext::default(),
             verbose,
+            safety: None,
         }
+    }
+
+    /// Enable safety gate for command execution.
+    ///
+    /// When enabled, all `run` steps will be validated through DCG
+    /// before execution.
+    pub fn with_safety(mut self, gate: SafetyGate) -> Self {
+        self.safety = Some(gate);
+        self
     }
 
     /// Execute a single test step
     pub fn execute(&mut self, step: &TestStep) -> Result<()> {
-        execute_step(step, &mut self.test_ctx, self.verbose)
+        execute_step(step, &mut self.test_ctx, self.verbose, self.safety.as_ref())
     }
 
     /// Get a reference to the test context
@@ -83,10 +95,15 @@ impl TestContext {
 }
 
 /// Execute a single test step
-pub fn execute_step(step: &TestStep, ctx: &mut TestContext, verbose: bool) -> Result<()> {
+pub fn execute_step(
+    step: &TestStep,
+    ctx: &mut TestContext,
+    verbose: bool,
+    safety: Option<&SafetyGate>,
+) -> Result<()> {
     match step {
         TestStep::LoadSkill { load_skill } => execute_load_skill(load_skill, ctx, verbose),
-        TestStep::Run { run } => execute_run(run, ctx, verbose),
+        TestStep::Run { run } => execute_run(run, ctx, verbose, safety),
         TestStep::Assert { assert } => execute_assert(assert, ctx, verbose),
         TestStep::WriteFile { write_file } => execute_write_file(write_file, ctx, verbose),
         TestStep::Mkdir { mkdir } => execute_mkdir(mkdir, ctx, verbose),
@@ -94,7 +111,7 @@ pub fn execute_step(step: &TestStep, ctx: &mut TestContext, verbose: bool) -> Re
         TestStep::Copy { copy } => execute_copy(copy, ctx, verbose),
         TestStep::Sleep { sleep } => execute_sleep(sleep, ctx, verbose),
         TestStep::Set { set } => execute_set(set, ctx, verbose),
-        TestStep::If { if_step } => execute_if(if_step, ctx, verbose),
+        TestStep::If { if_step } => execute_if(if_step, ctx, verbose, safety),
     }
 }
 
@@ -119,7 +136,12 @@ fn execute_load_skill(step: &LoadSkillStep, ctx: &mut TestContext, verbose: bool
     Ok(())
 }
 
-fn execute_run(step: &RunStep, ctx: &mut TestContext, verbose: bool) -> Result<()> {
+fn execute_run(
+    step: &RunStep,
+    ctx: &mut TestContext,
+    verbose: bool,
+    safety: Option<&SafetyGate>,
+) -> Result<()> {
     let cmd = ctx.expand(&step.cmd);
     let cwd = step.cwd.as_ref().map(|c| ctx.expand(c));
 
@@ -128,6 +150,11 @@ fn execute_run(step: &RunStep, ctx: &mut TestContext, verbose: bool) -> Result<(
         if let Some(ref dir) = cwd {
             println!("[STEP]   cwd: {dir}");
         }
+    }
+
+    // Enforce safety gate before execution
+    if let Some(gate) = safety {
+        gate.enforce(&cmd, None)?;
     }
 
     let shell = if cfg!(windows) { "cmd" } else { "sh" };
@@ -430,7 +457,12 @@ fn execute_set(step: &SetStep, ctx: &mut TestContext, verbose: bool) -> Result<(
     Ok(())
 }
 
-fn execute_if(step: &IfStep, ctx: &mut TestContext, verbose: bool) -> Result<()> {
+fn execute_if(
+    step: &IfStep,
+    ctx: &mut TestContext,
+    verbose: bool,
+    safety: Option<&SafetyGate>,
+) -> Result<()> {
     if verbose {
         println!("[STEP] if condition");
     }
@@ -447,7 +479,7 @@ fn execute_if(step: &IfStep, ctx: &mut TestContext, verbose: bool) -> Result<()>
     };
 
     for s in steps_to_run {
-        execute_step(s, ctx, verbose)?;
+        execute_step(s, ctx, verbose, safety)?;
     }
 
     Ok(())
@@ -517,7 +549,7 @@ mod tests {
             stdin: None,
             timeout: None,
         };
-        execute_run(&step, &mut ctx, false).unwrap();
+        execute_run(&step, &mut ctx, false, None).unwrap();
         assert!(ctx.last_stdout.contains("hello"));
         assert_eq!(ctx.last_exit_code, Some(0));
     }

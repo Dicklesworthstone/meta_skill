@@ -1,0 +1,68 @@
+# cargo-deny configuration
+# See https://embarkstudios.github.io/cargo-deny/
+
+[graph]
+# Targets to check against
+targets = [
+    "x86_64-unknown-linux-gnu",
+    "x86_64-apple-darwin",
+    "aarch64-apple-darwin",
+]
+
+[advisories]
+# The path where the advisory database is cloned/fetched into
+db-path = "~/.cargo/advisory-db"
+# Use the RustSec advisory database
+url = "https://github.com/rustsec/advisory-db"
+# Check for yanked crates
+yanked = "warn"
+# Ignore specific advisories (keep this list minimal!)
+ignore = []
+
+[licenses]
+# Allow these licenses
+allow = [
+    "MIT",
+    "Apache-2.0",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "ISC",
+    "Zlib",
+    "0BSD",
+    "Unicode-3.0",
+    "Unicode-DFS-2016",
+    "CC0-1.0",
+    "MPL-2.0",
+    "BSL-1.0",
+]
+# Confidence threshold for detecting license from file contents
+confidence-threshold = 0.8
+
+[bans]
+# Deny multiple versions of the same crate
+multiple-versions = "warn"
+# Skip checking these crates for duplicates
+skip = []
+# Skip tree checking for workspace crates
+wildcards = "allow"
+# Allow build dependencies to be duplicated
+allow-build-scripts = ["*"]
+# Highlight exact duplicates
+highlight = "all"
+# Deny specific crates
+deny = [
+    # Crates with known security issues or that are unmaintained
+]
+
+[sources]
+# Allow crates from these sources
+unknown-registry = "deny"
+unknown-git = "deny"
+# Allow crates.io as a source
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]
+# Allow these private git repositories
+allow-git = []
+
+[sources.allow-org]
+# Allow crates from these GitHub orgs
+github = []

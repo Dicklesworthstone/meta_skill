@@ -9,7 +9,7 @@ use colored::Colorize;
 use crate::app::AppContext;
 use crate::core::recovery::{RecoveryManager, RecoveryReport};
 use crate::error::Result;
-use crate::security::SafetyGate;
+use crate::security::{SafetyGate, scan_secrets_summary};
 use crate::storage::tx::GlobalLock;
 
 #[derive(Args, Debug)]
@@ -21,10 +21,6 @@ pub struct DoctorArgs {
     /// Attempt to fix issues automatically
     #[arg(long)]
     pub fix: bool,
-
-    /// Show verbose output
-    #[arg(long)]
-    pub verbose: bool,
 
     /// Check lock status
     #[arg(long)]
@@ -42,6 +38,7 @@ pub struct DoctorArgs {
 pub fn run(ctx: &AppContext, args: &DoctorArgs) -> Result<()> {
     let mut issues_found = 0;
     let mut issues_fixed = 0;
+    let verbose = ctx.verbosity > 0;
 
     println!("{}", "ms doctor - Health Checks".bold());
     println!();
@@ -50,7 +47,7 @@ pub fn run(ctx: &AppContext, args: &DoctorArgs) -> Result<()> {
 
     // Check lock status if requested or as part of general health check
     if run_only.is_none() && (args.check_lock || !args.break_lock) {
-        issues_found += check_lock_status(ctx, args.verbose)?;
+        issues_found += check_lock_status(ctx, verbose)?;
     }
 
     // Break lock if requested
@@ -67,31 +64,33 @@ pub fn run(ctx: &AppContext, args: &DoctorArgs) -> Result<()> {
 
     // Check database integrity
     if run_only.is_none() {
-        issues_found += check_database(ctx, args.verbose)?;
+        issues_found += check_database(ctx, verbose)?;
     }
 
     // Check Git archive integrity
     if run_only.is_none() {
-        issues_found += check_git_archive(ctx, args.verbose)?;
+        issues_found += check_git_archive(ctx, verbose)?;
     }
 
     // Check for incomplete transactions
     if run_only.is_none() {
-        issues_found += check_transactions(ctx, args.fix, args.verbose, &mut issues_fixed)?;
+        issues_found += check_transactions(ctx, args.fix, verbose, &mut issues_fixed)?;
     }
 
     // Run comprehensive recovery diagnostics if requested
     if run_only.is_none() && args.comprehensive {
-        issues_found += run_comprehensive_check(ctx, args.fix, args.verbose, &mut issues_fixed)?;
+        issues_found += run_comprehensive_check(ctx, args.fix, verbose, &mut issues_fixed)?;
     }
 
     // Run a specific check if requested
     if let Some(check) = run_only {
         issues_found += match check {
-            "safety" => check_safety(ctx, args.verbose)?,
-            "recovery" => run_comprehensive_check(ctx, args.fix, args.verbose, &mut issues_fixed)?,
+            "safety" => check_safety(ctx, verbose)?,
+            "security" => check_security(ctx, verbose)?,
+            "recovery" => run_comprehensive_check(ctx, args.fix, verbose, &mut issues_fixed)?,
             other => {
                 println!("{} Unknown check: {}", "!".yellow(), other);
+                println!("  Available checks: safety, security, recovery");
                 1
             }
         };
@@ -291,6 +290,133 @@ fn check_safety(ctx: &AppContext, verbose: bool) -> Result<usize> {
             Ok(1)
         }
     }
+}
+
+/// Comprehensive security check
+fn check_security(ctx: &AppContext, verbose: bool) -> Result<usize> {
+    println!("{}", "Security Checks".bold());
+    println!("{}", "─".repeat(15));
+
+    let mut issues = 0;
+
+    // 1. Check DCG availability
+    print!("  [1/5] Command safety (DCG)... ");
+    let gate = SafetyGate::from_context(ctx);
+    let status = gate.status();
+    match status.dcg_version {
+        Some(version) => {
+            println!("{} v{}", "✓".green(), version);
+        }
+        None => {
+            println!("{} not available", "!".yellow());
+            println!("        Commands will run without safety checks");
+            issues += 1;
+        }
+    }
+
+    // 2. Check ACIP prompt availability
+    print!("  [2/5] ACIP prompt... ");
+    let acip_path = &ctx.config.security.acip.prompt_path;
+    if acip_path.exists() {
+        match crate::security::acip::prompt_version(acip_path) {
+            Ok(Some(version)) => {
+                println!("{} v{}", "✓".green(), version);
+                if verbose {
+                    println!("        Path: {}", acip_path.display());
+                }
+            }
+            Ok(None) => {
+                println!("{} no version detected", "!".yellow());
+                issues += 1;
+            }
+            Err(e) => {
+                println!("{} error: {}", "✗".red(), e);
+                issues += 1;
+            }
+        }
+    } else {
+        println!("{} not found", "-".dimmed());
+        if verbose {
+            println!("        Expected: {}", acip_path.display());
+        }
+    }
+
+    // 3. Check safety tier configuration
+    print!("  [3/5] Safety tier config... ");
+    if ctx.config.safety.require_verbatim_approval {
+        println!("{} verbatim approval required for dangerous commands", "✓".green());
+    } else {
+        println!("{} verbatim approval disabled", "!".yellow());
+        println!("        Dangerous commands may execute without explicit approval");
+        issues += 1;
+    }
+
+    // 4. Scan evidence for secrets
+    print!("  [4/5] Evidence secret scan... ");
+    let evidence_dir = ctx.ms_root.join("archive").join("skills");
+    if evidence_dir.exists() {
+        let mut secrets_found = 0;
+        let mut files_scanned = 0;
+
+        // Scan a sample of evidence files
+        if let Ok(entries) = std::fs::read_dir(&evidence_dir) {
+            for entry in entries.take(50).flatten() {
+                let path = entry.path();
+                if path.is_file() && path.extension().is_some_and(|e| e == "json" || e == "md") {
+                    if let Ok(content) = std::fs::read_to_string(&path) {
+                        files_scanned += 1;
+                        let summary = scan_secrets_summary(&content);
+                        if summary.total_count > 0 {
+                            secrets_found += summary.total_count;
+                            if verbose {
+                                println!();
+                                println!("        {} potential secret(s) in {}", summary.total_count, path.display());
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        if secrets_found > 0 {
+            println!("{} {} potential secret(s) found", "!".yellow(), secrets_found);
+            println!("        Review evidence files for sensitive data");
+            issues += 1;
+        } else {
+            println!("{} {} files scanned, no secrets detected", "✓".green(), files_scanned);
+        }
+    } else {
+        println!("{} no evidence directory", "-".dimmed());
+    }
+
+    // 5. Check for .env files that shouldn't be tracked
+    print!("  [5/5] Environment files... ");
+    let mut env_issues = Vec::new();
+
+    for env_file in &[".env", ".env.local", ".env.production", "credentials.json", "secrets.yaml"] {
+        let path = ctx.ms_root.join(env_file);
+        if path.exists() {
+            env_issues.push(env_file.to_string());
+        }
+    }
+
+    if env_issues.is_empty() {
+        println!("{} no sensitive env files in ms root", "✓".green());
+    } else {
+        println!("{} found sensitive files: {}", "!".yellow(), env_issues.join(", "));
+        println!("        These files should not be in the ms root directory");
+        issues += env_issues.len();
+    }
+
+    // Summary
+    println!();
+    if issues == 0 {
+        println!("{} All security checks passed", "✓".green().bold());
+    } else {
+        println!("{} {} security issue(s) found", "!".yellow().bold(), issues);
+    }
+
+    Ok(issues)
 }
 
 /// Check for incomplete transactions
