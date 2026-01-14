@@ -267,9 +267,15 @@ fn render_skill_markdown(spec: &SkillSpec) -> String {
         for block in &section.blocks {
             match block.block_type {
                 crate::core::BlockType::Code => {
-                    out.push_str("```\n");
-                    out.push_str(&block.content);
-                    out.push_str("\n```\n\n");
+                    let content = block.content.trim_end();
+                    if content.starts_with("```") {
+                        out.push_str(content);
+                        out.push_str("\n\n");
+                    } else {
+                        out.push_str("```\n");
+                        out.push_str(content);
+                        out.push_str("\n```\n\n");
+                    }
                 }
                 _ => {
                     out.push_str(&block.content);
