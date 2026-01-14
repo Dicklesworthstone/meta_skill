@@ -476,7 +476,7 @@ fn is_abandoned(messages: &[SessionMessage]) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::cass::{SessionMetadata, ToolCall, ToolResult};
+    use crate::cass::{SessionMetadata, ToolResult};
 
     fn make_message(role: &str, content: &str) -> SessionMessage {
         SessionMessage {
