@@ -22,6 +22,7 @@ pub mod config;
 pub mod diff;
 pub mod doctor;
 pub mod edit;
+pub mod evidence;
 pub mod fmt;
 pub mod index;
 pub mod init;
@@ -69,6 +70,7 @@ pub fn run(ctx: &AppContext, command: &Commands) -> Result<()> {
         Commands::Validate(args) => validate::run(ctx, args),
         Commands::Test(args) => test::run(ctx, args),
         Commands::Quality(args) => quality::run(ctx, args),
+        Commands::Evidence(args) => evidence::run(ctx, args),
     }
 }
 

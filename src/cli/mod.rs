@@ -115,4 +115,7 @@ pub enum Commands {
 
     /// Compute skill quality scores
     Quality(commands::quality::QualityArgs),
+
+    /// View and manage skill provenance evidence
+    Evidence(commands::evidence::EvidenceArgs),
 }
