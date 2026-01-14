@@ -12,6 +12,67 @@ Treat "never delete files without permission" as a hard invariant.
 
 ---
 
+## RULE 2 – BEADS/BD DATABASE SAFETY (ABSOLUTE)
+
+**SQLite + WAL = DATA LOSS RISK.** The beads system uses SQLite with Write-Ahead Logging. Improper handling WILL destroy uncommitted data.
+
+### BEFORE Running Parallel Agents That Use `bd`
+
+You MUST complete this checklist BEFORE launching any parallel agents/subagents that will run `bd update`, `bd create`, or any bd write operations:
+
+```bash
+# 1. Check for stale bd processes (MUST be zero or only 1 daemon)
+lsof .beads/beads.db 2>/dev/null | wc -l
+# If more than 2 lines (header + 1 daemon), STOP. Ask user.
+
+# 2. Verify daemon health
+bd doctor 2>&1 | grep -E "(✖|FAIL|Error)"
+# If any failures, STOP. Ask user.
+
+# 3. Verify sync status
+bd sync --status 2>&1
+# Must show "no differences". If not, run `bd sync` first.
+```
+
+**If ANY check fails: STOP and ask the user. Do NOT proceed.**
+
+### DURING Parallel Agent Work
+
+- **SYNC AFTER EACH BATCH**: Run `bd sync` after each agent completes, NOT at the end
+- **NEVER batch syncs**: If Agent 1 finishes, sync immediately. Don't wait for Agents 2-6.
+- **Monitor for failures**: If any `bd update` or `bd sync` fails, STOP ALL AGENTS
+
+### FORBIDDEN ACTIONS (Will Destroy Data)
+
+1. **NEVER kill processes holding `.beads/beads.db`**
+   - `kill` on bd processes with open WAL = DATA LOSS
+   - The WAL contains uncommitted transactions that will be destroyed
+
+2. **NEVER delete or modify these files manually:**
+   - `.beads/beads.db`
+   - `.beads/beads.db-wal`
+   - `.beads/beads.db-shm`
+
+3. **NEVER run `rm .beads/beads.db*` to "fix" issues**
+
+### When `bd sync` or `bd export` Fails
+
+**STOP IMMEDIATELY. Ask the user.** Do not attempt to:
+- Kill processes
+- Delete database files
+- Delete WAL files
+- "Fix" the daemon yourself
+
+The correct response is: "bd sync is failing with [error]. I need your guidance before proceeding."
+
+### Recovery After Disaster
+
+If data was lost, check these locations for recovery:
+- Agent output files: `/tmp/claude/-data-projects-*/tasks/*.output`
+- These contain the full command history including file contents that were passed to `bd update`
+
+---
+
 ### IRREVERSIBLE GIT & FILESYSTEM ACTIONS
 
 Absolutely forbidden unless I give the **exact command and explicit approval** in the same message:
@@ -412,6 +473,33 @@ git push                # Push to remote
 - Create new issues with `bd create` when you discover tasks
 - Use descriptive titles and set appropriate priority/type
 - Always `bd sync` before ending session
+
+### CRITICAL: Parallel Agent Safety
+
+**READ RULE 2 ABOVE BEFORE RUNNING PARALLEL AGENTS.**
+
+When running multiple agents that use `bd update`:
+
+1. **Pre-flight checks are MANDATORY** (see Rule 2 checklist)
+2. **Sync after EACH agent completes** - not at the end
+3. **If bd sync fails: STOP ALL WORK and ask user**
+
+```bash
+# WRONG - will lose data if sync fails at end
+for agent in 1 2 3 4 5 6; do
+  run_agent $agent  # Each does bd update
+done
+bd sync  # If this fails, ALL work is lost
+
+# RIGHT - sync after each batch
+run_agent 1
+bd sync  # Persist immediately
+run_agent 2
+bd sync  # Persist immediately
+# ... etc
+```
+
+**The SQLite WAL can hold uncommitted data. If you kill processes or the daemon crashes before export, THAT DATA IS GONE FOREVER.**
 
 <!-- end-bv-agent-instructions -->
 
