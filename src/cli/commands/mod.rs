@@ -14,6 +14,7 @@ use crate::cli::Commands;
 use crate::error::Result;
 
 pub mod alias;
+pub mod antipatterns;
 pub mod bandit;
 pub mod build;
 pub mod bundle;
@@ -45,6 +46,7 @@ pub mod validate;
 /// Dispatch a command to its handler
 pub fn run(ctx: &AppContext, command: &Commands) -> Result<()> {
     match command {
+        Commands::Antipatterns(args) => antipatterns::run(ctx, args),
         Commands::Init(args) => init::run(ctx, args),
         Commands::Index(args) => index::run(ctx, args),
         Commands::Search(args) => search::run(ctx, args),

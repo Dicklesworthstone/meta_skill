@@ -38,6 +38,9 @@ pub struct Cli {
 /// Available commands
 #[derive(Subcommand, Debug)]
 pub enum Commands {
+    /// Mine and manage anti-patterns from CASS sessions
+    Antipatterns(commands::antipatterns::AntiPatternsArgs),
+
     /// Initialize ms in current directory or globally
     Init(commands::init::InitArgs),
 
