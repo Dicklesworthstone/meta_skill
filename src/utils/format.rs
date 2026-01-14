@@ -2,10 +2,22 @@
 
 /// Truncate a string to a maximum length
 pub fn truncate_string(s: &str, max_len: usize) -> String {
-    if s.len() <= max_len {
-        s.to_string()
+    let mut out = String::new();
+    for (idx, ch) in s.chars().enumerate() {
+        if idx >= max_len {
+            break;
+        }
+        out.push(ch);
+    }
+    if s.chars().count() > max_len {
+        if max_len >= 3 {
+            let trimmed = out.chars().take(max_len.saturating_sub(3)).collect::<String>();
+            format!("{trimmed}...")
+        } else {
+            "...".to_string()
+        }
     } else {
-        format!("{}...", &s[..max_len.saturating_sub(3)])
+        out
     }
 }
 

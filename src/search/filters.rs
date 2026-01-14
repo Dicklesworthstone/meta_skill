@@ -1,95 +1,23 @@
-//! Search filters for post-fusion result filtering
+//! Search filter utilities for post-fusion result filtering
 //!
-//! Filters are applied after RRF fusion to narrow down results based on:
-//! - Layer (base, org, project, user)
-//! - Tags (any-match)
-//! - Minimum quality score
-//! - Deprecation status (default excludes deprecated)
+//! Provides utility functions for filtering search results using SearchFilters
+//! from the context module. These functions operate on SkillRecord lookups
+//! and HybridResult vectors.
 
 use crate::storage::sqlite::SkillRecord;
 
-/// Search filters for narrowing results
-#[derive(Debug, Clone, Default)]
-pub struct SearchFilters {
-    /// Filter by layer (base, org, project, user)
-    pub layer: Option<String>,
-    /// Filter by tags (any-match - skill must have at least one matching tag)
-    pub tags: Vec<String>,
-    /// Minimum quality score (0.0 - 1.0)
-    pub min_quality: Option<f32>,
-    /// Include deprecated skills (default: false)
-    pub include_deprecated: bool,
-}
+use super::context::SearchFilters;
+use super::hybrid::HybridResult;
 
-impl SearchFilters {
-    /// Create new empty filters
-    pub fn new() -> Self {
-        Self::default()
-    }
-
-    /// Set layer filter
-    pub fn with_layer(mut self, layer: impl Into<String>) -> Self {
-        self.layer = Some(layer.into());
-        self
-    }
-
-    /// Set tags filter
-    pub fn with_tags(mut self, tags: Vec<String>) -> Self {
-        self.tags = tags;
-        self
-    }
-
-    /// Set minimum quality filter
-    pub fn with_min_quality(mut self, min_quality: f32) -> Self {
-        self.min_quality = Some(min_quality.clamp(0.0, 1.0));
-        self
-    }
-
-    /// Include deprecated skills
-    pub fn include_deprecated(mut self) -> Self {
-        self.include_deprecated = true;
-        self
-    }
-
-    /// Check if any filters are set
-    pub fn is_empty(&self) -> bool {
-        self.layer.is_none()
-            && self.tags.is_empty()
-            && self.min_quality.is_none()
-            && !self.include_deprecated
-    }
-
-    /// Check if a skill record passes all filters
-    pub fn matches(&self, skill: &SkillRecord) -> bool {
-        // Layer filter
-        if let Some(ref layer) = self.layer {
-            if skill.source_layer != *layer {
-                return false;
-            }
-        }
-
-        // Tags filter (any-match)
-        if !self.tags.is_empty() {
-            let skill_tags = parse_tags_from_metadata(&skill.metadata_json);
-            if !self.tags.iter().any(|t| skill_tags.contains(t)) {
-                return false;
-            }
-        }
-
-        // Quality filter
-        if let Some(min_quality) = self.min_quality {
-            if skill.quality_score < min_quality as f64 {
-                return false;
-            }
-        }
-
-        // Deprecation filter (default: exclude deprecated)
-        if !self.include_deprecated && skill.is_deprecated {
-            return false;
-        }
-
-        true
-    }
+/// Check if a skill record matches the given filters
+pub fn matches_skill_record(filters: &SearchFilters, skill: &SkillRecord) -> bool {
+    let skill_tags = parse_tags_from_metadata(&skill.metadata_json);
+    filters.matches(
+        &skill_tags,
+        &skill.source_layer,
+        skill.quality_score as f32,
+        skill.is_deprecated,
+    )
 }
 
 /// Filter a list of skill IDs based on a lookup function
@@ -105,7 +33,7 @@ where
         .iter()
         .filter(|id| {
             if let Some(skill) = lookup(id) {
-                filters.matches(&skill)
+                matches_skill_record(filters, &skill)
             } else {
                 false
             }
@@ -116,15 +44,15 @@ where
 
 /// Filter hybrid results maintaining order and scores
 pub fn filter_hybrid_results(
-    results: Vec<super::hybrid::HybridResult>,
+    results: Vec<HybridResult>,
     filters: &SearchFilters,
     lookup: impl Fn(&str) -> Option<SkillRecord>,
-) -> Vec<super::hybrid::HybridResult> {
+) -> Vec<HybridResult> {
     results
         .into_iter()
         .filter(|r| {
             if let Some(skill) = lookup(&r.skill_id) {
-                filters.matches(&skill)
+                matches_skill_record(filters, &skill)
             } else {
                 false
             }

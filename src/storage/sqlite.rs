@@ -56,6 +56,15 @@ pub struct AliasResolution {
     pub alias_type: String,
 }
 
+/// Full alias record for listing
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AliasRecord {
+    pub alias: String,
+    pub skill_id: String,
+    pub alias_type: String,
+    pub created_at: String,
+}
+
 impl Database {
     /// Open database at the given path
     pub fn open(path: impl AsRef<Path>) -> Result<Self> {
@@ -223,6 +232,71 @@ impl Database {
             params![alias, skill_id, alias_type, created_at],
         )?;
         Ok(())
+    }
+
+    /// Delete an alias
+    pub fn delete_alias(&self, alias: &str) -> Result<bool> {
+        let count = self
+            .conn
+            .execute("DELETE FROM skill_aliases WHERE alias = ?", [alias])?;
+        Ok(count > 0)
+    }
+
+    /// List all aliases, optionally filtered by skill_id
+    pub fn list_aliases(&self, skill_id: Option<&str>) -> Result<Vec<AliasRecord>> {
+        let mut records = Vec::new();
+
+        if let Some(sid) = skill_id {
+            let mut stmt = self.conn.prepare(
+                "SELECT alias, skill_id, alias_type, created_at
+                 FROM skill_aliases
+                 WHERE skill_id = ?
+                 ORDER BY alias",
+            )?;
+            let rows = stmt.query_map([sid], |row| {
+                Ok(AliasRecord {
+                    alias: row.get(0)?,
+                    skill_id: row.get(1)?,
+                    alias_type: row.get(2)?,
+                    created_at: row.get(3)?,
+                })
+            })?;
+            for row in rows {
+                records.push(row?);
+            }
+        } else {
+            let mut stmt = self.conn.prepare(
+                "SELECT alias, skill_id, alias_type, created_at
+                 FROM skill_aliases
+                 ORDER BY skill_id, alias",
+            )?;
+            let rows = stmt.query_map([], |row| {
+                Ok(AliasRecord {
+                    alias: row.get(0)?,
+                    skill_id: row.get(1)?,
+                    alias_type: row.get(2)?,
+                    created_at: row.get(3)?,
+                })
+            })?;
+            for row in rows {
+                records.push(row?);
+            }
+        }
+
+        Ok(records)
+    }
+
+    /// Get aliases for a specific skill
+    pub fn get_aliases_for_skill(&self, skill_id: &str) -> Result<Vec<String>> {
+        let mut stmt = self
+            .conn
+            .prepare("SELECT alias FROM skill_aliases WHERE skill_id = ? ORDER BY alias")?;
+        let rows = stmt.query_map([skill_id], |row| row.get(0))?;
+        let mut aliases = Vec::new();
+        for row in rows {
+            aliases.push(row?);
+        }
+        Ok(aliases)
     }
 
     pub fn search_fts(&self, query: &str, limit: usize) -> Result<Vec<String>> {
