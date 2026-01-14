@@ -1506,11 +1506,27 @@ CREATE INDEX idx_redaction_session ON redaction_reports(session_id);
 CREATE TABLE injection_reports (
     id INTEGER PRIMARY KEY,
     session_id TEXT NOT NULL,
+    acip_version TEXT,
+    acip_mode TEXT,
+    acip_audit_mode INTEGER,
     report_json TEXT NOT NULL,   -- InjectionReport
     created_at TEXT NOT NULL
 );
 
 CREATE INDEX idx_injection_session ON injection_reports(session_id);
+
+-- Command safety events (DCG decisions + policy enforcement)
+CREATE TABLE command_safety_events (
+    id INTEGER PRIMARY KEY,
+    session_id TEXT,
+    command TEXT NOT NULL,
+    dcg_version TEXT,
+    dcg_pack TEXT,
+    decision_json TEXT NOT NULL,  -- DcgDecision
+    created_at TEXT NOT NULL
+);
+
+CREATE INDEX idx_command_safety_session ON command_safety_events(session_id);
 
 -- Skill usage tracking
 CREATE TABLE skill_usage (
@@ -1548,6 +1564,38 @@ CREATE TABLE rule_outcomes (
     followed INTEGER NOT NULL,
     outcome TEXT NOT NULL,     -- JSON SessionOutcome
     created_at TEXT NOT NULL
+);
+
+-- UBS static analysis reports (quality gates)
+CREATE TABLE ubs_reports (
+    id INTEGER PRIMARY KEY,
+    project_path TEXT,
+    run_at TEXT NOT NULL,
+    exit_code INTEGER NOT NULL,
+    report_json TEXT NOT NULL      -- UbsReport
+);
+
+CREATE INDEX idx_ubs_project ON ubs_reports(project_path);
+
+-- CM (cass-memory) rule link registry
+CREATE TABLE cm_rule_links (
+    id TEXT PRIMARY KEY,
+    cm_rule_id TEXT NOT NULL,
+    ms_rule_id TEXT NOT NULL,
+    linkage_json TEXT NOT NULL,    -- CmRuleLink
+    updated_at TEXT NOT NULL
+);
+
+CREATE INDEX idx_cm_rule ON cm_rule_links(cm_rule_id);
+
+-- CM sync state (import/export checkpoints)
+CREATE TABLE cm_sync_state (
+    id INTEGER PRIMARY KEY,
+    cm_db_path TEXT,
+    last_imported_at TEXT,
+    last_exported_at TEXT,
+    status_json TEXT,              -- CmSyncStatus
+    updated_at TEXT NOT NULL
 );
 
 -- A/B experiments for skill variants
@@ -2341,6 +2389,10 @@ ms index --path /data/projects/agent_flywheel_clawdbot_skills_and_integrations
 ms index --all  # Re-index everything
 ms index --watch  # Watch for changes (daemon mode)
 ms index --cass-incremental  # Only process new/changed sessions
+
+# RU → ms index automation (multi-machine sync)
+ru sync --non-interactive --json
+ms index --all
 
 # Search for skills
 ms search "git workflow"
@@ -6268,7 +6320,28 @@ pub struct InjectionReport {
     pub session_id: String,
     pub findings: Vec<InjectionFinding>,
     pub severity: InjectionSeverity,
+    pub acip_version: Option<String>,
+    pub acip_mode: Option<String>,
+    pub acip_audit_mode: Option<bool>,
     pub created_at: DateTime<Utc>,
+}
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AcipConfig {
+    pub enabled: bool,
+    pub version: String,     // e.g., "1.3"
+    pub mode: String,        // direct | checker | hybrid
+    pub audit_mode: bool,
+}
+
+pub struct InjectionGate {
+    pub acip: AcipConfig,
+}
+
+impl InjectionGate {
+    pub fn evaluate(&self, session: &Session) -> Result<InjectionReport> {
+        // Apply ACIP as primary defense; record version/mode in report
+        unimplemented!()
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -6397,6 +6470,40 @@ pub struct ApprovalRequest {
     pub tier: SafetyTier,
     pub reason: String,
     pub approve_hint: String,
+}
+
+/// DCG integration wrapper (preferred enforcement layer)
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DcgGuard {
+    pub dcg_bin: PathBuf,
+    pub packs: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DcgDecision {
+    pub allowed: bool,
+    pub reason: String,
+    pub remediation: Option<String>,
+    pub rule_id: Option<String>,
+    pub pack: Option<String>,
+    pub tier: SafetyTier,
+}
+
+impl DcgGuard {
+    pub fn evaluate_command(&self, cmd: &str) -> Result<DcgDecision> {
+        // Delegate to dcg explain/scan mode and translate decision
+        unimplemented!()
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CommandSafetyEvent {
+    pub session_id: Option<String>,
+    pub command: String,
+    pub dcg_version: Option<String>,
+    pub dcg_pack: Option<String>,
+    pub decision: DcgDecision,
+    pub created_at: DateTime<Utc>,
 }
 ```
 
@@ -9018,6 +9125,13 @@ ms backup diff 2026-01-13-143200
 
 Following the xf pattern for distributed archive access across multiple development machines.
 
+**RU (repo_updater) Integration:**
+- Use `/data/projects/repo_updater` as the repo‑level sync backend for skill sources.
+- RU syncs GitHub repos; ms indexes/merges at the skill level.
+- When RU finishes a sync, trigger `ms index` to refresh skills deterministically.
+- Bead cross‑reference: `meta_skill-327` (RU integration) depends on
+  `meta_skill-ujr` and `meta_skill-yu1` (blocks).
+
 #### 8.5.1 Machine Identity
 
 ```rust
@@ -9536,6 +9650,17 @@ sync_skills = true
 sync_bundles = true
 sync_config = false  # Don't sync machine-specific config
 
+[ru]
+# Repo Updater integration for multi-machine sync
+enabled = true
+binary = "ru"
+sync_on_startup = true
+sync_interval_minutes = 30
+
+# After ru sync, trigger ms index to refresh registry
+run_ms_index = true
+index_scope = "all"
+
 [remotes.origin]
 url = "https://github.com/user/skills.git"
 type = "github"
@@ -9902,6 +10027,41 @@ min_session_quality = 0.5
 # Incremental session scan (uses fingerprint cache)
 incremental_scan = true
 
+[cm]
+# Path to cass-memory binary
+binary = "cm"
+
+# CM database path (for rule import/export)
+db_path = "~/.local/share/cm/cm.db"
+
+# Enable import/export bridge
+import_enabled = true
+export_enabled = true
+
+[ubs]
+# Path to UBS binary
+binary = "ubs"
+
+# Minimum severity to report in ms doctor
+min_severity = "important"
+
+# Report format: json | sarif
+report_format = "json"
+
+[ru]
+# Path to repo_updater binary
+binary = "ru"
+
+# Enable RU integration for multi-machine sync
+enabled = true
+
+# Auto-sync cadence (minutes)
+sync_interval_minutes = 30
+sync_on_startup = true
+
+# RU repo listing command (used to discover skill sources)
+repo_list_cmd = "ru list --paths"
+
 [generalization]
 # Generalization engine: heuristic | llm (uses local model if available)
 engine = "heuristic"
@@ -9963,6 +10123,11 @@ acip_enabled = true
 acip_recommended_version = "1.3"
 acip_audit_mode = false
 acip_mode = "hybrid"  # direct | checker | hybrid
+
+# DCG integration for destructive command guard
+dcg_bin = "dcg"
+dcg_packs = ["core", "git", "fs", "shell"]
+dcg_explain_mode = true
 
 # Regex patterns for prompt injection
 prompt_injection_patterns = [
@@ -10528,6 +10693,33 @@ Following Rust best practices with comprehensive coverage across unit, integrati
 - Integrate `/data/projects/ultimate_bug_scanner` as a required quality gate.
 - Run `ubs` on changed files before commits and during CI; surface findings in `ms doctor`.
 - Prefer machine-readable outputs (JSON/SARIF) for automation and bead creation.
+
+**UBS Data Model:**
+
+```rust
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct UbsConfig {
+    pub ubs_bin: PathBuf,
+    pub min_severity: String,
+    pub report_format: String, // json | sarif
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct UbsFinding {
+    pub file: String,
+    pub line: u32,
+    pub column: u32,
+    pub category: String,
+    pub message: String,
+    pub suggestion: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct UbsReport {
+    pub exit_code: i32,
+    pub findings: Vec<UbsFinding>,
+}
+```
 
 **Testing Beads Coverage:**
 - Create dedicated beads for unit tests, integration tests, E2E scripts, and benchmarks.
@@ -13556,6 +13748,34 @@ Learn from sessions across multiple projects to build more comprehensive skills 
 - Integrate `/data/projects/cass_memory_system` as a shared procedural memory layer.
 - Unify rule IDs, confidence decay, and anti-pattern promotion across ms and CM.
 - Provide import/export bridges so CM playbooks and ms skills reinforce each other.
+
+**CM Bridge Data Model:**
+
+```rust
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CmBridgeConfig {
+    pub cm_bin: PathBuf,
+    pub cm_db_path: PathBuf,
+    pub import_enabled: bool,
+    pub export_enabled: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CmRuleLink {
+    pub cm_rule_id: String,
+    pub ms_rule_id: String,
+    pub confidence: f32,
+    pub tags: Vec<String>,
+    pub updated_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CmSyncStatus {
+    pub last_imported_at: Option<DateTime<Utc>>,
+    pub last_exported_at: Option<DateTime<Utc>>,
+    pub status: String,
+}
+```
 
 ```
 ┌─────────────────────────────────────────────────────────────────────────────┐
