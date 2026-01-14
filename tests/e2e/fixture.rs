@@ -5,6 +5,7 @@ use std::path::PathBuf;
 use std::process::Command;
 use std::time::{Duration, Instant};
 
+use ms::error::{MsError, Result};
 use rusqlite::Connection;
 use tempfile::TempDir;
 
@@ -212,21 +213,21 @@ impl E2EFixture {
     }
 
     /// Create a skill in the specified layer.
-    pub fn create_skill(&self, name: &str, content: &str) {
-        self.create_skill_in_layer(name, content, "project");
+    pub fn create_skill(&self, name: &str, content: &str) -> Result<()> {
+        self.create_skill_in_layer(name, content, "project")
     }
 
     /// Create a skill in a specific layer.
-    pub fn create_skill_in_layer(&self, name: &str, content: &str, layer: &str) {
-        let skills_dir = self.skills_dirs.get(layer).unwrap_or_else(|| {
-            panic!("Unknown layer: {}", layer);
-        });
+    pub fn create_skill_in_layer(&self, name: &str, content: &str, layer: &str) -> Result<()> {
+        let skills_dir = self.skills_dirs.get(layer).ok_or_else(|| {
+            MsError::ValidationFailed(format!("Unknown layer: {}", layer))
+        })?;
 
         let skill_dir = skills_dir.join(name);
-        std::fs::create_dir_all(&skill_dir).expect("Failed to create skill dir");
+        std::fs::create_dir_all(&skill_dir)?;
 
         let skill_file = skill_dir.join("SKILL.md");
-        std::fs::write(&skill_file, content).expect("Failed to write skill");
+        std::fs::write(&skill_file, content)?;
 
         println!(
             "[SKILL] Created '{}' in layer '{}' ({} bytes)",
@@ -234,6 +235,7 @@ impl E2EFixture {
             layer,
             content.len()
         );
+        Ok(())
     }
 
     /// Open database connection for verification.
@@ -419,8 +421,10 @@ fn truncate(s: &str, max_len: usize) -> String {
     }
     if s.chars().count() <= max_len {
         s.to_string()
+    } else if max_len < 3 {
+        ".".repeat(max_len)
     } else {
-        let trimmed: String = s.chars().take(max_len.saturating_sub(3)).collect();
+        let trimmed: String = s.chars().take(max_len - 3).collect();
         format!("{trimmed}...")
     }
 }
