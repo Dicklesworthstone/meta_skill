@@ -1018,3 +1018,770 @@ struct ConflictsReport {
     total_modified: usize,
     total_conflicts: usize,
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::fs;
+    use tempfile::TempDir;
+
+    // ==================== Helper Function Tests ====================
+
+    #[test]
+    fn test_normalize_skill_list_simple() {
+        let input = vec!["skill1".to_string(), "skill2".to_string()];
+        let result = normalize_skill_list(&input);
+        assert_eq!(result, vec!["skill1", "skill2"]);
+    }
+
+    #[test]
+    fn test_normalize_skill_list_comma_separated() {
+        let input = vec!["skill1,skill2,skill3".to_string()];
+        let result = normalize_skill_list(&input);
+        assert_eq!(result, vec!["skill1", "skill2", "skill3"]);
+    }
+
+    #[test]
+    fn test_normalize_skill_list_mixed() {
+        let input = vec!["skill1,skill2".to_string(), "skill3".to_string()];
+        let result = normalize_skill_list(&input);
+        assert_eq!(result, vec!["skill1", "skill2", "skill3"]);
+    }
+
+    #[test]
+    fn test_normalize_skill_list_trims_whitespace() {
+        let input = vec![" skill1 , skill2 ".to_string()];
+        let result = normalize_skill_list(&input);
+        assert_eq!(result, vec!["skill1", "skill2"]);
+    }
+
+    #[test]
+    fn test_normalize_skill_list_deduplicates() {
+        let input = vec!["skill1,skill2,skill1".to_string()];
+        let result = normalize_skill_list(&input);
+        assert_eq!(result, vec!["skill1", "skill2"]);
+    }
+
+    #[test]
+    fn test_normalize_skill_list_empty() {
+        let input: Vec<String> = vec![];
+        let result = normalize_skill_list(&input);
+        assert!(result.is_empty());
+    }
+
+    #[test]
+    fn test_normalize_skill_list_empty_strings() {
+        let input = vec![",,".to_string(), "".to_string()];
+        let result = normalize_skill_list(&input);
+        assert!(result.is_empty());
+    }
+
+    // ==================== Slugify Tests ====================
+
+    #[test]
+    fn test_slugify_simple() {
+        assert_eq!(slugify("My Bundle"), "my-bundle");
+    }
+
+    #[test]
+    fn test_slugify_already_slug() {
+        assert_eq!(slugify("my-bundle"), "my-bundle");
+    }
+
+    #[test]
+    fn test_slugify_uppercase() {
+        assert_eq!(slugify("MY_BUNDLE"), "my-bundle");
+    }
+
+    #[test]
+    fn test_slugify_special_chars() {
+        assert_eq!(slugify("My!@#Bundle$%^Name"), "my-bundle-name");
+    }
+
+    #[test]
+    fn test_slugify_consecutive_special() {
+        assert_eq!(slugify("my!!!bundle"), "my-bundle");
+    }
+
+    #[test]
+    fn test_slugify_leading_trailing_special() {
+        assert_eq!(slugify("!!!my-bundle!!!"), "my-bundle");
+    }
+
+    #[test]
+    fn test_slugify_numbers() {
+        assert_eq!(slugify("Bundle v2.0"), "bundle-v2-0");
+    }
+
+    #[test]
+    fn test_slugify_empty() {
+        assert_eq!(slugify(""), "bundle");
+    }
+
+    #[test]
+    fn test_slugify_only_special_chars() {
+        assert_eq!(slugify("!@#$%"), "bundle");
+    }
+
+    // ==================== Split Repo Tag Tests ====================
+
+    #[test]
+    fn test_split_repo_tag_with_tag() {
+        let result = split_repo_tag("owner/repo@v1.0.0");
+        assert_eq!(result, Some(("owner/repo", Some("v1.0.0"))));
+    }
+
+    #[test]
+    fn test_split_repo_tag_without_tag() {
+        let result = split_repo_tag("owner/repo");
+        assert_eq!(result, Some(("owner/repo", None)));
+    }
+
+    #[test]
+    fn test_split_repo_tag_no_slash() {
+        let result = split_repo_tag("just-a-name");
+        assert_eq!(result, None);
+    }
+
+    #[test]
+    fn test_split_repo_tag_nested_path() {
+        let result = split_repo_tag("owner/repo/subpath@v2.0");
+        assert_eq!(result, Some(("owner/repo/subpath", Some("v2.0"))));
+    }
+
+    // ==================== Looks Like Path Tests ====================
+
+    #[test]
+    fn test_looks_like_path_absolute() {
+        assert!(looks_like_path("/absolute/path"));
+        assert!(looks_like_path("/"));
+    }
+
+    #[test]
+    fn test_looks_like_path_relative() {
+        assert!(looks_like_path("./relative/path"));
+        assert!(looks_like_path("../parent/path"));
+    }
+
+    #[test]
+    fn test_looks_like_path_home() {
+        assert!(looks_like_path("~"));
+        assert!(looks_like_path("~/path/to/file"));
+    }
+
+    #[test]
+    fn test_looks_like_path_not_a_path() {
+        assert!(!looks_like_path("owner/repo"));
+        assert!(!looks_like_path("just-a-name"));
+        assert!(!looks_like_path("https://example.com"));
+    }
+
+    // ==================== Expand Local Path Tests ====================
+
+    #[test]
+    fn test_expand_local_path_relative() {
+        let result = expand_local_path("./relative");
+        assert_eq!(result, PathBuf::from("./relative"));
+    }
+
+    #[test]
+    fn test_expand_local_path_absolute() {
+        let result = expand_local_path("/absolute/path");
+        assert_eq!(result, PathBuf::from("/absolute/path"));
+    }
+
+    #[test]
+    fn test_expand_local_path_home_tilde() {
+        let result = expand_local_path("~");
+        // Should either be home dir or "~" if no home dir
+        if let Some(home) = dirs::home_dir() {
+            assert_eq!(result, home);
+        } else {
+            assert_eq!(result, PathBuf::from("~"));
+        }
+    }
+
+    #[test]
+    fn test_expand_local_path_home_subpath() {
+        let result = expand_local_path("~/subpath");
+        if let Some(home) = dirs::home_dir() {
+            assert_eq!(result, home.join("subpath"));
+        } else {
+            assert_eq!(result, PathBuf::from("~/subpath"));
+        }
+    }
+
+    // ==================== Discover Skills In Dir Tests ====================
+
+    #[test]
+    fn test_discover_skills_in_dir_finds_skills() {
+        let temp = TempDir::new().unwrap();
+
+        // Create skill directories with SKILL.md
+        let skill1_dir = temp.path().join("skill-one");
+        fs::create_dir(&skill1_dir).unwrap();
+        fs::write(skill1_dir.join("SKILL.md"), "# Skill One").unwrap();
+
+        let skill2_dir = temp.path().join("skill-two");
+        fs::create_dir(&skill2_dir).unwrap();
+        fs::write(skill2_dir.join("SKILL.md"), "# Skill Two").unwrap();
+
+        let result = discover_skills_in_dir(temp.path()).unwrap();
+        assert_eq!(result.len(), 2);
+        assert!(result.contains(&"skill-one".to_string()));
+        assert!(result.contains(&"skill-two".to_string()));
+    }
+
+    #[test]
+    fn test_discover_skills_in_dir_ignores_non_skills() {
+        let temp = TempDir::new().unwrap();
+
+        // Create skill directory with SKILL.md
+        let skill_dir = temp.path().join("real-skill");
+        fs::create_dir(&skill_dir).unwrap();
+        fs::write(skill_dir.join("SKILL.md"), "# Real Skill").unwrap();
+
+        // Create directory without SKILL.md
+        let non_skill_dir = temp.path().join("not-a-skill");
+        fs::create_dir(&non_skill_dir).unwrap();
+        fs::write(non_skill_dir.join("README.md"), "# Not a skill").unwrap();
+
+        // Create a regular file (not a directory)
+        fs::write(temp.path().join("file.txt"), "just a file").unwrap();
+
+        let result = discover_skills_in_dir(temp.path()).unwrap();
+        assert_eq!(result, vec!["real-skill"]);
+    }
+
+    #[test]
+    fn test_discover_skills_in_dir_empty() {
+        let temp = TempDir::new().unwrap();
+        let result = discover_skills_in_dir(temp.path()).unwrap();
+        assert!(result.is_empty());
+    }
+
+    #[test]
+    fn test_discover_skills_in_dir_not_found() {
+        let result = discover_skills_in_dir(std::path::Path::new("/nonexistent/path"));
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_discover_skills_in_dir_not_a_directory() {
+        let temp = TempDir::new().unwrap();
+        let file_path = temp.path().join("file.txt");
+        fs::write(&file_path, "content").unwrap();
+
+        let result = discover_skills_in_dir(&file_path);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_discover_skills_in_dir_sorted() {
+        let temp = TempDir::new().unwrap();
+
+        // Create skills in non-alphabetical order
+        for name in ["zebra-skill", "alpha-skill", "middle-skill"] {
+            let dir = temp.path().join(name);
+            fs::create_dir(&dir).unwrap();
+            fs::write(dir.join("SKILL.md"), format!("# {}", name)).unwrap();
+        }
+
+        let result = discover_skills_in_dir(temp.path()).unwrap();
+        assert_eq!(
+            result,
+            vec!["alpha-skill", "middle-skill", "zebra-skill"]
+        );
+    }
+
+    // ==================== Argument Parsing Tests ====================
+
+    #[test]
+    fn test_bundle_create_args_default_version() {
+        use clap::Parser;
+
+        #[derive(Parser)]
+        struct TestCli {
+            #[command(subcommand)]
+            cmd: BundleCommand,
+        }
+
+        let args = TestCli::parse_from(["test", "create", "my-bundle", "--skills", "skill1"]);
+        if let BundleCommand::Create(create) = args.cmd {
+            assert_eq!(create.name, "my-bundle");
+            assert_eq!(create.version, "0.1.0"); // default
+            assert_eq!(create.skills, vec!["skill1"]);
+            assert!(!create.sign);
+            assert!(!create.write_manifest);
+        } else {
+            panic!("Expected Create command");
+        }
+    }
+
+    #[test]
+    fn test_bundle_create_args_with_options() {
+        use clap::Parser;
+
+        #[derive(Parser)]
+        struct TestCli {
+            #[command(subcommand)]
+            cmd: BundleCommand,
+        }
+
+        let args = TestCli::parse_from([
+            "test",
+            "create",
+            "my-bundle",
+            "--skills",
+            "skill1,skill2",
+            "--version",
+            "1.0.0",
+            "--id",
+            "custom-id",
+            "--write-manifest",
+        ]);
+
+        if let BundleCommand::Create(create) = args.cmd {
+            assert_eq!(create.name, "my-bundle");
+            assert_eq!(create.version, "1.0.0");
+            assert_eq!(create.id, Some("custom-id".to_string()));
+            assert!(create.write_manifest);
+        } else {
+            panic!("Expected Create command");
+        }
+    }
+
+    #[test]
+    fn test_bundle_install_args_defaults() {
+        use clap::Parser;
+
+        #[derive(Parser)]
+        struct TestCli {
+            #[command(subcommand)]
+            cmd: BundleCommand,
+        }
+
+        let args = TestCli::parse_from(["test", "install", "./bundle.msb"]);
+        if let BundleCommand::Install(install) = args.cmd {
+            assert_eq!(install.source, "./bundle.msb");
+            assert!(!install.no_verify);
+            assert!(!install.force);
+            assert!(install.skills.is_empty());
+        } else {
+            panic!("Expected Install command");
+        }
+    }
+
+    #[test]
+    fn test_bundle_install_args_with_options() {
+        use clap::Parser;
+
+        #[derive(Parser)]
+        struct TestCli {
+            #[command(subcommand)]
+            cmd: BundleCommand,
+        }
+
+        let args = TestCli::parse_from([
+            "test",
+            "install",
+            "owner/repo@v1.0.0",
+            "--skills",
+            "skill1",
+            "--force",
+            "--no-verify",
+        ]);
+
+        if let BundleCommand::Install(install) = args.cmd {
+            assert_eq!(install.source, "owner/repo@v1.0.0");
+            assert!(install.force);
+            assert!(install.no_verify);
+            assert_eq!(install.skills, vec!["skill1"]);
+        } else {
+            panic!("Expected Install command");
+        }
+    }
+
+    #[test]
+    fn test_bundle_remove_args() {
+        use clap::Parser;
+
+        #[derive(Parser)]
+        struct TestCli {
+            #[command(subcommand)]
+            cmd: BundleCommand,
+        }
+
+        let args = TestCli::parse_from([
+            "test",
+            "remove",
+            "my-bundle",
+            "--remove-skills",
+            "--force",
+        ]);
+
+        if let BundleCommand::Remove(remove) = args.cmd {
+            assert_eq!(remove.bundle_id, "my-bundle");
+            assert!(remove.remove_skills);
+            assert!(remove.force);
+        } else {
+            panic!("Expected Remove command");
+        }
+    }
+
+    #[test]
+    fn test_bundle_publish_args() {
+        use clap::Parser;
+
+        #[derive(Parser)]
+        struct TestCli {
+            #[command(subcommand)]
+            cmd: BundleCommand,
+        }
+
+        let args = TestCli::parse_from([
+            "test",
+            "publish",
+            "./bundle.msb",
+            "--repo",
+            "owner/repo",
+            "--tag",
+            "v1.0.0",
+            "--draft",
+        ]);
+
+        if let BundleCommand::Publish(publish) = args.cmd {
+            assert_eq!(publish.path, "./bundle.msb");
+            assert_eq!(publish.repo, Some("owner/repo".to_string()));
+            assert_eq!(publish.tag, Some("v1.0.0".to_string()));
+            assert!(publish.draft);
+            assert!(!publish.prerelease);
+        } else {
+            panic!("Expected Publish command");
+        }
+    }
+
+    #[test]
+    fn test_bundle_show_args() {
+        use clap::Parser;
+
+        #[derive(Parser)]
+        struct TestCli {
+            #[command(subcommand)]
+            cmd: BundleCommand,
+        }
+
+        let args = TestCli::parse_from(["test", "show", "owner/repo@v1.0.0", "--tag", "latest"]);
+
+        if let BundleCommand::Show(show) = args.cmd {
+            assert_eq!(show.source, "owner/repo@v1.0.0");
+            assert_eq!(show.tag, Some("latest".to_string()));
+        } else {
+            panic!("Expected Show command");
+        }
+    }
+
+    #[test]
+    fn test_bundle_conflicts_args() {
+        use clap::Parser;
+
+        #[derive(Parser)]
+        struct TestCli {
+            #[command(subcommand)]
+            cmd: BundleCommand,
+        }
+
+        let args = TestCli::parse_from([
+            "test",
+            "conflicts",
+            "--skill",
+            "my-skill",
+            "--modified-only",
+            "--diff",
+        ]);
+
+        if let BundleCommand::Conflicts(conflicts) = args.cmd {
+            assert_eq!(conflicts.skill, Some("my-skill".to_string()));
+            assert!(conflicts.modified_only);
+            assert!(conflicts.diff);
+        } else {
+            panic!("Expected Conflicts command");
+        }
+    }
+
+    #[test]
+    fn test_bundle_list_command() {
+        use clap::Parser;
+
+        #[derive(Parser)]
+        struct TestCli {
+            #[command(subcommand)]
+            cmd: BundleCommand,
+        }
+
+        let args = TestCli::parse_from(["test", "list"]);
+        assert!(matches!(args.cmd, BundleCommand::List));
+    }
+
+    // ==================== Argument Conflict Tests ====================
+
+    #[test]
+    fn test_bundle_create_skills_and_from_dir_conflict() {
+        use clap::Parser;
+
+        #[derive(Parser)]
+        struct TestCli {
+            #[command(subcommand)]
+            cmd: BundleCommand,
+        }
+
+        // --skills and --from-dir should conflict
+        let result = TestCli::try_parse_from([
+            "test",
+            "create",
+            "my-bundle",
+            "--skills",
+            "skill1",
+            "--from-dir",
+            "/some/path",
+        ]);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_bundle_create_sign_key_requires_sign() {
+        use clap::Parser;
+
+        #[derive(Parser)]
+        struct TestCli {
+            #[command(subcommand)]
+            cmd: BundleCommand,
+        }
+
+        // --sign-key requires --sign
+        let result = TestCli::try_parse_from([
+            "test",
+            "create",
+            "my-bundle",
+            "--skills",
+            "skill1",
+            "--sign-key",
+            "/path/to/key",
+        ]);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_bundle_create_sign_with_key() {
+        use clap::Parser;
+
+        #[derive(Parser)]
+        struct TestCli {
+            #[command(subcommand)]
+            cmd: BundleCommand,
+        }
+
+        // --sign with --sign-key should work
+        let args = TestCli::parse_from([
+            "test",
+            "create",
+            "my-bundle",
+            "--skills",
+            "skill1",
+            "--sign",
+            "--sign-key",
+            "/path/to/key",
+        ]);
+        if let BundleCommand::Create(create) = args.cmd {
+            assert!(create.sign);
+            assert_eq!(create.sign_key, Some(PathBuf::from("/path/to/key")));
+        } else {
+            panic!("Expected Create command");
+        }
+    }
+
+    #[test]
+    fn test_bundle_install_force_short_flag() {
+        use clap::Parser;
+
+        #[derive(Parser)]
+        struct TestCli {
+            #[command(subcommand)]
+            cmd: BundleCommand,
+        }
+
+        // Test -f short flag for --force
+        let args = TestCli::parse_from(["test", "install", "bundle.msb", "-f"]);
+        if let BundleCommand::Install(install) = args.cmd {
+            assert!(install.force);
+        } else {
+            panic!("Expected Install command");
+        }
+    }
+
+    #[test]
+    fn test_bundle_remove_force_short_flag() {
+        use clap::Parser;
+
+        #[derive(Parser)]
+        struct TestCli {
+            #[command(subcommand)]
+            cmd: BundleCommand,
+        }
+
+        // Test -f short flag for --force
+        let args = TestCli::parse_from(["test", "remove", "my-bundle", "-f"]);
+        if let BundleCommand::Remove(remove) = args.cmd {
+            assert!(remove.force);
+        } else {
+            panic!("Expected Remove command");
+        }
+    }
+
+    #[test]
+    fn test_bundle_publish_prerelease_and_draft() {
+        use clap::Parser;
+
+        #[derive(Parser)]
+        struct TestCli {
+            #[command(subcommand)]
+            cmd: BundleCommand,
+        }
+
+        // Both --draft and --prerelease should work together
+        let args = TestCli::parse_from([
+            "test",
+            "publish",
+            "bundle.msb",
+            "--repo",
+            "owner/repo",
+            "--draft",
+            "--prerelease",
+        ]);
+        if let BundleCommand::Publish(publish) = args.cmd {
+            assert!(publish.draft);
+            assert!(publish.prerelease);
+        } else {
+            panic!("Expected Publish command");
+        }
+    }
+
+    // ==================== Helper Edge Cases ====================
+
+    #[test]
+    fn test_normalize_skill_list_with_extra_commas() {
+        let input = vec!["skill1,,skill2,,,skill3".to_string()];
+        let result = normalize_skill_list(&input);
+        assert_eq!(result, vec!["skill1", "skill2", "skill3"]);
+    }
+
+    #[test]
+    fn test_normalize_skill_list_whitespace_only() {
+        let input = vec!["   ,  ,   ".to_string()];
+        let result = normalize_skill_list(&input);
+        assert!(result.is_empty());
+    }
+
+    #[test]
+    fn test_slugify_unicode() {
+        // Unicode chars should be stripped (not alphanumeric ASCII)
+        assert_eq!(slugify("café bundle"), "caf-bundle");
+    }
+
+    #[test]
+    fn test_slugify_mixed_separators() {
+        assert_eq!(slugify("my_bundle-name.v1"), "my-bundle-name-v1");
+    }
+
+    #[test]
+    fn test_split_repo_tag_at_in_tag() {
+        // Handle @ in tag name (edge case)
+        let result = split_repo_tag("owner/repo@v1.0.0@special");
+        // First @ splits, rest is tag
+        assert_eq!(result, Some(("owner/repo", Some("v1.0.0@special"))));
+    }
+
+    #[test]
+    fn test_split_repo_tag_org_repo() {
+        // GitHub org/repo format
+        let result = split_repo_tag("anthropic/claude-code@latest");
+        assert_eq!(result, Some(("anthropic/claude-code", Some("latest"))));
+    }
+
+    #[test]
+    fn test_looks_like_path_windows_style() {
+        // Windows-style paths shouldn't be recognized (we're on Unix)
+        assert!(!looks_like_path("C:\\Users\\name"));
+    }
+
+    #[test]
+    fn test_expand_local_path_empty() {
+        let result = expand_local_path("");
+        assert_eq!(result, PathBuf::from(""));
+    }
+
+    // ==================== Serialization Tests ====================
+
+    #[test]
+    fn test_bundle_create_report_serialization() {
+        let report = BundleCreateReport {
+            id: "test-bundle".to_string(),
+            output: "/path/to/output.msb".to_string(),
+            manifest_path: Some("/path/to/manifest.toml".to_string()),
+            checksum: Some("sha256:abc123".to_string()),
+        };
+        let json = serde_json::to_string(&report).unwrap();
+        assert!(json.contains("\"id\":\"test-bundle\""));
+        assert!(json.contains("\"checksum\":\"sha256:abc123\""));
+    }
+
+    #[test]
+    fn test_bundle_show_report_serialization() {
+        let report = BundleShowReport {
+            id: "test".to_string(),
+            name: "Test Bundle".to_string(),
+            version: "1.0.0".to_string(),
+            description: Some("A test bundle".to_string()),
+            authors: vec!["author1".to_string()],
+            license: Some("MIT".to_string()),
+            repository: None,
+            keywords: vec!["test".to_string()],
+            ms_version: Some("0.1.0".to_string()),
+            skills: vec!["skill1".to_string(), "skill2".to_string()],
+            skill_count: 2,
+            checksum: Some("sha256:xyz".to_string()),
+            signed: false,
+        };
+        let json = serde_json::to_string(&report).unwrap();
+        assert!(json.contains("\"signed\":false"));
+        assert!(json.contains("\"skill_count\":2"));
+    }
+
+    #[test]
+    fn test_bundle_list_entry_serialization() {
+        let entry = BundleListEntry {
+            id: "bundle-1".to_string(),
+            version: "1.0.0".to_string(),
+            source: "owner/repo".to_string(),
+            skills: vec!["skill1".to_string()],
+            installed_at: "2026-01-14T12:00:00Z".to_string(),
+        };
+        let json = serde_json::to_string(&entry).unwrap();
+        assert!(json.contains("\"id\":\"bundle-1\""));
+        assert!(json.contains("\"installed_at\":\"2026-01-14T12:00:00Z\""));
+    }
+
+    // ==================== Conflicts Report Tests ====================
+
+    #[test]
+    fn test_conflicts_report_serialization() {
+        let report = ConflictsReport {
+            skills: vec![],
+            total_modified: 0,
+            total_conflicts: 0,
+        };
+        let json = serde_json::to_string(&report).unwrap();
+        assert!(json.contains("\"total_modified\":0"));
+        assert!(json.contains("\"total_conflicts\":0"));
+    }
+}
