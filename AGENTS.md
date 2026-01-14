@@ -414,3 +414,71 @@ git push                # Push to remote
 - Always `bd sync` before ending session
 
 <!-- end-bv-agent-instructions -->
+
+---
+
+## ms — Meta Skill CLI
+
+`ms` mines CASS sessions to generate production-quality Claude Code skills. Architecture follows `/data/projects/xf` exactly.
+
+### Core Commands
+
+```bash
+ms init                           # Initialize (--global for ~/.ms/)
+ms index                          # Index all skills from configured paths
+ms index --watch                  # Background file watcher
+ms search "query"                 # Hybrid search (BM25 + embeddings + RRF)
+ms search --robot                 # JSON output for automation
+ms load <skill> --level overview  # Levels: minimal|overview|standard|full|complete
+ms load <skill> --pack 2000       # Token-packed slices within budget
+ms suggest --cwd .                # Context-aware recommendations
+ms suggest --for-ntm --agents 4   # Swarm-aware pack planning
+ms build --from-cass "topic"      # Mine sessions → generate skill
+ms build --guided --duration 4h   # Hours-long autonomous generation
+ms bundle create my-skills        # Package for sharing
+ms doctor                         # Health checks (--fix auto-repairs)
+ms sync                           # Git + SQLite dual persistence sync
+```
+
+### Key Concepts
+
+| Concept | Description |
+|---------|-------------|
+| **Progressive Disclosure** | minimal (~100 tokens) → full (variable) based on need |
+| **Token Packing** | Constrained optimization: slices selected by utility within budget |
+| **Skill Layers** | system < global < project < session (higher overrides lower) |
+| **Dual Persistence** | SQLite for queries, Git for audit/sync |
+| **Robot Mode** | `--robot` flag: stdout=JSON, stderr=diagnostics, exit 0=success |
+| **Hash Embeddings** | FNV-1a based, 384 dims, no ML dependency |
+
+### Skill Building from CASS
+
+```bash
+# Find topics with sufficient sessions
+ms coverage --min-sessions 5
+
+# Single-shot extraction
+ms build --from-cass "error handling" --since "7 days"
+
+# Autonomous generation with checkpointing
+ms build --guided --autonomous --duration 4h --checkpoint-interval 30m
+ms build --resume <build-id>      # Resume interrupted build
+
+# Mark sessions for skill extraction
+ms mark <session> --exemplary --topics "debugging,rust"
+ms mark <session> --anti-pattern --reason "wrong approach"
+```
+
+### Integration Points
+
+- **CASS**: Source of session transcripts for mining
+- **NTM**: `ms suggest --for-ntm` returns swarm packs per agent
+- **BV/Beads**: `ms prune --emit-beads` creates issues for review
+- **MCP Server**: `ms mcp serve` for native agent tool-use integration
+
+### Safety Invariants
+
+- Destructive ops require verbatim approval (mirrors AGENTS.md Rule 1)
+- Redaction pipeline strips secrets/PII before pattern extraction
+- Injection defense filters prompt-injection content from sessions
+- Mandatory policy slices cannot be omitted even under tight budgets
