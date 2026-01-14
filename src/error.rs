@@ -78,6 +78,12 @@ pub enum MsError {
 
     #[error("Not found: {0}")]
     NotFound(String),
+
+    #[error("Timeout: {0}")]
+    Timeout(String),
+
+    #[error("Assertion failed: {0}")]
+    AssertionFailed(String),
 }
 
 pub type Result<T> = std::result::Result<T, MsError>;
