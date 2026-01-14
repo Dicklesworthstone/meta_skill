@@ -3546,37 +3546,112 @@ pub struct SteadyStateDetector {
 
     /// Maximum token delta considered "stable"
     max_token_delta: usize,  // Default: 50
+
+    /// Maximum quality score delta considered "stable"
+    max_quality_delta: f32,  // Default: 0.01
+
+    /// Minimum evidence coverage to allow steady-state (prevents premature completion)
+    min_evidence_coverage: f32,  // Default: 0.7
+
+    /// Maximum iterations without quality improvement before forced stop
+    max_no_improvement_iters: usize,  // Default: 3
+
+    /// Maximum wall-clock time per skill (prevents pathological loops)
+    max_wall_clock_per_skill: Duration,  // Default: 15 minutes
 }
 
 impl SteadyStateDetector {
-    pub fn is_steady(&self, history: &[SkillDraft]) -> bool {
+    pub fn is_steady(&self, history: &[SkillDraft], start_time: Instant) -> SteadyStateResult {
+        // Hard stop: wall-clock timeout
+        if start_time.elapsed() > self.max_wall_clock_per_skill {
+            return SteadyStateResult::ForcedStop {
+                reason: "Max wall-clock time exceeded".into(),
+            };
+        }
+
         if history.len() < self.min_iterations {
-            return false;
+            return SteadyStateResult::NotYet;
         }
 
         let recent = &history[history.len() - 2..];
         let prev = &recent[0];
         let curr = &recent[1];
 
-        // Check semantic similarity
-        let similarity = cosine_similarity(&prev.embedding, &curr.embedding);
+        // Check semantic similarity (on canonical "outline + rules only" for stability)
+        let similarity = cosine_similarity(
+            &self.canonical_embedding(prev),
+            &self.canonical_embedding(curr),
+        );
         if similarity < self.similarity_threshold {
-            return false;
+            return SteadyStateResult::NotYet;
         }
 
         // Check structural stability
         let token_delta = (curr.token_count as i64 - prev.token_count as i64).abs();
         if token_delta as usize > self.max_token_delta {
-            return false;
+            return SteadyStateResult::NotYet;
+        }
+
+        // Check quality score stability (prevents false-positive "steady" on tiny edits)
+        let quality_delta = (curr.quality_score - prev.quality_score).abs();
+        if quality_delta > self.max_quality_delta {
+            return SteadyStateResult::NotYet;
+        }
+
+        // Check evidence coverage (can't be steady if evidence is missing)
+        if curr.evidence_coverage < self.min_evidence_coverage {
+            return SteadyStateResult::NeedsEvidence {
+                current: curr.evidence_coverage,
+                required: self.min_evidence_coverage,
+            };
+        }
+
+        // Check for no-improvement stall
+        let recent_quality: Vec<_> = history.iter()
+            .rev()
+            .take(self.max_no_improvement_iters + 1)
+            .map(|d| d.quality_score)
+            .collect();
+        if recent_quality.len() > self.max_no_improvement_iters {
+            let max_recent = recent_quality.iter().cloned().fold(f32::MIN, f32::max);
+            let improvement = max_recent - recent_quality.last().unwrap_or(&0.0);
+            if improvement < 0.001 {
+                return SteadyStateResult::ForcedStop {
+                    reason: format!("No quality improvement in {} iterations", self.max_no_improvement_iters),
+                };
+            }
         }
 
         // Check section stability
         let sections_unchanged = prev.section_hashes == curr.section_hashes;
 
-        similarity >= self.similarity_threshold &&
-        token_delta as usize <= self.max_token_delta &&
-        sections_unchanged
+        if similarity >= self.similarity_threshold &&
+           token_delta as usize <= self.max_token_delta &&
+           quality_delta <= self.max_quality_delta &&
+           sections_unchanged {
+            SteadyStateResult::Steady
+        } else {
+            SteadyStateResult::NotYet
+        }
     }
+
+    /// Compute embedding on canonical representation (outline + rules only)
+    /// More stable than full-document embedding
+    fn canonical_embedding(&self, draft: &SkillDraft) -> Vec<f32> {
+        let canonical = format!(
+            "{}\n{}",
+            draft.outline_text(),
+            draft.rules_only_text(),
+        );
+        self.embedder.embed(&canonical)
+    }
+}
+
+pub enum SteadyStateResult {
+    NotYet,
+    Steady,
+    NeedsEvidence { current: f32, required: f32 },
+    ForcedStop { reason: String },
 }
 ```
 
@@ -3869,26 +3944,77 @@ impl SpecificToGeneralTransformer {
 ```rust
 pub struct GeneralizationValidation {
     pub coverage: f32,           // How many instances fit the generalization
-    pub predictive_power: f32,   // How well it predicts outcomes
+    pub predictive_power: f32,   // How well it predicts outcomes (given applicability)
     pub coherence: f32,          // Semantic coherence
+    pub specificity: f32,        // Inverse of overbreadth (prevents platitudes)
     pub confidence: f32,         // Combined score
+    pub counterexamples: Vec<CounterExample>,  // Instances where pattern fails
+}
+
+/// A counterexample captures why a pattern didn't apply or failed
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CounterExample {
+    pub instance_id: String,
+    pub failure_reason: CounterExampleReason,
+    pub missing_precondition: Option<String>,
+    pub suggests_refinement: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum CounterExampleReason {
+    PatternNotApplicable,  // Preconditions not met
+    OutcomeMismatch,       // Applied but wrong outcome
+    DifferentContext,      // Similar surface but different underlying situation
 }
 
 impl GeneralizationValidation {
     pub fn compute(pattern: &GeneralPattern, instances: &[Instance]) -> Self {
-        let coverage = instances.iter()
+        let applies: Vec<_> = instances.iter()
             .filter(|i| pattern.applies_to(i))
-            .count() as f32 / instances.len() as f32;
+            .collect();
+        let applies_count = applies.len();
 
-        let predictive_power = instances.iter()
-            .filter(|i| pattern.applies_to(i))
+        let coverage = applies_count as f32 / instances.len() as f32;
+
+        // IMPORTANT: predictive_power uses applies_count as denominator, not instances.len()
+        // This prevents predictive power from collapsing as coverage drops
+        let correct_count = applies.iter()
             .filter(|i| i.outcome == pattern.predicted_outcome())
-            .count() as f32 / instances.len() as f32;
+            .count();
+        let predictive_power = if applies_count > 0 {
+            correct_count as f32 / applies_count as f32
+        } else {
+            0.0
+        };
 
         let coherence = pattern.semantic_coherence_score();
-        let confidence = 0.4 * coverage + 0.4 * predictive_power + 0.2 * coherence;
 
-        Self { coverage, predictive_power, coherence, confidence }
+        // Specificity penalizes overly broad patterns (platitudes that "apply to everything")
+        // High coverage + low coherence = probably a platitude
+        let specificity = if coverage > 0.95 && coherence < 0.5 {
+            0.3  // Penalty for overbreadth
+        } else {
+            1.0 - (coverage * 0.2)  // Slight preference for more specific patterns
+        };
+
+        let confidence = 0.35 * coverage + 0.35 * predictive_power + 0.20 * coherence + 0.10 * specificity;
+
+        // Collect counterexamples for "Avoid / When NOT to use" section
+        let counterexamples = instances.iter()
+            .filter(|i| !pattern.applies_to(i) || i.outcome != pattern.predicted_outcome())
+            .map(|i| CounterExample {
+                instance_id: i.id.clone(),
+                failure_reason: if !pattern.applies_to(i) {
+                    CounterExampleReason::PatternNotApplicable
+                } else {
+                    CounterExampleReason::OutcomeMismatch
+                },
+                missing_precondition: pattern.missing_precondition(i),
+                suggests_refinement: pattern.suggest_scope_refinement(i),
+            })
+            .collect();
+
+        Self { coverage, predictive_power, coherence, specificity, confidence, counterexamples }
     }
 }
 ```
@@ -4559,10 +4685,10 @@ pub struct GenerationCheckpoint {
     /// Unique checkpoint ID
     pub id: String,
 
-    /// Session that created this checkpoint
-    pub session_id: String,
+    /// Build ID (stable across resumes)
+    pub build_id: String,
 
-    /// Checkpoint sequence number within session
+    /// Checkpoint sequence number within build
     pub sequence: usize,
 
     /// When checkpoint was created
@@ -4588,6 +4714,20 @@ pub struct GenerationCheckpoint {
 
     /// Human feedback received so far
     pub feedback_history: Vec<FeedbackEvent>,
+
+    // --- Idempotency fields for reproducibility ---
+
+    /// Hashes of all input sessions processed so far (for dedup on resume)
+    pub processed_session_hashes: Vec<String>,
+
+    /// Config snapshot (effective config after overrides)
+    pub config_snapshot: AutonomousConfig,
+
+    /// Algorithm version (so resumes don't change semantics silently)
+    pub algorithm_version: String,
+
+    /// Random seed if any stochastic steps exist
+    pub random_seed: Option<u64>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -4764,17 +4904,33 @@ impl Default for AutonomousConfig {
 
 impl AutonomousOrchestrator {
     /// Run autonomous skill generation
-    pub async fn run(&self, topics: &[String]) -> Result<AutonomousResult> {
-        let session_id = uuid::Uuid::new_v4().to_string();
+    ///
+    /// Note on identifiers:
+    /// - `build_id`: Stable across resumes; supplied via CLI on resume
+    /// - `run_id`: New each invocation (for logging/metrics)
+    /// - `checkpoint_id`: Unique per checkpoint within a build
+    pub async fn run(
+        &self,
+        topics: &[String],
+        resume_build_id: Option<&str>,
+    ) -> Result<AutonomousResult> {
+        let run_id = uuid::Uuid::new_v4().to_string();
         let start_time = Utc::now();
         let mut checkpoint_seq = 0;
 
-        // Try to resume from existing checkpoint
-        let mut state = if let Some(cp) = self.checkpoint_mgr.load_latest(&session_id)? {
-            eprintln!("Resuming from checkpoint {}", cp.id);
-            State::from_checkpoint(cp)
+        // Determine build_id: either resume existing or start new
+        let (build_id, mut state) = if let Some(existing_id) = resume_build_id {
+            // Resume from existing build
+            let cp = self.checkpoint_mgr.load_latest(existing_id)?
+                .ok_or_else(|| anyhow!("No checkpoint found for build {}", existing_id))?;
+            eprintln!("Resuming build {} from checkpoint {}", existing_id, cp.id);
+            checkpoint_seq = cp.sequence;
+            (existing_id.to_string(), State::from_checkpoint(cp))
         } else {
-            State::new(topics.to_vec())
+            // Start new build
+            let new_build_id = uuid::Uuid::new_v4().to_string();
+            eprintln!("Starting new build {}", new_build_id);
+            (new_build_id, State::new(topics.to_vec()))
         };
 
         // Main autonomous loop
@@ -4794,9 +4950,9 @@ impl AutonomousOrchestrator {
             // Checkpoint save
             if should_save_checkpoint(&state, self.config.checkpoint_interval) {
                 checkpoint_seq += 1;
-                let checkpoint = state.to_checkpoint(&session_id, checkpoint_seq);
+                let checkpoint = state.to_checkpoint(&build_id, checkpoint_seq);
                 let path = self.checkpoint_mgr.save(&checkpoint)?;
-                eprintln!("Checkpoint saved: {:?}", path);
+                eprintln!("Checkpoint saved: {:?} (build {})", path, build_id);
             }
 
             // Execute next phase
@@ -4829,11 +4985,12 @@ impl AutonomousOrchestrator {
         }
 
         // Final checkpoint
-        let final_checkpoint = state.to_checkpoint(&session_id, checkpoint_seq + 1);
+        let final_checkpoint = state.to_checkpoint(&build_id, checkpoint_seq + 1);
         self.checkpoint_mgr.save(&final_checkpoint)?;
 
         Ok(AutonomousResult {
-            session_id,
+            build_id,
+            run_id,
             duration: Utc::now() - start_time,
             skills_generated: state.completed_skills.len(),
             skills: state.completed_skills,
@@ -5033,20 +5190,60 @@ pub enum MarkType {
     AntiPattern,
 }
 
-/// A highlighted section within a session
+/// A highlighted section within a session (first-class, topic-scoped)
+///
+/// Highlights are first-class objects that can be independently queried,
+/// filtered, and aggregated. They are topic-scoped, meaning a highlight
+/// belongs to specific topics rather than inheriting all topics from
+/// the parent session. This enables:
+/// - Precise topic→evidence mapping during generalization
+/// - Multi-topic sessions where different sections apply to different topics
+/// - Efficient queries like "all highlights for 'git-workflow' topic"
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SessionHighlight {
+    /// Unique identifier for this highlight
+    pub id: String,
+
     /// Start turn/message index
     pub start: usize,
 
     /// End turn/message index
     pub end: usize,
 
+    /// Topics this specific highlight applies to (NOT inherited from session)
+    /// A highlight can have a subset of session topics, or different topics entirely
+    pub topics: Vec<String>,
+
+    /// Classification of what kind of evidence this highlight provides
+    pub highlight_type: HighlightType,
+
     /// Why this section is highlighted
     pub reason: String,
 
+    /// Confidence that this highlight is correctly scoped (0.0-1.0)
+    pub confidence: f32,
+
     /// Extracted pattern (if any)
     pub pattern: Option<ExtractedPattern>,
+
+    /// Related highlights (e.g., problem→solution pairs)
+    pub related_ids: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum HighlightType {
+    /// Exemplary implementation of a pattern
+    Exemplar,
+    /// A problem that was solved (pair with Solution)
+    Problem,
+    /// A solution to a problem (pair with Problem)
+    Solution,
+    /// An anti-pattern or mistake to avoid
+    AntiPattern,
+    /// A clarifying discussion or explanation
+    Clarification,
+    /// A specific command sequence worth extracting
+    CommandSequence,
 }
 
 /// Storage for session marks
@@ -5672,6 +5869,53 @@ Low confidence pattern → Queue → Suggested CASS queries → Review/resolve �
 **Queue Interface:**
 
 ```rust
+/// An uncertainty item with actionable resolution criteria
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct UncertaintyItem {
+    pub id: String,
+    pub pattern_candidate: PatternCandidate,
+    pub reason: String,
+    pub confidence: f32,
+    pub suggested_queries: Vec<String>,
+    pub status: UncertaintyStatus,
+    pub created_at: DateTime<Utc>,
+
+    // --- Actionable resolution criteria ---
+
+    /// What evidence would change the decision (makes resolution deterministic)
+    /// e.g., "need 2 more positive instances OR 1 strong counterexample"
+    pub decision_boundary: DecisionBoundary,
+
+    /// What signals are missing that caused low confidence
+    /// e.g., "no tests-passed instances", "no user-confirmed resolution"
+    pub missing_signals: Vec<MissingSignal>,
+
+    /// Proposed narrower scope if current scope is too broad
+    pub candidate_scope_refinement: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DecisionBoundary {
+    /// Minimum additional positive instances needed to promote
+    pub positive_instances_needed: usize,
+    /// If true, one strong counterexample would demote to discard
+    pub counterexample_would_discard: bool,
+    /// Target confidence threshold to promote
+    pub target_confidence: f32,
+    /// Human-readable description of what would resolve this
+    pub description: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum MissingSignal {
+    NoTestsPassed,
+    NoUserConfirmation,
+    NoClearResolution,
+    InsufficientInstances { have: usize, need: usize },
+    LowSemanticCoherence,
+    NoCounterExamplesValidated,
+}
+
 pub struct UncertaintyQueue {
     db: Connection,
 }
@@ -5679,13 +5923,16 @@ pub struct UncertaintyQueue {
 impl UncertaintyQueue {
     pub fn enqueue(&self, item: UncertaintyItem) -> Result<()> {
         self.db.execute(
-            "INSERT INTO uncertainty_queue VALUES (?, ?, ?, ?, ?, ?, ?)",
+            "INSERT INTO uncertainty_queue VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             params![
                 item.id,
                 serde_json::to_string(&item.pattern_candidate)?,
                 item.reason,
                 item.confidence,
                 serde_json::to_string(&item.suggested_queries)?,
+                serde_json::to_string(&item.decision_boundary)?,
+                serde_json::to_string(&item.missing_signals)?,
+                item.candidate_scope_refinement,
                 "pending",
                 item.created_at.to_rfc3339(),
             ],
@@ -5704,6 +5951,37 @@ impl UncertaintyQueue {
         )?;
         Ok(())
     }
+
+    /// Check if new evidence satisfies the decision boundary
+    pub fn check_resolution(&self, item: &UncertaintyItem, new_evidence: &NewEvidence) -> ResolutionCheck {
+        let boundary = &item.decision_boundary;
+
+        if new_evidence.positive_instances >= boundary.positive_instances_needed {
+            return ResolutionCheck::Promote;
+        }
+        if boundary.counterexample_would_discard && new_evidence.strong_counterexamples > 0 {
+            return ResolutionCheck::Discard;
+        }
+        if new_evidence.updated_confidence >= boundary.target_confidence {
+            return ResolutionCheck::Promote;
+        }
+
+        ResolutionCheck::StillUncertain {
+            progress: format!(
+                "{}/{} positive instances, confidence {:.2}/{:.2}",
+                new_evidence.positive_instances,
+                boundary.positive_instances_needed,
+                new_evidence.updated_confidence,
+                boundary.target_confidence,
+            ),
+        }
+    }
+}
+
+pub enum ResolutionCheck {
+    Promote,
+    Discard,
+    StillUncertain { progress: String },
 }
 ```
 
@@ -5824,13 +6102,61 @@ rules and prevents ms from becoming a footgun.
 
 **Safety Policy Model:**
 
+Safety classification is **effect-based**, not command-string-based. Rather than
+pattern-matching on strings like `rm` or `git reset`, we classify by the semantic
+effect of what the command does. This is more robust because:
+- `rm -rf /` and `find . -delete` have the same effect (file deletion)
+- A command with harmless flags (e.g., `rm -i`) is safer than one without
+- Novel commands get correct classification based on what they do
+
 ```rust
+/// Effect-based safety classification
+/// Classifies by what a command DOES, not what it looks like
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum CommandEffect {
+    /// No state changes (ls, cat, git status)
+    ReadOnly,
+    /// Creates new files/directories (touch, mkdir, git init)
+    Create,
+    /// Modifies existing content in place (edit, append)
+    Modify,
+    /// Removes files/directories (rm, rmdir)
+    Delete,
+    /// Overwrites existing content (cp without -n, mv, redirect >)
+    Overwrite,
+    /// Changes repository state (git commit, git branch)
+    GitState,
+    /// Rewrites history (git rebase, git reset, git filter-branch)
+    GitHistoryRewrite,
+    /// Network/external system interaction
+    Network,
+    /// Unknown effect (should be treated as dangerous)
+    Unknown,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum SafetyTier {
-    Safe,
-    Caution,
-    Dangerous,
-    Critical,
+    Safe,      // ReadOnly, Create (in safe paths)
+    Caution,   // Modify, GitState, Network
+    Dangerous, // Delete, Overwrite
+    Critical,  // GitHistoryRewrite, Unknown
+}
+
+impl CommandEffect {
+    /// Map effect to safety tier
+    pub fn to_tier(&self) -> SafetyTier {
+        match self {
+            CommandEffect::ReadOnly => SafetyTier::Safe,
+            CommandEffect::Create => SafetyTier::Safe,
+            CommandEffect::Modify => SafetyTier::Caution,
+            CommandEffect::GitState => SafetyTier::Caution,
+            CommandEffect::Network => SafetyTier::Caution,
+            CommandEffect::Delete => SafetyTier::Dangerous,
+            CommandEffect::Overwrite => SafetyTier::Dangerous,
+            CommandEffect::GitHistoryRewrite => SafetyTier::Critical,
+            CommandEffect::Unknown => SafetyTier::Critical,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -5850,6 +6176,8 @@ pub enum DestructiveOpsPolicy {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ApprovalRequest {
     pub command: String,
+    /// Classified by effect, not command string pattern
+    pub effect: CommandEffect,
     pub tier: SafetyTier,
     pub reason: String,
     pub approve_hint: String,
@@ -6105,6 +6433,39 @@ pub struct PackConstraints {
     pub excluded_groups: Vec<String>,
     /// Maximum improvement iterations
     pub max_improvement_passes: usize,
+
+    // --- Packing Invariants (mandatory slices) ---
+
+    /// Slices that MUST be included if they exist (by ID or predicate)
+    /// These are not subject to utility ranking - they're hard requirements
+    /// Use for: safety warnings, critical pitfalls, license notices
+    pub mandatory_slices: Vec<MandatorySlice>,
+
+    /// If true, fail the pack rather than omit mandatory slices
+    /// Default: true (safe default - ensures critical content isn't silently dropped)
+    pub fail_on_mandatory_omission: bool,
+}
+
+/// A mandatory slice specification
+#[derive(Debug, Clone)]
+pub enum MandatorySlice {
+    /// Include slice by exact ID
+    ById(String),
+    /// Include all slices matching a predicate
+    ByPredicate(MandatoryPredicate),
+}
+
+/// Predicates for mandatory slice matching
+#[derive(Debug, Clone)]
+pub enum MandatoryPredicate {
+    /// All slices tagged with a specific tag
+    HasTag(String),
+    /// All slices of a specific type
+    OfType(SliceType),
+    /// All slices in a specific group
+    InGroup(String),
+    /// Slices matching a custom filter function name
+    Custom(String),
 }
 
 #[derive(Debug, Clone)]
@@ -6115,10 +6476,23 @@ pub struct CoverageQuota {
 
 pub struct ConstrainedPacker;
 
+/// Error type for packing failures
+#[derive(Debug, Clone)]
+pub enum PackError {
+    /// A mandatory slice couldn't fit within budget
+    MandatorySliceOmitted {
+        slice_id: String,
+        required_tokens: usize,
+        available_tokens: usize,
+    },
+    /// Budget too small for minimum viable pack
+    InsufficientBudget { required: usize, available: usize },
+}
+
 impl ConstrainedPacker {
-    pub fn pack(&self, slices: &[SkillSlice], constraints: &PackConstraints) -> PackResult {
-        // Phase 1: Coverage seeding - satisfy required groups first
-        let mut selected = self.seed_required_coverage(slices, constraints);
+    pub fn pack(&self, slices: &[SkillSlice], constraints: &PackConstraints) -> Result<PackResult, PackError> {
+        // Phase 1: Coverage seeding - satisfy mandatory + required groups first
+        let mut selected = self.seed_required_coverage(slices, constraints)?;
         let mut remaining = constraints.budget - selected.iter().map(|s| s.token_estimate).sum::<usize>();
 
         // Phase 2: Greedy fill with utility density + diminishing returns
@@ -6150,27 +6524,62 @@ impl ConstrainedPacker {
             }
         }
 
-        PackResult {
+        Ok(PackResult {
             slices: selected,
             total_tokens: constraints.budget - remaining,
             coverage_satisfied: self.check_coverage(&selected, constraints),
+        })
+    }
+
+    /// Check if a slice matches a mandatory specification
+    fn matches_mandatory(&self, slice: &SkillSlice, mandatory: &MandatorySlice) -> bool {
+        match mandatory {
+            MandatorySlice::ById(id) => &slice.id == id,
+            MandatorySlice::ByPredicate(pred) => match pred {
+                MandatoryPredicate::HasTag(tag) => slice.tags.contains(tag),
+                MandatoryPredicate::OfType(slice_type) => &slice.slice_type == slice_type,
+                MandatoryPredicate::InGroup(group) => slice.coverage_group.as_ref() == Some(group),
+                MandatoryPredicate::Custom(_) => false, // Custom predicates resolved externally
+            },
         }
     }
 
     /// Seed required coverage groups with highest utility slices
-    fn seed_required_coverage(&self, slices: &[SkillSlice], constraints: &PackConstraints) -> Vec<SkillSlice> {
+    fn seed_required_coverage(&self, slices: &[SkillSlice], constraints: &PackConstraints) -> Result<Vec<SkillSlice>, PackError> {
         let mut selected = Vec::new();
         let mut remaining = constraints.budget;
 
-        // Always include Overview first
+        // PHASE 0: Include mandatory slices FIRST (packing invariants)
+        // These are non-negotiable - they must be included if they exist
+        for mandatory in &constraints.mandatory_slices {
+            let matching: Vec<_> = slices.iter()
+                .filter(|s| self.matches_mandatory(s, mandatory))
+                .filter(|s| !selected.iter().any(|x| x.id == s.id))
+                .collect();
+
+            for slice in matching {
+                if slice.token_estimate <= remaining {
+                    selected.push(slice.clone());
+                    remaining -= slice.token_estimate;
+                } else if constraints.fail_on_mandatory_omission {
+                    return Err(PackError::MandatorySliceOmitted {
+                        slice_id: slice.id.clone(),
+                        required_tokens: slice.token_estimate,
+                        available_tokens: remaining,
+                    });
+                }
+            }
+        }
+
+        // PHASE 1: Always include Overview (if not already mandatory)
         if let Some(overview) = slices.iter().find(|s| matches!(s.slice_type, SliceType::Overview)) {
-            if overview.token_estimate <= remaining {
+            if !selected.iter().any(|x| x.id == overview.id) && overview.token_estimate <= remaining {
                 selected.push(overview.clone());
                 remaining -= overview.token_estimate;
             }
         }
 
-        // Satisfy required coverage quotas
+        // PHASE 2: Satisfy required coverage quotas
         for quota in &constraints.required_coverage {
             let group_slices: Vec<_> = slices.iter()
                 .filter(|s| s.coverage_group.as_ref() == Some(&quota.group))
@@ -6194,7 +6603,7 @@ impl ConstrainedPacker {
             }
         }
 
-        selected
+        Ok(selected)
     }
 
     /// Rank candidates by utility density with diminishing returns per group
