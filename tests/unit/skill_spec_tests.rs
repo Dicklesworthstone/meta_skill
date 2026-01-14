@@ -9,7 +9,7 @@ fn fixture_path(relative: &str) -> PathBuf {
 }
 
 #[test]
-fn parse_markdown_table() {
+fn parse_markdown_table() -> Result<(), String> {
     let cases = vec![
         TestCase {
             name: "valid_minimal",
@@ -36,5 +36,6 @@ fn parse_markdown_table() {
         let content = fs::read_to_string(&path).expect("read fixture");
         let spec = parse_markdown(&content).expect("parse markdown");
         (spec.metadata.name, spec.sections.len())
-    });
+    })?;
+    Ok(())
 }

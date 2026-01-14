@@ -9,7 +9,7 @@ fn fixture_path(relative: &str) -> PathBuf {
 }
 
 #[test]
-fn config_disclosure_search_from_fixture() {
+fn config_disclosure_search_from_fixture() -> Result<(), String> {
     let cases = vec![TestCase {
         name: "default",
         input: "tests/fixtures/configs/default.toml",
@@ -38,11 +38,12 @@ fn config_disclosure_search_from_fixture() {
             config.search.bm25_weight,
             config.search.semantic_weight,
         )
-    });
+    })?;
+    Ok(())
 }
 
 #[test]
-fn config_paths_and_layers_from_fixture() {
+fn config_paths_and_layers_from_fixture() -> Result<(), String> {
     let cases = vec![TestCase {
         name: "custom",
         input: "tests/fixtures/configs/custom.toml",
@@ -79,5 +80,6 @@ fn config_paths_and_layers_from_fixture() {
             config.robot.format,
             config.robot.include_metadata,
         )
-    });
+    })?;
+    Ok(())
 }

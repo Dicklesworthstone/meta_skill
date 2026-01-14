@@ -16,7 +16,7 @@ pub struct TestCase<I, E> {
 }
 
 /// Run table-driven tests with detailed logging.
-pub fn run_table_tests<I, E, F>(cases: Vec<TestCase<I, E>>, test_fn: F)
+pub fn run_table_tests<I, E, F>(cases: Vec<TestCase<I, E>>, test_fn: F) -> Result<(), String>
 where
     I: std::fmt::Debug + Clone + std::panic::RefUnwindSafe,
     E: std::fmt::Debug + PartialEq,
@@ -31,21 +31,32 @@ where
         let elapsed = start.elapsed();
 
         if case.should_panic {
-            assert!(result.is_err(), "Test '{}' expected panic", case.name);
+            if !result.is_err() {
+                return Err(format!("Test '{}' expected panic", case.name));
+            }
             println!("[TEST] Expected panic occurred");
             println!("[TEST] PASSED: {} ({:?})\n", case.name, elapsed);
             continue;
         }
 
-        let actual = result.unwrap_or_else(|_| {
-            panic!("Test '{}' panicked unexpectedly", case.name);
-        });
+        let actual = match result {
+            Ok(value) => value,
+            Err(_) => {
+                return Err(format!("Test '{}' panicked unexpectedly", case.name));
+            }
+        };
 
         println!("[TEST] Expected: {:?}", case.expected);
         println!("[TEST] Actual: {:?}", actual);
         println!("[TEST] Timing: {:?}", elapsed);
 
-        assert_eq!(actual, case.expected, "Test '{}' failed", case.name);
+        if actual != case.expected {
+            return Err(format!(
+                "Test '{}' failed: expected {:?}, got {:?}",
+                case.name, case.expected, actual
+            ));
+        }
         println!("[TEST] PASSED: {} ({:?})\n", case.name, elapsed);
     }
+    Ok(())
 }

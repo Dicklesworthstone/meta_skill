@@ -4,10 +4,11 @@
 //! validating them, and making them searchable.
 
 use super::fixture::E2EFixture;
+use ms::error::Result;
 
 /// Test creating multiple skills and verifying their integration.
 #[test]
-fn test_skill_creation_workflow() {
+fn test_skill_creation_workflow() -> Result<()> {
     let mut fixture = E2EFixture::new("skill_creation_workflow");
 
     // Step 1: Initialize
@@ -45,7 +46,7 @@ Modern frontends use component-based architectures.
 
 Backends handle business logic and data persistence.
 "#,
-    );
+    )?;
 
     // Child skill 1
     fixture.create_skill(
@@ -75,7 +76,7 @@ function Greeting({ name }) {
 const [count, setCount] = useState(0);
 ```
 "#,
-    );
+    )?;
 
     // Child skill 2
     fixture.create_skill(
@@ -109,7 +110,7 @@ app.use(express.json());
 app.use(cors());
 ```
 "#,
-    );
+    )?;
     fixture.checkpoint("skills_created");
 
     // Step 3: Index all skills
@@ -176,11 +177,12 @@ app.use(cors());
     );
 
     fixture.generate_report();
+    Ok(())
 }
 
 /// Test updating an existing skill.
 #[test]
-fn test_skill_update_workflow() {
+fn test_skill_update_workflow() -> Result<()> {
     let mut fixture = E2EFixture::new("skill_update_workflow");
 
     fixture.log_step("Initialize");
@@ -200,7 +202,7 @@ tags: [test]
 
 Initial content.
 "#,
-    );
+    )?;
 
     fixture.log_step("Index initial version");
     let output = fixture.run_ms(&["--robot", "index"]);
@@ -230,7 +232,7 @@ Updated content with more detail.
 
 This section was added in v2.
 "#,
-    );
+    )?;
 
     fixture.log_step("Re-index after update");
     let output = fixture.run_ms(&["--robot", "index"]);
@@ -244,11 +246,12 @@ This section was added in v2.
     fixture.checkpoint("v2_loaded");
 
     fixture.generate_report();
+    Ok(())
 }
 
 /// Test skill with complex metadata.
 #[test]
-fn test_skill_with_complex_metadata() {
+fn test_skill_with_complex_metadata() -> Result<()> {
     let mut fixture = E2EFixture::new("skill_complex_metadata");
 
     fixture.log_step("Initialize");
@@ -286,7 +289,7 @@ Testing that complex metadata is properly parsed and stored.
 
 Works on Linux, macOS, and Windows.
 "#,
-    );
+    )?;
 
     fixture.log_step("Index");
     let output = fixture.run_ms(&["--robot", "index"]);
@@ -303,4 +306,5 @@ Works on Linux, macOS, and Windows.
     fixture.assert_output_contains(&output, "complex-metadata-skill");
 
     fixture.generate_report();
+    Ok(())
 }

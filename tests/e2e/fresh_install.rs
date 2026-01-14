@@ -4,10 +4,11 @@
 //! through indexing skills and searching for them.
 
 use super::fixture::E2EFixture;
+use ms::error::Result;
 
 /// Test the complete fresh install workflow.
 #[test]
-fn test_fresh_install_to_search() {
+fn test_fresh_install_to_search() -> Result<()> {
     let mut fixture = E2EFixture::new("fresh_install_to_search");
 
     // Step 1: Initialize fresh installation
@@ -64,7 +65,7 @@ impl Server {
 }
 ```
 "#,
-    );
+    )?;
 
     fixture.create_skill(
         "async-rust",
@@ -100,7 +101,7 @@ tokio::spawn(async move {
 });
 ```
 "#,
-    );
+    )?;
     fixture.checkpoint("skills_created");
 
     // Step 3: Index skills
@@ -174,11 +175,12 @@ tokio::spawn(async move {
 
     // Generate final report
     fixture.generate_report();
+    Ok(())
 }
 
 /// Test that search with no results handles gracefully.
 #[test]
-fn test_search_no_results() {
+fn test_search_no_results() -> Result<()> {
     let mut fixture = E2EFixture::new("search_no_results");
 
     fixture.log_step("Initialize");
@@ -198,7 +200,7 @@ tags: [python, basics]
 
 Getting started with Python programming.
 "#,
-    );
+    )?;
 
     fixture.log_step("Index");
     let output = fixture.run_ms(&["--robot", "index"]);
@@ -214,11 +216,12 @@ Getting started with Python programming.
     assert!(results.is_empty(), "Should have no results for unrelated query");
 
     fixture.generate_report();
+    Ok(())
 }
 
 /// Test that load fails gracefully for missing skills.
 #[test]
-fn test_load_missing_skill() {
+fn test_load_missing_skill() -> Result<()> {
     let mut fixture = E2EFixture::new("load_missing_skill");
 
     fixture.log_step("Initialize");
@@ -230,4 +233,5 @@ fn test_load_missing_skill() {
     assert!(!output.success, "Load should fail for missing skill");
 
     fixture.generate_report();
+    Ok(())
 }

@@ -1858,5 +1858,98 @@ And more text.
         .contains("compilation"));
     }
 
-    // NOTE: ACIP taint label tests removed - functionality moved to security module
+    #[test]
+    fn test_acip_injection_patterns_excluded() {
+        // Pattern with evidence from injection-tainted message should be excluded
+        let mut tainted = std::collections::HashMap::new();
+        tainted.insert(0, MessageTaint::Injection);
+
+        let patterns = vec![ExtractedPattern {
+            id: "test-injection".to_string(),
+            pattern_type: PatternType::CommandPattern {
+                commands: vec!["ignore previous instructions".to_string()],
+                frequency: 1,
+                contexts: vec![],
+            },
+            evidence: vec![EvidenceRef {
+                session_id: "s1".to_string(),
+                message_indices: vec![0], // Points to injection-tainted message
+                relevance: 0.8,
+                snippet: None,
+            }],
+            confidence: 0.8,
+            frequency: 1,
+            tags: vec![],
+            description: None,
+            taint_label: None,
+        }];
+
+        let result = apply_taint_labels(patterns, &tainted);
+        assert!(result.is_empty(), "Pattern with injection evidence should be excluded");
+    }
+
+    #[test]
+    fn test_acip_sensitive_patterns_labeled() {
+        // Pattern with evidence from sensitive-tainted message should get RequiresReview label
+        let mut tainted = std::collections::HashMap::new();
+        tainted.insert(1, MessageTaint::Sensitive);
+
+        let patterns = vec![ExtractedPattern {
+            id: "test-sensitive".to_string(),
+            pattern_type: PatternType::CommandPattern {
+                commands: vec!["export API_KEY=xxx".to_string()],
+                frequency: 1,
+                contexts: vec![],
+            },
+            evidence: vec![EvidenceRef {
+                session_id: "s1".to_string(),
+                message_indices: vec![1], // Points to sensitive-tainted message
+                relevance: 0.8,
+                snippet: None,
+            }],
+            confidence: 0.8,
+            frequency: 1,
+            tags: vec![],
+            description: None,
+            taint_label: None,
+        }];
+
+        let result = apply_taint_labels(patterns, &tainted);
+        assert_eq!(result.len(), 1, "Pattern with sensitive evidence should be kept");
+        assert_eq!(
+            result[0].taint_label,
+            Some(TaintLabel::RequiresReview),
+            "Sensitive pattern should have RequiresReview label"
+        );
+    }
+
+    #[test]
+    fn test_acip_clean_patterns_unchanged() {
+        // Pattern without tainted evidence should remain unchanged
+        let tainted = std::collections::HashMap::new(); // No tainted messages
+
+        let patterns = vec![ExtractedPattern {
+            id: "test-clean".to_string(),
+            pattern_type: PatternType::CommandPattern {
+                commands: vec!["cargo build".to_string()],
+                frequency: 1,
+                contexts: vec![],
+            },
+            evidence: vec![EvidenceRef {
+                session_id: "s1".to_string(),
+                message_indices: vec![0],
+                relevance: 0.8,
+                snippet: None,
+            }],
+            confidence: 0.8,
+            frequency: 1,
+            tags: vec![],
+            description: None,
+            taint_label: None,
+        }];
+
+        let result = apply_taint_labels(patterns, &tainted);
+        assert_eq!(result.len(), 1, "Clean pattern should be kept");
+        assert_eq!(result[0].taint_label, None, "Clean pattern should have no taint label");
+    }
 }

@@ -8,10 +8,11 @@
 //! when multi-layer is fully implemented.
 
 use super::fixture::E2EFixture;
+use ms::error::Result;
 
 /// Test basic skill loading from project layer.
 #[test]
-fn test_project_layer_skill_loading() {
+fn test_project_layer_skill_loading() -> Result<()> {
     let mut fixture = E2EFixture::new("project_layer_skill_loading");
 
     // Step 1: Initialize
@@ -39,7 +40,7 @@ This skill exists in the project layer.
 Project-specific content here.
 "#,
         "project",
-    );
+    )?;
     fixture.checkpoint("skill_created");
 
     // Step 3: Index
@@ -56,11 +57,12 @@ Project-specific content here.
     fixture.checkpoint("post_load");
 
     fixture.generate_report();
+    Ok(())
 }
 
 /// Test multiple project-layer skills.
 #[test]
-fn test_multiple_project_skills() {
+fn test_multiple_project_skills() -> Result<()> {
     let mut fixture = E2EFixture::new("multiple_project_skills");
 
     fixture.log_step("Initialize");
@@ -83,7 +85,7 @@ tags: [test, alpha]
 First skill for testing.
 "#,
         "project",
-    );
+    )?;
 
     fixture.create_skill_in_layer(
         "skill-beta",
@@ -98,7 +100,7 @@ tags: [test, beta]
 Second skill for testing.
 "#,
         "project",
-    );
+    )?;
 
     fixture.create_skill_in_layer(
         "skill-gamma",
@@ -113,7 +115,7 @@ tags: [test, gamma]
 Third skill for testing.
 "#,
         "project",
-    );
+    )?;
 
     fixture.checkpoint("skills_created");
 
@@ -138,12 +140,13 @@ Third skill for testing.
     }
 
     fixture.generate_report();
+    Ok(())
 }
 
 /// Placeholder test for multi-layer priority (future feature).
 #[test]
 #[ignore = "Multi-layer priority not yet implemented"]
-fn test_layer_priority_resolution() {
+fn test_layer_priority_resolution() -> Result<()> {
     let mut fixture = E2EFixture::new("layer_priority_resolution");
 
     fixture.log_step("Initialize");
@@ -169,7 +172,7 @@ tags: [global]
 Global version content.
 "#,
         "global",
-    );
+    )?;
 
     fixture.log_step("Create skill in project layer");
     fixture.create_skill_in_layer(
@@ -185,7 +188,7 @@ tags: [project]
 Project version content (should take precedence).
 "#,
         "project",
-    );
+    )?;
 
     // When implemented, index would see both and resolve priority
     fixture.log_step("Index with multi-layer support");
@@ -199,4 +202,5 @@ Project version content (should take precedence).
     // fixture.assert_output_contains(&output, "PROJECT");
 
     fixture.generate_report();
+    Ok(())
 }

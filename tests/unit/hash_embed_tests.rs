@@ -2,7 +2,7 @@ use ms::search::HashEmbedder;
 use ms::test_utils::{run_table_tests, TestCase};
 
 #[test]
-fn hash_embedding_dimensions_table() {
+fn hash_embedding_dimensions_table() -> Result<(), String> {
     let cases = vec![
         TestCase {
             name: "dims_32",
@@ -22,5 +22,6 @@ fn hash_embedding_dimensions_table() {
         let embedder = HashEmbedder::new(dim);
         let embedding = embedder.embed(text);
         embedding.len()
-    });
+    })?;
+    Ok(())
 }
