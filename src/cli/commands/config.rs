@@ -5,7 +5,7 @@ use clap::Args;
 use std::path::{Path, PathBuf};
 
 use crate::cli::output;
-use crate::cli::Cli;
+use crate::app::AppContext;
 use crate::config::Config;
 use crate::error::Result;
 
@@ -26,17 +26,11 @@ pub struct ConfigArgs {
     pub unset: bool,
 }
 
-pub fn run(cli: &Cli, args: &ConfigArgs) -> Result<()> {
-    let ms_root = find_ms_root()?;
-    let config_path = cli
-        .config
-        .clone()
-        .unwrap_or_else(|| default_config_path(&ms_root));
-    let config = Config::load(cli.config.as_deref(), &ms_root)?;
+pub fn run(ctx: &AppContext, args: &ConfigArgs) -> Result<()> {
     let ctx = ConfigContext {
-        config,
-        config_path,
-        robot_mode: cli.robot,
+        config: ctx.config.clone(),
+        config_path: ctx.config_path.clone(),
+        robot_mode: ctx.robot_mode,
     };
 
     if args.list || args.key.is_none() {
