@@ -574,10 +574,6 @@ fn truncate_examples(body: &str, max_tokens: usize) -> String {
     }
 }
 
-/// Truncate to fit within a token budget
-fn truncate_to_tokens(body: &str, max_tokens: usize) -> String {
-    truncate_examples(body, max_tokens)
-}
 
 /// Estimate tokens for frontmatter
 fn estimate_tokens_frontmatter(meta: &SkillMetadata, minimal: bool) -> usize {

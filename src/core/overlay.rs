@@ -111,17 +111,10 @@ impl PartialEq for SkillOverlay {
 
 impl Eq for SkillOverlay {}
 
-impl PartialOrd for SkillOverlay {
-    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
-        Some(self.cmp(other))
-    }
-}
-
-impl Ord for SkillOverlay {
-    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
-        self.priority.cmp(&other.priority)
-    }
-}
+// NOTE: Intentionally NOT implementing Ord/PartialOrd.
+// Equality is based on ID, but sorting should be by priority.
+// These semantics are incompatible with Rust's Ord contract.
+// Use explicit sort_by(|a, b| a.priority.cmp(&b.priority)) when sorting.
 
 /// Conditions for overlay application
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -178,7 +171,7 @@ mod tests {
     }
 
     #[test]
-    fn test_overlay_ordering() {
+    fn test_overlay_priority_sorting() {
         let low = SkillOverlay {
             id: "low".into(),
             skill_id: "test".into(),
@@ -193,6 +186,44 @@ mod tests {
             conditions: vec![],
             modifications: vec![],
         };
-        assert!(low < high);
+        // Use explicit priority comparison (not Ord trait)
+        assert!(low.priority < high.priority);
+
+        // Verify sorting works correctly
+        let mut overlays = vec![high.clone(), low.clone()];
+        overlays.sort_by(|a, b| a.priority.cmp(&b.priority));
+        assert_eq!(overlays[0].id, "low");
+        assert_eq!(overlays[1].id, "high");
+    }
+
+    #[test]
+    fn test_overlay_equality_by_id() {
+        // Equality is based on ID only, not on priority or other fields
+        let overlay1 = SkillOverlay {
+            id: "same-id".into(),
+            skill_id: "test".into(),
+            priority: 1,
+            conditions: vec![],
+            modifications: vec![],
+        };
+        let overlay2 = SkillOverlay {
+            id: "same-id".into(),
+            skill_id: "different".into(), // Different skill_id
+            priority: 100,                // Different priority
+            conditions: vec![OverlayCondition::Always],
+            modifications: vec![],
+        };
+        // Same ID means equal, regardless of other fields
+        assert_eq!(overlay1, overlay2);
+
+        let overlay3 = SkillOverlay {
+            id: "different-id".into(),
+            skill_id: "test".into(),
+            priority: 1,
+            conditions: vec![],
+            modifications: vec![],
+        };
+        // Different ID means not equal, even with same other fields
+        assert_ne!(overlay1, overlay3);
     }
 }

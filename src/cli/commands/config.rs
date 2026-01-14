@@ -237,29 +237,3 @@ fn default_config_path(ms_root: &Path) -> PathBuf {
     }
 }
 
-fn find_ms_root() -> Result<PathBuf> {
-    if let Ok(root) = std::env::var("MS_ROOT") {
-        return Ok(PathBuf::from(root));
-    }
-
-    let cwd = std::env::current_dir()?;
-    if let Some(found) = find_upwards(&cwd, ".ms")? {
-        return Ok(found);
-    }
-
-    let data_dir = dirs::data_dir()
-        .ok_or_else(|| crate::error::MsError::MissingConfig("data directory not found".to_string()))?;
-    Ok(data_dir.join("ms"))
-}
-
-fn find_upwards(start: &Path, name: &str) -> Result<Option<PathBuf>> {
-    let mut current = Some(start);
-    while let Some(dir) = current {
-        let candidate = dir.join(name);
-        if candidate.is_dir() {
-            return Ok(Some(candidate));
-        }
-        current = dir.parent();
-    }
-    Ok(None)
-}

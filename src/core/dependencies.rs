@@ -381,8 +381,13 @@ impl<'a> DependencyResolver<'a> {
         for skill_id in closure {
             for dep in self.graph.direct_dependencies(skill_id) {
                 if closure.contains(dep) {
-                    adj.get_mut(skill_id.as_str()).unwrap().push(dep);
-                    *in_degree.get_mut(dep).unwrap() += 1;
+                    // Use if-let to safely handle missing keys (defensive against graph bugs)
+                    if let Some(adj_list) = adj.get_mut(skill_id.as_str()) {
+                        adj_list.push(dep);
+                    }
+                    if let Some(degree) = in_degree.get_mut(dep) {
+                        *degree += 1;
+                    }
                 }
             }
         }

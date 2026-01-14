@@ -400,19 +400,6 @@ fn hash_content(content: &str) -> String {
     hex::encode(digest)
 }
 
-fn not_implemented(ctx: &AppContext, message: &str) -> Result<()> {
-    if ctx.robot_mode {
-        let payload = serde_json::json!({
-            "ok": false,
-            "error": "not_implemented",
-            "message": message,
-        });
-        emit_json(&payload)
-    } else {
-        println!("{message}");
-        Ok(())
-    }
-}
 
 fn emit_output<T: Serialize>(ctx: &AppContext, payload: &T) -> Result<()> {
     if ctx.robot_mode {
