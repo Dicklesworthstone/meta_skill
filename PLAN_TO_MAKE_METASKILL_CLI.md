@@ -42,7 +42,7 @@ These agents share a common interaction pattern:
 
 ### 0.2 What Are Claude Code Skills?
 
-**Skills** are Claude Code's mechanism for extending agent capabilities with domain-specific knowledge. A skill is a markdown file (conventionally `SKILL.md`) that gets injected into the agent's context when relevant.
+**Skills** are Claude Code's mechanism for extending agent capabilities with domain-specific knowledge. A skill is a markdown file (conventionally `SKILL.md`) that gets injected into the agent's context when relevant. In ms, `SKILL.md` is a compiled view; the source-of-truth is `SkillSpec`.
 
 **Why skills exist:** LLMs have general knowledge but lack specific knowledge about:
 - Your company's coding conventions
@@ -345,6 +345,11 @@ bd close beads-abc123
 bd stats           # Project overview
 ```
 
+**Beads Viewer Integration (bv):**
+- Prefer `bv --robot-*` flags for deterministic JSON (triage, plan, graph, insights).
+- Use `bv --robot-triage` as the single entry point for actionable, dependency-aware picks.
+- Avoid bare `bv` in automation (it launches interactive TUI).
+
 **Why this matters for ms:** Skills can be tracked as beads. A skill-building session could be:
 ```bash
 bd create --title "Create rust-async skill from CASS" --type task
@@ -405,7 +410,9 @@ The **Agent Flywheel** is an integrated suite of tools that compound AI agent ef
 |------|---------|
 | **CM** (Cass Memory) | Procedural memory—learns rules from session analysis |
 | **DCG** (Destructive Command Guard) | Safety system blocking dangerous commands |
+| **ACIP** | Prompt injection defense framework (primary for Section 5.17) |
 | **UBS** (Ultimate Bug Scanner) | Static analysis for catching bugs pre-commit |
+| **BV** (Beads Viewer) | Graph-aware Beads triage + dependency insights |
 | **RU** (Repo Updater) | Syncs GitHub repos, handles updates |
 | **XF** (X Archive Search) | Twitter archive search (architectural template) |
 
@@ -496,7 +503,7 @@ ms search "auth" --robot
 
 **Current state (without ms):**
 
-1. **Skill creation is manual:** Writing SKILL.md from scratch requires:
+1. **Skill creation is manual:** Writing skills (spec + compiled SKILL.md) from scratch requires:
    - Remembering what patterns worked
    - Articulating tacit knowledge explicitly
    - Formatting correctly for Claude Code
@@ -1187,6 +1194,9 @@ pub struct SkillSlice {
 
     /// Coverage group id (e.g., "critical-rules", "workflow", "pitfalls")
     pub coverage_group: Option<String>,
+
+    /// Optional tags for packing and filtering
+    pub tags: Vec<String>,
 
     /// Optional dependencies on other slices (by id)
     pub requires: Vec<String>,
@@ -2293,7 +2303,7 @@ impl TxManager {
 | `ms load` | None (read-only) | SQLite WAL handles read concurrency |
 | `ms search` | None (read-only) | FTS queries are read-only |
 | `ms suggest` | None (read-only) | Query-only operation |
-| `ms edit` | Exclusive | Modifies SKILL.md and SQLite |
+| `ms edit` | Exclusive | Modifies SkillSpec, re-renders SKILL.md, updates SQLite |
 | `ms mine` | Exclusive | Writes new skills |
 | `ms calibrate` | Exclusive | Updates rule strengths |
 | `ms doctor --fix` | Exclusive | May modify both stores |
@@ -2586,6 +2596,7 @@ ms list --robot
 ms search "query" --robot
 ms show skill-id --robot
 ms load skill-id --robot
+ms review skill-id --robot
 ms suggest --robot
 ms build --robot --status
 ms stats --robot
@@ -6239,6 +6250,12 @@ ms filters prompt-injection content before pattern extraction. Any session messa
 that attempt to override system rules or instruct the agent to ignore constraints
 are quarantined and excluded by default.
 
+**Primary Defense: ACIP Integration (v1.3 recommended):**
+- Use **ACIP** from `/data/projects/acip` as the canonical injection defense framework.
+- Support three modes: direct inclusion, checker-model gate, or hybrid audit mode.
+- Audit mode uses `ACIP_AUDIT_MODE=ENABLED` tags for operator visibility.
+- Pin ACIP version in config and store provenance alongside injection reports.
+
 **Forensic Quarantine Playback:**
 - Store snippet hash, minimal safe excerpt, triggered rule, and replay command.
 - Replay requires explicit user invocation to expand context from CASS.
@@ -6287,6 +6304,12 @@ ms enforces a hard invariant: destructive filesystem or git operations are never
 executed without explicit, verbatim approval. This mirrors the global agent
 rules and prevents ms from becoming a footgun.
 
+**Primary Enforcement: DCG Integration:**
+- Integrate **Destructive Command Guard (DCG)** from `/data/projects/destructive_command_guard`
+  as the primary runtime guard for destructive commands.
+- Leverage DCG’s pack system, heredoc/inline script scanning, explain mode, and
+  fail‑open design rather than re‑implementing command semantics in ms.
+
 **Safety Policy Model:**
 
 Safety classification is **effect-based**, not command-string-based. Rather than
@@ -6297,8 +6320,10 @@ effect of what the command does. This is more robust because:
 - Novel commands get correct classification based on what they do
 
 **Non-Removable Policy Lenses:**
-- Compile critical policies into `Policy` slices with `MandatoryPredicate::Always`.
-- Packer fails closed if these slices are omitted under any pack budget.
+- Compile critical policies into `Policy` slices and include them via
+  `MandatoryPredicate::OfType(SliceType::Policy)` in pack constraints.
+- `MandatoryPredicate::Always` is reserved for global invariants (rare).
+- Packer fails closed if policy slices are omitted under any pack budget.
 
 ```rust
 /// Effect-based safety classification
@@ -6594,10 +6619,11 @@ that fit within a token budget.
 
 **Slice Generation Heuristics:**
 
-- One slice per rule, command block, example, checklist, or pitfall (including anti-patterns)
+- One slice per rule, command block, example, checklist, pitfall, or policy invariant
 - Preserve section headings by attaching them to the first slice in the section
 - Estimate tokens per slice using a fast tokenizer heuristic
 - Assign utility score from quality signals + usage frequency + evidence coverage
+- Propagate tags from skill metadata and block annotations into slices
 
 **Token Packer (Constrained Optimization):**
 
@@ -6743,6 +6769,7 @@ impl ConstrainedPacker {
         match mandatory {
             MandatorySlice::ById(id) => &slice.id == id,
             MandatorySlice::ByPredicate(pred) => match pred {
+                MandatoryPredicate::Always => true,
                 MandatoryPredicate::HasTag(tag) => slice.tags.contains(tag),
                 MandatoryPredicate::OfType(slice_type) => &slice.slice_type == slice_type,
                 MandatoryPredicate::InGroup(group) => slice.coverage_group.as_ref() == Some(group),
@@ -9931,6 +9958,12 @@ redaction_allowlist = [
 # Detect prompt-injection content in sessions
 prompt_injection_enabled = true
 
+# ACIP integration for prompt injection defense
+acip_enabled = true
+acip_recommended_version = "1.3"
+acip_audit_mode = false
+acip_mode = "hybrid"  # direct | checker | hybrid
+
 # Regex patterns for prompt injection
 prompt_injection_patterns = [
     "(?i)ignore previous instructions",
@@ -10490,6 +10523,15 @@ ms suggest
 ### 18.1 Testing Philosophy
 
 Following Rust best practices with comprehensive coverage across unit, integration, and property-based tests.
+
+**UBS (Ultimate Bug Scanner) Integration:**
+- Integrate `/data/projects/ultimate_bug_scanner` as a required quality gate.
+- Run `ubs` on changed files before commits and during CI; surface findings in `ms doctor`.
+- Prefer machine-readable outputs (JSON/SARIF) for automation and bead creation.
+
+**Testing Beads Coverage:**
+- Create dedicated beads for unit tests, integration tests, E2E scripts, and benchmarks.
+- Treat testing beads as first-class blockers in planning/triage.
 
 ```rust
 // Testing configuration
@@ -11231,6 +11273,7 @@ skill: "rust-error-handling"
 type: packing
 tests:
   - budget: 500
+    contract: "DebugContract"
     expect_contains:
       - "rule-1"                  # Critical rule must be included
       - "rule-2"
@@ -11238,12 +11281,14 @@ tests:
       - "example-verbose"         # Long example should be cut
 
   - budget: 1500
+    contract: "RefactorContract"
     expect_coverage_groups:
       - "critical-rules"          # All critical rules at this budget
       - "core-examples"
     expect_min_utility: 0.7       # Minimum average utility of packed slices
 
   - budget: 200
+    recent_slice_ids: ["overview", "rule-1"]  # novelty penalty vs prior context
     expect_contains:
       - "overview"                # Overview always included
     expect_max_slices: 3          # At tight budget, only essentials
@@ -11252,10 +11297,35 @@ tests:
 **Test Harness Implementation:**
 
 ```rust
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RetrievalTest {
+    pub name: String,
+    pub skill: String,
+    pub query: Option<String>,
+    pub context: TestContext,
+    pub expect: RetrievalExpect,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PackingTest {
+    pub budget: usize,
+    pub contract: Option<PackContract>,
+    pub expect_contains: Vec<String>,
+    pub expect_excludes: Vec<String>,
+    pub expect_coverage_groups: Vec<String>,
+    pub expect_min_utility: Option<f32>,
+    pub expect_max_slices: Option<usize>,
+    pub required_coverage: Vec<CoverageQuota>,
+    pub excluded_groups: Vec<String>,
+    pub mandatory_slices: Vec<MandatorySlice>,
+    pub max_per_group: Option<usize>,
+    pub recent_slice_ids: Option<Vec<String>>,
+}
+
 pub struct SkillTestHarness {
     registry: SkillRegistry,
     searcher: HybridSearcher,
-    packer: SlicePacker,
+    packer: ConstrainedPacker,
 }
 
 impl SkillTestHarness {
@@ -11283,7 +11353,18 @@ impl SkillTestHarness {
 
     pub fn run_packing_test(&self, test: &PackingTest) -> TestResult {
         let skill = self.registry.get(&test.skill).unwrap();
-        let packed = pack_slices(&skill.slices, TokenBudget { tokens: test.budget, ..Default::default() });
+        let constraints = PackConstraints {
+            budget: test.budget,
+            max_per_group: test.max_per_group.unwrap_or(3),
+            required_coverage: test.required_coverage.clone(),
+            excluded_groups: test.excluded_groups.clone(),
+            max_improvement_passes: 3,
+            mandatory_slices: test.mandatory_slices.clone(),
+            fail_on_mandatory_omission: true,
+            recent_slice_ids: test.recent_slice_ids.clone().unwrap_or_default(),
+            contract: test.contract.clone(),
+        };
+        let packed = self.packer.pack(&skill.computed.slices, &constraints).unwrap().slices;
         let packed_ids: Vec<_> = packed.iter().map(|s| s.id.clone()).collect();
 
         let contains_ok = test.expect_contains.iter().all(|id| packed_ids.contains(id));
@@ -11291,9 +11372,18 @@ impl SkillTestHarness {
         let coverage_ok = test.expect_coverage_groups.iter().all(|group| {
             packed.iter().any(|s| s.coverage_group.as_ref() == Some(group))
         });
+        let max_slices_ok = test.expect_max_slices
+            .map(|max| packed.len() <= max)
+            .unwrap_or(true);
+        let min_utility_ok = test.expect_min_utility
+            .map(|min| {
+                let avg = packed.iter().map(|s| s.utility_score).sum::<f32>() / packed.len().max(1) as f32;
+                avg >= min
+            })
+            .unwrap_or(true);
 
         TestResult {
-            passed: contains_ok && excludes_ok && coverage_ok,
+            passed: contains_ok && excludes_ok && coverage_ok && max_slices_ok && min_utility_ok,
             packed_slice_ids: packed_ids,
             total_tokens: packed.iter().map(|s| s.token_estimate).sum(),
         }
@@ -13461,6 +13551,11 @@ ms experiment results rust-patterns
 ### 23.1 Overview
 
 Learn from sessions across multiple projects to build more comprehensive skills and identify coverage gaps.
+
+**CM (cass-memory) Integration:**
+- Integrate `/data/projects/cass_memory_system` as a shared procedural memory layer.
+- Unify rule IDs, confidence decay, and anti-pattern promotion across ms and CM.
+- Provide import/export bridges so CM playbooks and ms skills reinforce each other.
 
 ```
 ┌─────────────────────────────────────────────────────────────────────────────┐

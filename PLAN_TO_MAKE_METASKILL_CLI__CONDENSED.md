@@ -3,6 +3,7 @@
 > **Project Codename:** `ms` (meta_skill)
 > **Architecture Pattern:** Follow `/data/projects/xf` exactly
 > **Primary Innovation:** Mining CASS sessions to generate production-quality skills
+> **Plan Version:** 2026-01-13.39 (Section 39 + architectural enhancements)
 
 ---
 
@@ -41,7 +42,7 @@ These agents share a common interaction pattern:
 
 ### 0.2 What Are Claude Code Skills?
 
-**Skills** are Claude Code's mechanism for extending agent capabilities with domain-specific knowledge. A skill is a markdown file (conventionally `SKILL.md`) that gets injected into the agent's context when relevant.
+**Skills** are Claude Code's mechanism for extending agent capabilities with domain-specific knowledge. A skill is a markdown file (conventionally `SKILL.md`) that gets injected into the agent's context when relevant. In ms, `SKILL.md` is a compiled view; the source-of-truth is `SkillSpec`.
 
 **Why skills exist:** LLMs have general knowledge but lack specific knowledge about:
 - Your company's coding conventions
@@ -52,16 +53,24 @@ These agents share a common interaction pattern:
 
 **Skill file structure:**
 
-[Code block omitted: ASCII diagram illustrating a workflow/system layout.]
-- Block length: 11 line(s).
-- Diagram uses box-and-arrow flow to show major steps, loops, or dependencies.
-- Intended to give a visual map of the process described in nearby text.
+[Diagram omitted: workflow/system diagram.]
+- 11 line(s); see surrounding text for step labels.
+
+**Session Segmentation (Phase-Aware Mining):**
+- Segment sessions into phases: recon → hypothesis → change → validation → regression fix → wrap-up.
+- Use tool-call boundaries + language markers to avoid phase bleed.
+
+[Code block omitted: Rust enums: SessionPhase.]
+
+**Pattern IR (Typed Intermediate Representation):**
+- Compile extracted patterns into typed IR before synthesis (e.g., `CommandRecipe`,
+  `DiagnosticDecisionTree`, `Invariant`, `Pitfall`, `PromptMacro`, `RefactorPlaybook`,
+  `ChecklistItem`).
+- Normalize commands, filepaths, tool names, and error signatures for deterministic dedupe.
 
 **SKILL.md anatomy:**
 
-[Code block omitted: example block (lang='markdown').]
-- Block length: 50 line(s).
-- Block contains illustrative content referenced by the surrounding text.
+[Code block omitted: example block (lang='markdown', 50 line(s)).]
 
 **Conditional blocks:** The `::: block` syntax allows version-specific content. At load time, `ms` evaluates predicates against the project environment (package.json, Cargo.toml, etc.) and strips blocks whose conditions evaluate false. The agent never sees irrelevant version-specific content.
 
@@ -83,10 +92,7 @@ These agents share a common interaction pattern:
 
 **Key CASS capabilities:**
 
-[Code block omitted: shell command examples (12 lines).]
-- Unique tools referenced: 1.
-- Tool invoked: cass
-- Commands illustrate typical workflows and integrations.
+[Code block omitted: shell commands using cass.]
 
 **Robot mode:** All CASS commands support `--robot` for machine-readable JSON output. This is critical for programmatic integration—ms will call CASS as a subprocess and parse its JSON output.
 
@@ -96,14 +102,7 @@ These agents share a common interaction pattern:
 - **Hybrid fusion:** Reciprocal Rank Fusion (RRF) combines both rankings
 
 **Session structure:** A session is a sequence of messages:
-[Code block omitted: JSON example payload/schema.]
-- Block length: 4 line(s).
-- Keys extracted: 4.
-- Key: role
-- Key: content
-- Key: tool_calls
-- Key: tool_call_id
-- Example illustrates machine-readable output contract.
+[Code block omitted: JSON payload; keys include role, content, tool_calls, tool_call_id.]
 
 **Why CASS matters for ms:** CASS contains thousands of solved problems. When an agent successfully debugged an auth issue, that solution is in CASS. When a deployment workflow was refined over 10 sessions, the evolution is in CASS. ms can mine this to generate skills automatically.
 
@@ -155,10 +154,8 @@ This provides ~80-90% of neural embedding quality with zero dependencies, instan
 
 **The dual persistence pattern:** Agent Mail writes data to both SQLite (for queries) and Git (for auditability):
 
-[Code block omitted: ASCII diagram illustrating a workflow/system layout.]
-- Block length: 15 line(s).
-- Diagram uses box-and-arrow flow to show major steps, loops, or dependencies.
-- Intended to give a visual map of the process described in nearby text.
+[Diagram omitted: workflow/system diagram.]
+- 15 line(s); see surrounding text for step labels.
 
 **Why ms adopts this:** Skills benefit from both:
 - **SQLite:** Fast search, usage tracking, quality scores
@@ -168,10 +165,7 @@ This provides ~80-90% of neural embedding quality with zero dependencies, instan
 lightweight two-phase commit for all write operations.
 
 **File reservation pattern:** When an agent wants to edit a file, it requests a reservation:
-[Code block omitted: shell command examples (2 lines).]
-- Unique tools referenced: 1.
-- Tool invoked: agent_mail
-- Commands illustrate typical workflows and integrations.
+[Code block omitted: shell commands using agent_mail.]
 
 ms can use similar reservations for skill editing to prevent conflicts.
 
@@ -185,18 +179,10 @@ ms can use similar reservations for skill editing to prevent conflicts.
 3. **Context rotation:** As agents exhaust context, skills must transfer to fresh agents
 
 **NTM agent types:**
-[Code block omitted: shell command examples (2 lines).]
-- Unique tools referenced: 1.
-- Tool invoked: ntm
-- Commands illustrate typical workflows and integrations.
+[Code block omitted: shell commands using ntm.]
 
 **Integration point:** ms should provide:
-[Code block omitted: ms CLI command examples (3 lines).]
-- Unique ms commands: 2.
-- Example: ms suggest (flags: --for-ntm)
-- Example: ms suggest (flags: --for-ntm, --agents, --budget, --objective)
-- Example: ms load (flags: --level)
-- Examples collectively cover init/index, search/suggest/load, build, maintenance, testing, and integrations.
+[Code block omitted: ms CLI examples; commands include load, suggest]
 
 ### 0.7 What Is BV (Beads Viewer) and the Beads System?
 
@@ -206,40 +192,25 @@ ms can use similar reservations for skill editing to prevent conflicts.
 - **Agent-friendly:** Simple enough for agents to read/write
 
 **Bead structure:**
-[Code block omitted: YAML example.]
-- Block length: 10 line(s).
-- Keys extracted: 9.
-- Key: id
-- Key: title
-- Key: type
-- Key: status
-- Key: priority
-- Key: created
-- Key: assignee
-- Key: blocks
-- Key: blocked_by
-- Example encodes structured test/spec or config data.
+[Code block omitted: YAML example; keys include id, title, type, status, priority, created, ....]
 
 **BV (Beads Viewer)** is the CLI for interacting with beads:
-[Code block omitted: shell command examples (5 lines).]
-- Unique tools referenced: 1.
-- Tool invoked: bd
-- Commands illustrate typical workflows and integrations.
+[Code block omitted: shell commands using bd.]
+
+**Beads Viewer Integration (bv):**
+- Prefer `bv --robot-*` flags for deterministic JSON (triage, plan, graph, insights).
+- Use `bv --robot-triage` as the single entry point for actionable, dependency-aware picks.
+- Avoid bare `bv` in automation (it launches interactive TUI).
 
 **Why this matters for ms:** Skills can be tracked as beads. A skill-building session could be:
-[Code block omitted: ms CLI command examples (1 lines).]
-- Unique ms commands: 1.
-- Example: ms build (flags: --name, --from-cass)
-- Examples collectively cover init/index, search/suggest/load, build, maintenance, testing, and integrations.
+[Code block omitted: ms CLI examples; commands include build]
 
 ### 0.8 The Agent Flywheel Ecosystem
 
 The **Agent Flywheel** is an integrated suite of tools that compound AI agent effectiveness:
 
-[Code block omitted: ASCII diagram illustrating a workflow/system layout.]
-- Block length: 40 line(s).
-- Diagram uses box-and-arrow flow to show major steps, loops, or dependencies.
-- Intended to give a visual map of the process described in nearby text.
+[Diagram omitted: workflow/system diagram.]
+- 40 line(s); see surrounding text for step labels.
 
 **Other flywheel tools:**
 
@@ -247,7 +218,9 @@ The **Agent Flywheel** is an integrated suite of tools that compound AI agent ef
 |------|---------|
 | **CM** (Cass Memory) | Procedural memory—learns rules from session analysis |
 | **DCG** (Destructive Command Guard) | Safety system blocking dangerous commands |
+| **ACIP** | Prompt injection defense framework (primary for Section 5.17) |
 | **UBS** (Ultimate Bug Scanner) | Static analysis for catching bugs pre-commit |
+| **BV** (Beads Viewer) | Graph-aware Beads triage + dependency insights |
 | **RU** (Repo Updater) | Syncs GitHub repos, handles updates |
 | **XF** (X Archive Search) | Twitter archive search (architectural template) |
 
@@ -298,11 +271,7 @@ Every CLI tool in the flywheel ecosystem supports **robot mode**—machine-reada
 
 **Robot mode convention:**
 
-[Code block omitted: ms CLI command examples (2 lines).]
-- Unique ms commands: 1.
-- Example: ms search (no flags shown)
-- Example: ms search (flags: --robot)
-- Examples collectively cover init/index, search/suggest/load, build, maintenance, testing, and integrations.
+[Code block omitted: ms CLI examples; commands include search]
 
 **Robot mode rules:**
 - stdout = data only (valid JSON)
@@ -314,7 +283,7 @@ Every CLI tool in the flywheel ecosystem supports **robot mode**—machine-reada
 
 **Current state (without ms):**
 
-1. **Skill creation is manual:** Writing SKILL.md from scratch requires:
+1. **Skill creation is manual:** Writing skills (spec + compiled SKILL.md) from scratch requires:
    - Remembering what patterns worked
    - Articulating tacit knowledge explicitly
    - Formatting correctly for Claude Code
@@ -425,9 +394,7 @@ This plan should enable:
 
 This example from an actual session illustrates exactly what ms should extract and generalize:
 
-[Code block omitted: example block (lang='n/a').]
-- Block length: 16 line(s).
-- Block contains illustrative content referenced by the surrounding text.
+[Code block omitted: example block (lang='n/a', 16 line(s)).]
 
 **What ms extracts from this session:**
 
@@ -452,10 +419,8 @@ This example from an actual session illustrates exactly what ms should extract a
 
 Skills are crystallized wisdom from successful coding sessions. Instead of manually writing skills from scratch, we can **mine existing session history** to extract patterns that actually worked. CASS already indexes thousands of coding sessions—ms transforms that raw material into polished, production-ready skills.
 
-[Code block omitted: ASCII diagram illustrating a workflow/system layout.]
-- Block length: 10 line(s).
-- Diagram uses box-and-arrow flow to show major steps, loops, or dependencies.
-- Intended to give a visual map of the process described in nearby text.
+[Diagram omitted: workflow/system diagram.]
+- 10 line(s); see surrounding text for step labels.
 
 ### 1.2 What ms Does
 
@@ -483,29 +448,23 @@ Skills are crystallized wisdom from successful coding sessions. Instead of manua
 
 ### 2.1 High-Level Components
 
-[Code block omitted: ASCII diagram illustrating a workflow/system layout.]
-- Block length: 24 line(s).
-- Diagram uses box-and-arrow flow to show major steps, loops, or dependencies.
-- Intended to give a visual map of the process described in nearby text.
+[Diagram omitted: workflow/system diagram.]
+- 24 line(s); see surrounding text for step labels.
 
 ### 2.2 Data Flow
 
-[Code block omitted: ASCII diagram illustrating a workflow/system layout.]
-- Block length: 31 line(s).
-- Diagram uses box-and-arrow flow to show major steps, loops, or dependencies.
-- Intended to give a visual map of the process described in nearby text.
+[Diagram omitted: workflow/system diagram.]
+- 31 line(s); see surrounding text for step labels.
 
 ### 2.3 File Layout (Following xf Pattern)
 
-[Code block omitted: ASCII diagram illustrating a workflow/system layout.]
-- Block length: 81 line(s).
-- Diagram uses box-and-arrow flow to show major steps, loops, or dependencies.
-- Intended to give a visual map of the process described in nearby text.
+[Diagram omitted: workflow/system diagram.]
+- 81 line(s); see surrounding text for step labels.
 
 **Runtime Artifacts:**
 - `.ms/skillpack.bin` (or per-skill pack objects) caches parsed spec, slices,
-  embeddings, and predicate analysis for low-latency loads.
-- Markdown is compiled; runtime uses binary packs by default.
+  embeddings, and predicate analysis for low-latency load/suggest.
+- Markdown remains a compiled view; runtime uses the pack by default.
 
 ---
 
@@ -513,291 +472,16 @@ Skills are crystallized wisdom from successful coding sessions. Instead of manua
 
 ### 3.1 Skill Structure
 
-[Code block omitted: Rust example code (types/logic).]
-- Block length: 351 line(s).
-- Counts: 23 struct(s), 8 enum(s), 0 trait(s), 1 impl(s), 2 fn(s), 90 field(s).
-- Struct: Skill
-- Struct: SkillSpec
-- Struct: SkillSectionSpec
-- Struct: SpecLens
-- Struct: BlockLens
-- Struct: SkillMetadata
-- Struct: SkillPolicy
-- Struct: DeprecationInfo
-- Struct: SkillTrigger
-- Struct: ToolchainConstraint
-- Struct: SkillRequirements
-- Struct: ToolRequirement
-- Struct: SkillAssets
-- Struct: TestFile
-- Struct: SkillSource
-- Struct: SkillComputed
-- Struct: SkillSlice
-- Struct: SlicePredicate
-- Struct: SkillSliceIndex
-- Struct: SkillEvidenceIndex
-- Struct: EvidenceRef
-- Struct: EvidenceCoverage
-- Struct: UncertaintyItem
-- Enum: SkillBlockSpec
-- Enum: Platform
-- Enum: NetworkRequirement
-- Enum: SkillLayer
-- Enum: PredicateType
-- Enum: VersionOp
-- Enum: SliceType
-- Enum: UncertaintyStatus
-- Impl block: Default
-- Function/method: default
-- Function/method: default_required
-- Field/key: id
-- Field/key: metadata
-- Field/key: body
-- Field/key: assets
-- Field/key: source
-- Field/key: computed
-- Field/key: evidence
-- Field/key: format_version
-- Field/key: sections
-- Field/key: generated_at
-- Field/key: title
-- Field/key: level
-- Field/key: blocks
-- Field/key: block_id
-- Field/key: section
-- Field/key: block_type
-- Field/key: byte_range
-- Field/key: name
-- Field/key: description
-- Field/key: version
-- Field/key: author
-- Field/key: tags
-- Field/key: aliases
-- Field/key: requires
-- Field/key: provides
-- Field/key: triggers
-- Field/key: priority
-- Field/key: deprecated
-- Field/key: toolchains
-- Field/key: requirements
-- Field/key: fixes
-- Field/key: policies
-- Field/key: pattern_type
-- Field/key: pattern
-- Field/key: severity
-- Field/key: message
-- Field/key: since
-- Field/key: reason
-- Field/key: replaced_by
-- Field/key: sunset_at
-- Field/key: trigger_type
-- Field/key: boost
-- Field/key: min_version
-- Field/key: max_version
-- Field/key: notes
-- Field/key: platforms
-- Field/key: tools
-- Field/key: env
-- Field/key: network
-- Field/key: required
-- Field/key: NetworkRequirement
-- Field/key: scripts
-- Field/key: references
-- Field/key: tests
-- Field/key: path
-- Field/key: test_type
-- Field/key: layer
-- Field/key: git_remote
-- Field/key: git_commit
-- Field/key: modified_at
-- Field/key: content_hash
-- Field/key: token_count
-- Field/key: disclosure_levels
-- Field/key: quality_score
-- Field/key: embedding
-- Field/key: slices
-- Field/key: slice_type
-- Field/key: token_estimate
-- Field/key: utility_score
-- Field/key: coverage_group
-- Field/key: condition
-- Field/key: content
-- Field/key: expr
-- Field/key: predicate_type
-- Field/key: rules
-- Field/key: coverage
-- Field/key: session_id
-- Field/key: message_range
-- Field/key: snippet_hash
-- Field/key: excerpt
-- Field/key: excerpt_path
-- Field/key: confidence
-- Field/key: captured_at
-- Field/key: total_rules
-- Field/key: rules_with_evidence
-- Field/key: avg_confidence
-- Field/key: pattern_candidate
-- Field/key: suggested_queries
-- Field/key: status
-- Field/key: created_at
-- Block defines core structures or algorithms referenced by surrounding text.
+[Code block omitted: Rust structs: Skill, SkillSpec, SkillSectionSpec; enums: SkillBlockSpec, Platform, NetworkRequirement; fns: default, default_required; fields: id, metadata, body, assets, source, computed.]
 
 ### 3.2 SQLite Schema
 
-[Code block omitted: SQL schema snippet.]
-- Block length: 225 line(s).
-- Counts: 19 table(s), 10 index(es), 3 trigger(s).
-- Table: skills
-  - Column: id
-  - Column: name
-  - Column: description
-  - Column: version
-  - Column: author
-  - Column: source_path
-  - Column: source_layer
-  - Column: git_remote
-  - Column: git_commit
-  - Column: content_hash
-  - Column: body
-  - Column: metadata_json
-  - Column: assets_json
-  - Column: token_count
-  - Column: quality_score
-  - Column: indexed_at
-  - Column: modified_at
-  - Column: is_deprecated
-  - Column: deprecation_reason
-- Table: skill_aliases
-  - Column: alias
-  - Column: skill_id
-  - Column: alias_type
-  - Column: created_at
-- Table: skill_embeddings
-  - Column: skill_id
-  - Column: embedding
-  - Column: created_at
-- Table: skill_slices
-  - Column: skill_id
-  - Column: slices_json
-  - Column: updated_at
-- Table: skill_evidence
-  - Column: skill_id
-  - Column: rule_id
-  - Column: evidence_json
-  - Column: coverage_json
-  - Column: updated_at
-- Table: skill_rules
-  - Column: skill_id
-  - Column: rule_id
-  - Column: strength
-  - Column: updated_at
-- Table: uncertainty_queue
-  - Column: id
-  - Column: pattern_json
-  - Column: reason
-  - Column: confidence
-  - Column: suggested_queries
-  - Column: status
-  - Column: created_at
-- Table: redaction_reports
-  - Column: id
-  - Column: session_id
-  - Column: report_json
-  - Column: created_at
-- Table: injection_reports
-  - Column: id
-  - Column: session_id
-  - Column: report_json
-  - Column: created_at
-- Table: skill_usage
-  - Column: id
-  - Column: skill_id
-  - Column: project_path
-  - Column: used_at
-  - Column: disclosure_level
-  - Column: context_keywords
-  - Column: success_signal
-  - Column: experiment_id
-  - Column: variant_id
-- Table: skill_usage_events
-  - Column: id
-  - Column: skill_id
-  - Column: session_id
-  - Column: loaded_at
-  - Column: disclosure_level
-  - Column: discovery_method
-  - Column: experiment_id
-  - Column: variant_id
-  - Column: outcome
-  - Column: feedback
-- Table: rule_outcomes
-  - Column: id
-  - Column: skill_id
-  - Column: rule_id
-  - Column: session_id
-  - Column: followed
-  - Column: outcome
-  - Column: created_at
-- Table: skill_experiments
-  - Column: id
-  - Column: skill_id
-  - Column: variants_json
-  - Column: allocation_json
-  - Column: status
-  - Column: started_at
-- Table: skill_dependencies
-  - Column: skill_id
-  - Column: depends_on
-- Table: skill_capabilities
-  - Column: capability
-  - Column: skill_id
-- Table: build_sessions
-  - Column: id
-  - Column: name
-  - Column: status
-  - Column: cass_queries
-  - Column: patterns_json
-  - Column: draft_skill_json
-  - Column: skill_spec_json
-  - Column: iteration_count
-  - Column: last_feedback
-  - Column: created_at
-  - Column: updated_at
-- Table: config
-  - Column: key
-  - Column: value
-  - Column: updated_at
-- Table: tx_log
-  - Column: id
-  - Column: entity_type
-  - Column: entity_id
-  - Column: phase
-  - Column: payload_json
-  - Column: created_at
-- Table: cass_fingerprints
-  - Column: session_id
-  - Column: content_hash
-  - Column: updated_at
-- Index: idx_skill_aliases_skill
-- Index: idx_evidence_skill
-- Index: idx_uncertainty_status
-- Index: idx_redaction_session
-- Index: idx_injection_session
-- Index: idx_skills_name
-- Index: idx_skills_modified
-- Index: idx_skills_quality
-- Index: idx_usage_skill
-- Index: idx_usage_time
-- Trigger: skills_ai
-- Trigger: skills_ad
-- Trigger: skills_au
+[Code block omitted: SQL schema; tables include skills, skill_aliases, skill_embeddings, skill_packs, skill_slices, ...; indexes=10, triggers=3.]
 
 ### 3.3 Git Archive Structure (Human-Readable Persistence)
 
-[Code block omitted: ASCII diagram illustrating a workflow/system layout.]
-- Block length: 45 line(s).
-- Diagram uses box-and-arrow flow to show major steps, loops, or dependencies.
-- Intended to give a visual map of the process described in nearby text.
+[Diagram omitted: workflow/system diagram.]
+- 45 line(s); see surrounding text for step labels.
 
 ### 3.4 Dependency Graph and Resolution
 
@@ -805,29 +489,7 @@ Skills declare dependencies (`requires`), capabilities (`provides`), and environ
 (platforms, tools, env vars) in metadata.
 ms builds a dependency graph to resolve load order, detect cycles, and auto-load prerequisites.
 
-[Code block omitted: Rust example code (types/logic).]
-- Block length: 41 line(s).
-- Counts: 5 struct(s), 1 enum(s), 0 trait(s), 1 impl(s), 1 fn(s), 11 field(s).
-- Struct: DependencyGraph
-- Struct: DependencyEdge
-- Struct: ResolvedDependencyPlan
-- Struct: SkillLoadPlan
-- Struct: DependencyResolver
-- Enum: DependencyLoadMode
-- Impl block: DependencyResolver
-- Function/method: resolve
-- Field/key: nodes
-- Field/key: edges
-- Field/key: skill_id
-- Field/key: depends_on
-- Field/key: ordered
-- Field/key: missing
-- Field/key: cycles
-- Field/key: disclosure
-- Field/key: reason
-- Field/key: registry
-- Field/key: max_depth
-- Block defines core structures or algorithms referenced by surrounding text.
+[Code block omitted: Rust structs: DependencyGraph, DependencyEdge, ResolvedDependencyPlan; enums: DependencyLoadMode; fns: resolve; fields: nodes, edges, skill_id, depends_on, ordered, missing.]
 
 Default behavior: `ms load` uses `DependencyLoadMode::Auto` (load dependencies
 at `overview` disclosure, root skill at the requested level).
@@ -838,18 +500,7 @@ Renames are inevitable. ms preserves backward compatibility by maintaining
 alias mappings (old id → canonical id) and surfacing deprecations with explicit
 replacements.
 
-[Code block omitted: Rust example code (types/logic).]
-- Block length: 17 line(s).
-- Counts: 2 struct(s), 0 enum(s), 0 trait(s), 1 impl(s), 1 fn(s), 4 field(s).
-- Struct: AliasResolver
-- Struct: AliasResolution
-- Impl block: AliasResolver
-- Function/method: resolve
-- Field/key: db
-- Field/key: canonical_id
-- Field/key: alias_type
-- Field/key: replaced_by
-- Block defines core structures or algorithms referenced by surrounding text.
+[Code block omitted: Rust structs: AliasResolver, AliasResolution; fns: resolve; fields: db, canonical_id, alias_type, replaced_by.]
 
 **Behavior:**
 - `ms load legacy-id` resolves to canonical skill and emits a warning if deprecated.
@@ -864,32 +515,11 @@ Skills can exist in multiple layers. Higher layers override lower layers when
 conflicts occur.
 
 Layer order (default):
-[Code block omitted: example block (lang='n/a').]
-- Block length: 1 line(s).
-- Block contains illustrative content referenced by the surrounding text.
+[Code block omitted: example block (lang='n/a', 1 line(s)).]
 
 **Layered Skill Registry:**
 
-[Code block omitted: Rust example code (types/logic).]
-- Block length: 45 line(s).
-- Counts: 3 struct(s), 3 enum(s), 0 trait(s), 1 impl(s), 1 fn(s), 8 field(s).
-- Struct: LayeredRegistry
-- Struct: ResolvedSkill
-- Struct: ConflictDetail
-- Enum: ConflictStrategy
-- Enum: MergeStrategy
-- Enum: ConflictResolution
-- Impl block: LayeredRegistry
-- Function/method: effective
-- Field/key: layers
-- Field/key: registries
-- Field/key: skill
-- Field/key: conflicts
-- Field/key: section
-- Field/key: higher_layer
-- Field/key: lower_layer
-- Field/key: resolution
-- Block defines core structures or algorithms referenced by surrounding text.
+[Code block omitted: Rust structs: LayeredRegistry, ResolvedSkill, ConflictDetail; enums: ConflictStrategy, MergeStrategy, ConflictResolution; fns: effective; fields: layers, registries, skill, conflicts, section, higher_layer.]
 
 **Resolution Rules:**
 - If only one layer provides a skill, use it directly.
@@ -905,23 +535,7 @@ Layer order (default):
 To reduce manual resolution, ms computes section-level diffs and applies a
 merge policy before falling back to interactive mode.
 
-[Code block omitted: Rust example code (types/logic).]
-- Block length: 40 line(s).
-- Counts: 1 struct(s), 0 enum(s), 0 trait(s), 1 impl(s), 4 fn(s), 7 field(s).
-- Struct: ConflictMerger
-- Impl block: ConflictMerger
-- Function/method: resolve
-- Function/method: section_diff
-- Function/method: merge_sections
-- Function/method: merge_by_section_preference
-- Field/key: higher
-- Field/key: lower
-- Field/key: strategy
-- Field/key: merge_strategy
-- Field/key: skill
-- Field/key: conflicts
-- Field/key: ConflictStrategy
-- Block defines core structures or algorithms referenced by surrounding text.
+[Code block omitted: Rust structs: ConflictMerger; fns: resolve, section_diff, merge_sections; fields: higher, lower, strategy, merge_strategy, skill, conflicts.]
 
 When conflicts remain, ms surfaces a guided diff in `ms resolve` showing the
 exact section differences and suggested merges.
@@ -932,35 +546,13 @@ Beyond whole-skill overrides, higher layers can provide **overlay files** that p
 specific block IDs without copying the entire skill. This enables surgical policy
 additions and reduces duplication/drift.
 
-[Code block omitted: Rust example code (types/logic).]
-- Block length: 56 line(s).
-- Counts: 1 struct(s), 1 enum(s), 0 trait(s), 1 impl(s), 1 fn(s), 4 field(s).
-- Struct: SkillOverlay
-- Enum: OverlayOp
-- Impl block: LayeredRegistry
-- Function/method: apply_overlays
-- Field/key: skill_id
-- Field/key: layer
-- Field/key: operations
-- Field/key: OverlayOp
-- Block defines core structures or algorithms referenced by surrounding text.
+[Code block omitted: Rust structs: SkillOverlay; enums: OverlayOp; fns: apply_overlays; fields: skill_id, layer, operations, OverlayOp.]
 
 **Overlay File Format:**
 
 Overlays are stored in the layer's skill directory as `skill.overlay.json`:
 
-[Code block omitted: JSON example payload/schema.]
-- Block length: 23 line(s).
-- Keys extracted: 8.
-- Key: skill_id
-- Key: operations
-- Key: type
-- Key: block_id
-- Key: content
-- Key: items
-- Key: rule
-- Key: id
-- Example illustrates machine-readable output contract.
+[Code block omitted: JSON payload; keys include skill_id, operations, type, block_id, content, items, ....]
 
 **Benefits:**
 
@@ -975,83 +567,42 @@ SKILL.md is a rendered artifact. The source-of-truth is a structured `SkillSpec`
 that can be deterministically compiled into SKILL.md. This ensures reproducible
 output, stable diffs, and safe automated edits.
 
-[Code block omitted: Rust example code (types/logic).]
-- Block length: 15 line(s).
-- Counts: 1 struct(s), 0 enum(s), 0 trait(s), 1 impl(s), 2 fn(s), 0 field(s).
-- Struct: SkillCompiler
-- Impl block: SkillCompiler
-- Function/method: compile
-- Function/method: validate
-- Block defines core structures or algorithms referenced by surrounding text.
+[Code block omitted: Rust structs: SkillCompiler; enums: CompileTarget; fns: compile, validate.]
 
 By default, `ms build` outputs `skill.spec.json`, then compiles it to SKILL.md.
-Manual edits should update the spec, not the rendered artifact.
-
-**Spec-Only Editing (Hard Invariant):**
-- `SkillSpec` is the *only* editable source of truth.
-- Direct edits to SKILL.md are detected and blocked by default.
-- A “repair/import” flow can ingest Markdown diffs into spec with warnings, but
-  remains opt-in and records a provenance note.
-- This guarantees stable block IDs, predicates, slice mapping, and semantic diffs.
-
-**Multi-Target Compilation (Agent Adapters):**
-- `ms compile --target claude|openai|cursor|generic-md`
-- Same `SkillSpec`, different renderers/frontmatter, optional tool-call hints.
-- Prevents ecosystem forks and makes skills portable across agent stacks.
-
-**Semantic Diff Everywhere:**
-- `ms diff --semantic` becomes the default view for review/merge/resolve.
-- `ms review <skill>` groups changes by rule type (critical, pitfalls, examples).
-- Bundle updates and conflict resolution show *meaning changes*, not formatting.
-
-**Runtime Skillpack Cache:**
-- On `ms index`, emit `.ms/skillpack.bin` (or per-skill pack objects) containing
-  parsed spec, pre-tokenized slices, embeddings, predicate pre-analysis, and
-  provenance pointers.
-- `ms load/suggest` reads skillpack first for low-latency and consistent behavior.
+SKILL.md is always generated; direct edits are blocked by default.
 
 **Round-Trip Editing (Spec ↔ Markdown):**
 - `ms edit <skill>` opens a structured view, parses edits back into `SkillSpec`,
   and re-renders `SKILL.md` deterministically.
+- `ms edit --import-markdown` (or `ms repair`) can ingest Markdown diffs into
+  spec with warnings and a provenance note, but remains opt-in.
 - The compiler emits `spec.lens.json` to map block IDs to byte ranges so edits
   can be attributed to the correct spec blocks.
 - If parsing fails, `--allow-lossy` permits a best-effort import with warnings.
 - `ms fmt` re-renders from spec; `ms diff --semantic` compares spec blocks.
+
+**Agent Adapters (Multi-Target Compile):**
+- `ms compile --target claude|openai|cursor|generic-md`
+- Same `SkillSpec`, different frontmatter and optional tool-call hints.
+
+**Semantic Diff Everywhere:**
+- `ms review <skill>` shows spec-level changes grouped by rule type.
+- Conflict resolution and bundle updates default to semantic diffs.
+
+**Runtime Skillpack Cache:**
+- On `ms index`, emit `.ms/skillpack.bin` (or per-skill pack objects) containing:
+  parsed spec, pre-tokenized slices, embeddings, predicate pre-analysis, and
+  provenance pointers for low-latency `ms suggest/load`.
 
 ### 3.7 Two-Phase Commit for Dual Persistence
 
 All writes that touch both SQLite and Git are wrapped in a lightweight two-phase
 commit to avoid split-brain states.
 
-[Code block omitted: Rust example code (types/logic).]
-- Block length: 27 line(s).
-- Counts: 2 struct(s), 0 enum(s), 0 trait(s), 1 impl(s), 1 fn(s), 9 field(s).
-- Struct: TxManager
-- Struct: TxRecord
-- Impl block: TxManager
-- Function/method: write_skill
-- Field/key: db
-- Field/key: git
-- Field/key: tx_dir
-- Field/key: id
-- Field/key: entity_type
-- Field/key: entity_id
-- Field/key: phase
-- Field/key: payload_json
-- Field/key: created_at
-- Block defines core structures or algorithms referenced by surrounding text.
+[Code block omitted: Rust structs: TxManager, TxRecord; fns: write_skill; fields: db, git, tx_dir, id, entity_type, entity_id.]
 
 Recovery is automatic on startup and via `ms doctor --fix`.
-
-**2PC Hardening:**
-- Tx IDs are monotonic (timestamp + counter) for deterministic recovery.
-- Phase files written via atomic rename; directory entries fsynced where supported.
-- Recovery uses a deterministic state machine and never “guesses” payloads.
-
-**Index Invariants + Self-Repair (Non-Destructive):**
-- `ms doctor --fix` can rehydrate missing DB rows from Git, recompute embeddings/slices,
-  and mark stale artifacts with tombstones (never delete).
-- Lossy repairs emit beads for human review.
 
 ### 3.7.1 Global File Locking
 
@@ -1060,34 +611,14 @@ pattern (SQLite + Git) requires coordination when multiple `ms` processes run
 concurrently (e.g., parallel agent invocations, IDE background indexer + CLI).
 
 **Optional Single-Writer Daemon (`msd`):**
-- Holds hot indices/caches in memory and serializes all write operations.
+- Holds hot indices/caches in memory and serializes writes.
 - CLI becomes a thin client when daemon is running (lower p95 latency).
-- Reduces lock contention and simplifies crash recovery in swarm scenarios.
 
-[Code block omitted: Rust example code (types/logic).]
-- Block length: 102 line(s).
-- Counts: 1 struct(s), 0 enum(s), 0 trait(s), 2 impl(s), 4 fn(s), 3 field(s).
-- Struct: GlobalLock
-- Impl block: GlobalLock
-- Impl block: Drop
-- Function/method: acquire
-- Function/method: try_acquire
-- Function/method: acquire_timeout
-- Function/method: drop
-- Field/key: lock_file
-- Field/key: lock_path
-- Field/key: std
-- Block defines core structures or algorithms referenced by surrounding text.
+[Code block omitted: Rust structs: GlobalLock; fns: acquire, try_acquire, acquire_timeout; fields: lock_file, lock_path, std.]
 
 **Locked TxManager:**
 
-[Code block omitted: Rust example code (types/logic).]
-- Block length: 18 line(s).
-- Counts: 0 struct(s), 0 enum(s), 0 trait(s), 1 impl(s), 2 fn(s), 0 field(s).
-- Impl block: TxManager
-- Function/method: write_skill_locked
-- Function/method: write_skills_batch
-- Block defines core structures or algorithms referenced by surrounding text.
+[Code block omitted: Rust fns: write_skill_locked, write_skills_batch.]
 
 **Lock behavior by command:**
 
@@ -1097,19 +628,14 @@ concurrently (e.g., parallel agent invocations, IDE background indexer + CLI).
 | `ms load` | None (read-only) | SQLite WAL handles read concurrency |
 | `ms search` | None (read-only) | FTS queries are read-only |
 | `ms suggest` | None (read-only) | Query-only operation |
-| `ms edit` | Exclusive | Modifies SKILL.md and SQLite |
+| `ms edit` | Exclusive | Modifies SkillSpec, re-renders SKILL.md, updates SQLite |
 | `ms mine` | Exclusive | Writes new skills |
 | `ms calibrate` | Exclusive | Updates rule strengths |
 | `ms doctor --fix` | Exclusive | May modify both stores |
 
 **Diagnostics:**
 
-[Code block omitted: ms CLI command examples (3 lines).]
-- Unique ms commands: 2.
-- Example: ms doctor (flags: --check-lock)
-- Example: ms doctor (flags: --break-lock)
-- Example: ms lock (no flags shown)
-- Examples collectively cover init/index, search/suggest/load, build, maintenance, testing, and integrations.
+[Code block omitted: ms CLI examples; commands include doctor]
 
 The lock file includes a JSON payload with holder PID and timestamp, enabling
 stale lock detection (process no longer running) and diagnostics.
@@ -1120,154 +646,19 @@ stale lock detection (process no longer running) and diagnostics.
 
 ### 4.1 Core Commands
 
-[Code block omitted: ms CLI command examples (60 lines).]
-- Unique ms commands: 14.
-- Example: ms init (no flags shown)
-- Example: ms init (flags: --global)
-- Example: ms index (no flags shown)
-- Example: ms index (flags: --path)
-- Example: ms index (flags: --all)
-- Example: ms index (flags: --watch)
-- Example: ms index (flags: --cass-incremental)
-- Example: ms search (no flags shown)
-- Example: ms search (flags: --limit)
-- Example: ms search (flags: --tags)
-- Example: ms search (flags: --min-quality)
-- Example: ms search (flags: --include-deprecated)
-- Example: ms search (flags: --layer)
-- Example: ms load (no flags shown)
-- Example: ms load (flags: --level)
-- Example: ms load (flags: --level)
-- Example: ms load (flags: --level)
-- Example: ms load (flags: --full)
-- Example: ms load (flags: --pack)
-- Example: ms load (flags: --pack, --mode)
-- Example: ms load (flags: --pack, --mode, --max-per-group)
-- Example: ms load (flags: --deps)
-- Example: ms load (flags: --deps)
-- Example: ms load (flags: --deps)
-- Example: ms load (flags: --robot)
-- Example: ms suggest (no flags shown)
-- Example: ms suggest (flags: --cwd)
-- Example: ms suggest (flags: --file)
-- Example: ms suggest (flags: --query)
-- Example: ms suggest (flags: --pack)
-- Example: ms suggest (flags: --explain)
-- Example: ms suggest (flags: --pack, --mode, --max-per-group)
-- Example: ms suggest (flags: --include-deprecated)
-- Example: ms suggest (flags: --for-ntm, --agents, --budget, --objective)
-- Example: ms show (no flags shown)
-- Example: ms show (flags: --usage)
-- Example: ms show (flags: --deps)
-- Example: ms show (flags: --layer)
-- Example: ms edit (no flags shown)
-- Example: ms edit (flags: --allow-lossy)
-- Example: ms fmt (no flags shown)
-- Example: ms diff (flags: --semantic)
-- Example: ms alias (no flags shown)
-- Example: ms alias (no flags shown)
-- Example: ms alias (no flags shown)
-- Example: ms alias (no flags shown)
-- Example: ms requirements (no flags shown)
-- Example: ms requirements (flags: --project)
-- Example: ms requirements (flags: --robot)
-- Example: ms deps (no flags shown)
-- Example: ms deps (flags: --graph, --format)
-- Example: ms resolve (no flags shown)
-- Example: ms resolve (flags: --strategy)
-- Example: ms resolve (flags: --diff)
-- Example: ms resolve (flags: --merge-strategy)
-- Example: ms evidence (no flags shown)
-- Example: ms evidence (flags: --rule)
-- Example: ms evidence (flags: --graph)
-- Example: ms evidence (flags: --timeline)
-- Example: ms evidence (flags: --open)
-- Examples collectively cover init/index, search/suggest/load, build, maintenance, testing, and integrations.
+[Code block omitted: ms CLI examples; commands include deps, diff, edit, evidence, index, init, load, requirements...]
 
 ### 4.2 Build Commands (CASS Integration)
 
-[Code block omitted: ms CLI command examples (19 lines).]
-- Unique ms commands: 4.
-- Example: ms build (no flags shown)
-- Example: ms build (flags: --name)
-- Example: ms build (flags: --from-cass)
-- Example: ms build (flags: --from-cass, --sessions)
-- Example: ms build (flags: --from-cass, --redaction-report)
-- Example: ms build (flags: --from-cass, --no-redact)
-- Example: ms build (flags: --from-cass, --no-antipatterns)
-- Example: ms build (flags: --from-cass, --output-spec)
-- Example: ms build (flags: --from-cass, --min-session-quality)
-- Example: ms build (flags: --from-cass, --no-injection-filter)
-- Example: ms build (flags: --from-cass, --generalize)
-- Example: ms build (flags: --from-cass, --generalize, --llm-critique)
-- Example: ms build (flags: --resume)
-- Example: ms build (flags: --auto, --from-cass, --min-confidence)
-- Example: ms compile (flags: --out)
-- Example: ms spec (no flags shown)
-- Example: ms build (flags: --resolve-uncertainties)
-- Example: ms uncertainties (no flags shown)
-- Example: ms uncertainties (flags: --mine)
-- Examples collectively cover init/index, search/suggest/load, build, maintenance, testing, and integrations.
+[Code block omitted: ms CLI examples; commands include build, compile, uncertainties]
 
 ### 4.3 Bundle Commands
 
-[Code block omitted: ms CLI command examples (13 lines).]
-- Unique ms commands: 1.
-- Example: ms bundle (flags: --skills)
-- Example: ms bundle (flags: --tags, --min-quality)
-- Example: ms bundle (flags: --repo)
-- Example: ms bundle (flags: --gist)
-- Example: ms bundle (flags: --sign, --key)
-- Example: ms bundle (no flags shown)
-- Example: ms bundle (flags: --skills)
-- Example: ms bundle (flags: --channel, --verify)
-- Example: ms bundle (no flags shown)
-- Example: ms bundle (no flags shown)
-- Example: ms bundle (no flags shown)
-- Example: ms bundle (flags: --channel)
-- Example: ms bundle (no flags shown)
-- Examples collectively cover init/index, search/suggest/load, build, maintenance, testing, and integrations.
+[Code block omitted: ms CLI examples; commands include bundle]
 
 ### 4.4 Maintenance Commands
 
-[Code block omitted: ms CLI command examples (28 lines).]
-- Unique ms commands: 8.
-- Example: ms update (flags: --check)
-- Example: ms update (no flags shown)
-- Example: ms doctor (no flags shown)
-- Example: ms doctor (flags: --fix)
-- Example: ms doctor (flags: --check)
-- Example: ms doctor (flags: --check)
-- Example: ms doctor (flags: --check)
-- Example: ms prune (flags: --scope)
-- Example: ms prune (flags: --scope, --dry-run)
-- Example: ms prune (flags: --scope, --min-uses, --window)
-- Example: ms prune (flags: --scope, --similarity, --emit-beads)
-- Example: ms prune (flags: --scope, --apply, --require-confirmation)
-- Example: ms config (no flags shown)
-- Example: ms config (no flags shown)
-- Example: ms config (no flags shown)
-- Example: ms config (no flags shown)
-- Example: ms stats (no flags shown)
-- Example: ms stats (flags: --skill)
-- Example: ms stats (flags: --period)
-- Example: ms stale (no flags shown)
-- Example: ms stale (flags: --project)
-
-**New Ops-Grade Maintenance Additions:**
-- `ms doctor --preflight <context>` returns a small “safe to proceed” JSON blob.
-- `ms load <skill> --pack --preview` shows exact injected slices + token counts.
-- `ms compile --target claude|openai|cursor|generic-md`
-- Optional `msd` daemon: `msd start|stop|status` with CLI auto-detect.
-- Perf telemetry in `ms doctor --check=perf` (p50/p95/p99 suggest/load, pack time).
-- Example: ms stale (flags: --min-severity)
-- Example: ms test (no flags shown)
-- Example: ms test (flags: --report)
-- Example: ms test (flags: --all)
-- Example: ms simulate (no flags shown)
-- Example: ms simulate (flags: --project)
-- Example: ms simulate (flags: --report)
-- Examples collectively cover init/index, search/suggest/load, build, maintenance, testing, and integrations.
+[Code block omitted: ms CLI examples; commands include doctor, load, prune, simulate, stale, stats, test, update]
 
 ### 4.5 Robot Mode (Comprehensive Specification)
 
@@ -1275,290 +666,57 @@ Following the xf pattern exactly, robot mode provides machine-readable JSON outp
 
 **Core Protocol:**
 
-[Code block omitted: ASCII diagram illustrating a workflow/system layout.]
-- Block length: 18 line(s).
-- Diagram uses box-and-arrow flow to show major steps, loops, or dependencies.
-- Intended to give a visual map of the process described in nearby text.
+[Diagram omitted: workflow/system diagram.]
+- 18 line(s); see surrounding text for step labels.
 
 **Robot Mode Commands:**
 
-[Code block omitted: ms CLI command examples (15 lines).]
-- Unique ms commands: 15.
-- Example: ms --robot-status (no flags shown)
-- Example: ms --robot-health (no flags shown)
-- Example: ms --robot-suggest (no flags shown)
-- Example: ms --robot-search="query" (no flags shown)
-- Example: ms --robot-build-status (no flags shown)
-- Example: ms --robot-cass-status (no flags shown)
-- Example: ms list (flags: --robot)
-- Example: ms search (flags: --robot)
-- Example: ms show (flags: --robot)
-- Example: ms load (flags: --robot)
-- Example: ms suggest (flags: --robot)
-- Example: ms build (flags: --robot, --status)
-- Example: ms stats (flags: --robot)
-- Example: ms doctor (flags: --robot)
-- Example: ms sync (flags: --robot)
-- Examples collectively cover init/index, search/suggest/load, build, maintenance, testing, and integrations.
+[Code block omitted: ms CLI examples; commands include build, doctor, list, load, review, search, show, stats...]
 
 **Output Schemas:**
 
-[Code block omitted: Rust example code (types/logic).]
-- Block length: 121 line(s).
-- Counts: 13 struct(s), 1 enum(s), 0 trait(s), 0 impl(s), 0 fn(s), 61 field(s).
-- Struct: RobotResponse
-- Struct: StatusResponse
-- Struct: RegistryStatus
-- Struct: SuggestResponse
-- Struct: SuggestionItem
-- Struct: SuggestionExplain
-- Struct: SuggestionExplanation
-- Struct: SuggestionSignalExplain
-- Struct: SignalScore
-- Struct: RrfBreakdown
-- Struct: BuildStatusResponse
-- Struct: RequirementsResponse
-- Struct: BuildSessionDetail
-- Enum: RobotStatus
-- Field/key: status
-- Field/key: timestamp
-- Field/key: version
-- Field/key: data
-- Field/key: warnings
-- Field/key: registry
-- Field/key: search_index
-- Field/key: cass_integration
-- Field/key: active_builds
-- Field/key: config
-- Field/key: total_skills
-- Field/key: indexed_skills
-- Field/key: local_skills
-- Field/key: upstream_skills
-- Field/key: modified_skills
-- Field/key: last_index_update
-- Field/key: context
-- Field/key: suggestions
-- Field/key: swarm_plan
-- Field/key: explain
-- Field/key: skill_id
-- Field/key: name
-- Field/key: score
-- Field/key: reason
-- Field/key: disclosure_level
-- Field/key: token_estimate
-- Field/key: pack_budget
-- Field/key: packed_token_estimate
-- Field/key: slice_count
-- Field/key: dependencies
-- Field/key: layer
-- Field/key: conflicts
-- Field/key: requirements
-- Field/key: explanation
-- Field/key: enabled
-- Field/key: signals
-- Field/key: matched_triggers
-- Field/key: signal_scores
-- Field/key: rrf_components
-- Field/key: signal_type
-- Field/key: value
-- Field/key: weight
-- Field/key: signal
-- Field/key: contribution
-- Field/key: bm25_rank
-- Field/key: vector_rank
-- Field/key: rrf_score
-- Field/key: active_sessions
-- Field/key: recent_completed
-- Field/key: queued_patterns
-- Field/key: queued_uncertainties
-- Field/key: environment
-- Field/key: session_id
-- Field/key: skill_name
-- Field/key: state
-- Field/key: iteration
-- Field/key: patterns_used
-- Field/key: patterns_available
-- Field/key: started_at
-- Field/key: last_activity
-- Field/key: checkpoint_path
-- Block defines core structures or algorithms referenced by surrounding text.
+[Code block omitted: Rust structs: RobotResponse, StatusResponse, RegistryStatus; enums: RobotStatus; fields: status, timestamp, version, data, warnings, registry.]
 
 **Error Response Format:**
 
-[Code block omitted: JSON example payload/schema.]
-- Block length: 12 line(s).
-- Keys extracted: 8.
-- Key: status
-- Key: error
-- Key: code
-- Key: message
-- Key: timestamp
-- Key: version
-- Key: data
-- Key: warnings
-- Example illustrates machine-readable output contract.
+[Code block omitted: JSON payload; keys include status, error, code, message, timestamp, version, ....]
 
 **Integration Examples:**
 
-[Code block omitted: ms CLI command examples (2 lines).]
-- Unique ms commands: 2.
-- Example: ms build (flags: --robot, --from-cass, --auto, --max-iterations)
-- Example: ms --robot-health (no flags shown)
-- Examples collectively cover init/index, search/suggest/load, build, maintenance, testing, and integrations.
+[Code block omitted: ms CLI examples; commands include build]
 
 ### 4.6 Doctor Command
 
 The `doctor` command performs comprehensive health checks on the ms installation, following best practices from xf and other Rust CLI tools.
 
-[Code block omitted: ms CLI command examples (4 lines).]
-- Unique ms commands: 1.
-- Example: ms doctor (no flags shown)
-- Example: ms doctor (flags: --fix)
-- Example: ms doctor (flags: --robot)
-- Example: ms doctor (flags: --check)
-- Examples collectively cover init/index, search/suggest/load, build, maintenance, testing, and integrations.
+[Code block omitted: ms CLI examples; commands include doctor]
 
 **Check Categories:**
 
-[Code block omitted: Rust example code (types/logic).]
-- Block length: 38 line(s).
-- Counts: 2 struct(s), 2 enum(s), 0 trait(s), 0 impl(s), 0 fn(s), 10 field(s).
-- Struct: DoctorReport
-- Struct: CheckResult
-- Enum: CheckCategory
-- Enum: HealthStatus
-- Field/key: checks
-- Field/key: overall_status
-- Field/key: auto_fixable
-- Field/key: check_id
-- Field/key: category
-- Field/key: status
-- Field/key: message
-- Field/key: details
-- Field/key: fix_available
-- Field/key: fix_command
-- Block defines core structures or algorithms referenced by surrounding text.
+[Code block omitted: Rust structs: DoctorReport, CheckResult; enums: CheckCategory, HealthStatus; fields: checks, overall_status, auto_fixable, check_id, category, status.]
 
 **Checks Performed:**
 
-[Code block omitted: ASCII diagram illustrating a workflow/system layout.]
-- Block length: 94 line(s).
-- Diagram uses box-and-arrow flow to show major steps, loops, or dependencies.
-- Intended to give a visual map of the process described in nearby text.
+[Diagram omitted: workflow/system diagram.]
+- 94 line(s); see surrounding text for step labels.
 
 **Output Example:**
 
-[Code block omitted: ms CLI command examples (1 lines).]
-- Unique ms commands: 1.
-- Example: ms doctor (no flags shown)
-- Examples collectively cover init/index, search/suggest/load, build, maintenance, testing, and integrations.
+[Code block omitted: ms CLI examples; commands include ]
 
 ### 4.7 Shell Integration
 
 Shell integration provides aliases, completions, and environment setup.
 
-[Code block omitted: ms CLI command examples (3 lines).]
-- Unique ms commands: 1.
-- Example: ms init (no flags shown)
-- Example: ms init (no flags shown)
-- Example: ms init (no flags shown)
-- Examples collectively cover init/index, search/suggest/load, build, maintenance, testing, and integrations.
+[Code block omitted: ms CLI examples; commands include ]
 
 **Generated Shell Functions:**
 
-[Code block omitted: ms CLI command examples (2 lines).]
-- Unique ms commands: 2.
-- Example: ms load (flags: --level)
-- Example: ms build (flags: --from-cass, --robot, --limit)
-- Examples collectively cover init/index, search/suggest/load, build, maintenance, testing, and integrations.
+[Code block omitted: ms CLI examples; commands include build, load]
 
 **Shell Completions:**
 
-[Code block omitted: shell command examples (117 lines).]
-- Unique tools referenced: 82.
-- Tool invoked: _ms()
-- Tool invoked: local
-- Tool invoked: commands=(
-- Tool invoked: 'search:Search
-- Tool invoked: 'list:List
-- Tool invoked: 'show:Show
-- Tool invoked: 'alias:Manage
-- Tool invoked: 'requirements:Check
-- Tool invoked: 'edit:Edit
-- Tool invoked: 'fmt:Format
-- Tool invoked: 'diff:Diff
-- Tool invoked: 'prune:Prune
-- Tool invoked: 'load:Load
-- Tool invoked: 'suggest:Get
-- Tool invoked: 'build:Build
-- Tool invoked: 'bundle:Manage
-- Tool invoked: 'sync:Synchronize
-- Tool invoked: 'doctor:Health
-- Tool invoked: 'stats:Usage
-- Tool invoked: 'config:Configuration
-- Tool invoked: 'upgrade:Check
-- Tool invoked: )
-- Tool invoked: global_opts=(
-- Tool invoked: '--robot[Output
-- Tool invoked: '--help[Show
-- Tool invoked: '--version[Show
-- Tool invoked: '--verbose[Verbose
-- Tool invoked: '--quiet[Suppress
-- Tool invoked: _arguments
-- Tool invoked: $global_opts
-- Tool invoked: '1:command:->command'
-- Tool invoked: '*::arg:->args'
-- Tool invoked: case
-- Tool invoked: command)
-- Tool invoked: _describe
-- Tool invoked: ;;
-- Tool invoked: args)
-- Tool invoked: search)
-- Tool invoked: '--limit[Max
-- Tool invoked: '--tags[Filter
-- Tool invoked: '--type[Filter
-- Tool invoked: '--include-deprecated[Include
-- Tool invoked: alias)
-- Tool invoked: '1:action:(list
-- Tool invoked: '*:skill:_ms_skills'
-- Tool invoked: requirements)
-- Tool invoked: '--project[Project
-- Tool invoked: suggest)
-- Tool invoked: '--cwd[Working
-- Tool invoked: '--file[Current
-- Tool invoked: '--query[Explicit
-- Tool invoked: '--pack[Token
-- Tool invoked: '--mode[Pack
-- Tool invoked: '--max-per-group[Max
-- Tool invoked: '--explain[Include
-- Tool invoked: '--for-ntm[Swarm-aware
-- Tool invoked: '--agents[Agent
-- Tool invoked: '--budget[Token
-- Tool invoked: '--objective[Swarm
-- Tool invoked: load)
-- Tool invoked: '--level[Disclosure
-- Tool invoked: '--format[Output
-- Tool invoked: edit)
-- Tool invoked: '--allow-lossy[Allow
-- Tool invoked: fmt)
-- Tool invoked: '--check[Check
-- Tool invoked: diff)
-- Tool invoked: '--semantic[Spec-level
-- Tool invoked: prune)
-- Tool invoked: '--scope[Prune
-- Tool invoked: '--approve[Verbatim
-- Tool invoked: build)
-- Tool invoked: '--from-cass[Mine
-- Tool invoked: '--from-sessions[Specific
-- Tool invoked: '--name[Skill
-- Tool invoked: '--auto[Non-interactive
-- Tool invoked: '--iterations[Max
-- Tool invoked: esac
-- Tool invoked: }
-- Tool invoked: _ms_skills()
-- Tool invoked: skills=(${(f)"$(ms
-- Tool invoked: compdef
-- Commands illustrate typical workflows and integrations.
+[Code block omitted: shell commands using _ms(), local, commands=(, 'search:Search, 'list:List, 'show:Show, 'alias:Manage, 'requirements:Check....]
 
 ### 4.8 MCP Server Mode
 
@@ -1572,52 +730,15 @@ can consume ms via MCP with dramatically less friction.
 
 **Server Commands:**
 
-[Code block omitted: ms CLI command examples (3 lines).]
-- Unique ms commands: 1.
-- Example: ms mcp (no flags shown)
-- Example: ms mcp (flags: --tcp)
-- Example: ms mcp (no flags shown)
-- Examples collectively cover init/index, search/suggest/load, build, maintenance, testing, and integrations.
+[Code block omitted: ms CLI examples; commands include mcp]
 
 **MCP Tool Definitions:**
 
-[Code block omitted: Rust example code (types/logic).]
-- Block length: 49 line(s).
-- Counts: 6 struct(s), 0 enum(s), 0 trait(s), 0 impl(s), 0 fn(s), 12 field(s).
-- Struct: MsSearch
-- Struct: MsSuggest
-- Struct: MsLoad
-- Struct: MsEvidence
-- Struct: MsBuildStatus
-- Struct: MsPack
-- Field/key: query
-- Field/key: filters
-- Field/key: limit
-- Field/key: context
-- Field/key: budget_tokens
-- Field/key: skill_id
-- Field/key: pack_budget
-- Field/key: level
-- Field/key: rule_id
-- Field/key: expand_context
-- Field/key: skill_ids
-- Field/key: mode
-- Block defines core structures or algorithms referenced by surrounding text.
+[Code block omitted: Rust structs: MsSearch, MsSuggest, MsLoad; fields: query, filters, limit, context, budget_tokens, skill_id.]
 
 **Server Architecture:**
 
-[Code block omitted: Rust example code (types/logic).]
-- Block length: 26 line(s).
-- Counts: 1 struct(s), 0 enum(s), 0 trait(s), 1 impl(s), 2 fn(s), 4 field(s).
-- Struct: McpServer
-- Impl block: McpServer
-- Function/method: serve_stdio
-- Function/method: serve_tcp
-- Field/key: registry
-- Field/key: cache
-- Field/key: protocol
-- Field/key: tokio
-- Block defines core structures or algorithms referenced by surrounding text.
+[Code block omitted: Rust structs: McpServer; fns: serve_stdio, serve_tcp; fields: registry, cache, protocol, tokio.]
 
 **Benefits over CLI:**
 
@@ -1631,14 +752,7 @@ can consume ms via MCP with dramatically less friction.
 
 **Claude Code Integration:**
 
-[Code block omitted: JSON example payload/schema.]
-- Block length: 8 line(s).
-- Keys extracted: 4.
-- Key: ms
-- Key: command
-- Key: args
-- Key: env
-- Example illustrates machine-readable output contract.
+[Code block omitted: JSON payload; keys include ms, command, args, env.]
 
 ---
 
@@ -1646,85 +760,25 @@ can consume ms via MCP with dramatically less friction.
 
 ### 5.1 The Mining Pipeline
 
-[Code block omitted: ASCII diagram illustrating a workflow/system layout.]
-- Block length: 68 line(s).
-- Diagram uses box-and-arrow flow to show major steps, loops, or dependencies.
-- Intended to give a visual map of the process described in nearby text.
-
-**Session Segmentation (Phase-Aware Mining):**
-- Segment sessions into phases: recon → hypothesis → change → validation → regression fix → wrap-up.
-- Use tool-call boundaries and language markers (“let’s try”, “run tests”, etc.) to classify phase.
-- Extract phase-specific patterns to avoid overgeneralizing recon tactics into wrap-up rules.
+[Diagram omitted: workflow/system diagram.]
+- 68 line(s); see surrounding text for step labels.
 
 ### 5.2 Pattern Types
 
-[Code block omitted: Rust example code (types/logic).]
-- Block length: 68 line(s).
-- Counts: 1 struct(s), 1 enum(s), 0 trait(s), 0 impl(s), 0 fn(s), 26 field(s).
-- Struct: ExtractedPattern
-- Enum: PatternType
-- Field/key: commands
-- Field/key: frequency
-- Field/key: contexts
-- Field/key: language
-- Field/key: code
+[Code block omitted: Rust structs: ExtractedPattern; enums: PatternType; fields: commands, frequency, contexts, language, code, purpose.]
 
 **Pattern IR (Typed Intermediate Representation):**
-- Introduce typed IR before synthesis: `CommandRecipe`, `DiagnosticDecisionTree`,
-  `Invariant`, `Pitfall`, `PromptMacro`, `RefactorPlaybook`, `ChecklistItem`.
-- Normalize commands, filepaths, tool names, and error signatures for dedupe.
-- IR drives confidence scoring, clustering, and deterministic synthesis.
-- Field/key: purpose
-- Field/key: text
-- Field/key: variants
-- Field/key: steps
-- Field/key: decision_points
-- Field/key: rule
-- Field/key: severity
-- Field/key: rationale
-- Field/key: error_signature
-- Field/key: resolution
-- Field/key: prevention
-- Field/key: prompt
-- Field/key: context
-- Field/key: effectiveness_score
-- Field/key: bad_practice
-- Field/key: risk
-- Field/key: safer_alternative
-- Field/key: id
-- Field/key: pattern_type
-- Field/key: evidence
-- Field/key: confidence
-- Block defines core structures or algorithms referenced by surrounding text.
+
+[Code block omitted: Rust enums: PatternIR.]
 
 ### 5.3 CASS Client Implementation
 
-[Code block omitted: Rust example code (types/logic).]
-- Block length: 64 line(s).
-- Counts: 2 struct(s), 0 enum(s), 0 trait(s), 2 impl(s), 6 fn(s), 5 field(s).
-- Struct: CassClient
-- Struct: FingerprintCache
-- Impl block: CassClient
-- Impl block: FingerprintCache
-- Function/method: search
-- Function/method: get_session
-- Function/method: incremental_sessions
-- Function/method: capabilities
-- Function/method: is_new_or_changed
-- Function/method: update
-- Field/key: cass_bin
-- Field/key: data_dir
-- Field/key: fingerprint_cache
-- Field/key: serde_json
-- Field/key: db
-- Block defines core structures or algorithms referenced by surrounding text.
+[Code block omitted: Rust structs: CassClient, FingerprintCache; fns: search, get_session, incremental_sessions; fields: cass_bin, data_dir, fingerprint_cache, serde_json, db.]
 
 ### 5.4 Interactive Build Session Flow
 
-[Code block omitted: ASCII diagram illustrating a workflow/system layout.]
-- Block length: 62 line(s).
-- Diagram uses box-and-arrow flow to show major steps, loops, or dependencies.
-- Intended to give a visual map of the process described in nearby text.
+[Diagram omitted: workflow/system diagram.]
+- 62 line(s); see surrounding text for step labels.
 
 ### 5.5 The Guided Iterative Mode (Hours-Long Autonomous Skill Generation)
 
@@ -1738,40 +792,19 @@ This is a **killer feature**: ms can run autonomously for hours, systematically 
 
 **The Vision:**
 
-[Code block omitted: ASCII diagram illustrating a workflow/system layout.]
-- Block length: 37 line(s).
-- Diagram uses box-and-arrow flow to show major steps, loops, or dependencies.
-- Intended to give a visual map of the process described in nearby text.
+[Diagram omitted: workflow/system diagram.]
+- 37 line(s); see surrounding text for step labels.
 
 **Shared State Machine (Guided vs Autonomous):**
-- Guided mode and autonomous mode share the same underlying state machine.
-- Autonomous = guided mode with zero user input; guided = autonomous with checkpoints.
+- Guided mode and autonomous mode share the same state machine.
+- Autonomous = guided with zero user input; guided = autonomous with checkpoints.
 - One recovery path reduces drift and improves reliability.
 
 **Steady-State Detection:**
 
 From your planning-workflow skill, we adopt the "iterate until steady state" pattern:
 
-[Code block omitted: Rust example code (types/logic).]
-- Block length: 99 line(s).
-- Counts: 1 struct(s), 1 enum(s), 0 trait(s), 1 impl(s), 2 fn(s), 11 field(s).
-- Struct: SteadyStateDetector
-- Enum: SteadyStateResult
-- Impl block: SteadyStateDetector
-- Function/method: is_steady
-- Function/method: canonical_embedding
-- Field/key: min_iterations
-- Field/key: similarity_threshold
-- Field/key: max_token_delta
-- Field/key: max_quality_delta
-- Field/key: min_evidence_coverage
-- Field/key: max_no_improvement_iters
-- Field/key: max_wall_clock_per_skill
-- Field/key: reason
-- Field/key: current
-- Field/key: required
-- Field/key: SteadyStateResult
-- Block defines core structures or algorithms referenced by surrounding text.
+[Code block omitted: Rust structs: SteadyStateDetector; enums: SteadyStateResult; fns: is_steady, canonical_embedding; fields: min_iterations, similarity_threshold, max_token_delta, max_quality_delta, min_evidence_coverage, max_no_improvement_iters.]
 
 **Autonomous Quality Rubric:**
 
@@ -1789,22 +822,11 @@ The guided mode self-critiques each draft against this rubric:
 
 Even in autonomous mode, ms pauses for user input at key moments:
 
-[Code block omitted: Rust example code (types/logic).]
-- Block length: 12 line(s).
-- Counts: 0 struct(s), 1 enum(s), 0 trait(s), 0 impl(s), 0 fn(s), 0 field(s).
-- Enum: CheckpointTrigger
-- Block defines core structures or algorithms referenced by surrounding text.
+[Code block omitted: Rust enums: CheckpointTrigger.]
 
 **CLI Interface:**
 
-[Code block omitted: ms CLI command examples (5 lines).]
-- Unique ms commands: 1.
-- Example: ms build (flags: --guided, --duration)
-- Example: ms build (flags: --guided, --focus, --duration)
-- Example: ms build (flags: --guided, --resume)
-- Example: ms build (flags: --guided, --autonomous, --duration)
-- Example: ms build (flags: --guided, --dry-run, --duration)
-- Examples collectively cover init/index, search/suggest/load, build, maintenance, testing, and integrations.
+[Code block omitted: ms CLI examples; commands include build]
 
 ### 5.6 Specific-to-General Transformation Algorithm
 
@@ -1813,10 +835,8 @@ The same pipeline is applied to counter-examples to produce "Avoid / When NOT to
 
 **The Transformation Pipeline:**
 
-[Code block omitted: ASCII diagram illustrating a workflow/system layout.]
-- Block length: 52 line(s).
-- Diagram uses box-and-arrow flow to show major steps, loops, or dependencies.
-- Intended to give a visual map of the process described in nearby text.
+[Diagram omitted: workflow/system diagram.]
+- 52 line(s); see surrounding text for step labels.
 
 **Optional LLM-Assisted Refinement (Pluggable):**
 - If configured, a local model critiques the candidate generalization for overreach,
@@ -1826,167 +846,40 @@ The same pipeline is applied to counter-examples to produce "Avoid / When NOT to
 
 **The Algorithm:**
 
-[Code block omitted: Rust example code (types/logic).]
-- Block length: 132 line(s).
-- Counts: 2 struct(s), 0 enum(s), 1 trait(s), 1 impl(s), 6 fn(s), 23 field(s).
-- Struct: SpecificToGeneralTransformer
-- Struct: RefinementCritique
-- Trait: GeneralizationRefiner
-- Impl block: SpecificToGeneralTransformer
-- Function/method: critique
-- Function/method: transform
-- Function/method: extract_structure
-- Function/method: find_similar_instances
-- Function/method: extract_common_elements
-- Function/method: queue_uncertainty
-- Field/key: cass
-- Field/key: embedder
-- Field/key: uncertainty_queue
-- Field/key: refiner
-- Field/key: min_instances
-- Field/key: confidence_threshold
-- Field/key: summary
-- Field/key: flags_overgeneralization
-- Field/key: principle
-- Field/key: examples
-- Field/key: applicability
-- Field/key: confidence
-- Field/key: source_instances
-- Field/key: abstracted_description
-- Field/key: context_conditions
-- Field/key: instance
-- Field/key: validation
-- Field/key: cluster
-- Field/key: critique
-- Field/key: id
-- Field/key: pattern_candidate
-- Field/key: status
-- Field/key: created_at
-- Block defines core structures or algorithms referenced by surrounding text.
+[Code block omitted: Rust structs: SpecificToGeneralTransformer, RefinementCritique; fns: critique, transform, extract_structure; fields: cass, embedder, uncertainty_queue, refiner, min_instances, confidence_threshold.]
 
 **Generalization Confidence Scoring:**
 
-[Code block omitted: Rust example code (types/logic).]
-- Block length: 65 line(s).
-- Counts: 2 struct(s), 1 enum(s), 0 trait(s), 1 impl(s), 1 fn(s), 11 field(s).
-- Struct: GeneralizationValidation
-- Struct: CounterExample
-- Enum: CounterExampleReason
-- Impl block: GeneralizationValidation
-- Function/method: compute
-- Field/key: coverage
-- Field/key: predictive_power
-- Field/key: coherence
-- Field/key: specificity
-- Field/key: confidence
-- Field/key: counterexamples
-- Field/key: instance_id
-- Field/key: failure_reason
-- Field/key: missing_precondition
-- Field/key: suggests_refinement
-- Field/key: CounterExampleReason
-- Block defines core structures or algorithms referenced by surrounding text.
+[Code block omitted: Rust structs: GeneralizationValidation, CounterExample; enums: CounterExampleReason; fns: compute; fields: coverage, predictive_power, coherence, specificity, confidence, counterexamples.]
 
 ### 5.7 Skill Deduplication and Personalization
 
 **No Redundancy Across Skills:**
 
-[Code block omitted: ASCII diagram illustrating a workflow/system layout.]
-- Block length: 47 line(s).
-- Diagram uses box-and-arrow flow to show major steps, loops, or dependencies.
-- Intended to give a visual map of the process described in nearby text.
+[Diagram omitted: workflow/system diagram.]
+- 47 line(s); see surrounding text for step labels.
 
 **Implementation:**
 
-[Code block omitted: Rust example code (types/logic).]
-- Block length: 43 line(s).
-- Counts: 1 struct(s), 0 enum(s), 0 trait(s), 1 impl(s), 2 fn(s), 10 field(s).
-- Struct: SkillDeduplicator
-- Impl block: SkillDeduplicator
-- Function/method: check_overlap
-- Function/method: recommend_action
-- Field/key: embedder
-- Field/key: registry
-- Field/key: semantic_threshold
-- Field/key: uniqueness_threshold
-- Field/key: existing_skill
-- Field/key: semantic_similarity
-- Field/key: structural_overlap
-- Field/key: recommended_action
-- Field/key: suggested_scopes
-- Field/key: OverlapAction
-- Block defines core structures or algorithms referenced by surrounding text.
+[Code block omitted: Rust structs: SkillDeduplicator; fns: check_overlap, recommend_action; fields: embedder, registry, semantic_threshold, uniqueness_threshold, existing_skill, semantic_similarity.]
 
 **Personalization ("Tailored to YOUR Approach"):**
 
-[Code block omitted: Rust example code (types/logic).]
-- Block length: 50 line(s).
-- Counts: 2 struct(s), 0 enum(s), 0 trait(s), 1 impl(s), 2 fn(s), 9 field(s).
-- Struct: PersonalizationEngine
-- Struct: StyleProfile
-- Impl block: PersonalizationEngine
-- Function/method: build_from_sessions
-- Function/method: personalize
-- Field/key: style_profile
-- Field/key: tool_preferences
-- Field/key: naming_conventions
-- Field/key: prompt_patterns
-- Field/key: indentation
-- Field/key: comment_style
-- Field/key: error_handling
-- Field/key: test_style
-- Field/key: verbosity
-- Block defines core structures or algorithms referenced by surrounding text.
+[Code block omitted: Rust structs: PersonalizationEngine, StyleProfile; fns: build_from_sessions, personalize; fields: style_profile, tool_preferences, naming_conventions, prompt_patterns, indentation, comment_style.]
 
 ### 5.8 Tech Stack Detection and Specialization
 
 Different tech stacks require different skills. ms auto-detects your project's stack:
 
-[Code block omitted: Rust example code (types/logic).]
-- Block length: 78 line(s).
-- Counts: 1 struct(s), 1 enum(s), 0 trait(s), 1 impl(s), 2 fn(s), 4 field(s).
-- Struct: TechStackDetector
-- Enum: TechStack
-- Impl block: TechStackDetector
-- Function/method: detect
-- Function/method: suggest_for_stack
-- Field/key: indicators
-- Field/key: secondary
-- Field/key: confidence
-- Field/key: TechStack
-- Block defines core structures or algorithms referenced by surrounding text.
+[Code block omitted: Rust structs: TechStackDetector; enums: TechStack; fns: detect, suggest_for_stack; fields: indicators, secondary, confidence, TechStack.]
 
 **Toolchain Detection and Drift:**
 
-[Code block omitted: Rust example code (types/logic).]
-- Block length: 55 line(s).
-- Counts: 3 struct(s), 0 enum(s), 0 trait(s), 1 impl(s), 2 fn(s), 10 field(s).
-- Struct: ProjectToolchain
-- Struct: ToolchainDetector
-- Struct: ToolchainMismatch
-- Impl block: ToolchainDetector
-- Function/method: detect
-- Function/method: detect_toolchain_mismatches
-- Field/key: node
-- Field/key: rust
-- Field/key: go
-- Field/key: nextjs
-- Field/key: react
-- Field/key: tool
-- Field/key: skill_range
-- Field/key: project_version
-- Field/key: skill
-- Field/key: toolchain
-- Block defines core structures or algorithms referenced by surrounding text.
+[Code block omitted: Rust structs: ProjectToolchain, ToolchainDetector, ToolchainMismatch; fns: detect, detect_toolchain_mismatches; fields: node, rust, go, nextjs, react, tool.]
 
 **Stack-Specific Mining:**
 
-[Code block omitted: ms CLI command examples (3 lines).]
-- Unique ms commands: 1.
-- Example: ms build (flags: --from-cass, --stack)
-- Example: ms build (flags: --guided, --stack, --duration)
-- Example: ms build (flags: --from-cass, --stack)
-- Examples collectively cover init/index, search/suggest/load, build, maintenance, testing, and integrations.
+[Code block omitted: ms CLI examples; commands include build]
 
 ### 5.9 The Meta Skill Concept
 
@@ -1994,16 +887,12 @@ The **meta skill** is a special skill that guides AI agents in using `ms` itself
 
 #### The Core Insight
 
-[Code block omitted: ASCII diagram illustrating a workflow/system layout.]
-- Block length: 19 line(s).
-- Diagram uses box-and-arrow flow to show major steps, loops, or dependencies.
-- Intended to give a visual map of the process described in nearby text.
+[Diagram omitted: workflow/system diagram.]
+- 19 line(s); see surrounding text for step labels.
 
 #### The Meta Skill Content
 
-[Code block omitted: example block (lang='markdown').]
-- Block length: 16 line(s).
-- Block contains illustrative content referenced by the surrounding text.
+[Code block omitted: example block (lang='markdown', 16 line(s)).]
 # What topics have enough sessions for skill extraction?
 ms coverage --min-sessions 5
 
@@ -2012,9 +901,7 @@ ms analyze --cluster --min-cluster-size 3
 
 # What skills already exist?
 ms list --format=coverage
-[Code block omitted: example block (lang='n/a').]
-- Block length: 1 line(s).
-- Block contains illustrative content referenced by the surrounding text.
+[Code block omitted: example block (lang='n/a', 1 line(s)).]
 # Guided interactive build (recommended)
 ms build --guided --topic "UI/UX fixes"
 
@@ -2023,9 +910,7 @@ ms build --from-cass "error handling" --since "7 days" --output draft.md
 
 # Hours-long autonomous generation
 ms build --guided --duration 4h --checkpoint-interval 30m
-[Code block omitted: example block (lang='n/a').]
-- Block length: 8 line(s).
-- Block contains illustrative content referenced by the surrounding text.
+[Code block omitted: example block (lang='n/a', 8 line(s)).]
 # Add to your skill registry
 ms add ./draft-skill/
 
@@ -2034,17 +919,13 @@ ms index --refresh
 
 # Verify skill works
 ms suggest "scenario that should trigger this skill"
-[Code block omitted: example block (lang='n/a').]
-- Block length: 7 line(s).
-- Block contains illustrative content referenced by the surrounding text.
+[Code block omitted: example block (lang='n/a', 7 line(s)).]
 Specific Session Example           General Pattern
 ─────────────────────────────────────────────────────────
 "Fixed aria-hidden on SVG" ────► "Decorative elements need aria-hidden"
 "Added motion-reduce class" ────► "All animations need reduced-motion support"
 "Changed transition-all" ────► "Use specific transition properties"
-[Code block omitted: example block (lang='n/a').]
-- Block length: 2 line(s).
-- Block contains illustrative content referenced by the surrounding text.
+[Code block omitted: example block (lang='n/a', 2 line(s)).]
 # What topics have sessions but no skills?
 ms coverage --show-gaps
 
@@ -2053,9 +934,7 @@ ms stats --by-category
 
 # Suggest next skill to build based on session frequency
 ms next --suggest-build
-[Code block omitted: example block (lang='n/a').]
-- Block length: 1 line(s).
-- Block contains illustrative content referenced by the surrounding text.
+[Code block omitted: example block (lang='n/a', 1 line(s)).]
 # 1. I've done many UI/UX fix sessions recently
 ms analyze --topic "UI fixes" --days 30
 # Output: Found 23 sessions with 156 extractable patterns
@@ -2076,47 +955,16 @@ ms add ./draft-skill/      # Add to registry
 
 #### Meta Skill Generation Algorithm
 
-[Code block omitted: Rust example code (types/logic).]
-- Block length: 60 line(s).
-- Counts: 2 struct(s), 0 enum(s), 0 trait(s), 1 impl(s), 2 fn(s), 14 field(s).
-- Struct: MetaSkillGenerator
-- Struct: MetaSkillMetrics
-- Impl block: MetaSkillGenerator
-- Function/method: analyze_meta_usage
-- Function/method: self_improve
-- Field/key: cass
-- Field/key: ms_registry
-- Field/key: meta_skill_version
-- Field/key: total_uses
-- Field/key: success_rate
-- Field/key: common_errors
-- Field/key: improvement_opportunities
-- Field/key: content
-- Field/key: improvements_made
-- Field/key: confidence
-- Field/key: skills_generated
-- Field/key: avg_quality_score
-- Field/key: guided_completion_rate
-- Field/key: avg_time_to_skill
-- Block defines core structures or algorithms referenced by surrounding text.
+[Code block omitted: Rust structs: MetaSkillGenerator, MetaSkillMetrics; fns: analyze_meta_usage, self_improve; fields: cass, ms_registry, meta_skill_version, total_uses, success_rate, common_errors.]
 
 #### The Self-Improvement Loop
 
-[Code block omitted: ASCII diagram illustrating a workflow/system layout.]
-- Block length: 24 line(s).
-- Diagram uses box-and-arrow flow to show major steps, loops, or dependencies.
-- Intended to give a visual map of the process described in nearby text.
+[Diagram omitted: workflow/system diagram.]
+- 24 line(s); see surrounding text for step labels.
 
 **CLI Commands for Meta Skill:**
 
-[Code block omitted: ms CLI command examples (5 lines).]
-- Unique ms commands: 1.
-- Example: ms meta (no flags shown)
-- Example: ms meta (flags: --days)
-- Example: ms meta (flags: --dry-run)
-- Example: ms meta (flags: --apply)
-- Example: ms meta (no flags shown)
-- Examples collectively cover init/index, search/suggest/load, build, maintenance, testing, and integrations.
+[Code block omitted: ms CLI examples; commands include meta]
 
 ### 5.10 Long-Running Autonomous Generation with Checkpointing
 
@@ -2124,123 +972,24 @@ The user's vision emphasizes hours-long autonomous skill generation sessions. Th
 
 #### The Long-Running Session Problem
 
-[Code block omitted: ASCII diagram illustrating a workflow/system layout.]
-- Block length: 17 line(s).
-- Diagram uses box-and-arrow flow to show major steps, loops, or dependencies.
-- Intended to give a visual map of the process described in nearby text.
+[Diagram omitted: workflow/system diagram.]
+- 17 line(s); see surrounding text for step labels.
 
 #### Checkpoint Architecture
 
-[Code block omitted: Rust example code (types/logic).]
-- Block length: 141 line(s).
-- Counts: 3 struct(s), 1 enum(s), 0 trait(s), 1 impl(s), 3 fn(s), 41 field(s).
-- Struct: CheckpointManager
-- Struct: GenerationCheckpoint
-- Struct: SkillInProgress
-- Enum: GenerationPhase
-- Impl block: CheckpointManager
-- Function/method: save
-- Function/method: load_latest
-- Function/method: resume
-- Field/key: checkpoint_dir
-- Field/key: checkpoint_interval
-- Field/key: max_checkpoints
-- Field/key: id
-- Field/key: build_id
-- Field/key: sequence
-- Field/key: created_at
-- Field/key: phase
-- Field/key: active_skills
-- Field/key: completed_skills
-- Field/key: pattern_pool
-- Field/key: cass_state
-- Field/key: metrics
-- Field/key: feedback_history
-- Field/key: processed_session_hashes
-- Field/key: config_snapshot
-- Field/key: algorithm_version
-- Field/key: random_seed
-- Field/key: queries_completed
-- Field/key: queries_remaining
-- Field/key: patterns_found
-- Field/key: clusters_formed
-- Field/key: current_cluster
-- Field/key: skills_started
-- Field/key: skills_completed
-- Field/key: current_skill
-- Field/key: iteration
-- Field/key: last_delta
-- Field/key: steady_state_approach
-- Field/key: total_skills
-- Field/key: total_duration
-- Field/key: name
-- Field/key: tech_stack
-- Field/key: patterns_used
-- Field/key: current_draft
-- Field/key: quality_score
-- Field/key: feedback
-- Field/key: std
-- Field/key: checkpoint
-- Field/key: start_time
-- Field/key: iterations_since_resume
-- Block defines core structures or algorithms referenced by surrounding text.
+[Code block omitted: Rust structs: CheckpointManager, GenerationCheckpoint, SkillInProgress; enums: GenerationPhase; fns: save, load_latest, resume; fields: checkpoint_dir, checkpoint_interval, max_checkpoints, id, build_id, sequence.]
 
 #### Autonomous Generation Orchestrator
 
-[Code block omitted: Rust example code (types/logic).]
-- Block length: 157 line(s).
-- Counts: 2 struct(s), 0 enum(s), 0 trait(s), 2 impl(s), 3 fn(s), 22 field(s).
-- Struct: AutonomousOrchestrator
-- Struct: AutonomousConfig
-- Impl block: Default
-- Impl block: AutonomousOrchestrator
-- Function/method: default
-- Function/method: run
-- Function/method: report_progress
-- Field/key: cass
-- Field/key: transformer
-- Field/key: checkpoint_mgr
-- Field/key: deduplicator
-- Field/key: quality_scorer
-- Field/key: config
-- Field/key: max_duration
-- Field/key: checkpoint_interval
-- Field/key: progress_interval
-- Field/key: max_iterations_per_skill
-- Field/key: min_quality_threshold
-- Field/key: parallel_skills
-- Field/key: stall_timeout
-- Field/key: topics
-- Field/key: resume_build_id
-- Field/key: GenerationPhase
-- Field/key: duration
-- Field/key: skills_generated
-- Field/key: skills
-- Field/key: patterns_discovered
-- Field/key: patterns_used
-- Field/key: checkpoints_created
-- Block defines core structures or algorithms referenced by surrounding text.
+[Code block omitted: Rust structs: AutonomousOrchestrator, AutonomousConfig; fns: default, run, report_progress; fields: cass, transformer, checkpoint_mgr, deduplicator, quality_scorer, config.]
 
 **CLI Commands:**
 
-[Code block omitted: ms CLI command examples (9 lines).]
-- Unique ms commands: 1.
-- Example: ms build (flags: --autonomous, --topics, --duration)
-- Example: ms build (flags: --resume)
-- Example: ms build (flags: --resume-latest)
-- Example: ms build (flags: --list-checkpoints)
-- Example: ms build (flags: --show-checkpoint)
-- Example: ms build (flags: --export-checkpoint, --output)
-- Example: ms build (flags: --autonomous, --topics, --dry-run)
-- Example: ms build (flags: --autonomous, --topics, --checkpoint-interval)
-- Example: ms build (flags: --autonomous, --topics, --progress-interval)
-- Examples collectively cover init/index, search/suggest/load, build, maintenance, testing, and integrations.
+[Code block omitted: ms CLI examples; commands include build]
 
 **Progress Output Example:**
 
-[Code block omitted: example block (lang='n/a').]
-- Block length: 38 line(s).
-- Block contains illustrative content referenced by the surrounding text.
+[Code block omitted: example block (lang='n/a', 38 line(s)).]
 
 ### 5.11 Session Marking for Skill Mining
 
@@ -2248,94 +997,24 @@ Allow users to mark sessions during or after completion as good candidates for s
 
 #### The Session Marking Problem
 
-[Code block omitted: ASCII diagram illustrating a workflow/system layout.]
-- Block length: 15 line(s).
-- Diagram uses box-and-arrow flow to show major steps, loops, or dependencies.
-- Intended to give a visual map of the process described in nearby text.
+[Diagram omitted: workflow/system diagram.]
+- 15 line(s); see surrounding text for step labels.
 
 #### Marking Data Model
 
-[Code block omitted: Rust example code (types/logic).]
-- Block length: 148 line(s).
-- Counts: 3 struct(s), 2 enum(s), 0 trait(s), 1 impl(s), 4 fn(s), 20 field(s).
-- Struct: SessionMark
-- Struct: SessionHighlight
-- Struct: SessionMarkStore
-- Enum: MarkType
-- Enum: HighlightType
-- Impl block: SessionMarkStore
-- Function/method: mark
-- Function/method: get_for_topic
-- Function/method: get_exemplary
-- Function/method: filter_for_cass_query
-- Field/key: session_id
-- Field/key: session_path
-- Field/key: mark_type
-- Field/key: topics
-- Field/key: tech_stack
-- Field/key: quality_rating
-- Field/key: reason
-- Field/key: marked_at
-- Field/key: marked_by
-- Field/key: highlights
-- Field/key: id
-- Field/key: start
-- Field/key: end
-- Field/key: highlight_type
-- Field/key: confidence
-- Field/key: pattern
-- Field/key: related_ids
-- Field/key: db
-- Field/key: opts
-- Field/key: TechStackDetector
-- Block defines core structures or algorithms referenced by surrounding text.
+[Code block omitted: Rust structs: SessionMark, SessionHighlight, SessionMarkStore; enums: MarkType, HighlightType; fns: mark, get_for_topic, get_exemplary; fields: session_id, session_path, mark_type, topics, tech_stack, quality_rating.]
 
 #### CLI Commands for Session Marking
 
-[Code block omitted: ms CLI command examples (12 lines).]
-- Unique ms commands: 2.
-- Example: ms mark (flags: --exemplary, --topics)
-- Example: ms mark (flags: --useful, --topics, --reason)
-- Example: ms mark (flags: --ignore, --reason)
-- Example: ms mark (flags: --anti-pattern, --topics, --reason)
-- Example: ms mark (flags: --exemplary, --quality, --topics)
-- Example: ms mark (flags: --highlight, --reason)
-- Example: ms marks (no flags shown)
-- Example: ms marks (flags: --exemplary, --topic)
-- Example: ms marks (no flags shown)
-- Example: ms marks (no flags shown)
-- Example: ms marks (no flags shown)
-- Example: ms marks (flags: --output)
-- Examples collectively cover init/index, search/suggest/load, build, maintenance, testing, and integrations.
+[Code block omitted: ms CLI examples; commands include mark, marks]
 
 #### Integration with Skill Building
 
-[Code block omitted: Rust example code (types/logic).]
-- Block length: 35 line(s).
-- Counts: 1 struct(s), 0 enum(s), 0 trait(s), 1 impl(s), 1 fn(s), 5 field(s).
-- Struct: MarkedSessionBuilder
-- Impl block: MarkedSessionBuilder
-- Function/method: build_from_marked
-- Field/key: cass
-- Field/key: mark_store
-- Field/key: transformer
-- Field/key: topic
-- Field/key: opts
-- Block defines core structures or algorithms referenced by surrounding text.
+[Code block omitted: Rust structs: MarkedSessionBuilder; fns: build_from_marked; fields: cass, mark_store, transformer, topic, opts.]
 
 **Example Workflow:**
 
-[Code block omitted: shell command examples (17 lines).]
-- Unique tools referenced: 8.
-- Tool invoked: $
-- Tool invoked: --reason
-- Tool invoked: --quality
-- Tool invoked: Exemplary
-- Tool invoked: ★★★★★
-- Tool invoked: ★★★★☆
-- Tool invoked: Ignored
-- Tool invoked: xyz789
-- Commands illustrate typical workflows and integrations.
+[Code block omitted: shell commands using $, --reason, --quality, Exemplary, ★★★★★, ★★★★☆, Ignored, xyz789.]
 
 Anti-pattern markings are treated as counter-examples and flow into a dedicated
 "Avoid / When NOT to use" section during draft generation.
@@ -2345,96 +1024,33 @@ Anti-pattern markings are treated as counter-examples and flow into a dedicated
 Evidence links are first-class: every rule in a generated skill should be traceable back
 to concrete session evidence. ms builds a lightweight provenance graph that connects:
 
-[Code block omitted: example block (lang='n/a').]
-- Block length: 1 line(s).
-- Block contains illustrative content referenced by the surrounding text.
+[Code block omitted: example block (lang='n/a', 1 line(s)).]
 
 This makes skills auditable, merge-safe, and self-correcting.
 
 **Provenance Compression (Pointer + Fetch):**
-- Level 0: hash pointers + message ranges (cheap, default).
-- Level 1: minimal redacted excerpt (N lines) for quick review.
-- Level 2: expandable context fetched on demand via CASS.
-- Keeps bundles light while remaining auditable.
+- Level 0: hash pointers + message ranges (cheap default)
+- Level 1: minimal redacted excerpt for quick review
+- Level 2: expandable context fetched from CASS on demand
 
 **Provenance Graph Model:**
 
-[Code block omitted: Rust example code (types/logic).]
-- Block length: 37 line(s).
-- Counts: 5 struct(s), 1 enum(s), 0 trait(s), 0 impl(s), 0 fn(s), 15 field(s).
-- Struct: ProvenanceGraph
-- Struct: ProvNode
-- Struct: ProvEdge
-- Struct: EvidenceTimeline
-- Struct: TimelineItem
-- Enum: ProvNodeType
-- Field/key: nodes
-- Field/key: edges
-- Field/key: id
-- Field/key: node_type
-- Field/key: label
-- Field/key: from
-- Field/key: to
-- Field/key: weight
-- Field/key: reason
-- Field/key: rule_id
-- Field/key: items
-- Field/key: session_id
-- Field/key: occurred_at
-- Field/key: excerpt_path
-- Field/key: confidence
-- Block defines core structures or algorithms referenced by surrounding text.
+[Code block omitted: Rust structs: ProvenanceGraph, ProvNode, ProvEdge; enums: ProvNodeType; fields: nodes, edges, id, node_type, label, from.]
 
 **CLI Examples:**
 
-[Code block omitted: ms CLI command examples (5 lines).]
-- Unique ms commands: 1.
-- Example: ms evidence (no flags shown)
-- Example: ms evidence (flags: --rule)
-- Example: ms evidence (flags: --graph, --format)
-- Example: ms evidence (flags: --timeline)
-- Example: ms evidence (flags: --open)
-- Examples collectively cover init/index, search/suggest/load, build, maintenance, testing, and integrations.
+[Code block omitted: ms CLI examples; commands include evidence]
 
 **Actionable Evidence Navigation:**
 
 Provenance is only valuable if humans can quickly validate and refine rules.
 ms provides direct jump-to-source workflows that call CASS to expand context.
 
-[Code block omitted: Rust example code (types/logic).]
-- Block length: 64 line(s).
-- Counts: 3 struct(s), 0 enum(s), 0 trait(s), 1 impl(s), 2 fn(s), 13 field(s).
-- Struct: EvidenceNavigator
-- Struct: ExpandedEvidence
-- Struct: ExpandedEvidenceItem
-- Impl block: EvidenceNavigator
-- Function/method: expand_evidence
-- Function/method: cache_evidence
-- Field/key: cass_client
-- Field/key: evidence_cache
-- Field/key: skill_id
-- Field/key: rule_id
-- Field/key: context_lines
-- Field/key: session_id
-- Field/key: message_range
-- Field/key: context_before
-- Field/key: matched_content
-- Field/key: context_after
-- Field/key: session_metadata
-- Field/key: items
-- Field/key: std
-- Block defines core structures or algorithms referenced by surrounding text.
+[Code block omitted: Rust structs: EvidenceNavigator, ExpandedEvidence, ExpandedEvidenceItem; fns: expand_evidence, cache_evidence; fields: cass_client, evidence_cache, skill_id, rule_id, context_lines, session_id.]
 
 **Jump-to-Source CLI:**
 
-[Code block omitted: ms CLI command examples (5 lines).]
-- Unique ms commands: 1.
-- Example: ms evidence (flags: --rule, --expand)
-- Example: ms evidence (flags: --rule, --open-editor)
-- Example: ms evidence (flags: --rule, --cass-info)
-- Example: ms evidence (flags: --validate)
-- Example: ms evidence (flags: --refresh-cache)
-- Examples collectively cover init/index, search/suggest/load, build, maintenance, testing, and integrations.
+[Code block omitted: ms CLI examples; commands include evidence]
 
 ### 5.13 Redaction and Privacy Guard
 
@@ -2442,50 +1058,22 @@ All CASS transcripts pass through a redaction pipeline before pattern extraction
 This prevents secrets, tokens, and PII from ever entering generated skills,
 evidence excerpts, or provenance graphs.
 
+**Reassembly Resistance:**
+- Redaction assigns stable `secret_id` values so multiple partial excerpts cannot
+  be combined to reconstruct a secret across rules/evidence.
+- High-risk secret types are blocked from excerpt storage entirely.
+
 **Redaction Report Model:**
 
-[Code block omitted: Rust example code (types/logic).]
-- Block length: 39 line(s).
-- Counts: 3 struct(s), 2 enum(s), 0 trait(s), 0 impl(s), 0 fn(s), 12 field(s).
-- Struct: RedactionReport
-- Struct: RedactionFinding
-- Struct: RedactionLocation
-- Enum: RedactionKind
-- Enum: RedactionRisk
-- Field/key: session_id
-- Field/key: findings
-- Field/key: redacted_tokens
-- Field/key: risk_level
-- Field/key: created_at
-- Field/key: kind
-- Field/key: matched_pattern
-- Field/key: snippet_hash
-- Field/key: location
-- Field/key: message_index
-- Field/key: byte_start
-- Field/key: byte_end
-- Block defines core structures or algorithms referenced by surrounding text.
+[Code block omitted: Rust structs: RedactionReport, RedactionFinding, RedactionLocation; enums: RedactionKind, SecretType, RedactionRisk; fields: session_id, findings, redacted_tokens, risk_level, created_at, kind.]
 
 **Redactor Interface:**
 
-[Code block omitted: Rust example code (types/logic).]
-- Block length: 14 line(s).
-- Counts: 1 struct(s), 0 enum(s), 0 trait(s), 1 impl(s), 1 fn(s), 3 field(s).
-- Struct: Redactor
-- Impl block: Redactor
-- Function/method: redact
-- Field/key: rules
-- Field/key: allowlist
-- Field/key: min_entropy
-- Block defines core structures or algorithms referenced by surrounding text.
+[Code block omitted: Rust structs: Redactor; fns: redact; fields: rules, allowlist, min_entropy.]
 
 **CLI Examples:**
 
-[Code block omitted: ms CLI command examples (2 lines).]
-- Unique ms commands: 2.
-- Example: ms doctor (flags: --check)
-- Example: ms build (flags: --from-cass, --redaction-report)
-- Examples collectively cover init/index, search/suggest/load, build, maintenance, testing, and integrations.
+[Code block omitted: ms CLI examples; commands include build, doctor]
 
 **Taint Tracking Through Mining Pipeline:**
 
@@ -2493,51 +1081,15 @@ Beyond binary redaction, ms tracks **taint labels** through the entire extractio
 clustering → synthesis pipeline. This ensures unsafe provenance never leaks into
 high-leverage artifacts (prompts, rules, scripts).
 
-**Structured Secret Types + Reassembly Resistance:**
-- Classify secrets by type (API keys, tokens, emails, hostnames, filepaths, customer data).
-- Assign stable secret IDs and prevent multiple partial excerpts from reconstructing
-  the same secret across different evidence/rules.
-- Enforce stricter policies for high-risk secret types and aggregate taint to descendants.
-
-[Code block omitted: Rust example code (types/logic).]
-- Block length: 69 line(s).
-- Counts: 3 struct(s), 1 enum(s), 0 trait(s), 2 impl(s), 4 fn(s), 5 field(s).
-- Struct: TaintSet
-- Struct: TaintedSnippet
-- Struct: TaintTracker
-- Enum: TaintSource
-- Impl block: TaintSet
-- Impl block: TaintTracker
-- Function/method: is_safe_for_prompt
-- Function/method: is_safe_for_evidence
-- Function/method: classify_message
-- Function/method: propagate
-- Field/key: sources
-- Field/key: propagated_from
-- Field/key: content
-- Field/key: taint
-- Field/key: source_location
-- Block defines core structures or algorithms referenced by surrounding text.
+[Code block omitted: Rust structs: TaintSet, TaintedSnippet, TaintTracker; enums: TaintSource; fns: is_safe_for_prompt, is_safe_for_evidence, classify_message; fields: sources, propagated_from, content, taint, source_location.]
 
 **Taint Policy Enforcement:**
 
-[Code block omitted: Rust example code (types/logic).]
-- Block length: 26 line(s).
-- Counts: 1 struct(s), 0 enum(s), 0 trait(s), 1 impl(s), 1 fn(s), 1 field(s).
-- Struct: TaintPolicy
-- Impl block: TaintPolicy
-- Function/method: validate_block
-- Field/key: BlockType
-- Block defines core structures or algorithms referenced by surrounding text.
+[Code block omitted: Rust structs: TaintPolicy; fns: validate_block; fields: BlockType.]
 
 **CLI Integration:**
 
-[Code block omitted: ms CLI command examples (3 lines).]
-- Unique ms commands: 3.
-- Example: ms doctor (flags: --check)
-- Example: ms evidence (flags: --show-taint)
-- Example: ms build (flags: --from-cass, --strict-taint)
-- Examples collectively cover init/index, search/suggest/load, build, maintenance, testing, and integrations.
+[Code block omitted: ms CLI examples; commands include build, doctor, evidence]
 
 ### 5.14 Anti-Pattern Mining and Counter-Examples
 
@@ -2546,10 +1098,9 @@ signals, marked anti-pattern sessions, and explicit “wrong” fixes in transcr
 These are presented as a dedicated "Avoid / When NOT to use" section and sliced
 as `Pitfall` blocks for token packing.
 
-**Symmetric Counterexample Pipeline (First-Class):**
-- Treat counterexamples as a full pipeline: extraction → clustering → synthesis → packing.
+**Symmetric Counterexample Pipeline:**
+- Counterexamples are first-class patterns: extraction → clustering → synthesis → packing.
 - Link each anti-pattern to the positive rule it constrains (conditionalization).
-- Use counterexamples to tighten scope: “Do X *unless* Y, then do Z.”
 
 **Anti-Pattern Extraction Sources:**
 - Session marks with `MarkType::AntiPattern`
@@ -2558,9 +1109,7 @@ as `Pitfall` blocks for token packing.
 
 **Draft Integration (example):**
 
-[Code block omitted: example block (lang='n/a').]
-- Block length: 5 line(s).
-- Block contains illustrative content referenced by the surrounding text.
+[Code block omitted: appendix/example (lang='n/a', 5 line(s)).]
 
 ### 5.15 Active-Learning Uncertainty Queue
 
@@ -2569,59 +1118,20 @@ it queues the candidate for targeted evidence gathering. This turns "maybe" patt
 into high-quality rules with minimal extra effort.
 
 **Precision Loop (Active Learning):**
-- For each uncertainty item, generate 3–7 targeted CASS queries (positive, negative, boundary).
-- Auto-run when idle or via `ms uncertainties --mine`.
-- Stop when confidence threshold is met or no further evidence can be found.
+- Generate 3–7 targeted CASS queries per uncertainty (positive, negative, boundary).
+- Auto-run when idle or via `ms uncertainties --mine` and stop on confidence threshold.
 
 **Uncertainty Queue Flow:**
 
-[Code block omitted: example block (lang='n/a').]
-- Block length: 1 line(s).
-- Block contains illustrative content referenced by the surrounding text.
+[Code block omitted: example block (lang='n/a', 1 line(s)).]
 
 **Queue Interface:**
 
-[Code block omitted: Rust example code (types/logic).]
-- Block length: 100 line(s).
-- Counts: 3 struct(s), 2 enum(s), 0 trait(s), 1 impl(s), 4 fn(s), 18 field(s).
-- Struct: UncertaintyItem
-- Struct: DecisionBoundary
-- Struct: UncertaintyQueue
-- Enum: MissingSignal
-- Enum: ResolutionCheck
-- Impl block: UncertaintyQueue
-- Function/method: enqueue
-- Function/method: list_pending
-- Function/method: resolve
-- Function/method: check_resolution
-- Field/key: id
-- Field/key: pattern_candidate
-- Field/key: reason
-- Field/key: confidence
-- Field/key: suggested_queries
-- Field/key: status
-- Field/key: created_at
-- Field/key: decision_boundary
-- Field/key: missing_signals
-- Field/key: candidate_scope_refinement
-- Field/key: positive_instances_needed
-- Field/key: counterexample_would_discard
-- Field/key: target_confidence
-- Field/key: description
-- Field/key: db
-- Field/key: serde_json
-- Field/key: ResolutionCheck
-- Field/key: progress
-- Block defines core structures or algorithms referenced by surrounding text.
+[Code block omitted: Rust structs: UncertaintyItem, DecisionBoundary, UncertaintyQueue; enums: MissingSignal, ResolutionCheck; fns: enqueue, list_pending, resolve; fields: id, pattern_candidate, reason, confidence, suggested_queries, status.]
 
 **CLI Examples:**
 
-[Code block omitted: ms CLI command examples (3 lines).]
-- Unique ms commands: 2.
-- Example: ms uncertainties (no flags shown)
-- Example: ms uncertainties (flags: --mine)
-- Example: ms build (flags: --resolve-uncertainties)
-- Examples collectively cover init/index, search/suggest/load, build, maintenance, testing, and integrations.
+[Code block omitted: ms CLI examples; commands include build, uncertainties]
 
 ### 5.16 Session Quality Scoring
 
@@ -2630,16 +1140,7 @@ filters out low-quality transcripts before pattern extraction.
 
 **Session Quality Model:**
 
-[Code block omitted: Rust example code (types/logic).]
-- Block length: 34 line(s).
-- Counts: 1 struct(s), 0 enum(s), 0 trait(s), 1 impl(s), 1 fn(s), 3 field(s).
-- Struct: SessionQuality
-- Impl block: SessionQuality
-- Function/method: compute
-- Field/key: session_id
-- Field/key: score
-- Field/key: signals
-- Block defines core structures or algorithms referenced by surrounding text.
+[Code block omitted: Rust structs: SessionQuality; fns: compute; fields: session_id, score, signals.]
 
 **Usage:**
 - Default threshold: `cass.min_session_quality`
@@ -2654,35 +1155,25 @@ ms filters prompt-injection content before pattern extraction. Any session messa
 that attempt to override system rules or instruct the agent to ignore constraints
 are quarantined and excluded by default.
 
+**Primary Defense: ACIP Integration (v1.3 recommended):**
+- Use **ACIP** (`/data/projects/acip`, version 1.3) as the canonical injection
+  defense framework, not a bespoke prompt filter.
+- Support three deployment modes: direct inclusion, checker-model gate, or hybrid
+  audit mode with `ACIP_AUDIT_MODE=ENABLED` tags for operator visibility.
+- Pin the ACIP version in config and emit provenance so skills can cite the
+  exact defense version in effect during mining.
+
 **Forensic Quarantine Playback:**
-- Store snippet hash, minimal safe excerpt, triggered rule, and a replay command.
+- Store snippet hash, minimal safe excerpt, triggered rule, and replay command.
 - Replay requires explicit user invocation to expand context from CASS.
-- Enables tuning of injection filters without leaking unsafe text into skills.
 
 **Injection Report Model:**
 
-[Code block omitted: Rust example code (types/logic).]
-- Block length: 19 line(s).
-- Counts: 2 struct(s), 1 enum(s), 0 trait(s), 0 impl(s), 0 fn(s), 7 field(s).
-- Struct: InjectionReport
-- Struct: InjectionFinding
-- Enum: InjectionSeverity
-- Field/key: session_id
-- Field/key: findings
-- Field/key: severity
-- Field/key: created_at
-- Field/key: pattern
-- Field/key: message_index
-- Field/key: snippet_hash
-- Block defines core structures or algorithms referenced by surrounding text.
+[Code block omitted: Rust structs: InjectionReport, InjectionFinding; enums: InjectionSeverity; fields: session_id, findings, severity, created_at, pattern, message_index.]
 
 **CLI Examples:**
 
-[Code block omitted: ms CLI command examples (2 lines).]
-- Unique ms commands: 2.
-- Example: ms doctor (flags: --check)
-- Example: ms build (flags: --from-cass, --no-injection-filter)
-- Examples collectively cover init/index, search/suggest/load, build, maintenance, testing, and integrations.
+[Code block omitted: ms CLI examples; commands include build, doctor]
 
 ---
 
@@ -2691,6 +1182,12 @@ are quarantined and excluded by default.
 ms enforces a hard invariant: destructive filesystem or git operations are never
 executed without explicit, verbatim approval. This mirrors the global agent
 rules and prevents ms from becoming a footgun.
+
+**Primary Enforcement: DCG Integration:**
+- Integrate **Destructive Command Guard (DCG)** (`/data/projects/destructive_command_guard`)
+  as the primary runtime guard for destructive commands.
+- Leverage DCG’s pack system, heredoc/inline script scanning, explain mode, and
+  fail‑open design rather than re‑implementing command semantics in ms.
 
 **Safety Policy Model:**
 
@@ -2702,30 +1199,12 @@ effect of what the command does. This is more robust because:
 - Novel commands get correct classification based on what they do
 
 **Non-Removable Policy Lenses:**
-- Certain policies (e.g., AGENTS.md Rule 1) compile into `Policy` slices with
-  `MandatoryPredicate::Always`.
-- Packer fails closed if mandatory policy slices are omitted, even under tight budgets.
+- Compile critical policies into `Policy` slices and include them via
+  `MandatoryPredicate::OfType(SliceType::Policy)` in pack constraints.
+- `MandatoryPredicate::Always` is reserved for global invariants (rare).
+- Packer fails closed if policy slices are omitted under any pack budget.
 
-[Code block omitted: Rust example code (types/logic).]
-- Block length: 67 line(s).
-- Counts: 2 struct(s), 3 enum(s), 0 trait(s), 1 impl(s), 1 fn(s), 9 field(s).
-- Struct: SafetyPolicy
-- Struct: ApprovalRequest
-- Enum: CommandEffect
-- Enum: SafetyTier
-- Enum: DestructiveOpsPolicy
-- Impl block: CommandEffect
-- Function/method: to_tier
-- Field/key: CommandEffect
-- Field/key: destructive_ops
-- Field/key: require_verbatim_approval
-- Field/key: tombstone_deletes
-- Field/key: command
-- Field/key: effect
-- Field/key: tier
-- Field/key: reason
-- Field/key: approve_hint
-- Block defines core structures or algorithms referenced by surrounding text.
+[Code block omitted: Rust structs: SafetyPolicy, ApprovalRequest; enums: CommandEffect, SafetyTier, DestructiveOpsPolicy; fns: to_tier; fields: CommandEffect, destructive_ops, require_verbatim_approval, tombstone_deletes, command, effect.]
 
 **Behavior:**
 - Destructive commands (delete/overwrite/reset) are blocked by default.
@@ -2736,19 +1215,7 @@ effect of what the command does. This is more robust because:
 
 **Robot Approval Example:**
 
-[Code block omitted: JSON example payload/schema.]
-- Block length: 12 line(s).
-- Keys extracted: 9.
-- Key: status
-- Key: approval_required
-- Key: approve_command
-- Key: tier
-- Key: reason
-- Key: timestamp
-- Key: version
-- Key: data
-- Key: warnings
-- Example illustrates machine-readable output contract.
+[Code block omitted: JSON payload; keys include status, approval_required, approve_command, tier, reason, timestamp, ....]
 
 ---
 
@@ -2756,64 +1223,19 @@ effect of what the command does. This is more robust because:
 
 ### 6.1 Disclosure Levels
 
-[Code block omitted: Rust example code (types/logic).]
-- Block length: 31 line(s).
-- Counts: 0 struct(s), 1 enum(s), 0 trait(s), 1 impl(s), 1 fn(s), 1 field(s).
-- Enum: DisclosureLevel
-- Impl block: DisclosureLevel
-- Function/method: token_budget
-- Field/key: DisclosureLevel
-- Block defines core structures or algorithms referenced by surrounding text.
+[Code block omitted: Rust enums: DisclosureLevel; fns: token_budget; fields: DisclosureLevel.]
 
 ### 6.2 Disclosure Logic
 
-[Code block omitted: Rust example code (types/logic).]
-- Block length: 70 line(s).
-- Counts: 1 struct(s), 2 enum(s), 0 trait(s), 0 impl(s), 3 fn(s), 9 field(s).
-- Struct: TokenBudget
-- Enum: DisclosurePlan
-- Enum: PackMode
-- Function/method: disclose
-- Function/method: disclose_level
-- Function/method: disclose_packed
-- Field/key: DisclosurePlan
-- Field/key: DisclosureLevel
-- Field/key: frontmatter
-- Field/key: body
-- Field/key: scripts
-- Field/key: references
-- Field/key: tokens
-- Field/key: mode
-- Field/key: max_per_group
-- Block defines core structures or algorithms referenced by surrounding text.
+[Code block omitted: Rust structs: TokenBudget; enums: DisclosurePlan, PackMode; fns: disclose, disclose_level, disclose_packed; fields: DisclosurePlan, DisclosureLevel, frontmatter, body, scripts, references.]
 
 ### 6.3 Context-Aware Disclosure
 
-[Code block omitted: Rust example code (types/logic).]
-- Block length: 32 line(s).
-- Counts: 0 struct(s), 0 enum(s), 0 trait(s), 0 impl(s), 1 fn(s), 5 field(s).
-- Function/method: optimal_disclosure
-- Field/key: skill
-- Field/key: context
-- Field/key: mode
-- Field/key: max_per_group
-- Field/key: DisclosurePlan
-- Block defines core structures or algorithms referenced by surrounding text.
+[Code block omitted: Rust fns: optimal_disclosure; fields: skill, context, mode, max_per_group, DisclosurePlan.]
 
 **Disclosure Context (partial):**
 
-[Code block omitted: Rust example code (types/logic).]
-- Block length: 9 line(s).
-- Counts: 1 struct(s), 0 enum(s), 0 trait(s), 0 impl(s), 0 fn(s), 7 field(s).
-- Struct: DisclosureContext
-- Field/key: explicit_level
-- Field/key: pack_budget
-- Field/key: pack_mode
-- Field/key: max_per_group
-- Field/key: remaining_tokens
-- Field/key: usage_history
-- Field/key: request_type
-- Block defines core structures or algorithms referenced by surrounding text.
+[Code block omitted: Rust structs: DisclosureContext; fields: explicit_level, pack_budget, pack_mode, max_per_group, remaining_tokens, usage_history.]
 
 ### 6.4 Micro-Slicing and Token Packing
 
@@ -2823,10 +1245,11 @@ that fit within a token budget.
 
 **Slice Generation Heuristics:**
 
-- One slice per rule, command block, example, checklist, or pitfall (including anti-patterns)
+- One slice per rule, command block, example, checklist, pitfall, or policy invariant
 - Preserve section headings by attaching them to the first slice in the section
 - Estimate tokens per slice using a fast tokenizer heuristic
 - Assign utility score from quality signals + usage frequency + evidence coverage
+- Propagate tags from skill metadata and block annotations into slices
 
 **Token Packer (Constrained Optimization):**
 
@@ -2842,64 +1265,19 @@ greedy selection. This ensures predictable coverage, safer packs, and stable beh
 
 **Objective:** Maximize total utility with diminishing returns per group.
 
-**Injection-Time Pack Optimization:**
-- Penalize slices already present in the current context (novelty-aware packing).
-- Boost slices that cover missing task facets (e.g., pitfalls when editing infra).
-- Uses context fingerprints + recent usage history to avoid redundancy.
+**Injection-Time Optimization:**
+- Apply novelty penalties vs. already-loaded slices in the current prompt/context.
+- Boost missing facets (e.g., pitfalls/validation) based on task fingerprint.
 
-**Pack Contracts (Minimum Viable Guidance):**
-- Define contracts like `DebugContract`, `RefactorContract`, `DeployContract`.
-- Contracts specify mandatory slices/groups (repro loop, validation, rollback).
-- Packer fails closed if a contract cannot be satisfied within budget.
+**Pack Contracts:**
+- `DebugContract`, `RefactorContract`, etc. define mandatory groups/slices.
+- Packer fails closed if contract cannot be satisfied within budget.
 
-[Code block omitted: Rust example code (types/logic).]
-- Block length: 233 line(s).
-- Counts: 4 struct(s), 3 enum(s), 0 trait(s), 1 impl(s), 7 fn(s), 22 field(s).
-- Struct: PackConstraints
-- Struct: CoverageQuota
-- Struct: ConstrainedPacker
-- Struct: PackResult
-- Enum: MandatorySlice
-- Enum: MandatoryPredicate
-- Enum: PackError
-- Impl block: ConstrainedPacker
-- Function/method: pack
-- Function/method: matches_mandatory
-- Function/method: seed_required_coverage
-- Function/method: rank_by_density
-- Function/method: try_improve
-- Function/method: estimate_packed_tokens_with_constraints
-- Function/method: score_slice
-- Field/key: budget
-- Field/key: max_per_group
-- Field/key: required_coverage
-- Field/key: excluded_groups
-- Field/key: max_improvement_passes
-- Field/key: mandatory_slices
-- Field/key: fail_on_mandatory_omission
-- Field/key: group
-- Field/key: min_count
-- Field/key: slice_id
-- Field/key: required_tokens
-- Field/key: available_tokens
-- Field/key: slices
-- Field/key: total_tokens
-- Field/key: coverage_satisfied
-- Field/key: MandatorySlice
-- Field/key: MandatoryPredicate
-- Field/key: index
-- Field/key: mode
-- Field/key: tokens
-- Field/key: PackMode
-- Field/key: SliceType
-- Block defines core structures or algorithms referenced by surrounding text.
+[Code block omitted: Rust structs: PackConstraints, CoverageQuota, ConstrainedPacker; enums: MandatorySlice, MandatoryPredicate, PackError; fns: pack, matches_mandatory, seed_required_coverage; fields: budget, max_per_group, required_coverage, excluded_groups, max_improvement_passes, mandatory_slices.]
 
 **CLI Example:**
 
-[Code block omitted: ms CLI command examples (1 lines).]
-- Unique ms commands: 1.
-- Example: ms load (flags: --pack)
-- Examples collectively cover init/index, search/suggest/load, build, maintenance, testing, and integrations.
+[Code block omitted: ms CLI examples; commands include load]
 
 ### 6.5 Conditional Block Predicates
 
@@ -2909,9 +1287,7 @@ ms supports **block-level predicates** that strip irrelevant content at load tim
 
 **Markdown Syntax:**
 
-[Code block omitted: example block (lang='markdown').]
-- Block length: 3 line(s).
-- Block contains illustrative content referenced by the surrounding text.
+[Code block omitted: example block (lang='markdown', 3 line(s)).]
 
 **Predicate Types:**
 
@@ -2927,16 +1303,7 @@ ms supports **block-level predicates** that strip irrelevant content at load tim
 
 **Evaluation Flow:**
 
-[Code block omitted: Rust example code (types/logic).]
-- Block length: 42 line(s).
-- Counts: 0 struct(s), 0 enum(s), 0 trait(s), 0 impl(s), 2 fn(s), 4 field(s).
-- Function/method: evaluate_predicate
-- Function/method: filter_slices_by_predicates
-- Field/key: PredicateType
-- Field/key: glob
-- Field/key: slices
-- Field/key: ctx
-- Block defines core structures or algorithms referenced by surrounding text.
+[Code block omitted: Rust fns: evaluate_predicate, filter_slices_by_predicates; fields: PredicateType, glob, slices, ctx.]
 
 **Why This Matters:**
 
@@ -2947,11 +1314,7 @@ AGENTS.md without requiring separate skills or complex agent reasoning.
 
 **CLI Example:**
 
-[Code block omitted: ms CLI command examples (2 lines).]
-- Unique ms commands: 1.
-- Example: ms load (flags: --eval-predicates, --package-version)
-- Example: ms load (flags: --dry-run, --show-filtered)
-- Examples collectively cover init/index, search/suggest/load, build, maintenance, testing, and integrations.
+[Code block omitted: ms CLI examples; commands include load]
 
 ### 6.6 Meta-Skills: Composed Slice Bundles
 
@@ -2969,45 +1332,15 @@ and evolve.
 
 **Data Model:**
 
-[Code block omitted: Rust example code (types/logic).]
-- Block length: 33 line(s).
-- Counts: 2 struct(s), 1 enum(s), 0 trait(s), 0 impl(s), 0 fn(s), 10 field(s).
-- Struct: MetaSkill
-- Struct: MetaSkillSliceRef
-- Enum: PinStrategy
-- Field/key: id
-- Field/key: name
-- Field/key: description
-- Field/key: slices
-- Field/key: pin_strategy
-- Field/key: validated_at
-- Field/key: skill_id
-- Field/key: slice_id
-- Field/key: content_hash
-- Field/key: priority_override
-- Block defines core structures or algorithms referenced by surrounding text.
+[Code block omitted: Rust structs: MetaSkill, MetaSkillSliceRef; enums: PinStrategy; fields: id, name, description, slices, pin_strategy, validated_at.]
 
 **CLI Commands:**
 
-[Code block omitted: ms CLI command examples (6 lines).]
-- Unique ms commands: 2.
-- Example: ms meta (no flags shown)
-- Example: ms load (flags: --pack)
-- Example: ms meta (flags: --add, --remove)
-- Example: ms meta (no flags shown)
-- Example: ms meta (no flags shown)
-- Example: ms meta (flags: --slices)
-- Examples collectively cover init/index, search/suggest/load, build, maintenance, testing, and integrations.
+[Code block omitted: ms CLI examples; commands include load, meta]
 
 **Resolution and Packing:**
 
-[Code block omitted: Rust example code (types/logic).]
-- Block length: 31 line(s).
-- Counts: 0 struct(s), 0 enum(s), 0 trait(s), 1 impl(s), 2 fn(s), 0 field(s).
-- Impl block: MetaSkillLoader
-- Function/method: resolve
-- Function/method: load_packed
-- Block defines core structures or algorithms referenced by surrounding text.
+[Code block omitted: Rust fns: resolve, load_packed.]
 
 **Use Cases:**
 
@@ -3021,19 +1354,7 @@ and evolve.
 
 ### 7.1 Hybrid Search (Following xf Pattern)
 
-[Code block omitted: Rust example code (types/logic).]
-- Block length: 40 line(s).
-- Counts: 1 struct(s), 0 enum(s), 0 trait(s), 1 impl(s), 1 fn(s), 6 field(s).
-- Struct: HybridSearcher
-- Impl block: HybridSearcher
-- Function/method: search
-- Field/key: tantivy_index
-- Field/key: embedding_index
-- Field/key: rrf_k
-- Field/key: query
-- Field/key: filters
-- Field/key: limit
-- Block defines core structures or algorithms referenced by surrounding text.
+[Code block omitted: Rust structs: HybridSearcher; fns: search; fields: tantivy_index, embedding_index, rrf_k, query, filters, limit.]
 
 **Alias + Deprecation Handling:**
 - If the query exactly matches a skill alias, ms resolves to the canonical skill id.
@@ -3041,210 +1362,60 @@ and evolve.
 
 ### 7.2 Context-Aware Suggestion
 
-[Code block omitted: Rust example code (types/logic).]
-- Block length: 118 line(s).
-- Counts: 1 struct(s), 0 enum(s), 0 trait(s), 1 impl(s), 3 fn(s), 12 field(s).
-- Struct: Suggester
-- Impl block: Suggester
-- Function/method: suggest
-- Function/method: trigger_boost
-- Function/method: explain_result
-- Field/key: searcher
-- Field/key: registry
-- Field/key: requirements
-- Field/key: skill
-- Field/key: signals
-- Field/key: final_score
-- Field/key: signal
-- Field/key: contribution
-- Field/key: rrf_components
-- Field/key: bm25_rank
-- Field/key: vector_rank
-- Field/key: rrf_score
-- Block defines core structures or algorithms referenced by surrounding text.
+[Code block omitted: Rust structs: Suggester; fns: suggest, trigger_boost, explain_result; fields: searcher, registry, requirements, bandit, skill, signals.]
 
 When `--for-ntm` is used, `ms suggest` returns `swarm_plan` in robot mode so
 each agent can load a complementary slice pack instead of duplicating content.
 
-**Bandit-Weighted Suggestion Signals:**
-- Use a contextual bandit over signal-weighting schemes (bm25, embeddings, triggers,
-  freshness, project match).
-- Reward = acceptance / follow-through / outcome success; train per-project + global prior.
-- Replaces static weight tuning with adaptive, self-optimizing retrieval.
+**Bandit-Weighted Signal Selection:**
+- A contextual bandit learns per-project weighting over signals (bm25, embeddings,
+  triggers, freshness, project match) using usage/outcome rewards.
+- Replaces static tuning with adaptive, self-optimizing retrieval.
 
-**Swarm Role Packs (Leader/Worker/Reviewer):**
-- Leader gets decision structure + pitfalls + plan template slices.
-- Workers get command recipes + examples; reviewer gets semantic diff + safety invariants.
+[Code block omitted: Rust structs: SignalBandit; fields: arms, prior.]
 
 **Suggestion Context (partial):**
 
-[Code block omitted: Rust example code (types/logic).]
-- Block length: 13 line(s).
-- Counts: 1 struct(s), 0 enum(s), 0 trait(s), 0 impl(s), 0 fn(s), 11 field(s).
-- Struct: SuggestionContext
-- Field/key: cwd
-- Field/key: current_file
-- Field/key: recent_commands
-- Field/key: query
-- Field/key: pack_budget
-- Field/key: explain
-- Field/key: pack_mode
-- Field/key: max_per_group
-- Field/key: environment
-- Field/key: include_deprecated
-- Field/key: swarm
-- Block defines core structures or algorithms referenced by surrounding text.
+[Code block omitted: Rust structs: SuggestionContext; fields: cwd, current_file, recent_commands, query, pack_budget, explain.]
 
 **Requirement-aware suggestions:**
 
-[Code block omitted: Rust example code (types/logic).]
-- Block length: 88 line(s).
-- Counts: 3 struct(s), 1 enum(s), 0 trait(s), 2 impl(s), 3 fn(s), 8 field(s).
-- Struct: EnvironmentSnapshot
-- Struct: RequirementStatus
-- Struct: RequirementChecker
-- Enum: NetworkStatus
-- Impl block: RequirementStatus
-- Impl block: RequirementChecker
-- Function/method: is_satisfied
-- Function/method: summary
-- Function/method: check
-- Field/key: platform
-- Field/key: tools
-- Field/key: env_vars
-- Field/key: network
-- Field/key: platform_ok
-- Field/key: missing_tools
-- Field/key: missing_env
-- Field/key: network_ok
-- Block defines core structures or algorithms referenced by surrounding text.
+[Code block omitted: Rust structs: EnvironmentSnapshot, RequirementStatus, RequirementChecker; enums: NetworkStatus; fns: is_satisfied, summary, check; fields: platform, tools, env_vars, network, platform_ok, missing_tools.]
 
 **Collective Pack Planning (Swarm / NTM):**
 
-[Code block omitted: Rust example code (types/logic).]
-- Block length: 37 line(s).
-- Counts: 3 struct(s), 1 enum(s), 0 trait(s), 1 impl(s), 1 fn(s), 11 field(s).
-- Struct: SwarmContext
-- Struct: SwarmPlan
-- Struct: AgentPack
-- Enum: PackObjective
-- Impl block: Suggester
-- Function/method: plan_swarm_packs
-- Field/key: agent_count
-- Field/key: budget_per_agent
-- Field/key: objective
-- Field/key: replicate_pitfalls
-- Field/key: agents
-- Field/key: total_tokens
-- Field/key: agent_id
-- Field/key: slice_ids
-- Field/key: token_estimate
-- Field/key: skill
-- Field/key: context
-- Block defines core structures or algorithms referenced by surrounding text.
+[Code block omitted: Rust structs: SwarmContext, SwarmPlan, AgentPack; enums: PackObjective, SwarmRole; fns: plan_swarm_packs; fields: agent_count, budget_per_agent, objective, replicate_pitfalls, agents, total_tokens.]
 
 ### 7.2.1 Context Fingerprints & Suggestion Cooldowns
 
 To prevent `ms suggest` from spamming the same skills repeatedly when context hasn't meaningfully changed, we compute a **context fingerprint** and maintain a cooldown cache.
 
-[Code block omitted: Rust example code (types/logic).]
-- Block length: 83 line(s).
-- Counts: 1 struct(s), 0 enum(s), 0 trait(s), 1 impl(s), 6 fn(s), 5 field(s).
-- Struct: ContextFingerprint
-- Impl block: ContextFingerprint
-- Function/method: compute
-- Function/method: differs_from
-- Function/method: fingerprint_hash
-- Function/method: hash_string_list
-- Function/method: git_head_short
-- Function/method: git_diff_hash
-- Field/key: repo_root
-- Field/key: git_head
-- Field/key: diff_hash
-- Field/key: open_files_hash
-- Field/key: recent_commands_hash
-- Block defines core structures or algorithms referenced by surrounding text.
+[Code block omitted: Rust structs: ContextFingerprint; fns: compute, differs_from, fingerprint_hash; fields: repo_root, git_head, diff_hash, open_files_hash, recent_commands_hash.]
 
 **Cooldown Cache:**
 
-[Code block omitted: Rust example code (types/logic).]
-- Block length: 100 line(s).
-- Counts: 2 struct(s), 0 enum(s), 0 trait(s), 1 impl(s), 6 fn(s), 7 field(s).
-- Struct: SuggestionCooldownCache
-- Struct: CooldownEntry
-- Impl block: SuggestionCooldownCache
-- Function/method: load
-- Function/method: save
-- Function/method: should_suppress
-- Function/method: record
-- Function/method: evict_oldest
-- Function/method: gc
-- Field/key: entries
-- Field/key: max_entries
-- Field/key: skill_ids
-- Field/key: suggested_at
-- Field/key: fingerprint
-- Field/key: std
-- Field/key: cooldown
-- Block defines core structures or algorithms referenced by surrounding text.
+[Code block omitted: Rust structs: SuggestionCooldownCache, CooldownEntry; fns: load, save, should_suppress; fields: entries, max_entries, skill_ids, suggested_at, fingerprint, std.]
 
 **Integration with Suggester:**
 
-[Code block omitted: Rust example code (types/logic).]
-- Block length: 64 line(s).
-- Counts: 2 struct(s), 0 enum(s), 0 trait(s), 2 impl(s), 2 fn(s), 8 field(s).
-- Struct: CooldownConfig
-- Struct: SuggestionResult
-- Impl block: Suggester
-- Impl block: Default
-- Function/method: suggest_with_cooldown
-- Function/method: default
-- Field/key: context
-- Field/key: cooldown_config
-- Field/key: suggestions
-- Field/key: suppressed
-- Field/key: reason
-- Field/key: fingerprint
-- Field/key: enabled
-- Field/key: duration
-- Block defines core structures or algorithms referenced by surrounding text.
+[Code block omitted: Rust structs: CooldownConfig, SuggestionResult; fns: suggest_with_cooldown, default; fields: context, cooldown_config, suggestions, suppressed, reason, fingerprint.]
 
 **CLI flags:**
 
-[Code block omitted: ms CLI command examples (4 lines).]
-- Unique ms commands: 1.
-- Example: ms suggest (flags: --no-cooldown)
-- Example: ms suggest (flags: --cooldown)
-- Example: ms suggest (flags: --show-fingerprint)
-- Example: ms suggest (flags: --clear-cache)
-- Examples collectively cover init/index, search/suggest/load, build, maintenance, testing, and integrations.
+[Code block omitted: ms CLI examples; commands include suggest]
 
 This mechanism prevents suggestion spam in tight loops (e.g., IDE integrations calling `ms suggest` on every keystroke) while still responding to meaningful context changes like new commits, file edits, or command history.
 
 ### 7.3 Hash-Based Embeddings (From xf)
 
-[Code block omitted: Rust example code (types/logic).]
-- Block length: 41 line(s).
-- Counts: 0 struct(s), 0 enum(s), 0 trait(s), 0 impl(s), 1 fn(s), 0 field(s).
-- Function/method: hash_embedding
-- Block defines core structures or algorithms referenced by surrounding text.
+[Code block omitted: Rust fns: hash_embedding.]
 
 ### 7.3.1 Pluggable Embedding Backends
 
 Hash embeddings are the default (fast, deterministic, zero dependencies). For
 higher semantic fidelity, ms supports an optional local ML embedder.
 
-[Code block omitted: Rust example code (types/logic).]
-- Block length: 21 line(s).
-- Counts: 2 struct(s), 0 enum(s), 1 trait(s), 1 impl(s), 2 fn(s), 1 field(s).
-- Struct: HashEmbedder
-- Struct: LocalMlEmbedder
-- Trait: Embedder
-- Impl block: Embedder
-- Function/method: embed
-- Function/method: dims
-- Field/key: dims
-- Block defines core structures or algorithms referenced by surrounding text.
+[Code block omitted: Rust structs: HashEmbedder, LocalMlEmbedder; fns: embed, dims; fields: dims.]
 
 **Selection Rules:**
 - Default: `HashEmbedder`
@@ -3255,83 +1426,19 @@ higher semantic fidelity, ms supports an optional local ML embedder.
 
 Quality scoring determines which skills are most worth surfacing to agents. This section details the multi-factor scoring algorithm, including provenance (evidence coverage and confidence).
 
-[Code block omitted: Rust example code (types/logic).]
-- Block length: 294 line(s).
-- Counts: 4 struct(s), 0 enum(s), 0 trait(s), 2 impl(s), 9 fn(s), 26 field(s).
-- Struct: QualityScorer
-- Struct: QualityWeights
-- Struct: QualityScore
-- Struct: QualityFactors
-- Impl block: Default
-- Impl block: QualityScorer
-- Function/method: default
-- Function/method: score
-- Function/method: score_structure
-- Function/method: score_content
-- Function/method: score_effectiveness
-- Function/method: score_provenance
-- Function/method: score_safety
-- Function/method: score_freshness
-- Function/method: score_popularity
-- Field/key: weights
-- Field/key: usage_tracker
-- Field/key: toolchain_detector
-- Field/key: project_path
-- Field/key: structure_weight
-- Field/key: content_weight
-- Field/key: effectiveness_weight
-- Field/key: provenance_weight
-- Field/key: safety_weight
-- Field/key: freshness_weight
-- Field/key: popularity_weight
-- Field/key: overall
-- Field/key: factors
-- Field/key: issues
-- Field/key: suggestions
-- Field/key: structure
-- Field/key: content
-- Field/key: effectiveness
-- Field/key: provenance
-- Field/key: safety
-- Field/key: freshness
-- Field/key: popularity
-- Field/key: replaced_by
-- Field/key: tool
-- Field/key: skill_range
-- Field/key: project_version
-- Block defines core structures or algorithms referenced by surrounding text.
+[Code block omitted: Rust structs: QualityScorer, QualityWeights, QualityScore; fns: default, score, score_structure; fields: weights, usage_tracker, toolchain_detector, project_path, structure_weight, content_weight.]
 
 **Quality Issue Types:**
 
-[Code block omitted: Rust example code (types/logic).]
-- Block length: 21 line(s).
-- Counts: 0 struct(s), 1 enum(s), 0 trait(s), 0 impl(s), 0 fn(s), 0 field(s).
-- Enum: QualityIssue
-- Block defines core structures or algorithms referenced by surrounding text.
+[Code block omitted: Rust enums: QualityIssue.]
 
 **CLI Integration:**
 
-[Code block omitted: ms CLI command examples (7 lines).]
-- Unique ms commands: 1.
-- Example: ms quality (no flags shown)
-- Example: ms quality (flags: --verbose)
-- Example: ms quality (flags: --all, --min)
-- Example: ms quality (flags: --check, --min)
-- Example: ms quality (flags: --stale)
-- Example: ms quality (flags: --stale, --project)
-- Example: ms quality (flags: --robot)
-- Examples collectively cover init/index, search/suggest/load, build, maintenance, testing, and integrations.
+[Code block omitted: ms CLI examples; commands include quality]
 
 **Quality-Based Filtering:**
 
-[Code block omitted: Rust example code (types/logic).]
-- Block length: 18 line(s).
-- Counts: 0 struct(s), 0 enum(s), 0 trait(s), 0 impl(s), 1 fn(s), 3 field(s).
-- Function/method: filter_by_quality
-- Field/key: skills
-- Field/key: min_score
-- Field/key: scorer
-- Block defines core structures or algorithms referenced by surrounding text.
+[Code block omitted: Rust fns: filter_by_quality; fields: skills, min_score, scorer.]
 
 ---
 
@@ -3355,62 +1462,22 @@ or deprecations, and require explicit confirmation before applying changes.
 
 **CLI Example:**
 
-[Code block omitted: ms CLI command examples (3 lines).]
-- Unique ms commands: 1.
-- Example: ms prune (flags: --scope, --dry-run)
-- Example: ms prune (flags: --scope, --emit-beads)
-- Example: ms prune (flags: --scope, --apply, --require-confirmation)
-- Examples collectively cover init/index, search/suggest/load, build, maintenance, testing, and integrations.
+[Code block omitted: ms CLI examples; commands include prune]
 
 ## 8. Bundle & Distribution System
 
 ### 8.1 Bundle Format
 
-[Code block omitted: YAML example.]
-- Block length: 26 line(s).
-- Keys extracted: 17.
-- Key: name
-- Key: version
-- Key: channel
-- Key: description
-- Key: author
-- Key: license
-- Key: homepage
-- Key: skills
-- Key: - id
-- Key: path
-- Key: dependencies
-- Key: - bundle
-- Key: checksum
-- Key: signatures
-- Key: - signer
-- Key: key_id
-- Key: signature
-- Example encodes structured test/spec or config data.
+[Code block omitted: YAML example; keys include name, version, channel, description, author, license, ....]
 
 ### 8.2 GitHub Integration
 
-[Code block omitted: Rust example code (types/logic).]
-- Block length: 36 line(s).
-- Counts: 0 struct(s), 0 enum(s), 0 trait(s), 0 impl(s), 1 fn(s), 9 field(s).
-- Function/method: publish_to_github
-- Field/key: bundle
-- Field/key: config
-- Field/key: description
-- Field/key: private
-- Field/key: tag_name
-- Field/key: name
-- Field/key: body
-- Field/key: repo_url
-- Field/key: release_url
-- Block defines core structures or algorithms referenced by surrounding text.
+[Code block omitted: Rust fns: publish_to_github; fields: bundle, config, description, private, tag_name, name.]
 
 ### 8.3 Installation Flow
 
-[Code block omitted: ASCII diagram illustrating a workflow/system layout.]
-- Block length: 29 line(s).
-- Diagram uses box-and-arrow flow to show major steps, loops, or dependencies.
-- Intended to give a visual map of the process described in nearby text.
+[Diagram omitted: workflow/system diagram.]
+- 29 line(s); see surrounding text for step labels.
 
 ### 8.4 Sharing with Local Modification Safety
 
@@ -3418,150 +1485,43 @@ The sharing system allows one-URL distribution of all your skills while preservi
 
 #### The Three-Tier Storage Model
 
-[Code block omitted: ASCII diagram illustrating a workflow/system layout.]
-- Block length: 27 line(s).
-- Diagram uses box-and-arrow flow to show major steps, loops, or dependencies.
-- Intended to give a visual map of the process described in nearby text.
+[Diagram omitted: workflow/system diagram.]
+- 27 line(s); see surrounding text for step labels.
 
 #### Local Modification Data Model
 
-[Code block omitted: Rust example code (types/logic).]
-- Block length: 50 line(s).
-- Counts: 2 struct(s), 2 enum(s), 0 trait(s), 0 impl(s), 0 fn(s), 14 field(s).
-- Struct: LocalModification
-- Struct: ConflictInfo
-- Enum: SkillSyncStatus
-- Enum: Resolution
-- Field/key: skill_id
-- Field/key: upstream_bundle
-- Field/key: base_version
-- Field/key: patch
-- Field/key: created_at
-- Field/key: updated_at
-- Field/key: reason
-- Field/key: current_version
-- Field/key: upstream_version
-- Field/key: conflicts
-- Field/key: section
-- Field/key: upstream_change
-- Field/key: local_change
-- Field/key: suggested_resolution
-- Block defines core structures or algorithms referenced by surrounding text.
+[Code block omitted: Rust structs: LocalModification, ConflictInfo; enums: SkillSyncStatus, Resolution; fields: skill_id, upstream_bundle, base_version, patch, created_at, updated_at.]
 
 #### The Sync Engine
 
-[Code block omitted: Rust example code (types/logic).]
-- Block length: 112 line(s).
-- Counts: 1 struct(s), 0 enum(s), 0 trait(s), 1 impl(s), 4 fn(s), 14 field(s).
-- Struct: SyncEngine
-- Impl block: SyncEngine
-- Function/method: sync
-- Function/method: create_modification
-- Function/method: backup_local_mods
-- Function/method: reapply_modifications
-- Field/key: upstream_dir
-- Field/key: local_mods_dir
-- Field/key: merged_dir
-- Field/key: backup_dir
-- Field/key: skill_id
-- Field/key: new_content
-- Field/key: reason
-- Field/key: upstream_bundle
-- Field/key: base_version
-- Field/key: created_at
-- Field/key: updated_at
-- Field/key: Utc
-- Field/key: current_version
-- Field/key: upstream_version
-- Block defines core structures or algorithms referenced by surrounding text.
+[Code block omitted: Rust structs: SyncEngine; fns: sync, create_modification, backup_local_mods; fields: upstream_dir, local_mods_dir, merged_dir, backup_dir, skill_id, new_content.]
 
 #### One-URL Sharing
 
 Share all your skills (including local modifications) via a single URL:
 
-[Code block omitted: Rust example code (types/logic).]
-- Block length: 51 line(s).
-- Counts: 0 struct(s), 0 enum(s), 0 trait(s), 0 impl(s), 1 fn(s), 10 field(s).
-- Function/method: generate_share_url
-- Field/key: skills
-- Field/key: local_mods
-- Field/key: config
-- Field/key: version
-- Field/key: created_at
-- Field/key: local_modifications
-- Field/key: upstream_sources
-- Field/key: description
-- Field/key: private
-- Field/key: std
-- Block defines core structures or algorithms referenced by surrounding text.
+[Code block omitted: Rust fns: generate_share_url; fields: skills, local_mods, config, version, created_at, local_modifications.]
 
 **CLI Commands:**
 
-[Code block omitted: ms CLI command examples (9 lines).]
-- Unique ms commands: 2.
-- Example: ms share (flags: --gist)
-- Example: ms share (flags: --repo)
-- Example: ms share (flags: --export)
-- Example: ms import (no flags shown)
-- Example: ms import (no flags shown)
-- Example: ms import (no flags shown)
-- Example: ms share (flags: --status)
-- Example: ms share (flags: --auto-sync)
-- Example: ms share (flags: --dry-run)
-- Examples collectively cover init/index, search/suggest/load, build, maintenance, testing, and integrations.
+[Code block omitted: ms CLI examples; commands include share]
 
 #### Sync Status Dashboard
 
-[Code block omitted: ASCII diagram illustrating a workflow/system layout.]
-- Block length: 27 line(s).
-- Diagram uses box-and-arrow flow to show major steps, loops, or dependencies.
-- Intended to give a visual map of the process described in nearby text.
+[Diagram omitted: workflow/system diagram.]
+- 27 line(s); see surrounding text for step labels.
 
 #### Conflict Resolution Workflow
 
-[Code block omitted: shell command examples (28 lines).]
-- Unique tools referenced: 16.
-- Tool invoked: $
-- Tool invoked: Syncing
-- Tool invoked: ✓
-- Tool invoked: ⚠
-- Tool invoked: Conflict
-- Tool invoked: Section:
-- Tool invoked: Upstream
-- Tool invoked: -
-- Tool invoked: +
-- Tool invoked: Your
-- Tool invoked: Suggested
-- Tool invoked: Options:
-- Tool invoked: 1.
-- Tool invoked: 2.
-- Tool invoked: 3.
-- Tool invoked: 4.
-- Commands illustrate typical workflows and integrations.
+[Code block omitted: shell commands using $, Syncing, ✓, ⚠, Conflict, Section:, Upstream, -....]
 
 #### Automatic Backup Schedule
 
-[Code block omitted: Rust example code (types/logic).]
-- Block length: 21 line(s).
-- Counts: 1 struct(s), 0 enum(s), 0 trait(s), 1 impl(s), 1 fn(s), 4 field(s).
-- Struct: BackupConfig
-- Impl block: Default
-- Function/method: default
-- Field/key: retention_count
-- Field/key: backup_on_sync
-- Field/key: backup_on_modify
-- Field/key: scheduled_interval
-- Block defines core structures or algorithms referenced by surrounding text.
+[Code block omitted: Rust structs: BackupConfig; fns: default; fields: retention_count, backup_on_sync, backup_on_modify, scheduled_interval.]
 
 **Backup Commands:**
 
-[Code block omitted: ms CLI command examples (4 lines).]
-- Unique ms commands: 1.
-- Example: ms backup (flags: --reason)
-- Example: ms backup (no flags shown)
-- Example: ms backup (no flags shown)
-- Example: ms backup (no flags shown)
-- Examples collectively cover init/index, search/suggest/load, build, maintenance, testing, and integrations.
+[Code block omitted: ms CLI examples; commands include backup]
 
 ### 8.5 Multi-Machine Synchronization
 
@@ -3569,167 +1529,31 @@ Following the xf pattern for distributed archive access across multiple developm
 
 #### 8.5.1 Machine Identity
 
-[Code block omitted: Rust example code (types/logic).]
-- Block length: 32 line(s).
-- Counts: 1 struct(s), 0 enum(s), 0 trait(s), 1 impl(s), 2 fn(s), 4 field(s).
-- Struct: MachineIdentity
-- Impl block: MachineIdentity
-- Function/method: generate
-- Function/method: load_or_create
-- Field/key: machine_id
-- Field/key: machine_name
-- Field/key: sync_timestamps
-- Field/key: std
-- Block defines core structures or algorithms referenced by surrounding text.
+[Code block omitted: Rust structs: MachineIdentity; fns: generate, load_or_create; fields: machine_id, machine_name, sync_timestamps, std.]
 
 #### 8.5.2 Sync State Tracking
 
-[Code block omitted: Rust example code (types/logic).]
-- Block length: 67 line(s).
-- Counts: 3 struct(s), 3 enum(s), 0 trait(s), 0 impl(s), 0 fn(s), 13 field(s).
-- Struct: SyncState
-- Struct: SkillSyncState
-- Struct: RemoteConfig
-- Enum: SkillSyncStatus
-- Enum: RemoteType
-- Enum: SyncDirection
-- Field/key: skill_states
-- Field/key: remotes
-- Field/key: last_full_sync
-- Field/key: skill_id
-- Field/key: local_modified
-- Field/key: remote_modified
-- Field/key: content_hash
-- Field/key: status
-- Field/key: name
-- Field/key: remote_type
-- Field/key: url
-- Field/key: auto_sync
-- Field/key: direction
-- Block defines core structures or algorithms referenced by surrounding text.
+[Code block omitted: Rust structs: SyncState, SkillSyncState, RemoteConfig; enums: SkillSyncStatus, RemoteType, SyncDirection; fields: skill_states, remotes, last_full_sync, skill_id, local_modified, remote_modified.]
 
 #### 8.5.3 Conflict Resolution
 
-[Code block omitted: Rust example code (types/logic).]
-- Block length: 103 line(s).
-- Counts: 3 struct(s), 3 enum(s), 0 trait(s), 1 impl(s), 2 fn(s), 14 field(s).
-- Struct: ConflictResolver
-- Struct: ConflictInfo
-- Struct: SkillVersion
-- Enum: ConflictStrategy
-- Enum: ConflictType
-- Enum: Resolution
-- Impl block: ConflictResolver
-- Function/method: resolve
-- Function/method: attempt_three_way_merge
-- Field/key: default_strategy
-- Field/key: skill_strategies
-- Field/key: skill_id
-- Field/key: local_version
-- Field/key: remote_version
-- Field/key: base_version
-- Field/key: conflict_type
-- Field/key: content_hash
-- Field/key: modified_at
-- Field/key: modified_by
-- Field/key: version_number
-- Field/key: ConflictStrategy
-- Field/key: local_suffix
-- Field/key: remote_suffix
-- Block defines core structures or algorithms referenced by surrounding text.
+[Code block omitted: Rust structs: ConflictResolver, ConflictInfo, SkillVersion; enums: ConflictStrategy, ConflictType, Resolution; fns: resolve, attempt_three_way_merge; fields: default_strategy, skill_strategies, skill_id, local_version, remote_version, base_version.]
 
 #### 8.5.4 Sync Engine
 
-[Code block omitted: Rust example code (types/logic).]
-- Block length: 119 line(s).
-- Counts: 2 struct(s), 0 enum(s), 0 trait(s), 2 impl(s), 4 fn(s), 14 field(s).
-- Struct: SyncEngine
-- Struct: SyncReport
-- Impl block: SyncEngine
-- Impl block: SyncReport
-- Function/method: sync
-- Function/method: quick_sync
-- Function/method: watch_and_sync
-- Function/method: summary
-- Field/key: machine_identity
-- Field/key: sync_state
-- Field/key: conflict_resolver
-- Field/key: skills_db
-- Field/key: SyncChange
-- Field/key: Utc
-- Field/key: remote
-- Field/key: pulled
-- Field/key: pushed
-- Field/key: resolved
-- Field/key: conflicts
-- Field/key: deleted
-- Field/key: errors
-- Field/key: duration
-- Block defines core structures or algorithms referenced by surrounding text.
+[Code block omitted: Rust structs: SyncEngine, SyncReport; fns: sync, quick_sync, watch_and_sync; fields: machine_identity, sync_state, conflict_resolver, skills_db, SyncChange, Utc.]
 
 #### 8.5.5 CLI Commands
 
-[Code block omitted: ms CLI command examples (18 lines).]
-- Unique ms commands: 4.
-- Example: ms remote (flags: --bidirectional)
-- Example: ms remote (flags: --push-only)
-- Example: ms remote (flags: --pull-only)
-- Example: ms remote (no flags shown)
-- Example: ms remote (no flags shown)
-- Example: ms sync (no flags shown)
-- Example: ms sync (no flags shown)
-- Example: ms sync (flags: --quick)
-- Example: ms sync (flags: --dry-run)
-- Example: ms sync (no flags shown)
-- Example: ms conflicts (no flags shown)
-- Example: ms conflicts (no flags shown)
-- Example: ms conflicts (flags: --prefer-local)
-- Example: ms conflicts (flags: --prefer-remote)
-- Example: ms conflicts (flags: --merge)
-- Example: ms sync (no flags shown)
-- Example: ms machine (no flags shown)
-- Example: ms machine (no flags shown)
-- Examples collectively cover init/index, search/suggest/load, build, maintenance, testing, and integrations.
+[Code block omitted: ms CLI examples; commands include conflicts, remote, sync]
 
 #### 8.5.6 Robot Mode for Multi-Machine
 
-[Code block omitted: ms CLI command examples (4 lines).]
-- Unique ms commands: 4.
-- Example: ms --robot-sync-status (no flags shown)
-- Example: ms --robot-sync (flags: --remote)
-- Example: ms --robot-conflicts (no flags shown)
-- Example: ms --robot-resolve (flags: --skill, --strategy)
-- Examples collectively cover init/index, search/suggest/load, build, maintenance, testing, and integrations.
+[Code block omitted: ms CLI examples; commands include --robot-resolve, --robot-sync]
 
 #### 8.5.7 Sync Configuration
 
-[Code block omitted: TOML config example.]
-- Block length: 38 line(s).
-- Counts: 8 section(s), 15 key(s).
-- Section: machine
-- Section: sync
-- Section: remotes.origin
-- Section: remotes.origin.auth
-- Section: remotes.backup
-- Section: remotes.work
-- Section: skill_overrides."personal-workflow"
-- Section: skill_overrides."team-standards"
-- Key: name
-- Key: default_conflict_strategy
-- Key: auto_sync_on_change
-- Key: auto_sync_interval_minutes
-- Key: sync_on_startup
-- Key: sync_skills
-- Key: sync_bundles
-- Key: sync_config
-- Key: url
-- Key: type
-- Key: direction
-- Key: auto_sync
-- Key: method
-- Key: sync
-- Key: conflict_strategy
-- Example shows configuration defaults and feature toggles.
+[Code block omitted: TOML config; sections include machine, sync, remotes.origin, remotes.origin.auth, remotes.backup, remotes.work, ....]
 
 ---
 
@@ -3737,54 +1561,11 @@ Following the xf pattern for distributed archive access across multiple developm
 
 ### 9.1 Update Check
 
-[Code block omitted: Rust example code (types/logic).]
-- Block length: 88 line(s).
-- Counts: 2 struct(s), 0 enum(s), 0 trait(s), 1 impl(s), 2 fn(s), 11 field(s).
-- Struct: Updater
-- Struct: UpdateInfo
-- Impl block: Updater
-- Function/method: check
-- Function/method: install
-- Field/key: current_version
-- Field/key: github_repo
-- Field/key: binary_name
-- Field/key: version
-- Field/key: download_url
-- Field/key: release_notes
-- Field/key: checksum_url
-- Field/key: signature_url
-- Field/key: info
-- Field/key: security
-- Field/key: std
-- Block defines core structures or algorithms referenced by surrounding text.
+[Code block omitted: Rust structs: Updater, UpdateInfo; fns: check, install; fields: current_version, github_repo, binary_name, version, download_url, release_notes.]
 
 ### 9.2 Release Workflow
 
-[Code block omitted: YAML example.]
-- Block length: 48 line(s).
-- Keys extracted: 21.
-- Key: name
-- Key: on
-- Key: push
-- Key: tags
-- Key: jobs
-- Key: build
-- Key: strategy
-- Key: matrix
-- Key: include
-- Key: - os
-- Key: target
-- Key: artifact
-- Key: runs-on
-- Key: steps
-- Key: - uses
-- Key: - name
-- Key: uses
-- Key: with
-- Key: targets
-- Key: run
-- Key: files
-- Example encodes structured test/spec or config data.
+[Code block omitted: YAML example; keys include name, on, push, tags, jobs, build, ....]
 
 ---
 
@@ -3792,108 +1573,11 @@ Following the xf pattern for distributed archive access across multiple developm
 
 ### 10.1 Config File Structure
 
-[Code block omitted: TOML config example.]
-- Block length: 171 line(s).
-- Counts: 19 section(s), 67 key(s).
-- Section: general
-- Section: disclosure
-- Section: dependencies
-- Section: layers
-- Section: toolchain
-- Section: paths
-- Section: paths.layers
-- Section: search
-- Section: embeddings
-- Section: cass
-- Section: generalization
-- Section: uncertainty
-- Section: prune
-- Section: privacy
-- Section: safety
-- Section: security
-- Section: build
-- Section: github
-- Section: display
-- Key: default_disclosure
-- Key: min_quality_score
-- Key: max_suggestions
-- Key: default_pack_budget
-- Key: default_pack_mode
-- Key: default_max_per_group
-- Key: auto_load
-- Key: default_mode
-- Key: default_level
-- Key: max_depth
-- Key: order
-- Key: conflict_strategy
-- Key: merge_strategy
-- Key: section_preference
-- Key: emit_conflicts
-- Key: detect_toolchain
-- Key: project_roots
-- Key: max_major_drift
-- Key: skill_paths
-- Key: base
-- Key: org
-- Key: project
-- Key: user
-- Key: exclude_patterns
-- Key: default_limit
-- Key: rrf_k
-- Key: embedding_dims
-- Key: backend
-- Key: model_path
-- Key: binary
-- Key: default_session_limit
-- Key: min_pattern_confidence
-- Key: min_session_quality
-- Key: incremental_scan
-- Key: engine
-- Key: llm_critique
-- Key: llm_timeout_ms
-- Key: enabled
-- Key: min_confidence
-- Key: max_pending
-- Key: window_days
-- Key: min_uses
-- Key: merge_similarity
-- Key: require_confirmation
-- Key: redaction_enabled
-- Key: redaction_min_entropy
-- Key: redaction_patterns
-- Key: "(?i)api[_-]?key\\s*[:
-- Key: "(?i)secret\\s*[:
-- Key: redaction_allowlist
-- Key: prompt_injection_enabled
-- Key: prompt_injection_patterns
-- Key: quarantine_dir
-- Key: destructive_ops
-- Key: require_verbatim_approval
-- Key: tombstone_deletes
-- Key: verify_bundles
-- Key: verify_updates
-- Key: trusted_keys
-- Key: auto_save_interval
-- Key: max_iterations
-- Key: include_anti_patterns
-- Key: default_visibility
-- Key: update_check_hours
-- Key: theme
-- Key: use_icons
-- Key: color_scheme
-- Example shows configuration defaults and feature toggles.
+[Code block omitted: TOML config; sections include general, compiler, cache, bandit, disclosure, pack_contracts, ....]
 
 ### 10.2 Project-Local Config
 
-[Code block omitted: TOML config example.]
-- Block length: 13 line(s).
-- Counts: 2 section(s), 3 key(s).
-- Section: project
-- Section: triggers
-- Key: skill_paths
-- Key: "rust-async-patterns"
-- Key: "rust-testing"
-- Example shows configuration defaults and feature toggles.
+[Code block omitted: TOML config; sections include project, triggers.]
 
 ---
 
@@ -3901,45 +1585,33 @@ Following the xf pattern for distributed archive access across multiple developm
 
 ### Phase 1: Foundation
 
-[Code block omitted: ASCII diagram illustrating a workflow/system layout.]
-- Block length: 17 line(s).
-- Diagram uses box-and-arrow flow to show major steps, loops, or dependencies.
-- Intended to give a visual map of the process described in nearby text.
+[Diagram omitted: workflow/system diagram.]
+- 17 line(s); see surrounding text for step labels.
 
 ### Phase 2: Search
 
-[Code block omitted: ASCII diagram illustrating a workflow/system layout.]
-- Block length: 14 line(s).
-- Diagram uses box-and-arrow flow to show major steps, loops, or dependencies.
-- Intended to give a visual map of the process described in nearby text.
+[Diagram omitted: workflow/system diagram.]
+- 14 line(s); see surrounding text for step labels.
 
 ### Phase 3: Disclosure & Suggestions
 
-[Code block omitted: ASCII diagram illustrating a workflow/system layout.]
-- Block length: 17 line(s).
-- Diagram uses box-and-arrow flow to show major steps, loops, or dependencies.
-- Intended to give a visual map of the process described in nearby text.
+[Diagram omitted: workflow/system diagram.]
+- 17 line(s); see surrounding text for step labels.
 
 ### Phase 4: CASS Integration
 
-[Code block omitted: ASCII diagram illustrating a workflow/system layout.]
-- Block length: 16 line(s).
-- Diagram uses box-and-arrow flow to show major steps, loops, or dependencies.
-- Intended to give a visual map of the process described in nearby text.
+[Diagram omitted: workflow/system diagram.]
+- 16 line(s); see surrounding text for step labels.
 
 ### Phase 5: Bundles & Distribution
 
-[Code block omitted: ASCII diagram illustrating a workflow/system layout.]
-- Block length: 15 line(s).
-- Diagram uses box-and-arrow flow to show major steps, loops, or dependencies.
-- Intended to give a visual map of the process described in nearby text.
+[Diagram omitted: workflow/system diagram.]
+- 15 line(s); see surrounding text for step labels.
 
 ### Phase 6: Polish & Auto-Update
 
-[Code block omitted: ASCII diagram illustrating a workflow/system layout.]
-- Block length: 17 line(s).
-- Diagram uses box-and-arrow flow to show major steps, loops, or dependencies.
-- Intended to give a visual map of the process described in nearby text.
+[Diagram omitted: workflow/system diagram.]
+- 17 line(s); see surrounding text for step labels.
 
 **Reordered Phasing (Hard Invariants First):**
 1. Spec-only editing + compilation + semantic diff
@@ -3953,56 +1625,7 @@ Following the xf pattern for distributed archive access across multiple developm
 
 ## 12. Dependencies (Cargo.toml)
 
-[Code block omitted: TOML config example.]
-- Block length: 59 line(s).
-- Counts: 5 section(s), 41 key(s).
-- Section: package
-- Section: bin
-- Section: dependencies
-- Section: dev-dependencies
-- Section: profile.release
-- Key: name
-- Key: version
-- Key: edition
-- Key: rust-version
-- Key: authors
-- Key: description
-- Key: license
-- Key: repository
-- Key: path
-- Key: clap
-- Key: tokio
-- Key: serde
-- Key: serde_json
-- Key: serde_yaml
-- Key: toml
-- Key: rusqlite
-- Key: tantivy
-- Key: gix
-- Key: reqwest
-- Key: anyhow
-- Key: thiserror
-- Key: tracing
-- Key: tracing-subscriber
-- Key: crossterm
-- Key: ratatui
-- Key: indicatif
-- Key: chrono
-- Key: directories
-- Key: glob
-- Key: regex
-- Key: sha2
-- Key: semver
-- Key: uuid
-- Key: pulldown-cmark
-- Key: tempfile
-- Key: assert_cmd
-- Key: predicates
-- Key: lto
-- Key: codegen-units
-- Key: strip
-- Key: panic
-- Example shows configuration defaults and feature toggles.
+[Code block omitted: TOML config; sections include package, bin, dependencies, dev-dependencies, profile.release.]
 
 ---
 
@@ -4024,19 +1647,15 @@ that is still offline and fully opt-in.
 
 ### 13.2 Why SQLite + Git Dual Persistence
 
-[Code block omitted: ASCII diagram illustrating a workflow/system layout.]
-- Block length: 17 line(s).
-- Diagram uses box-and-arrow flow to show major steps, loops, or dependencies.
-- Intended to give a visual map of the process described in nearby text.
+[Diagram omitted: workflow/system diagram.]
+- 17 line(s); see surrounding text for step labels.
 
 **Two-Phase Commit for Consistency**
 
 To avoid partial writes (SQLite updated but Git not, or vice versa), ms wraps every
 write in a two-phase commit (2PC) protocol with a durable write-ahead record.
 
-[Code block omitted: example block (lang='n/a').]
-- Block length: 10 line(s).
-- Block contains illustrative content referenced by the surrounding text.
+[Code block omitted: example block (lang='n/a', 10 line(s)).]
 
 This makes dual persistence crash-safe and idempotent.
 
@@ -4070,10 +1689,8 @@ Fully automated mode (`--auto`) is available for pipelines, but interactive is t
 
 ### 14.2 Integration Points
 
-[Code block omitted: ASCII diagram illustrating a workflow/system layout.]
-- Block length: 24 line(s).
-- Diagram uses box-and-arrow flow to show major steps, loops, or dependencies.
-- Intended to give a visual map of the process described in nearby text.
+[Diagram omitted: workflow/system diagram.]
+- 24 line(s); see surrounding text for step labels.
 
 ---
 
@@ -4104,34 +1721,21 @@ Fully automated mode (`--auto`) is available for pipelines, but interactive is t
 
 ### 16.1 Pattern Extraction Prompt
 
-[Code block omitted: example block (lang='n/a').]
-- Block length: 17 line(s).
-- Block contains illustrative content referenced by the surrounding text.
+[Code block omitted: example block (lang='n/a', 17 line(s)).]
 
 ### 16.2 Draft Generation Prompt
 
-[Code block omitted: example block (lang='n/a').]
-- Block length: 17 line(s).
-- Block contains illustrative content referenced by the surrounding text.
+[Code block omitted: example block (lang='n/a', 17 line(s)).]
 
 ### 16.3 Refinement Prompt
 
-[Code block omitted: example block (lang='n/a').]
-- Block length: 13 line(s).
-- Block contains illustrative content referenced by the surrounding text.
+[Code block omitted: example block (lang='n/a', 13 line(s)).]
 
 ---
 
 ## 17. Getting Started
 
-[Code block omitted: ms CLI command examples (5 lines).]
-- Unique ms commands: 5.
-- Example: ms init (flags: --global)
-- Example: ms index (flags: --path)
-- Example: ms build (flags: --name)
-- Example: ms search (no flags shown)
-- Example: ms suggest (no flags shown)
-- Examples collectively cover init/index, search/suggest/load, build, maintenance, testing, and integrations.
+[Code block omitted: appendix/example (lang='bash', 17 line(s)).]
 
 ---
 
@@ -4141,150 +1745,46 @@ Fully automated mode (`--auto`) is available for pipelines, but interactive is t
 
 Following Rust best practices with comprehensive coverage across unit, integration, and property-based tests.
 
-[Code block omitted: Rust example code (types/logic).]
-- Block length: 13 line(s).
-- Counts: 0 struct(s), 0 enum(s), 0 trait(s), 0 impl(s), 0 fn(s), 0 field(s).
-- Block defines core structures or algorithms referenced by surrounding text.
+**UBS (Ultimate Bug Scanner) Integration:**
+- Integrate `/data/projects/ultimate_bug_scanner` as a required quality gate.
+- Run `ubs` on changed files before commits and during CI; surface findings in `ms doctor`.
+- Prefer machine-readable outputs (JSON/SARIF) for automation and bead creation.
+
+**Testing Beads Coverage:**
+- Create dedicated beads for unit tests, integration tests, E2E scripts, and benchmarks.
+- Treat testing beads as first-class blockers in planning/triage.
+
+[Code block omitted: Rust types/logic.]
 
 ### 18.2 Unit Tests
 
-[Code block omitted: Rust example code (types/logic).]
-- Block length: 138 line(s).
-- Counts: 0 struct(s), 0 enum(s), 0 trait(s), 0 impl(s), 11 fn(s), 4 field(s).
-- Function/method: test_fnv1a_deterministic
-- Function/method: test_embedding_dimensions
-- Function/method: test_embedding_normalization
-- Function/method: test_similar_texts_similar_embeddings
-- Function/method: test_skill_name_validation
-- Function/method: test_frontmatter_parsing
-- Function/method: test_malformed_frontmatter
-- Function/method: test_missing_required_fields
-- Function/method: test_index_and_search
-- Function/method: test_rrf_fusion
-- Function/method: test_structure_score
-- Field/key: name
-- Field/key: description
-- Field/key: id
-- Field/key: content
-- Block defines core structures or algorithms referenced by surrounding text.
+[Code block omitted: Rust fns: test_fnv1a_deterministic, test_embedding_dimensions, test_embedding_normalization; fields: name, description, id, content.]
 example code
-[Code block omitted: example block (lang='n/a').]
-- Block length: 19 line(s).
-- Block contains illustrative content referenced by the surrounding text.
+[Code block omitted: example block (lang='n/a', 19 line(s)).]
 
 ### 18.3 Integration Tests
 
-[Code block omitted: Rust example code (types/logic).]
-- Block length: 73 line(s).
-- Counts: 0 struct(s), 0 enum(s), 0 trait(s), 0 impl(s), 5 fn(s), 4 field(s).
-- Function/method: test_init_creates_config
-- Function/method: test_index_skills_directory
-- Function/method: test_search_returns_results
-- Function/method: test_robot_mode_json_output
-- Function/method: test_suggest_with_cass_integration
-- Field/key: Command
-- Field/key: std
-- Field/key: name
-- Field/key: description
-- Block defines core structures or algorithms referenced by surrounding text.
+[Code block omitted: Rust fns: test_init_creates_config, test_index_skills_directory, test_search_returns_results; fields: Command, std, name, description.]
 
 ### 18.4 Property-Based Tests
 
-[Code block omitted: Rust example code (types/logic).]
-- Block length: 54 line(s).
-- Counts: 0 struct(s), 0 enum(s), 0 trait(s), 0 impl(s), 5 fn(s), 2 field(s).
-- Function/method: test_skill_id_generation_unique
-- Function/method: test_embedding_always_normalized
-- Function/method: test_search_never_panics
-- Function/method: test_rrf_order_independent
-- Function/method: test_yaml_roundtrip
-- Field/key: name
-- Field/key: description
-- Block defines core structures or algorithms referenced by surrounding text.
+[Code block omitted: Rust fns: test_skill_id_generation_unique, test_embedding_always_normalized, test_search_never_panics; fields: name, description.]
 
 ### 18.5 Snapshot Tests
 
-[Code block omitted: Rust example code (types/logic).]
-- Block length: 30 line(s).
-- Counts: 0 struct(s), 0 enum(s), 0 trait(s), 0 impl(s), 5 fn(s), 0 field(s).
-- Function/method: test_skill_disclosure_minimal
-- Function/method: test_skill_disclosure_full
-- Function/method: test_robot_status_output
-- Function/method: test_doctor_report_format
-- Function/method: test_search_results_format
-- Block defines core structures or algorithms referenced by surrounding text.
+[Code block omitted: Rust fns: test_skill_disclosure_minimal, test_skill_disclosure_full, test_robot_status_output.]
 
 ### 18.6 Benchmark Tests
 
-[Code block omitted: Rust example code (types/logic).]
-- Block length: 65 line(s).
-- Counts: 0 struct(s), 0 enum(s), 0 trait(s), 0 impl(s), 4 fn(s), 1 field(s).
-- Function/method: bench_hash_embedding
-- Function/method: bench_search
-- Function/method: bench_rrf_fusion
-- Function/method: bench_skill_parsing
-- Field/key: BenchmarkId
-- Block defines core structures or algorithms referenced by surrounding text.
+[Code block omitted: Rust fns: bench_hash_embedding, bench_search, bench_rrf_fusion; fields: BenchmarkId.]
 
 ### 18.7 Test Fixtures and Helpers
 
-[Code block omitted: Rust example code (types/logic).]
-- Block length: 69 line(s).
-- Counts: 1 struct(s), 0 enum(s), 0 trait(s), 2 impl(s), 5 fn(s), 13 field(s).
-- Struct: TestFixture
-- Impl block: TestFixture
-- Impl block: Drop
-- Function/method: new
-- Function/method: with_indexed_skills
-- Function/method: with_mock_cass
-- Function/method: config_dir
-- Function/method: drop
-- Field/key: temp_dir
-- Field/key: config_dir
-- Field/key: skills_dir
-- Field/key: db
-- Field/key: index
-- Field/key: std
-- Field/key: id
-- Field/key: name
-- Field/key: description
-- Field/key: agent
-- Field/key: project
-- Field/key: messages
-- Field/key: MockCass
-- Block defines core structures or algorithms referenced by surrounding text.
+[Code block omitted: Rust structs: TestFixture; fns: new, with_indexed_skills, with_mock_cass; fields: temp_dir, config_dir, skills_dir, db, index, std.]
 
 ### 18.8 CI Integration
 
-[Code block omitted: YAML example.]
-- Block length: 67 line(s).
-- Keys extracted: 25.
-- Key: name
-- Key: on
-- Key: push
-- Key: branches
-- Key: pull_request
-- Key: env
-- Key: CARGO_TERM_COLOR
-- Key: RUST_BACKTRACE
-- Key: jobs
-- Key: test
-- Key: runs-on
-- Key: steps
-- Key: - uses
-- Key: - name
-- Key: uses
-- Key: with
-- Key: components
-- Key: run
-- Key: coverage
-- Key: files
-- Key: fail_ci_if_error
-- Key: property-tests
-- Key: PROPTEST_CASES
-- Key: benchmarks
-- Key: snapshots
-- Example encodes structured test/spec or config data.
+[Code block omitted: appendix/example (lang='yaml', 67 line(s)).]
 
 ### 18.9 Skill Tests
 
@@ -4293,17 +1793,7 @@ under `tests/` and run via `ms test`.
 
 **Test Format (YAML):**
 
-[Code block omitted: YAML example.]
-- Block length: 8 line(s).
-- Keys extracted: 7.
-- Key: name
-- Key: skill
-- Key: steps
-- Key: - load_skill
-- Key: - run
-- Key: - assert
-- Key: contains
-- Example encodes structured test/spec or config data.
+[Code block omitted: YAML example; keys include name, skill, steps, - load_skill, - run, - assert, ....]
 
 **Runner Contract:**
 - `load_skill` injects the selected disclosure
@@ -4312,79 +1802,24 @@ under `tests/` and run via `ms test`.
 
 **CLI:**
 
-[Code block omitted: ms CLI command examples (2 lines).]
-- Unique ms commands: 1.
-- Example: ms test (no flags shown)
-- Example: ms test (flags: --all, --report)
-- Examples collectively cover init/index, search/suggest/load, build, maintenance, testing, and integrations.
+[Code block omitted: ms CLI examples; commands include test]
 
 **Extended Test Types:**
 
 Beyond basic schema/script tests, ms supports **retrieval tests** and **packing tests**
 to enable regression testing of search quality and token efficiency.
 
-[Code block omitted: YAML example.]
-- Block length: 18 line(s).
-- Keys extracted: 14.
-- Key: name
-- Key: skill
-- Key: type
-- Key: tests
-- Key: - context
-- Key: cwd
-- Key: files
-- Key: keywords
-- Key: query
-- Key: expect
-- Key: top_k
-- Key: score_min
-- Key: diff
-- Key: suggested
-- Example encodes structured test/spec or config data.
+[Code block omitted: YAML example; keys include name, skill, type, tests, - context, cwd, ....]
 
-[Code block omitted: YAML example.]
-- Block length: 20 line(s).
-- Keys extracted: 10.
-- Key: name
-- Key: skill
-- Key: type
-- Key: tests
-- Key: - budget
-- Key: expect_contains
-- Key: expect_excludes
-- Key: expect_coverage_groups
-- Key: expect_min_utility
-- Key: expect_max_slices
-- Example encodes structured test/spec or config data.
+[Code block omitted: YAML example; keys include name, skill, type, tests, - budget, contract, ....]
 
 **Test Harness Implementation:**
 
-[Code block omitted: Rust example code (types/logic).]
-- Block length: 41 line(s).
-- Counts: 1 struct(s), 0 enum(s), 0 trait(s), 1 impl(s), 2 fn(s), 9 field(s).
-- Struct: SkillTestHarness
-- Impl block: SkillTestHarness
-- Function/method: run_retrieval_test
-- Function/method: run_packing_test
-- Field/key: registry
-- Field/key: searcher
-- Field/key: packer
-- Field/key: passed
-- Field/key: RetrievalExpect
-- Field/key: actual_rank
-- Field/key: actual_score
-- Field/key: packed_slice_ids
-- Field/key: total_tokens
-- Block defines core structures or algorithms referenced by surrounding text.
+[Code block omitted: Rust structs: RetrievalTest, PackingTest, SkillTestHarness; fns: run_retrieval_test, run_packing_test; fields: name, skill, query, context, expect, budget.]
 
 **CI Integration:**
 
-[Code block omitted: ms CLI command examples (3 lines).]
-- Unique ms commands: 1.
-- Example: ms test (flags: --all, --report)
-- Example: ms test (flags: --type)
-- Example: ms test (flags: --type, --budget-range)
-- Examples collectively cover init/index, search/suggest/load, build, maintenance, testing, and integrations.
+[Code block omitted: ms CLI examples; commands include test]
 
 ---
 
@@ -4402,12 +1837,7 @@ real projects.
 
 **CLI:**
 
-[Code block omitted: ms CLI command examples (3 lines).]
-- Unique ms commands: 1.
-- Example: ms simulate (no flags shown)
-- Example: ms simulate (flags: --project)
-- Example: ms simulate (flags: --report)
-- Examples collectively cover init/index, search/suggest/load, build, maintenance, testing, and integrations.
+[Code block omitted: ms CLI examples; commands include simulate]
 
 ---
 
@@ -4417,181 +1847,79 @@ real projects.
 
 Pre-built templates for common skill patterns, enabling rapid skill creation with best practices baked in.
 
-[Code block omitted: Rust example code (types/logic).]
-- Block length: 52 line(s).
-- Counts: 5 struct(s), 2 enum(s), 0 trait(s), 0 impl(s), 0 fn(s), 20 field(s).
-- Struct: TemplateLibrary
-- Struct: SkillTemplate
-- Struct: TemplateStructure
-- Struct: TemplateSection
-- Struct: Placeholder
-- Enum: TemplateCategory
-- Enum: ContentType
-- Field/key: templates
-- Field/key: custom_templates_dir
-- Field/key: id
-- Field/key: name
-- Field/key: description
-- Field/key: category
-- Field/key: structure
-- Field/key: placeholders
-- Field/key: examples
-- Field/key: best_for
-- Field/key: sections
-- Field/key: optional_sections
-- Field/key: resources
-- Field/key: heading_level
-- Field/key: content_type
-- Field/key: placeholder
-- Field/key: example
-- Field/key: default
-- Field/key: validation
-- Field/key: required
-- Block defines core structures or algorithms referenced by surrounding text.
+[Code block omitted: Rust structs: TemplateLibrary, SkillTemplate, TemplateStructure; enums: TemplateCategory, ContentType; fields: templates, custom_templates_dir, id, name, description, category.]
 
 ### 19.2 Built-in Templates
 
 #### 19.2.1 Workflow Template
 
-[Code block omitted: example block (lang='markdown').]
-- Block length: 12 line(s).
-- Block contains illustrative content referenced by the surrounding text.
+[Code block omitted: example block (lang='markdown', 12 line(s)).]
 {{step_1_code}}
-[Code block omitted: example block (lang='n/a').]
-- Block length: 3 line(s).
-- Block contains illustrative content referenced by the surrounding text.
+[Code block omitted: example block (lang='n/a', 3 line(s)).]
 {{decision_point}} ?
 ├── YES → {{yes_action}}
 └── NO → {{no_action}}
-[Code block omitted: example block (lang='n/a').]
-- Block length: 10 line(s).
-- Block contains illustrative content referenced by the surrounding text.
+[Code block omitted: example block (lang='n/a', 10 line(s)).]
 
 #### 19.2.2 Checklist Template
 
-[Code block omitted: example block (lang='markdown').]
-- Block length: 31 line(s).
-- Block contains illustrative content referenced by the surrounding text.
+[Code block omitted: example block (lang='markdown', 31 line(s)).]
 
 #### 19.2.3 Debugging Template
 
-[Code block omitted: example block (lang='markdown').]
-- Block length: 8 line(s).
-- Block contains illustrative content referenced by the surrounding text.
+[Code block omitted: example block (lang='markdown', 8 line(s)).]
 {{diagnostic_command}}
-[Code block omitted: example block (lang='n/a').]
-- Block length: 6 line(s).
-- Block contains illustrative content referenced by the surrounding text.
+[Code block omitted: example block (lang='n/a', 6 line(s)).]
 {{fix_code}}
-[Code block omitted: example block (lang='n/a').]
-- Block length: 6 line(s).
-- Block contains illustrative content referenced by the surrounding text.
+[Code block omitted: example block (lang='n/a', 6 line(s)).]
 {{symptom}}
 ├── Check: {{check_1}}
 │   ├── PASS → {{next_check}}
 │   └── FAIL → {{cause_1}} → {{fix_1}}
 └── Check: {{check_2}}
     └── FAIL → {{cause_2}} → {{fix_2}}
-[Code block omitted: example block (lang='n/a').]
-- Block length: 2 line(s).
-- Block contains illustrative content referenced by the surrounding text.
+[Code block omitted: example block (lang='n/a', 2 line(s)).]
 
 #### 19.2.4 Integration Template
 
-[Code block omitted: example block (lang='markdown').]
-- Block length: 10 line(s).
-- Block contains illustrative content referenced by the surrounding text.
+[Code block omitted: example block (lang='markdown', 10 line(s)).]
 {{setup_commands}}
-[Code block omitted: example block (lang='n/a').]
-- Block length: 1 line(s).
-- Block contains illustrative content referenced by the surrounding text.
+[Code block omitted: example block (lang='n/a', 1 line(s)).]
 {{config_example}}
-[Code block omitted: example block (lang='n/a').]
-- Block length: 2 line(s).
-- Block contains illustrative content referenced by the surrounding text.
+[Code block omitted: example block (lang='n/a', 2 line(s)).]
 {{operation_1_command}}
-[Code block omitted: example block (lang='n/a').]
-- Block length: 1 line(s).
-- Block contains illustrative content referenced by the surrounding text.
+[Code block omitted: example block (lang='n/a', 1 line(s)).]
 {{operation_2_command}}
-[Code block omitted: example block (lang='n/a').]
-- Block length: 11 line(s).
-- Block contains illustrative content referenced by the surrounding text.
+[Code block omitted: example block (lang='n/a', 11 line(s)).]
 
 #### 19.2.5 Pattern Template
 
-[Code block omitted: example block (lang='markdown').]
-- Block length: 13 line(s).
-- Block contains illustrative content referenced by the surrounding text.
+[Code block omitted: example block (lang='markdown', 13 line(s)).]
 {{pattern_structure}}
-[Code block omitted: example block (lang='n/a').]
-- Block length: 2 line(s).
-- Block contains illustrative content referenced by the surrounding text.
+[Code block omitted: example block (lang='n/a', 2 line(s)).]
 {{basic_implementation}}
-[Code block omitted: example block (lang='n/a').]
-- Block length: 1 line(s).
-- Block contains illustrative content referenced by the surrounding text.
+[Code block omitted: example block (lang='n/a', 1 line(s)).]
 {{advanced_implementation}}
-[Code block omitted: example block (lang='n/a').]
-- Block length: 3 line(s).
-- Block contains illustrative content referenced by the surrounding text.
+[Code block omitted: example block (lang='n/a', 3 line(s)).]
 {{variation_1_code}}
-[Code block omitted: example block (lang='n/a').]
-- Block length: 7 line(s).
-- Block contains illustrative content referenced by the surrounding text.
+[Code block omitted: example block (lang='n/a', 7 line(s)).]
 
 ### 19.3 Template CLI Commands
 
-[Code block omitted: ms CLI command examples (7 lines).]
-- Unique ms commands: 1.
-- Example: ms template (no flags shown)
-- Example: ms template (no flags shown)
-- Example: ms template (flags: --name)
-- Example: ms template (no flags shown)
-- Example: ms template (flags: --from-skill, --name)
-- Example: ms template (no flags shown)
-- Example: ms template (flags: --output)
-- Examples collectively cover init/index, search/suggest/load, build, maintenance, testing, and integrations.
+[Code block omitted: ms CLI examples; commands include template]
 
 ### 19.4 Template Instantiation Engine
 
-[Code block omitted: Rust example code (types/logic).]
-- Block length: 95 line(s).
-- Counts: 1 struct(s), 0 enum(s), 0 trait(s), 1 impl(s), 4 fn(s), 9 field(s).
-- Struct: TemplateEngine
-- Impl block: TemplateEngine
-- Function/method: new
-- Function/method: instantiate
-- Function/method: interactive_instantiate
-- Function/method: code_block_helper
-- Field/key: templates
-- Field/key: handlebars
-- Field/key: template_id
-- Field/key: values
-- Field/key: name
-- Field/key: pattern
-- Field/key: h
-- Field/key: _
-- Field/key: out
-- Block defines core structures or algorithms referenced by surrounding text.
+[Code block omitted: Rust structs: TemplateEngine; fns: new, instantiate, interactive_instantiate; fields: templates, handlebars, template_id, values, name, pattern.]
 
 ### 19.5 Template Discovery from Sessions
 
-[Code block omitted: ASCII diagram illustrating a workflow/system layout.]
-- Block length: 57 line(s).
-- Diagram uses box-and-arrow flow to show major steps, loops, or dependencies.
-- Intended to give a visual map of the process described in nearby text.
+[Diagram omitted: workflow/system diagram.]
+- 57 line(s); see surrounding text for step labels.
 
 ### 19.6 Template Validation
 
-[Code block omitted: Rust example code (types/logic).]
-- Block length: 45 line(s).
-- Counts: 1 struct(s), 0 enum(s), 0 trait(s), 1 impl(s), 1 fn(s), 1 field(s).
-- Struct: TemplateValidator
-- Impl block: TemplateValidator
-- Function/method: validate
-- Field/key: rules
-- Block defines core structures or algorithms referenced by surrounding text.
+[Code block omitted: Rust structs: TemplateValidator; fns: validate; fields: rules.]
 
 ---
 
@@ -4606,107 +1934,36 @@ The `ms` CLI integrates with the Agent Mail MCP server to enable multi-agent ski
 3. **Request skills** from other agents who may have relevant expertise
 4. **Notify** when new skills are ready for use
 
-[Code block omitted: ASCII diagram illustrating a workflow/system layout.]
-- Block length: 25 line(s).
-- Diagram uses box-and-arrow flow to show major steps, loops, or dependencies.
-- Intended to give a visual map of the process described in nearby text.
+[Diagram omitted: workflow/system diagram.]
+- 25 line(s); see surrounding text for step labels.
 
 ### 20.2 Agent Mail Client Integration
 
-[Code block omitted: Rust example code (types/logic).]
-- Block length: 152 line(s).
-- Counts: 2 struct(s), 1 enum(s), 0 trait(s), 2 impl(s), 9 fn(s), 17 field(s).
-- Struct: AgentMailClient
-- Struct: SkillRequestBounty
-- Enum: SkillRequestUrgency
-- Impl block: AgentMailClient
-- Impl block: SkillRequestUrgency
-- Function/method: register_skill_builder
-- Function/method: announce_build_start
-- Function/method: announce_bounty
-- Function/method: announce_skill_ready
-- Function/method: request_skill
-- Function/method: check_skill_in_progress
-- Function/method: reserve_patterns
-- Function/method: topics_overlap
-- Function/method: to_importance
-- Field/key: project_key
-- Field/key: agent_name
-- Field/key: mcp_endpoint
-- Field/key: topics
-- Field/key: topic
-- Field/key: estimated_duration
-- Field/key: bounty
-- Field/key: skill
-- Field/key: quality_score
-- Field/key: urgency
-- Field/key: builder
-- Field/key: started_at
-- Field/key: pattern_ids
-- Field/key: ttl
-- Field/key: amount
-- Field/key: currency
-- Field/key: Self
-- Block defines core structures or algorithms referenced by surrounding text.
+[Code block omitted: Rust structs: AgentMailClient, SkillRequestBounty; enums: SkillRequestUrgency; fns: register_skill_builder, announce_build_start, announce_bounty; fields: project_key, agent_name, mcp_endpoint, topics, topic, estimated_duration.]
 
 **Reservation-Aware Editing (Fallback):**
-- If Agent Mail CLI is unavailable, ms provides a local reservation mechanism with
-  the same semantics (path/glob, TTL, exclusive/shared).
+- If Agent Mail is unavailable, ms provides a local reservation mechanism with
+  compatible semantics (path/glob, TTL, exclusive/shared).
 - When Agent Mail is available, ms bridges to it transparently.
 
 ### 20.3 Coordination Protocol
 
-[Code block omitted: ASCII diagram illustrating a workflow/system layout.]
-- Block length: 26 line(s).
-- Diagram uses box-and-arrow flow to show major steps, loops, or dependencies.
-- Intended to give a visual map of the process described in nearby text.
+[Diagram omitted: workflow/system diagram.]
+- 26 line(s); see surrounding text for step labels.
 
 ### 20.4 CLI Commands with Agent Mail
 
-[Code block omitted: ms CLI command examples (8 lines).]
-- Unique ms commands: 5.
-- Example: ms build (flags: --check-duplicates)
-- Example: ms build (flags: --guided, --topic, --coordinate)
-- Example: ms build (flags: --guided, --topic, --no-coordinate)
-- Example: ms request (flags: --urgency)
-- Example: ms request (flags: --urgency, --bounty)
-- Example: ms inbox (flags: --requests)
-- Example: ms respond (flags: --skill)
-- Example: ms subscribe (flags: --timeout)
-- Examples collectively cover init/index, search/suggest/load, build, maintenance, testing, and integrations.
+[Code block omitted: ms CLI examples; commands include build, inbox, request, respond, subscribe]
 
 ### 20.5 Pattern Sharing Between Agents
 
-[Code block omitted: Rust example code (types/logic).]
-- Block length: 62 line(s).
-- Counts: 1 struct(s), 0 enum(s), 0 trait(s), 1 impl(s), 2 fn(s), 7 field(s).
-- Struct: PatternSharer
-- Impl block: PatternSharer
-- Function/method: share_relevant_patterns
-- Function/method: receive_patterns
-- Field/key: mail_client
-- Field/key: local_patterns
-- Field/key: recipient
-- Field/key: topic
-- Field/key: source_agent
-- Field/key: patterns
-- Field/key: created_at
-- Block defines core structures or algorithms referenced by surrounding text.
+[Code block omitted: Rust structs: PatternSharer; fns: share_relevant_patterns, receive_patterns; fields: mail_client, local_patterns, recipient, topic, source_agent, patterns.]
 
 ### 20.6 Multi-Agent Skill Swarm
 
 When building skills at scale with multiple agents (via NTM), coordinate using this pattern:
 
-[Code block omitted: Rust example code (types/logic).]
-- Block length: 47 line(s).
-- Counts: 1 struct(s), 0 enum(s), 0 trait(s), 1 impl(s), 2 fn(s), 2 field(s).
-- Struct: SkillSwarm
-- Impl block: SkillSwarm
-- Function/method: distribute_topics
-- Function/method: find_best_agent
-- Field/key: agents
-- Field/key: topic_allocator
-- Block defines core structures or algorithms referenced by surrounding text.
+[Code block omitted: Rust structs: SkillSwarm; fns: distribute_topics, find_best_agent; fields: agents, topic_allocator.]
 
 ---
 
@@ -4716,63 +1973,21 @@ When building skills at scale with multiple agents (via NTM), coordinate using t
 
 The interactive build experience uses a rich terminal UI for guided skill generation:
 
-[Code block omitted: ASCII diagram illustrating a workflow/system layout.]
-- Block length: 52 line(s).
-- Diagram uses box-and-arrow flow to show major steps, loops, or dependencies.
-- Intended to give a visual map of the process described in nearby text.
+[Diagram omitted: workflow/system diagram.]
+- 52 line(s); see surrounding text for step labels.
 
 ### 21.2 TUI Components
 
-[Code block omitted: ASCII diagram illustrating a workflow/system layout.]
-- Block length: 135 line(s).
-- Diagram uses box-and-arrow flow to show major steps, loops, or dependencies.
-- Intended to give a visual map of the process described in nearby text.
+[Diagram omitted: workflow/system diagram.]
+- 135 line(s); see surrounding text for step labels.
 
 ### 21.3 TUI Navigation and Actions
 
-[Code block omitted: Rust example code (types/logic).]
-- Block length: 95 line(s).
-- Counts: 1 struct(s), 0 enum(s), 0 trait(s), 2 impl(s), 6 fn(s), 10 field(s).
-- Struct: BuildDialogs
-- Impl block: BuildTui
-- Impl block: BuildDialogs
-- Function/method: handle_key
-- Function/method: toggle_current_pattern
-- Function/method: accept_pattern
-- Function/method: edit_pattern_dialog
-- Function/method: search_dialog
-- Function/method: quit_confirm_dialog
-- Field/key: KeyCode
-- Field/key: TuiAction
-- Field/key: title
-- Field/key: fields
-- Field/key: EditField
-- Field/key: placeholder
-- Field/key: filters
-- Field/key: SearchFilter
-- Field/key: message
-- Field/key: options
-- Block defines core structures or algorithms referenced by surrounding text.
+[Code block omitted: Rust structs: BuildDialogs; fns: handle_key, toggle_current_pattern, accept_pattern; fields: KeyCode, TuiAction, title, fields, EditField, placeholder.]
 
 ### 21.4 Real-Time Draft Generation
 
-[Code block omitted: Rust example code (types/logic).]
-- Block length: 48 line(s).
-- Counts: 1 struct(s), 0 enum(s), 0 trait(s), 1 impl(s), 2 fn(s), 9 field(s).
-- Struct: LiveDraftGenerator
-- Impl block: LiveDraftGenerator
-- Function/method: regenerate_preview
-- Function/method: estimate_quality
-- Field/key: transformer
-- Field/key: debounce
-- Field/key: last_generation
-- Field/key: selected_patterns
-- Field/key: current_draft
-- Field/key: content
-- Field/key: token_count
-- Field/key: quality_estimate
-- Field/key: diff_from_current
-- Block defines core structures or algorithms referenced by surrounding text.
+[Code block omitted: Rust structs: LiveDraftGenerator; fns: regenerate_preview, estimate_quality; fields: transformer, debounce, last_generation, selected_patterns, current_draft, content.]
 
 ---
 
@@ -4784,117 +1999,23 @@ Track whether skills actually help agents accomplish their tasks. This data impr
 When multiple variants exist, ms can run A/B experiments to select the most effective version.
 
 **Slice-Level Experiments:**
-- Run experiments on individual slices (rule wording, example choice, checklist variant),
-  keeping the rest of the skill constant for higher statistical power.
-- Uses the same experiment infrastructure but references slice IDs instead of whole skills.
+- Experiments can target individual slices (rule wording, example blocks) while keeping
+  the rest of the skill constant for faster convergence.
 
-[Code block omitted: ASCII diagram illustrating a workflow/system layout.]
-- Block length: 24 line(s).
-- Diagram uses box-and-arrow flow to show major steps, loops, or dependencies.
-- Intended to give a visual map of the process described in nearby text.
+[Diagram omitted: workflow/system diagram.]
+- 24 line(s); see surrounding text for step labels.
 
 ### 22.2 Usage Tracking
 
-[Code block omitted: Rust example code (types/logic).]
-- Block length: 251 line(s).
-- Counts: 7 struct(s), 5 enum(s), 0 trait(s), 1 impl(s), 5 fn(s), 43 field(s).
-- Struct: EffectivenessTracker
-- Struct: SkillExperiment
-- Struct: ExperimentVariant
-- Struct: SkillUsageEvent
-- Struct: RuleOutcome
-- Struct: SkillFeedback
-- Struct: RuleStat
-- Enum: AllocationStrategy
-- Enum: ExperimentStatus
-- Enum: DiscoveryMethod
-- Enum: SessionOutcome
-- Enum: FailureReason
-- Impl block: EffectivenessTracker
-- Function/method: record_skill_load
-- Function/method: analyze_session_outcome
-- Function/method: infer_outcome
-- Function/method: infer_rule_outcomes
-- Function/method: get_rule_stats
-- Field/key: db
-- Field/key: cass
-- Field/key: id
-- Field/key: skill_id
-- Field/key: variants
-- Field/key: allocation
-- Field/key: started_at
-- Field/key: status
-- Field/key: variant_id
-- Field/key: version
-- Field/key: description
-- Field/key: session_id
-- Field/key: loaded_at
-- Field/key: disclosure_level
-- Field/key: discovery_method
-- Field/key: experiment_id
-- Field/key: outcome
-- Field/key: feedback
-- Field/key: rule_id
-- Field/key: followed
-- Field/key: duration
-- Field/key: quality_signals
-- Field/key: completed_aspects
-- Field/key: failed_aspects
-- Field/key: reason
-- Field/key: at_step
-- Field/key: progress_percent
-- Field/key: rating
-- Field/key: positives
-- Field/key: improvements
-- Field/key: helpful_sections
-- Field/key: confusing_sections
-- Field/key: level
-- Field/key: method
-- Field/key: experiment
-- Field/key: serde_json
-- Field/key: None
-- Field/key: usage_event_id
-- Field/key: session
-- Field/key: skill
-- Field/key: SessionOutcome
-- Field/key: total
-- Field/key: success
-- Block defines core structures or algorithms referenced by surrounding text.
+[Code block omitted: Rust structs: EffectivenessTracker, SkillExperiment, ExperimentVariant; enums: ExperimentScope, AllocationStrategy, ExperimentStatus; fns: record_skill_load, analyze_session_outcome, infer_outcome; fields: db, cass, id, skill_id, scope, scope_id.]
 
 ### 22.3 Feedback Collection
 
-[Code block omitted: Rust example code (types/logic).]
-- Block length: 63 line(s).
-- Counts: 1 struct(s), 0 enum(s), 0 trait(s), 1 impl(s), 2 fn(s), 6 field(s).
-- Struct: FeedbackCollector
-- Impl block: FeedbackCollector
-- Function/method: collect_feedback_interactive
-- Function/method: infer_feedback
-- Field/key: tracker
-- Field/key: positives
-- Field/key: improvements
-- Field/key: helpful_sections
-- Field/key: confusing_sections
-- Field/key: rating
-- Block defines core structures or algorithms referenced by surrounding text.
+[Code block omitted: Rust structs: FeedbackCollector; fns: collect_feedback_interactive, infer_feedback; fields: tracker, positives, improvements, helpful_sections, confusing_sections, rating.]
 
 ### 22.4 Quality Score Updates
 
-[Code block omitted: Rust example code (types/logic).]
-- Block length: 79 line(s).
-- Counts: 1 struct(s), 0 enum(s), 0 trait(s), 1 impl(s), 2 fn(s), 7 field(s).
-- Struct: QualityUpdater
-- Impl block: QualityUpdater
-- Function/method: update_quality
-- Function/method: generate_improvements
-- Field/key: scorer
-- Field/key: tracker
-- Field/key: db
-- Field/key: suggestion_type
-- Field/key: priority
-- Field/key: evidence
-- Field/key: section
-- Block defines core structures or algorithms referenced by surrounding text.
+[Code block omitted: Rust structs: QualityUpdater; fns: update_quality, generate_improvements; fields: scorer, tracker, db, suggestion_type, priority, evidence.]
 
 ### 22.4.1 A/B Skill Experiments
 
@@ -4903,39 +2024,12 @@ examples), ms can run A/B experiments to empirically determine the more effectiv
 variant. Results feed back into quality scoring and can automatically promote the
 winning version.
 
-[Code block omitted: Rust example code (types/logic).]
-- Block length: 56 line(s).
-- Counts: 3 struct(s), 0 enum(s), 0 trait(s), 1 impl(s), 3 fn(s), 15 field(s).
-- Struct: ExperimentRunner
-- Struct: ExperimentResult
-- Struct: VariantStats
-- Impl block: ExperimentRunner
-- Function/method: create_experiment
-- Function/method: assign_variant
-- Function/method: evaluate
-- Field/key: tracker
-- Field/key: db
-- Field/key: skill_id
-- Field/key: variants
-- Field/key: allocation
-- Field/key: id
-- Field/key: started_at
-- Field/key: status
-- Field/key: serde_json
-- Field/key: winner_variant
-- Field/key: confidence
-- Field/key: stats
-- Field/key: uses
-- Field/key: success_rate
-- Field/key: avg_rating
-- Block defines core structures or algorithms referenced by surrounding text.
+[Code block omitted: Rust structs: ExperimentRunner, ExperimentResult, VariantStats; fns: create_experiment, assign_variant, evaluate; fields: tracker, db, skill_id, variants, allocation, id.]
 
 ### 22.5 CLI Commands for Effectiveness
 
-[Code block omitted: ASCII diagram illustrating a workflow/system layout.]
-- Block length: 29 line(s).
-- Diagram uses box-and-arrow flow to show major steps, loops, or dependencies.
-- Intended to give a visual map of the process described in nearby text.
+[Diagram omitted: workflow/system diagram.]
+- 29 line(s); see surrounding text for step labels.
 
 ---
 
@@ -4945,91 +2039,26 @@ winning version.
 
 Learn from sessions across multiple projects to build more comprehensive skills and identify coverage gaps.
 
-[Code block omitted: ASCII diagram illustrating a workflow/system layout.]
-- Block length: 32 line(s).
-- Diagram uses box-and-arrow flow to show major steps, loops, or dependencies.
-- Intended to give a visual map of the process described in nearby text.
+**CM (cass-memory) Integration:**
+- Integrate `/data/projects/cass_memory_system` as a shared procedural memory layer.
+- Unify rule IDs, confidence decay, and anti-pattern promotion across ms and CM.
+- Provide import/export bridges so CM playbooks and ms skills reinforce each other.
+
+[Diagram omitted: workflow/system diagram.]
+- 32 line(s); see surrounding text for step labels.
 
 ### 23.2 Cross-Project Pattern Extraction
 
-[Code block omitted: Rust example code (types/logic).]
-- Block length: 169 line(s).
-- Counts: 4 struct(s), 0 enum(s), 0 trait(s), 1 impl(s), 3 fn(s), 14 field(s).
-- Struct: CrossProjectAnalyzer
-- Struct: ProjectInfo
-- Struct: UniversalPattern
-- Struct: ProjectPattern
-- Impl block: CrossProjectAnalyzer
-- Function/method: find_universal_patterns
-- Function/method: find_tech_specific_patterns
-- Function/method: normalize_pattern
-- Field/key: cass
-- Field/key: projects
-- Field/key: path
-- Field/key: name
-- Field/key: tech_stack
-- Field/key: session_count
-- Field/key: project
-- Field/key: original
-- Field/key: normalized_pattern
-- Field/key: confidence
-- Field/key: pattern
-- Field/key: project_count
-- Field/key: Regex
-- Field/key: occurrences
-- Block defines core structures or algorithms referenced by surrounding text.
+[Code block omitted: Rust structs: CrossProjectAnalyzer, ProjectInfo, UniversalPattern; fns: find_universal_patterns, find_tech_specific_patterns, normalize_pattern; fields: cass, projects, path, name, tech_stack, session_count.]
 
 ### 23.3 Coverage Gap Analysis
 
-[Code block omitted: Rust example code (types/logic).]
-- Block length: 218 line(s).
-- Counts: 5 struct(s), 3 enum(s), 0 trait(s), 1 impl(s), 6 fn(s), 23 field(s).
-- Struct: CoverageAnalyzer
-- Struct: KnowledgeGraph
-- Struct: GraphNode
-- Struct: GraphEdge
-- Struct: CoverageGap
-- Enum: NodeType
-- Enum: EdgeRelation
-- Enum: SkillSuggestion
-- Impl block: CoverageAnalyzer
-- Function/method: find_gaps
-- Function/method: batch_compute_coverage
-- Function/method: get_or_build_skill_index
-- Function/method: suggest_next_skill
-- Function/method: calculate_gap_priority
-- Function/method: build_graph
-- Field/key: cass
-- Field/key: skill_registry
-- Field/key: search
-- Field/key: nodes
-- Field/key: edges
-- Field/key: id
-- Field/key: node_type
-- Field/key: label
-- Field/key: tags
-- Field/key: from
-- Field/key: to
-- Field/key: relation
-- Field/key: weight
-- Field/key: topic
-- Field/key: session_count
-- Field/key: pattern_count
-- Field/key: best_matching_skill
-- Field/key: priority
-- Field/key: topics
-- Field/key: rationale
-- Field/key: example_patterns
-- Field/key: suggested_tech_stacks
-- Field/key: coverage_score
-- Block defines core structures or algorithms referenced by surrounding text.
+[Code block omitted: Rust structs: CoverageAnalyzer, KnowledgeGraph, GraphNode; enums: NodeType, EdgeRelation, SkillSuggestion; fns: find_gaps, batch_compute_coverage, get_or_build_skill_index; fields: cass, skill_registry, search, nodes, edges, id.]
 
 ### 23.4 CLI Commands for Coverage
 
-[Code block omitted: ASCII diagram illustrating a workflow/system layout.]
-- Block length: 38 line(s).
-- Diagram uses box-and-arrow flow to show major steps, loops, or dependencies.
-- Intended to give a visual map of the process described in nearby text.
+[Diagram omitted: workflow/system diagram.]
+- 38 line(s); see surrounding text for step labels.
 
 ---
 
@@ -5039,150 +2068,34 @@ Learn from sessions across multiple projects to build more comprehensive skills 
 
 Robust error handling for long-running autonomous skill generation, including network failures, LLM errors, and system interruptions.
 
-[Code block omitted: ASCII diagram illustrating a workflow/system layout.]
-- Block length: 15 line(s).
-- Diagram uses box-and-arrow flow to show major steps, loops, or dependencies.
-- Intended to give a visual map of the process described in nearby text.
+[Diagram omitted: workflow/system diagram.]
+- 15 line(s); see surrounding text for step labels.
 
 ### 24.2 Error Taxonomy and Retryability Classification
 
 All errors in `ms` are classified by their retryability to prevent wasteful retry attempts and surface permanent failures immediately.
 
-[Code block omitted: Rust example code (types/logic).]
-- Block length: 107 line(s).
-- Counts: 0 struct(s), 2 enum(s), 0 trait(s), 1 impl(s), 3 fn(s), 4 field(s).
-- Enum: MsError
-- Enum: RetryDecision
-- Impl block: MsError
-- Function/method: retry_policy
-- Function/method: exit_code
-- Function/method: hint
-- Field/key: provider
-- Field/key: retry_after
-- Field/key: MsError
-- Field/key: RetryDecision
-- Block defines core structures or algorithms referenced by surrounding text.
+[Code block omitted: Rust enums: MsError, RetryDecision; fns: retry_policy, exit_code, hint; fields: provider, retry_after, MsError, RetryDecision.]
 
 ### 24.3 Retry System
 
-[Code block omitted: Rust example code (types/logic).]
-- Block length: 65 line(s).
-- Counts: 2 struct(s), 0 enum(s), 0 trait(s), 2 impl(s), 2 fn(s), 10 field(s).
-- Struct: RetryConfig
-- Struct: RetryExecutor
-- Impl block: Default
-- Impl block: RetryExecutor
-- Function/method: default
-- Function/method: execute
-- Field/key: max_retries
-- Field/key: initial_delay
-- Field/key: max_delay
-- Field/key: backoff_multiplier
-- Field/key: jitter
-- Field/key: config
-- Field/key: F
-- Field/key: E
-- Field/key: Duration
-- Field/key: tokio
-- Block defines core structures or algorithms referenced by surrounding text.
+[Code block omitted: Rust structs: RetryConfig, RetryExecutor; fns: default, execute; fields: max_retries, initial_delay, max_delay, backoff_multiplier, jitter, config.]
 
 ### 24.3 Rate Limit Handler
 
-[Code block omitted: Rust example code (types/logic).]
-- Block length: 126 line(s).
-- Counts: 2 struct(s), 0 enum(s), 0 trait(s), 1 impl(s), 5 fn(s), 12 field(s).
-- Struct: RateLimitHandler
-- Struct: RateLimitState
-- Impl block: RateLimitHandler
-- Function/method: should_wait
-- Function/method: update_from_headers
-- Function/method: parse_reset_timestamp
-- Function/method: parse_retry_after
-- Function/method: execute_with_limits
-- Field/key: limits
-- Field/key: queue
-- Field/key: provider
-- Field/key: requests_remaining
-- Field/key: tokens_remaining
-- Field/key: reset_at
-- Field/key: backoff_until
-- Field/key: chrono
-- Field/key: operation
-- Field/key: F
-- Field/key: Fut
-- Field/key: tokio
-- Block defines core structures or algorithms referenced by surrounding text.
+[Code block omitted: Rust structs: RateLimitHandler, RateLimitState; fns: should_wait, update_from_headers, parse_reset_timestamp; fields: limits, queue, provider, requests_remaining, tokens_remaining, reset_at.]
 
 ### 24.4 Checkpoint Recovery
 
-[Code block omitted: Rust example code (types/logic).]
-- Block length: 136 line(s).
-- Counts: 3 struct(s), 2 enum(s), 0 trait(s), 1 impl(s), 4 fn(s), 10 field(s).
-- Struct: CheckpointRecovery
-- Struct: RecoverableSession
-- Struct: RecoveryOption
-- Enum: RecoveryAction
-- Enum: DataLoss
-- Impl block: CheckpointRecovery
-- Function/method: find_recoverable
-- Function/method: is_recoverable
-- Function/method: analyze_recovery_options
-- Function/method: recover
-- Field/key: checkpoint_dir
-- Field/key: recovery_options
-- Field/key: name
-- Field/key: description
-- Field/key: action
-- Field/key: data_loss
-- Field/key: RecoveryAction
-- Field/key: starting_phase
-- Field/key: preserved_patterns
-- Field/key: checkpoint
-- Block defines core structures or algorithms referenced by surrounding text.
+[Code block omitted: Rust structs: CheckpointRecovery, RecoverableSession, RecoveryOption; enums: RecoveryAction, DataLoss; fns: find_recoverable, is_recoverable, analyze_recovery_options; fields: checkpoint_dir, recovery_options, name, description, action, data_loss.]
 
 ### 24.5 Graceful Degradation
 
-[Code block omitted: Rust example code (types/logic).]
-- Block length: 119 line(s).
-- Counts: 3 struct(s), 0 enum(s), 0 trait(s), 3 impl(s), 3 fn(s), 16 field(s).
-- Struct: GracefulDegradation
-- Struct: HealthEndpoints
-- Struct: HealthStatus
-- Impl block: Default
-- Impl block: GracefulDegradation
-- Impl block: Future
-- Function/method: default
-- Function/method: execute_with_fallback
-- Function/method: health_check
-- Field/key: cass_available
-- Field/key: network_available
-- Field/key: cache
-- Field/key: health_endpoints
-- Field/key: cass
-- Field/key: llm_providers
-- Field/key: network_probe
-- Field/key: primary
-- Field/key: fallback
-- Field/key: cache_key
-- Field/key: T
-- Field/key: serde_json
-- Field/key: CassClient
-- Field/key: reqwest
-- Field/key: cache_size
-- Field/key: degraded_mode
-- Block defines core structures or algorithms referenced by surrounding text.
+[Code block omitted: Rust structs: GracefulDegradation, HealthEndpoints, HealthStatus; fns: default, execute_with_fallback, health_check; fields: cass_available, network_available, cache, health_endpoints, cass, llm_providers.]
 
 ### 24.6 CLI Commands for Recovery
 
-[Code block omitted: ms CLI command examples (6 lines).]
-- Unique ms commands: 1.
-- Example: ms build (flags: --check-recoverable)
-- Example: ms build (flags: --resume)
-- Example: ms build (flags: --resume, --recovery-option)
-- Example: ms build (flags: --fresh, --topic)
-- Example: ms build (flags: --show-checkpoint)
-- Example: ms build (flags: --prune-checkpoints, --older-than)
-- Examples collectively cover init/index, search/suggest/load, build, maintenance, testing, and integrations.
+[Code block omitted: ms CLI examples; commands include build]
 
 ---
 
@@ -5192,146 +2105,26 @@ All errors in `ms` are classified by their retryability to prevent wasteful retr
 
 Track skill versions semantically and provide migration paths when skills evolve.
 
-[Code block omitted: ASCII diagram illustrating a workflow/system layout.]
-- Block length: 22 line(s).
-- Diagram uses box-and-arrow flow to show major steps, loops, or dependencies.
-- Intended to give a visual map of the process described in nearby text.
+[Diagram omitted: workflow/system diagram.]
+- 22 line(s); see surrounding text for step labels.
 
 ### 25.2 Version Data Model
 
-[Code block omitted: Rust example code (types/logic).]
-- Block length: 103 line(s).
-- Counts: 5 struct(s), 1 enum(s), 0 trait(s), 1 impl(s), 2 fn(s), 18 field(s).
-- Struct: SkillVersion
-- Struct: BreakingChange
-- Struct: VersionHistory
-- Struct: Migration
-- Struct: MigrationStep
-- Enum: MigrationAction
-- Impl block: VersionHistory
-- Function/method: migration_path
-- Function/method: generate_migration_steps
-- Field/key: version
-- Field/key: changelog
-- Field/key: breaking_changes
-- Field/key: migration_from
-- Field/key: created_at
-- Field/key: author
-- Field/key: description
-- Field/key: migration_hint
-- Field/key: affected_sections
-- Field/key: skill_id
-- Field/key: versions
-- Field/key: current
-- Field/key: from
-- Field/key: to
-- Field/key: steps
-- Field/key: action
-- Field/key: hint
-- Field/key: automatic
-- Block defines core structures or algorithms referenced by surrounding text.
+[Code block omitted: Rust structs: SkillVersion, BreakingChange, VersionHistory; enums: MigrationAction; fns: migration_path, generate_migration_steps; fields: version, changelog, breaking_changes, migration_from, created_at, author.]
 
 ### 25.3 Version Tracking
 
-[Code block omitted: SQL schema snippet.]
-- Block length: 24 line(s).
-- Counts: 2 table(s), 2 index(es), 0 trigger(s).
-- Table: skill_versions
-  - Column: skill_id
-  - Column: version
-  - Column: changelog
-  - Column: breaking_changes_json
-  - Column: migration_from
-  - Column: created_at
-  - Column: author
-  - Column: content_hash
-- Table: installed_skills
-  - Column: skill_id
-  - Column: installed_version
-  - Column: pinned_version
-  - Column: installed_at
-  - Column: source
-- Index: idx_skill_versions_skill
-- Index: idx_installed_source
+[Code block omitted: SQL schema; tables include skill_versions, installed_skills; indexes=2, triggers=0.]
 
-[Code block omitted: Rust example code (types/logic).]
-- Block length: 176 line(s).
-- Counts: 1 struct(s), 1 enum(s), 0 trait(s), 1 impl(s), 8 fn(s), 19 field(s).
-- Struct: VersionManager
-- Enum: BumpType
-- Impl block: VersionManager
-- Function/method: create_version
-- Function/method: get_latest_available
-- Function/method: get_installed
-- Function/method: needs_update
-- Function/method: pin
-- Function/method: unpin
-- Function/method: detect_bump_type
-- Function/method: detect_breaking_changes
-- Field/key: db
-- Field/key: git
-- Field/key: skill_id
-- Field/key: bump_type
-- Field/key: changelog
-- Field/key: breaking_changes
-- Field/key: BumpType
-- Field/key: version
-- Field/key: migration_from
-- Field/key: created_at
-- Field/key: author
-- Field/key: serde_json
-- Field/key: installed_version
-- Field/key: pinned_version
-- Field/key: installed_at
-- Field/key: source
-- Field/key: description
-- Field/key: migration_hint
-- Field/key: affected_sections
-- Block defines core structures or algorithms referenced by surrounding text.
+[Code block omitted: Rust structs: VersionManager; enums: BumpType; fns: create_version, get_latest_available, get_installed; fields: db, git, skill_id, bump_type, changelog, breaking_changes.]
 
 ### 25.4 Migration Runner
 
-[Code block omitted: Rust example code (types/logic).]
-- Block length: 93 line(s).
-- Counts: 4 struct(s), 0 enum(s), 0 trait(s), 1 impl(s), 3 fn(s), 14 field(s).
-- Struct: MigrationRunner
-- Struct: MigrationPlan
-- Struct: MigrationResult
-- Struct: ManualStep
-- Impl block: MigrationRunner
-- Function/method: check_migration_needed
-- Function/method: run_migration
-- Function/method: execute_step
-- Field/key: version_manager
-- Field/key: from
-- Field/key: to
-- Field/key: migrations
-- Field/key: manual_steps
-- Field/key: success
-- Field/key: completed_steps
-- Field/key: failed_step
-- Field/key: manual_steps_remaining
-- Field/key: description
-- Field/key: hint
-- Field/key: MigrationAction
-- Field/key: total_steps
-- Field/key: automatic_steps
-- Block defines core structures or algorithms referenced by surrounding text.
+[Code block omitted: Rust structs: MigrationRunner, MigrationPlan, MigrationResult; fns: check_migration_needed, run_migration, execute_step; fields: version_manager, from, to, migrations, manual_steps, success.]
 
 ### 25.5 CLI Commands for Versioning
 
-[Code block omitted: ms CLI command examples (9 lines).]
-- Unique ms commands: 1.
-- Example: ms version (no flags shown)
-- Example: ms version (flags: --minor, --message)
-- Example: ms version (flags: --major)
-- Example: ms version (no flags shown)
-- Example: ms version (no flags shown)
-- Example: ms version (flags: --dry-run)
-- Example: ms version (no flags shown)
-- Example: ms version (no flags shown)
-- Example: ms version (no flags shown)
-- Examples collectively cover init/index, search/suggest/load, build, maintenance, testing, and integrations.
+[Code block omitted: ms CLI examples; commands include version]
 
 ---
 
@@ -5346,24 +2139,14 @@ This section documents actual patterns discovered by mining CASS sessions. These
 **Source Sessions:** `/home/ubuntu/.claude/projects/-data-projects-brenner-bot/agent-a9a6d6d.jsonl`
 
 **Recurring Categories:**
-[Code block omitted: ASCII diagram illustrating a workflow/system layout.]
-- Block length: 20 line(s).
-- Diagram uses box-and-arrow flow to show major steps, loops, or dependencies.
-- Intended to give a visual map of the process described in nearby text.
+[Diagram omitted: workflow/system diagram.]
+- 20 line(s); see surrounding text for step labels.
 
 **Report Format (from sessions):**
-[Code block omitted: example block (lang='n/a').]
-- Block length: 3 line(s).
-- Block contains illustrative content referenced by the surrounding text.
+[Code block omitted: example block (lang='n/a', 3 line(s)).]
 
 **Inner Truth → Skill:**
-[Code block omitted: YAML example.]
-- Block length: 3 line(s).
-- Keys extracted: 3.
-- Key: name
-- Key: description
-- Key: tags
-- Example encodes structured test/spec or config data.
+[Code block omitted: YAML example; keys include name, description, tags.]
 
 ---
 
@@ -5375,31 +2158,10 @@ This section documents actual patterns discovered by mining CASS sessions. These
 > "Specifications improve through multiple iterations like numerical optimization converging to steady state"
 
 **Round Progression Heuristics:**
-[Code block omitted: Rust example code (types/logic).]
-- Block length: 51 line(s).
-- Counts: 1 struct(s), 0 enum(s), 0 trait(s), 1 impl(s), 1 fn(s), 5 field(s).
-- Struct: ConvergenceProfile
-- Impl block: Default
-- Function/method: default
-- Field/key: round_expectations
-- Field/key: rounds
-- Field/key: label
-- Field/key: expected_changes
-- Field/key: focus_areas
-- Block defines core structures or algorithms referenced by surrounding text.
+[Code block omitted: Rust structs: ConvergenceProfile; fns: default; fields: round_expectations, rounds, label, expected_changes, focus_areas.]
 
 **Steady-State Detection:**
-[Code block omitted: Rust example code (types/logic).]
-- Block length: 25 line(s).
-- Counts: 0 struct(s), 0 enum(s), 0 trait(s), 0 impl(s), 1 fn(s), 6 field(s).
-- Function/method: detect_steady_state
-- Field/key: round_outputs
-- Field/key: threshold
-- Field/key: SteadyStateResult
-- Field/key: final_round
-- Field/key: current_delta
-- Field/key: estimated_rounds_remaining
-- Block defines core structures or algorithms referenced by surrounding text.
+[Code block omitted: Rust fns: detect_steady_state; fields: round_outputs, threshold, SteadyStateResult, final_round, current_delta, estimated_rounds_remaining.]
 
 ---
 
@@ -5408,18 +2170,7 @@ This section documents actual patterns discovered by mining CASS sessions. These
 **Methodology Pattern:**
 Sessions reveal extraction of "AppliedPrinciples" from specific instances:
 
-[Code block omitted: Rust example code (types/logic).]
-- Block length: 28 line(s).
-- Counts: 1 struct(s), 0 enum(s), 0 trait(s), 0 impl(s), 1 fn(s), 6 field(s).
-- Struct: AppliedPrinciple
-- Function/method: extract_principles
-- Field/key: name
-- Field/key: explanation
-- Field/key: source_line
-- Field/key: confidence
-- Field/key: session_content
-- Field/key: principle_keywords
-- Block defines core structures or algorithms referenced by surrounding text.
+[Code block omitted: Rust structs: AppliedPrinciple; fns: extract_principles; fields: name, explanation, source_line, confidence, session_content, principle_keywords.]
 
 **Inner Truth:** Domain expertise can be encoded as keyword → principle mappings, then extracted from sessions automatically.
 
@@ -5428,9 +2179,7 @@ Sessions reveal extraction of "AppliedPrinciples" from specific instances:
 #### Pattern 4: Accessibility Standards (multi-project)
 
 **Recurring Pattern Across Sessions:**
-[Code block omitted: example block (lang='typescript').]
-- Block length: 12 line(s).
-- Block contains illustrative content referenced by the surrounding text.
+[Code block omitted: example block (lang='typescript', 12 line(s)).]
 
 ---
 
@@ -5447,9 +2196,7 @@ Sessions reveal extraction of "AppliedPrinciples" from specific instances:
 
 **Generated Skill Draft:**
 
-[Code block omitted: example block (lang='markdown').]
-- Block length: 62 line(s).
-- Block contains illustrative content referenced by the surrounding text.
+[Code block omitted: example block (lang='markdown', 62 line(s)).]
 
 ---
 
@@ -5471,10 +2218,7 @@ The CASS searches revealed natural clustering:
 
 **Effective queries discovered:**
 
-[Code block omitted: shell command examples (13 lines).]
-- Unique tools referenced: 1.
-- Tool invoked: cass
-- Commands illustrate typical workflows and integrations.
+[Code block omitted: shell commands using cass.]
 
 **Query expansion strategy:**
 1. Start with exact phrase: `"inner truth"`
@@ -5488,22 +2232,7 @@ The CASS searches revealed natural clustering:
 
 Based on session analysis, here's the refined extraction algorithm:
 
-[Code block omitted: Rust example code (types/logic).]
-- Block length: 54 line(s).
-- Counts: 1 struct(s), 0 enum(s), 0 trait(s), 2 impl(s), 2 fn(s), 7 field(s).
-- Struct: InnerTruthExtractor
-- Impl block: Default
-- Impl block: InnerTruthExtractor
-- Function/method: default
-- Function/method: extract
-- Field/key: generalization_markers
-- Field/key: specificity_markers
-- Field/key: min_pattern_occurrences
-- Field/key: occurrences
-- Field/key: sessions
-- Field/key: confidence
-- Field/key: suggested_skill_content
-- Block defines core structures or algorithms referenced by surrounding text.
+[Code block omitted: Rust structs: InnerTruthExtractor; fns: default, extract; fields: generalization_markers, specificity_markers, min_pattern_occurrences, occurrences, sessions, confidence.]
 
 ---
 
@@ -5526,25 +2255,19 @@ Based on mining experience, these CASS features would improve skill generation:
 **Session:** `agent-a9a6d6d.jsonl` (brenner_bot)
 **Key Finding:** Comprehensive UI polish report format
 
-[Code block omitted: example block (lang='n/a').]
-- Block length: 10 line(s).
-- Block contains illustrative content referenced by the surrounding text.
+[Code block omitted: example block (lang='n/a', 10 line(s)).]
 
 ### A.2 Iterative Refinement Session Excerpts
 
 **Session:** automated_plan_reviser_pro exploration
 **Key Finding:** Round progression pattern
 
-[Code block omitted: example block (lang='n/a').]
-- Block length: 4 line(s).
-- Block contains illustrative content referenced by the surrounding text.
+[Code block omitted: example block (lang='n/a', 4 line(s)).]
 
 ### A.3 Accessibility Pattern Excerpts
 
 **Multi-project recurring pattern:**
-[Code block omitted: example block (lang='tsx').]
-- Block length: 7 line(s).
-- Block contains illustrative content referenced by the surrounding text.
+[Code block omitted: example block (lang='tsx', 7 line(s)).]
 
 ---
 
@@ -5570,9 +2293,7 @@ A skill is valid only if you can **execute it on new problems**.
 
 ### 28.3 The Brenner Loop for Skill Extraction
 
-[Code block omitted: example block (lang='n/a').]
-- Block length: 8 line(s).
-- Block contains illustrative content referenced by the surrounding text.
+[Code block omitted: example block (lang='n/a', 8 line(s)).]
 
 ### 28.4 Skill Tags (Operator Algebra)
 
@@ -5609,81 +2330,45 @@ A skill is valid only if you can **execute it on new problems**.
 
 The Brenner extraction loop becomes operable through an interactive TUI that guides users from "some sessions" to "skill + tests" in one flow.
 
-[Code block omitted: ASCII diagram illustrating a workflow/system layout.]
-- Block length: 15 line(s).
-- Diagram uses box-and-arrow flow to show major steps, loops, or dependencies.
-- Intended to give a visual map of the process described in nearby text.
+[Diagram omitted: workflow/system diagram.]
+- 15 line(s); see surrounding text for step labels.
 
 #### CLI Interface
 
-[Code block omitted: ms CLI command examples (3 lines).]
-- Unique ms commands: 1.
-- Example: ms mine (flags: --guided)
-- Example: ms mine (flags: --guided, --query)
-- Example: ms mine (flags: --guided, --resume)
-- Examples collectively cover init/index, search/suggest/load, build, maintenance, testing, and integrations.
+[Code block omitted: ms CLI examples; commands include mine]
 
 #### TUI Screens
 
 **Screen 1: Session Selection**
-[Code block omitted: ASCII diagram illustrating a workflow/system layout.]
-- Block length: 16 line(s).
-- Diagram uses box-and-arrow flow to show major steps, loops, or dependencies.
-- Intended to give a visual map of the process described in nearby text.
+[Diagram omitted: workflow/system diagram.]
+- 16 line(s); see surrounding text for step labels.
 
 **Screen 2: Cognitive Move Extraction**
-[Code block omitted: ASCII diagram illustrating a workflow/system layout.]
-- Block length: 19 line(s).
-- Diagram uses box-and-arrow flow to show major steps, loops, or dependencies.
-- Intended to give a visual map of the process described in nearby text.
+[Diagram omitted: workflow/system diagram.]
+- 19 line(s); see surrounding text for step labels.
 
 **Screen 3: Third-Alternative Guard**
-[Code block omitted: ASCII diagram illustrating a workflow/system layout.]
-- Block length: 18 line(s).
-- Diagram uses box-and-arrow flow to show major steps, loops, or dependencies.
-- Intended to give a visual map of the process described in nearby text.
+[Diagram omitted: workflow/system diagram.]
+- 18 line(s); see surrounding text for step labels.
 
 **Screen 4: Skill Formalization (Live Editor)**
-[Code block omitted: ASCII diagram illustrating a workflow/system layout.]
-- Block length: 26 line(s).
-- Diagram uses box-and-arrow flow to show major steps, loops, or dependencies.
-- Intended to give a visual map of the process described in nearby text.
+[Diagram omitted: workflow/system diagram.]
+- 26 line(s); see surrounding text for step labels.
 
 **Screen 5: Materialization Test**
-[Code block omitted: ASCII diagram illustrating a workflow/system layout.]
-- Block length: 21 line(s).
-- Diagram uses box-and-arrow flow to show major steps, loops, or dependencies.
-- Intended to give a visual map of the process described in nearby text.
+[Diagram omitted: workflow/system diagram.]
+- 21 line(s); see surrounding text for step labels.
 
 #### Wizard Output Artifacts
 
 On completion, the wizard produces:
 
-[Code block omitted: ASCII diagram illustrating a workflow/system layout.]
-- Block length: 6 line(s).
-- Diagram uses box-and-arrow flow to show major steps, loops, or dependencies.
-- Intended to give a visual map of the process described in nearby text.
+[Diagram omitted: workflow/system diagram.]
+- 6 line(s); see surrounding text for step labels.
 
 #### Implementation
 
-[Code block omitted: Rust example code (types/logic).]
-- Block length: 66 line(s).
-- Counts: 1 struct(s), 1 enum(s), 0 trait(s), 1 impl(s), 2 fn(s), 9 field(s).
-- Struct: BrennerWizard
-- Enum: WizardState
-- Impl block: BrennerWizard
-- Function/method: run
-- Function/method: resume
-- Field/key: state
-- Field/key: sessions
-- Field/key: moves
-- Field/key: skill_draft
-- Field/key: test_results
-- Field/key: WizardState
-- Field/key: WizardAction
-- Field/key: skill_path
-- Field/key: manifest_path
-- Block defines core structures or algorithms referenced by surrounding text.
+[Code block omitted: Rust structs: BrennerWizard; enums: WizardState; fns: run, resume; fields: state, sessions, moves, skill_draft, test_results, WizardState.]
 
 ---
 
@@ -5703,10 +2388,8 @@ The APR project reveals a powerful insight: **iterative specification refinement
 
 Refinement progresses through predictable phases:
 
-[Code block omitted: ASCII diagram illustrating a workflow/system layout.]
-- Block length: 9 line(s).
-- Diagram uses box-and-arrow flow to show major steps, loops, or dependencies.
-- Intended to give a visual map of the process described in nearby text.
+[Diagram omitted: workflow/system diagram.]
+- 9 line(s); see surrounding text for step labels.
 
 | Phase | Rounds | Focus |
 |-------|--------|-------|
@@ -5721,9 +2404,7 @@ Refinement progresses through predictable phases:
 
 APR implements a quantitative convergence detector using three weighted signals:
 
-[Code block omitted: example block (lang='n/a').]
-- Block length: 1 line(s).
-- Block contains illustrative content referenced by the surrounding text.
+[Code block omitted: example block (lang='n/a', 1 line(s)).]
 
 | Signal | Weight | What It Measures |
 |--------|--------|------------------|
@@ -5747,10 +2428,8 @@ APR implements a quantitative convergence detector using three weighted signals:
 
 **Pattern:** Every 3-4 rounds of abstract refinement, ground the work in concrete implementation:
 
-[Code block omitted: ASCII diagram illustrating a workflow/system layout.]
-- Block length: 19 line(s).
-- Diagram uses box-and-arrow flow to show major steps, loops, or dependencies.
-- Intended to give a visual map of the process described in nearby text.
+[Diagram omitted: workflow/system diagram.]
+- 19 line(s); see surrounding text for step labels.
 
 **Application to meta_skill:** When extracting skills from CASS sessions, periodically test them:
 - Can the skill actually be loaded and executed?
@@ -5763,9 +2442,7 @@ APR implements several reliability patterns for expensive operations:
 
 #### Pre-Flight Validation
 Check all preconditions before starting expensive work:
-[Code block omitted: example block (lang='n/a').]
-- Block length: 5 line(s).
-- Block contains illustrative content referenced by the surrounding text.
+[Code block omitted: example block (lang='n/a', 5 line(s)).]
 
 **Application to meta_skill:** Before running expensive CASS operations:
 - Verify index is up-to-date
@@ -5774,9 +2451,7 @@ Check all preconditions before starting expensive work:
 - Confirm output paths writable
 
 #### Auto-Retry with Exponential Backoff
-[Code block omitted: example block (lang='n/a').]
-- Block length: 4 line(s).
-- Block contains illustrative content referenced by the surrounding text.
+[Code block omitted: example block (lang='n/a', 4 line(s)).]
 
 **Application to meta_skill:** Retry transient failures (network, rate limits) with increasing delays.
 
@@ -5795,13 +2470,7 @@ APR serves two audiences with the same codebase:
 | **Humans** | Beautiful TUI | gum styling, interactive wizards, progress indicators, notifications |
 | **Machines** | Robot Mode JSON | Structured output, semantic error codes, pre-flight validation |
 
-[Code block omitted: Rust example code (types/logic).]
-- Block length: 13 line(s).
-- Counts: 1 struct(s), 0 enum(s), 0 trait(s), 0 impl(s), 0 fn(s), 2 field(s).
-- Struct: OutputMode
-- Field/key: human
-- Field/key: robot
-- Block defines core structures or algorithms referenced by surrounding text.
+[Code block omitted: Rust structs: OutputMode; fields: human, robot.]
 
 **Semantic Error Codes:**
 - `ok` - Success
@@ -5841,16 +2510,16 @@ Every operation creates artifacts:
 |------|---|-------|--------|
 | meta_skill-4d7 | P0 | Inner Truth/Abstract Principles | ✓ Complete |
 | meta_skill-hzg | P1 | APR Iterative Refinement | ✓ Complete |
-| meta_skill-897 | P1 | Optimization Patterns | Pending |
+| meta_skill-897 | P1 | Optimization Patterns | ✓ Complete |
 | meta_skill-z2r | P1 | Performance Profiling | ✓ Complete |
-| meta_skill-aku | P1 | Security Vulnerability Assessment | Pending |
-| meta_skill-dag | P2 | Error Handling | Pending |
-| meta_skill-f8s | P2 | CI/CD Automation | Pending |
-| meta_skill-hax | P2 | Caching/Memoization | Pending |
-| meta_skill-36x | P2 | Debugging Workflows | Pending |
-| meta_skill-avs | P2 | Refactoring Patterns | Pending |
-| meta_skill-cbx | P2 | Testing Patterns | Pending |
-| meta_skill-6st | P2 | REST API Design | Pending |
+| meta_skill-aku | P1 | Security Vulnerability Assessment | ✓ Complete |
+| meta_skill-dag | P2 | Error Handling | ✓ Complete |
+| meta_skill-f8s | P2 | CI/CD Automation | ✓ Complete |
+| meta_skill-hax | P2 | Caching/Memoization | ✓ Complete |
+| meta_skill-36x | P2 | Debugging Workflows | ✓ Complete |
+| meta_skill-avs | P2 | Refactoring Patterns | ✓ Complete |
+| meta_skill-cbx | P2 | Testing Patterns | ✓ Complete |
+| meta_skill-6st | P2 | REST API Design | ✓ Complete |
 
 ## Section 30: Performance Profiling Patterns
 
@@ -5905,10 +2574,7 @@ Focus analysis on the most frequently executed code:
 
 #### Top-K Selection Strategies
 
-[Code block omitted: Rust example code (types/logic).]
-- Block length: 7 line(s).
-- Counts: 0 struct(s), 0 enum(s), 0 trait(s), 0 impl(s), 0 fn(s), 0 field(s).
-- Block defines core structures or algorithms referenced by surrounding text.
+[Code block omitted: Rust types/logic.]
 
 ### 30.4 SIMD and Vectorization
 
@@ -5919,142 +2585,73 @@ Focus analysis on the most frequently executed code:
 | **AoS** | Array of Structs: `[{x,y,z}, {x,y,z}]` | ❌ Poor |
 | **SoA** | Struct of Arrays: `{xs: [], ys: [], zs: []}` | ✅ Excellent |
 
-[Code block omitted: Rust example code (types/logic).]
-- Block length: 6 line(s).
-- Counts: 1 struct(s), 0 enum(s), 0 trait(s), 0 impl(s), 0 fn(s), 3 field(s).
-- Struct: VectorIndex
-- Field/key: xs
-- Field/key: ys
-- Field/key: zs
-- Block defines core structures or algorithms referenced by surrounding text.
+[Code block omitted: Rust structs: VectorIndex; fields: xs, ys, zs.]
 
 #### SIMD Dot Product Pattern
 
-[Code block omitted: Rust example code (types/logic).]
-- Block length: 16 line(s).
-- Counts: 0 struct(s), 0 enum(s), 0 trait(s), 0 impl(s), 1 fn(s), 0 field(s).
-- Function/method: dot_product_simd
-- Block defines core structures or algorithms referenced by surrounding text.
+[Code block omitted: Rust fns: dot_product_simd.]
 
 #### Quantization (F16 Storage)
 
-[Code block omitted: Rust example code (types/logic).]
-- Block length: 9 line(s).
-- Counts: 0 struct(s), 0 enum(s), 0 trait(s), 0 impl(s), 2 fn(s), 0 field(s).
-- Function/method: quantize_vector
-- Function/method: dequantize_vector
-- Block defines core structures or algorithms referenced by surrounding text.
+[Code block omitted: Rust fns: quantize_vector, dequantize_vector.]
 
 ### 30.5 Criterion Benchmark Patterns
 
 #### Basic Benchmark Structure
 
-[Code block omitted: Rust example code (types/logic).]
-- Block length: 13 line(s).
-- Counts: 0 struct(s), 0 enum(s), 0 trait(s), 0 impl(s), 1 fn(s), 0 field(s).
-- Function/method: bench_operation
-- Block defines core structures or algorithms referenced by surrounding text.
+[Code block omitted: Rust fns: bench_operation.]
 
 #### Batched Benchmarks (Setup/Teardown Separation)
 
-[Code block omitted: Rust example code (types/logic).]
-- Block length: 13 line(s).
-- Counts: 0 struct(s), 0 enum(s), 0 trait(s), 0 impl(s), 0 fn(s), 1 field(s).
-- Field/key: BatchSize
-- Block defines core structures or algorithms referenced by surrounding text.
+[Code block omitted: Rust fields: BatchSize.]
 
 #### Benchmark Groups for Comparison
 
-[Code block omitted: Rust example code (types/logic).]
-- Block length: 13 line(s).
-- Counts: 0 struct(s), 0 enum(s), 0 trait(s), 0 impl(s), 1 fn(s), 0 field(s).
-- Function/method: bench_scaling
-- Block defines core structures or algorithms referenced by surrounding text.
+[Code block omitted: Rust fns: bench_scaling.]
 
 #### Parallel vs Sequential Comparison
 
-[Code block omitted: Rust example code (types/logic).]
-- Block length: 22 line(s).
-- Counts: 0 struct(s), 0 enum(s), 0 trait(s), 0 impl(s), 1 fn(s), 0 field(s).
-- Function/method: bench_parallelization
-- Block defines core structures or algorithms referenced by surrounding text.
+[Code block omitted: Rust fns: bench_parallelization.]
 
 ### 30.6 Profiling Build Configuration
 
 #### Cargo Profile for Profiling
 
-[Code block omitted: TOML config example.]
-- Block length: 7 line(s).
-- Counts: 1 section(s), 3 key(s).
-- Section: profile.profiling
-- Key: inherits
-- Key: debug
-- Key: strip
-- Example shows configuration defaults and feature toggles.
+[Code block omitted: TOML config; sections include profile.profiling.]
 
 #### Profiling Workflow
 
-[Code block omitted: shell command examples (8 lines).]
-- Unique tools referenced: 3.
-- Tool invoked: RUSTFLAGS="-C
-- Tool invoked: perf
-- Tool invoked: cargo
-- Commands illustrate typical workflows and integrations.
+[Code block omitted: shell commands using RUSTFLAGS="-C, perf, cargo.]
 
 ### 30.7 I/O and Serialization Optimization
 
 #### Memory-Mapped Files
 
-[Code block omitted: Rust example code (types/logic).]
-- Block length: 11 line(s).
-- Counts: 0 struct(s), 0 enum(s), 0 trait(s), 0 impl(s), 1 fn(s), 0 field(s).
-- Function/method: mmap_read
-- Block defines core structures or algorithms referenced by surrounding text.
+[Code block omitted: Rust fns: mmap_read.]
 
 #### JSON Parsing Optimization
 
-[Code block omitted: Rust example code (types/logic).]
-- Block length: 8 line(s).
-- Counts: 0 struct(s), 0 enum(s), 0 trait(s), 0 impl(s), 0 fn(s), 0 field(s).
-- Block defines core structures or algorithms referenced by surrounding text.
+[Code block omitted: Rust types/logic.]
 
 ### 30.8 Cache Design Patterns
 
 #### LRU Cache with TTL
 
-[Code block omitted: Rust example code (types/logic).]
-- Block length: 20 line(s).
-- Counts: 1 struct(s), 0 enum(s), 0 trait(s), 0 impl(s), 2 fn(s), 2 field(s).
-- Struct: TtlCache
-- Function/method: get
-- Function/method: insert
-- Field/key: cache
-- Field/key: ttl
-- Block defines core structures or algorithms referenced by surrounding text.
+[Code block omitted: Rust structs: TtlCache; fns: get, insert; fields: cache, ttl.]
 
 #### Fast Hash for Cache Keys
 
-[Code block omitted: Rust example code (types/logic).]
-- Block length: 4 line(s).
-- Counts: 0 struct(s), 0 enum(s), 0 trait(s), 0 impl(s), 0 fn(s), 0 field(s).
-- Block defines core structures or algorithms referenced by surrounding text.
+[Code block omitted: Rust types/logic.]
 
 ### 30.9 Parallel Processing Patterns
 
 #### Rayon Work-Stealing
 
-[Code block omitted: Rust example code (types/logic).]
-- Block length: 12 line(s).
-- Counts: 0 struct(s), 0 enum(s), 0 trait(s), 0 impl(s), 0 fn(s), 1 field(s).
-- Field/key: rayon
-- Block defines core structures or algorithms referenced by surrounding text.
+[Code block omitted: Rust fields: rayon.]
 
 #### Chunked Processing
 
-[Code block omitted: Rust example code (types/logic).]
-- Block length: 10 line(s).
-- Counts: 0 struct(s), 0 enum(s), 0 trait(s), 0 impl(s), 0 fn(s), 0 field(s).
-- Block defines core structures or algorithms referenced by surrounding text.
+[Code block omitted: Rust types/logic.]
 
 ### 30.10 Application to meta_skill
 
@@ -6115,23 +2712,13 @@ Before attempting any optimization, follow this disciplined methodology:
 
 #### A) Baseline Establishment
 
-[Code block omitted: shell command examples (6 lines).]
-- Unique tools referenced: 2.
-- Tool invoked: cargo
-- Tool invoked: time
-- Commands illustrate typical workflows and integrations.
+[Code block omitted: shell commands using cargo, time.]
 
 **Key Principle**: Never optimize without knowing your starting point.
 
 #### B) Profile Before Proposing
 
-[Code block omitted: shell command examples (10 lines).]
-- Unique tools referenced: 4.
-- Tool invoked: cargo
-- Tool invoked: DHAT=1
-- Tool invoked: strace
-- Tool invoked: perf
-- Commands illustrate typical workflows and integrations.
+[Code block omitted: shell commands using cargo, DHAT=1, strace, perf.]
 
 **Anti-pattern**: Optimizing based on intuition rather than profiling data.
 
@@ -6139,25 +2726,13 @@ Before attempting any optimization, follow this disciplined methodology:
 
 Define explicit verification criteria before making changes:
 
-[Code block omitted: Rust example code (types/logic).]
-- Block length: 27 line(s).
-- Counts: 1 struct(s), 0 enum(s), 0 trait(s), 1 impl(s), 1 fn(s), 3 field(s).
-- Struct: OptimizationOracle
-- Impl block: OptimizationOracle
-- Function/method: verify
-- Field/key: golden_outputs
-- Field/key: invariants
-- Field/key: tolerance
-- Block defines core structures or algorithms referenced by surrounding text.
+[Code block omitted: Rust structs: OptimizationOracle; fns: verify; fields: golden_outputs, invariants, tolerance.]
 
 #### D) Isomorphism Proof Per Change
 
 Every optimization diff must include proof that outputs cannot change:
 
-[Code block omitted: Rust example code (types/logic).]
-- Block length: 11 line(s).
-- Counts: 0 struct(s), 0 enum(s), 0 trait(s), 0 impl(s), 0 fn(s), 0 field(s).
-- Block defines core structures or algorithms referenced by surrounding text.
+[Code block omitted: Rust types/logic.]
 
 #### E) Opportunity Matrix
 
@@ -6177,9 +2752,7 @@ Rank optimizations by expected value:
 
 One performance lever per commit:
 
-[Code block omitted: example block (lang='n/a').]
-- Block length: 2 line(s).
-- Block contains illustrative content referenced by the surrounding text.
+[Code block omitted: example block (lang='n/a', 2 line(s)).]
 
 Benefits:
 - Easier to measure individual impact
@@ -6190,357 +2763,135 @@ Benefits:
 
 Add benchmark thresholds to CI:
 
-[Code block omitted: Rust example code (types/logic).]
-- Block length: 14 line(s).
-- Counts: 0 struct(s), 0 enum(s), 0 trait(s), 0 impl(s), 1 fn(s), 0 field(s).
-- Function/method: benchmark_critical_path
-- Block defines core structures or algorithms referenced by surrounding text.
+[Code block omitted: Rust fns: benchmark_critical_path.]
 
-[Code block omitted: YAML example.]
-- Block length: 6 line(s).
-- Keys extracted: 2.
-- Key: - name
-- Key: run
-- Example encodes structured test/spec or config data.
+[Code block omitted: YAML example; keys include - name, run.]
 
 ### 31.2 Memory Optimization Patterns
 
 #### Zero-Copy Pattern
 
-[Code block omitted: Rust example code (types/logic).]
-- Block length: 13 line(s).
-- Counts: 0 struct(s), 0 enum(s), 0 trait(s), 0 impl(s), 1 fn(s), 1 field(s).
-- Function/method: process_data
-- Field/key: Cow
-- Block defines core structures or algorithms referenced by surrounding text.
+[Code block omitted: Rust fns: process_data; fields: Cow.]
 
 #### Buffer Reuse Pattern
 
-[Code block omitted: Rust example code (types/logic).]
-- Block length: 24 line(s).
-- Counts: 1 struct(s), 0 enum(s), 0 trait(s), 1 impl(s), 2 fn(s), 2 field(s).
-- Struct: BufferPool
-- Impl block: BufferPool
-- Function/method: acquire
-- Function/method: release
-- Field/key: buffers
-- Field/key: buffer_size
-- Block defines core structures or algorithms referenced by surrounding text.
+[Code block omitted: Rust structs: BufferPool; fns: acquire, release; fields: buffers, buffer_size.]
 
 #### String Interning
 
-[Code block omitted: Rust example code (types/logic).]
-- Block length: 18 line(s).
-- Counts: 1 struct(s), 0 enum(s), 0 trait(s), 1 impl(s), 1 fn(s), 2 field(s).
-- Struct: StringInterner
-- Impl block: StringInterner
-- Function/method: intern
-- Field/key: strings
-- Field/key: Arc
-- Block defines core structures or algorithms referenced by surrounding text.
+[Code block omitted: Rust structs: StringInterner; fns: intern; fields: strings, Arc.]
 
 #### Copy-on-Write (Cow) Pattern
 
-[Code block omitted: Rust example code (types/logic).]
-- Block length: 22 line(s).
-- Counts: 1 struct(s), 0 enum(s), 0 trait(s), 0 impl(s), 2 fn(s), 3 field(s).
-- Struct: SkillConfig
-- Function/method: default_static
-- Function/method: with_name
-- Field/key: name
-- Field/key: template
-- Field/key: tags
-- Block defines core structures or algorithms referenced by surrounding text.
+[Code block omitted: Rust structs: SkillConfig; fns: default_static, with_name; fields: name, template, tags.]
 
 #### Structure of Arrays (SoA) vs Array of Structures (AoS)
 
-[Code block omitted: Rust example code (types/logic).]
-- Block length: 27 line(s).
-- Counts: 5 struct(s), 0 enum(s), 0 trait(s), 0 impl(s), 0 fn(s), 11 field(s).
-- Struct: SkillAoS
-- Struct: SkillSoA
-- Struct: SkillHybrid
-- Struct: SkillHot
-- Struct: SkillCold
-- Field/key: skills
-- Field/key: names
-- Field/key: descriptions
-- Field/key: tags
-- Field/key: hot
-- Field/key: cold
-- Field/key: name
-- Field/key: score
-- Field/key: description
-- Field/key: examples
-- Field/key: metadata
-- Block defines core structures or algorithms referenced by surrounding text.
+[Code block omitted: Rust structs: SkillAoS, SkillSoA, SkillHybrid; fields: skills, names, descriptions, tags, hot, cold.]
 
 ### 31.3 Algorithm and Data Structure Optimizations
 
 #### Trie for Prefix Matching
 
-[Code block omitted: Rust example code (types/logic).]
-- Block length: 26 line(s).
-- Counts: 1 struct(s), 0 enum(s), 0 trait(s), 1 impl(s), 2 fn(s), 3 field(s).
-- Struct: TrieNode
-- Impl block: TrieNode
-- Function/method: insert
-- Function/method: find_prefix_matches
-- Field/key: children
-- Field/key: is_end
-- Field/key: value
-- Block defines core structures or algorithms referenced by surrounding text.
+[Code block omitted: Rust structs: TrieNode; fns: insert, find_prefix_matches; fields: children, is_end, value.]
 
 #### Bloom Filter for Membership Testing
 
-[Code block omitted: Rust example code (types/logic).]
-- Block length: 26 line(s).
-- Counts: 1 struct(s), 0 enum(s), 0 trait(s), 1 impl(s), 2 fn(s), 2 field(s).
-- Struct: BloomFilter
-- Impl block: BloomFilter
-- Function/method: insert
-- Function/method: may_contain
-- Field/key: bits
-- Field/key: num_hashes
-- Block defines core structures or algorithms referenced by surrounding text.
+[Code block omitted: Rust structs: BloomFilter; fns: insert, may_contain; fields: bits, num_hashes.]
 
 #### Interval Tree for Range Queries
 
-[Code block omitted: Rust example code (types/logic).]
-- Block length: 19 line(s).
-- Counts: 2 struct(s), 0 enum(s), 0 trait(s), 0 impl(s), 1 fn(s), 6 field(s).
-- Struct: IntervalTree
-- Struct: IntervalNode
-- Function/method: query_overlapping
-- Field/key: root
-- Field/key: interval
-- Field/key: max_end
-- Field/key: value
-- Field/key: left
-- Field/key: right
-- Block defines core structures or algorithms referenced by surrounding text.
+[Code block omitted: Rust structs: IntervalTree, IntervalNode; fns: query_overlapping; fields: root, interval, max_end, value, left, right.]
 
 #### Segment Tree with Lazy Propagation
 
-[Code block omitted: Rust example code (types/logic).]
-- Block length: 28 line(s).
-- Counts: 1 struct(s), 0 enum(s), 0 trait(s), 1 impl(s), 3 fn(s), 3 field(s).
-- Struct: SegmentTree
-- Impl block: SegmentTree
-- Function/method: range_update
-- Function/method: range_query
-- Function/method: push_down
-- Field/key: tree
-- Field/key: lazy
-- Field/key: n
-- Block defines core structures or algorithms referenced by surrounding text.
+[Code block omitted: Rust structs: SegmentTree; fns: range_update, range_query, push_down; fields: tree, lazy, n.]
 
 ### 31.4 Advanced Algorithmic Techniques
 
+> **Speculative Section**: The techniques below (Convex Hull Trick, Matrix Exponentiation)
+> are included for completeness but are unlikely to be needed for typical CLI tool workloads.
+> These are competitive programming techniques that apply to specific mathematical structures.
+> Profile before implementing - premature optimization with these patterns adds complexity
+> with no benefit if the problem structure doesn't match.
+
 #### Convex Hull Trick for DP Optimization
 
-[Code block omitted: Rust example code (types/logic).]
-- Block length: 33 line(s).
-- Counts: 1 struct(s), 0 enum(s), 0 trait(s), 1 impl(s), 2 fn(s), 1 field(s).
-- Struct: ConvexHullTrick
-- Impl block: ConvexHullTrick
-- Function/method: add_line
-- Function/method: query
-- Field/key: lines
-- Block defines core structures or algorithms referenced by surrounding text.
+[Code block omitted: Rust structs: ConvexHullTrick; fns: add_line, query; fields: lines.]
 
 #### Matrix Exponentiation for Linear Recurrences
 
-[Code block omitted: Rust example code (types/logic).]
-- Block length: 32 line(s).
-- Counts: 0 struct(s), 0 enum(s), 0 trait(s), 0 impl(s), 3 fn(s), 0 field(s).
-- Function/method: matrix_mult
-- Function/method: matrix_pow
-- Function/method: fibonacci
-- Block defines core structures or algorithms referenced by surrounding text.
+[Code block omitted: Rust fns: matrix_mult, matrix_pow, fibonacci.]
 
 #### FFT/NTT for Polynomial Multiplication
 
-[Code block omitted: Rust example code (types/logic).]
-- Block length: 58 line(s).
-- Counts: 0 struct(s), 0 enum(s), 0 trait(s), 0 impl(s), 2 fn(s), 0 field(s).
-- Function/method: ntt
-- Function/method: mod_pow
-- Block defines core structures or algorithms referenced by surrounding text.
+[Code block omitted: Rust fns: ntt, mod_pow.]
 
 ### 31.5 Lazy Evaluation Patterns
 
 #### Lazy Iterator Chains
 
-[Code block omitted: Rust example code (types/logic).]
-- Block length: 17 line(s).
-- Counts: 0 struct(s), 0 enum(s), 0 trait(s), 0 impl(s), 1 fn(s), 0 field(s).
-- Function/method: process_skills
-- Block defines core structures or algorithms referenced by surrounding text.
+[Code block omitted: Rust fns: process_skills.]
 
 #### Lazy Loading with OnceCell
 
-[Code block omitted: Rust example code (types/logic).]
-- Block length: 17 line(s).
-- Counts: 1 struct(s), 0 enum(s), 0 trait(s), 1 impl(s), 2 fn(s), 3 field(s).
-- Struct: LazySkillIndex
-- Impl block: LazySkillIndex
-- Function/method: new
-- Function/method: get
-- Field/key: path
-- Field/key: index
-- Field/key: SkillIndex
-- Block defines core structures or algorithms referenced by surrounding text.
+[Code block omitted: Rust structs: LazySkillIndex; fns: new, get; fields: path, index, SkillIndex.]
 
 #### Deferred Computation Pattern
 
-[Code block omitted: Rust example code (types/logic).]
-- Block length: 35 line(s).
-- Counts: 1 struct(s), 0 enum(s), 0 trait(s), 0 impl(s), 3 fn(s), 2 field(s).
-- Struct: Deferred
-- Function/method: new
-- Function/method: get
-- Function/method: is_computed
-- Field/key: cell
-- Field/key: init
-- Block defines core structures or algorithms referenced by surrounding text.
+[Code block omitted: Rust structs: Deferred; fns: new, get, is_computed; fields: cell, init.]
 
 ### 31.6 Memoization with Invalidation
 
 #### Time-Based Cache Invalidation
 
-[Code block omitted: Rust example code (types/logic).]
-- Block length: 23 line(s).
-- Counts: 1 struct(s), 0 enum(s), 0 trait(s), 0 impl(s), 3 fn(s), 2 field(s).
-- Struct: TimedCache
-- Function/method: get
-- Function/method: insert
-- Function/method: evict_expired
-- Field/key: entries
-- Field/key: ttl
-- Block defines core structures or algorithms referenced by surrounding text.
+[Code block omitted: Rust structs: TimedCache; fns: get, insert, evict_expired; fields: entries, ttl.]
 
 #### Version-Based Invalidation
 
-[Code block omitted: Rust example code (types/logic).]
-- Block length: 34 line(s).
-- Counts: 2 struct(s), 0 enum(s), 0 trait(s), 1 impl(s), 2 fn(s), 5 field(s).
-- Struct: VersionedCache
-- Struct: FileCache
-- Impl block: FileCache
-- Function/method: get
-- Function/method: invalidate
-- Field/key: value
-- Field/key: cached_version
-- Field/key: F
-- Field/key: path
-- Field/key: cache
-- Block defines core structures or algorithms referenced by surrounding text.
+[Code block omitted: Rust structs: VersionedCache, FileCache; fns: get, invalidate; fields: value, cached_version, F, path, cache.]
 
 #### Dependency-Based Invalidation
 
-[Code block omitted: Rust example code (types/logic).]
-- Block length: 28 line(s).
-- Counts: 2 struct(s), 0 enum(s), 0 trait(s), 0 impl(s), 2 fn(s), 4 field(s).
-- Struct: DependencyCache
-- Struct: CacheEntry
-- Function/method: invalidate
-- Function/method: set_dependency
-- Field/key: entries
-- Field/key: dependencies
-- Field/key: value
-- Field/key: valid
-- Block defines core structures or algorithms referenced by surrounding text.
+[Code block omitted: Rust structs: DependencyCache, CacheEntry; fns: invalidate, set_dependency; fields: entries, dependencies, value, valid.]
 
 ### 31.7 I/O Optimization Patterns
 
 #### Scatter-Gather I/O
 
-[Code block omitted: Rust example code (types/logic).]
-- Block length: 10 line(s).
-- Counts: 0 struct(s), 0 enum(s), 0 trait(s), 0 impl(s), 1 fn(s), 0 field(s).
-- Function/method: write_multiple
-- Block defines core structures or algorithms referenced by surrounding text.
+[Code block omitted: Rust fns: write_multiple.]
 
 #### Buffered I/O with Controlled Flushing
 
-[Code block omitted: Rust example code (types/logic).]
-- Block length: 18 line(s).
-- Counts: 1 struct(s), 0 enum(s), 0 trait(s), 0 impl(s), 1 fn(s), 3 field(s).
-- Struct: BatchedWriter
-- Function/method: write_item
-- Field/key: inner
-- Field/key: writes_since_flush
-- Field/key: flush_interval
-- Block defines core structures or algorithms referenced by surrounding text.
+[Code block omitted: Rust structs: BatchedWriter; fns: write_item; fields: inner, writes_since_flush, flush_interval.]
 
 #### Async I/O for Concurrent Operations
 
-[Code block omitted: Rust example code (types/logic).]
-- Block length: 15 line(s).
-- Counts: 0 struct(s), 0 enum(s), 0 trait(s), 0 impl(s), 1 fn(s), 0 field(s).
-- Function/method: read_all_files
-- Block defines core structures or algorithms referenced by surrounding text.
+[Code block omitted: Rust fns: read_all_files.]
 
 ### 31.8 Precomputation Patterns
 
 #### Lookup Tables
 
-[Code block omitted: Rust example code (types/logic).]
-- Block length: 24 line(s).
-- Counts: 1 struct(s), 0 enum(s), 0 trait(s), 1 impl(s), 2 fn(s), 1 field(s).
-- Struct: LookupTable
-- Impl block: LookupTable
-- Function/method: new
-- Function/method: to_hex
-- Field/key: byte_to_hex
-- Block defines core structures or algorithms referenced by surrounding text.
+[Code block omitted: Rust structs: LookupTable; fns: new, to_hex; fields: byte_to_hex.]
 
 #### Compile-Time Computation
 
-[Code block omitted: Rust example code (types/logic).]
-- Block length: 15 line(s).
-- Counts: 0 struct(s), 0 enum(s), 0 trait(s), 0 impl(s), 2 fn(s), 0 field(s).
-- Function/method: compute_factorial
-- Function/method: factorial
-- Block defines core structures or algorithms referenced by surrounding text.
+[Code block omitted: Rust fns: compute_factorial, factorial.]
 
 #### Static Initialization with LazyLock
 
-[Code block omitted: Rust example code (types/logic).]
-- Block length: 11 line(s).
-- Counts: 0 struct(s), 0 enum(s), 0 trait(s), 0 impl(s), 1 fn(s), 1 field(s).
-- Function/method: extract_skill
-- Field/key: Regex
-- Block defines core structures or algorithms referenced by surrounding text.
+[Code block omitted: Rust fns: extract_skill; fields: Regex.]
 
 ### 31.9 N+1 Query Elimination
 
 #### Batch Loading Pattern
 
-[Code block omitted: Rust example code (types/logic).]
-- Block length: 35 line(s).
-- Counts: 1 struct(s), 0 enum(s), 0 trait(s), 1 impl(s), 2 fn(s), 2 field(s).
-- Struct: SkillRepository
-- Impl block: SkillRepository
-- Function/method: get_skills_with_tags_bad
-- Function/method: get_skills_with_tags_good
-- Field/key: db
-- Field/key: tags
-- Block defines core structures or algorithms referenced by surrounding text.
+[Code block omitted: Rust structs: SkillRepository; fns: get_skills_with_tags_bad, get_skills_with_tags_good; fields: db, tags.]
 
 #### DataLoader Pattern
 
-[Code block omitted: Rust example code (types/logic).]
-- Block length: 27 line(s).
-- Counts: 1 struct(s), 0 enum(s), 0 trait(s), 0 impl(s), 2 fn(s), 3 field(s).
-- Struct: DataLoader
-- Function/method: load
-- Function/method: execute_batch
-- Field/key: load_fn
-- Field/key: cache
-- Field/key: pending
-- Block defines core structures or algorithms referenced by surrounding text.
+[Code block omitted: Rust structs: DataLoader; fns: load, execute_batch; fields: load_fn, cache, pending.]
 
 ### 31.10 Application to meta_skill
 
@@ -6559,10 +2910,8 @@ Add benchmark thresholds to CI:
 
 ### 31.11 Optimization Decision Flowchart
 
-[Code block omitted: ASCII diagram illustrating a workflow/system layout.]
-- Block length: 27 line(s).
-- Diagram uses box-and-arrow flow to show major steps, loops, or dependencies.
-- Intended to give a visual map of the process described in nearby text.
+[Diagram omitted: workflow/system diagram.]
+- 27 line(s); see surrounding text for step labels.
 
 ### 31.12 Optimization Checklist
 
@@ -6593,282 +2942,87 @@ This section captures systematic security vulnerability assessment methodologies
 
 #### Systematic Security Review Process
 
-[Code block omitted: Rust example code (types/logic).]
-- Block length: 31 line(s).
-- Counts: 1 struct(s), 2 enum(s), 0 trait(s), 0 impl(s), 0 fn(s), 8 field(s).
-- Struct: SecurityFinding
-- Enum: AuditPhase
-- Enum: Severity
-- Field/key: title
-- Field/key: severity
-- Field/key: file_path
-- Field/key: line_number
-- Field/key: description
-- Field/key: proof_of_concept
-- Field/key: recommendation
-- Field/key: cwe_id
-- Block defines core structures or algorithms referenced by surrounding text.
+[Code block omitted: Rust structs: SecurityFinding; enums: AuditPhase, Severity; fields: title, severity, file_path, line_number, description, proof_of_concept.]
 
 #### Attack Surface Mapping Checklist
 
-[Code block omitted: example block (lang='markdown').]
-- Block length: 29 line(s).
-- Block contains illustrative content referenced by the surrounding text.
+[Code block omitted: example block (lang='markdown', 29 line(s)).]
 
 ### 32.2 OWASP-Aligned Vulnerability Categories
 
 #### A01: Broken Access Control
 
-[Code block omitted: Rust example code (types/logic).]
-- Block length: 30 line(s).
-- Counts: 0 struct(s), 0 enum(s), 0 trait(s), 0 impl(s), 1 fn(s), 4 field(s).
-- Function/method: verify_authorization
-- Field/key: user
-- Field/key: resource
-- Field/key: action
-- Field/key: AccessType
-- Block defines core structures or algorithms referenced by surrounding text.
+[Code block omitted: Rust fns: verify_authorization; fields: user, resource, action, AccessType.]
 
 #### A02: Cryptographic Failures
 
-[Code block omitted: Rust example code (types/logic).]
-- Block length: 58 line(s).
-- Counts: 0 struct(s), 0 enum(s), 0 trait(s), 0 impl(s), 4 fn(s), 5 field(s).
-- Function/method: hash_password
-- Function/method: encrypt_data
-- Function/method: bad_derive_nonce
-- Function/method: good_derive_nonce
-- Field/key: argon2
-- Field/key: key
-- Field/key: plaintext
-- Field/key: aad
-- Field/key: msg
-- Block defines core structures or algorithms referenced by surrounding text.
+[Code block omitted: Rust fns: hash_password, encrypt_data, bad_derive_nonce; fields: argon2, key, plaintext, aad, msg.]
 
 #### A03: Injection
 
-[Code block omitted: Rust example code (types/logic).]
-- Block length: 42 line(s).
-- Counts: 0 struct(s), 0 enum(s), 0 trait(s), 0 impl(s), 3 fn(s), 7 field(s).
-- Function/method: get_user_by_email
-- Function/method: safe_execute_command
-- Function/method: escape_shell_arg
-- Field/key: id
-- Field/key: email
-- Field/key: name
-- Field/key: allowed_commands
-- Field/key: command
-- Field/key: args
-- Field/key: Command
-- Block defines core structures or algorithms referenced by surrounding text.
+[Code block omitted: Rust fns: get_user_by_email, safe_execute_command, escape_shell_arg; fields: id, email, name, allowed_commands, command, args.]
 
 #### A04: Insecure Design
 
-[Code block omitted: Rust example code (types/logic).]
-- Block length: 48 line(s).
-- Counts: 1 struct(s), 0 enum(s), 0 trait(s), 1 impl(s), 2 fn(s), 8 field(s).
-- Struct: SecureSession
-- Impl block: SecureSession
-- Function/method: new
-- Function/method: validate
-- Field/key: id
-- Field/key: user_id
-- Field/key: created_at
-- Field/key: expires_at
-- Field/key: last_activity
-- Field/key: ip_address
-- Field/key: user_agent_hash
-- Field/key: log
-- Block defines core structures or algorithms referenced by surrounding text.
+[Code block omitted: Rust structs: SecureSession; fns: new, validate; fields: id, user_id, created_at, expires_at, last_activity, ip_address.]
 
 #### A05: Security Misconfiguration
 
-[Code block omitted: Rust example code (types/logic).]
-- Block length: 44 line(s).
-- Counts: 1 struct(s), 0 enum(s), 0 trait(s), 1 impl(s), 2 fn(s), 7 field(s).
-- Struct: SecurityConfig
-- Impl block: SecurityConfig
-- Function/method: validate
-- Function/method: load_secret
-- Field/key: cors_origins
-- Field/key: rate_limit
-- Field/key: tls
-- Field/key: secrets
-- Field/key: log
-- Field/key: std
-- Field/key: ConfigError
-- Block defines core structures or algorithms referenced by surrounding text.
+[Code block omitted: Rust structs: SecurityConfig; fns: validate, load_secret; fields: cors_origins, rate_limit, tls, secrets, log, std.]
 
 ### 32.3 Input Validation Patterns
 
 #### Path Traversal Prevention
 
-[Code block omitted: Rust example code (types/logic).]
-- Block length: 56 line(s).
-- Counts: 0 struct(s), 0 enum(s), 0 trait(s), 0 impl(s), 2 fn(s), 1 field(s).
-- Function/method: validate_path
-- Function/method: sanitize_filename
-- Field/key: Component
-- Block defines core structures or algorithms referenced by surrounding text.
+[Code block omitted: Rust fns: validate_path, sanitize_filename; fields: Component.]
 
 #### XSS Prevention
 
-[Code block omitted: Rust example code (types/logic).]
-- Block length: 42 line(s).
-- Counts: 0 struct(s), 0 enum(s), 0 trait(s), 0 impl(s), 3 fn(s), 1 field(s).
-- Function/method: escape_html
-- Function/method: csp_header
-- Function/method: sanitize_html
-- Field/key: ammonia
-- Block defines core structures or algorithms referenced by surrounding text.
+[Code block omitted: Rust fns: escape_html, csp_header, sanitize_html; fields: ammonia.]
 
 ### 32.4 Authentication Security Patterns
 
 #### JWT Token Management
 
-[Code block omitted: Rust example code (types/logic).]
-- Block length: 94 line(s).
-- Counts: 2 struct(s), 0 enum(s), 0 trait(s), 0 impl(s), 3 fn(s), 17 field(s).
-- Struct: AccessTokenClaims
-- Struct: TokenPair
-- Function/method: generate_access_token
-- Function/method: validate_access_token
-- Function/method: refresh_tokens
-- Field/key: sub
-- Field/key: email
-- Field/key: tier
-- Field/key: iss
-- Field/key: aud
-- Field/key: iat
-- Field/key: exp
-- Field/key: user
-- Field/key: secret
-- Field/key: issuer
-- Field/key: audience
-- Field/key: token
-- Field/key: access_token
-- Field/key: refresh_token
-- Field/key: refresh_token_id
-- Field/key: old_refresh_token
-- Field/key: db
-- Block defines core structures or algorithms referenced by surrounding text.
+[Code block omitted: Rust structs: AccessTokenClaims, TokenPair; fns: generate_access_token, validate_access_token, refresh_tokens; fields: sub, email, tier, iss, aud, iat.]
 
 #### OAuth Security
 
-[Code block omitted: Rust example code (types/logic).]
-- Block length: 46 line(s).
-- Counts: 1 struct(s), 0 enum(s), 0 trait(s), 1 impl(s), 3 fn(s), 3 field(s).
-- Struct: PkceChallenge
-- Impl block: PkceChallenge
-- Function/method: validate_redirect_url
-- Function/method: generate
-- Function/method: verify
-- Field/key: code_verifier
-- Field/key: code_challenge
-- Field/key: code_challenge_method
-- Block defines core structures or algorithms referenced by surrounding text.
+[Code block omitted: Rust structs: PkceChallenge; fns: validate_redirect_url, generate, verify; fields: code_verifier, code_challenge, code_challenge_method.]
 
 ### 32.5 Rate Limiting and DoS Protection
 
 #### IP-Based Rate Limiting
 
-[Code block omitted: Rust example code (types/logic).]
-- Block length: 75 line(s).
-- Counts: 2 struct(s), 0 enum(s), 0 trait(s), 1 impl(s), 2 fn(s), 9 field(s).
-- Struct: RateLimiter
-- Struct: RateLimitEntry
-- Impl block: RateLimiter
-- Function/method: check
-- Function/method: extract_client_ip
-- Field/key: limits
-- Field/key: max_requests
-- Field/key: window
-- Field/key: max_entries
-- Field/key: count
-- Field/key: window_start
-- Field/key: retry_after
-- Field/key: request
-- Field/key: trusted_proxies
-- Block defines core structures or algorithms referenced by surrounding text.
+[Code block omitted: Rust structs: RateLimiter, RateLimitEntry; fns: check, extract_client_ip; fields: limits, max_requests, window, max_entries, count, window_start.]
 
 #### ReDoS (Regex Denial of Service) Protection
 
-[Code block omitted: Rust example code (types/logic).]
-- Block length: 25 line(s).
-- Counts: 1 struct(s), 0 enum(s), 0 trait(s), 1 impl(s), 2 fn(s), 2 field(s).
-- Struct: SafeRegex
-- Impl block: SafeRegex
-- Function/method: new
-- Function/method: is_match
-- Field/key: inner
-- Field/key: max_input_len
-- Block defines core structures or algorithms referenced by surrounding text.
+[Code block omitted: Rust structs: SafeRegex; fns: new, is_match; fields: inner, max_input_len.]
 
 ### 32.6 Secret Management
 
 #### Environment Variable Security
 
-[Code block omitted: Rust example code (types/logic).]
-- Block length: 30 line(s).
-- Counts: 1 struct(s), 0 enum(s), 0 trait(s), 1 impl(s), 3 fn(s), 1 field(s).
-- Struct: Secret
-- Impl block: Secret
-- Function/method: from_env
-- Function/method: expose
-- Function/method: validate_required_secrets
-- Field/key: std
-- Block defines core structures or algorithms referenced by surrounding text.
+[Code block omitted: Rust structs: Secret; fns: from_env, expose, validate_required_secrets; fields: std.]
 
 #### API Key Best Practices
 
-[Code block omitted: Rust example code (types/logic).]
-- Block length: 30 line(s).
-- Counts: 1 struct(s), 0 enum(s), 0 trait(s), 1 impl(s), 3 fn(s), 3 field(s).
-- Struct: ApiClient
-- Impl block: ApiClient
-- Function/method: bad_api_call
-- Function/method: good_api_call
-- Function/method: from_env
-- Field/key: reqwest
-- Field/key: base_url
-- Field/key: secret
-- Block defines core structures or algorithms referenced by surrounding text.
+[Code block omitted: Rust structs: ApiClient; fns: bad_api_call, good_api_call, from_env; fields: reqwest, base_url, secret.]
 
 ### 32.7 Command Execution Security
 
 #### Safe Command Execution Patterns
 
-[Code block omitted: Rust example code (types/logic).]
-- Block length: 74 line(s).
-- Counts: 1 struct(s), 0 enum(s), 0 trait(s), 1 impl(s), 3 fn(s), 8 field(s).
-- Struct: CommandExecutor
-- Impl block: CommandExecutor
-- Function/method: execute
-- Function/method: validate_argument
-- Function/method: analyze_heredoc
-- Field/key: allowed_commands
-- Field/key: allowed_cwd
-- Field/key: command
-- Field/key: args
-- Field/key: cwd
-- Field/key: Command
-- Field/key: severity
-- Field/key: description
-- Block defines core structures or algorithms referenced by surrounding text.
+[Code block omitted: Rust structs: CommandExecutor; fns: execute, validate_argument, analyze_heredoc; fields: allowed_commands, allowed_cwd, command, args, cwd, Command.]
 
 ### 32.8 Security Audit Report Template
 
-[Code block omitted: example block (lang='markdown').]
-- Block length: 9 line(s).
-- Block contains illustrative content referenced by the surrounding text.
+[Code block omitted: example block (lang='markdown', 9 line(s)).]
 // Vulnerable code snippet
-[Code block omitted: example block (lang='n/a').]
-- Block length: 3 line(s).
-- Block contains illustrative content referenced by the surrounding text.
+[Code block omitted: example block (lang='n/a', 3 line(s)).]
 // Fixed code snippet
-[Code block omitted: example block (lang='n/a').]
-- Block length: 26 line(s).
-- Block contains illustrative content referenced by the surrounding text.
+[Code block omitted: example block (lang='n/a', 26 line(s)).]
 
 ### 32.9 Application to meta_skill
 
@@ -6914,187 +3068,62 @@ Error handling in Rust differs fundamentally from exceptions in other languages.
 3. **Context over raw messages** - Error chains explain *why*, not just *what*
 4. **Match error types to boundaries** - Different error types for different layers
 
-[Code block omitted: ASCII diagram illustrating a workflow/system layout.]
-- Block length: 8 line(s).
-- Diagram uses box-and-arrow flow to show major steps, loops, or dependencies.
-- Intended to give a visual map of the process described in nearby text.
+[Diagram omitted: workflow/system diagram.]
+- 8 line(s); see surrounding text for step labels.
 
 ### 33.2 The thiserror and anyhow Dichotomy
 
 **thiserror** is for library code - create specific, matchable error types:
 
-[Code block omitted: Rust example code (types/logic).]
-- Block length: 28 line(s).
-- Counts: 0 struct(s), 1 enum(s), 0 trait(s), 1 impl(s), 1 fn(s), 1 field(s).
-- Enum: SkillError
-- Impl block: From
-- Function/method: from
-- Field/key: SkillError
-- Block defines core structures or algorithms referenced by surrounding text.
+[Code block omitted: Rust enums: SkillError; fns: from; fields: SkillError.]
 
 **anyhow** is for application code - rich context chains without ceremony:
 
-[Code block omitted: Rust example code (types/logic).]
-- Block length: 30 line(s).
-- Counts: 0 struct(s), 0 enum(s), 0 trait(s), 0 impl(s), 1 fn(s), 0 field(s).
-- Function/method: load_skill
-- Block defines core structures or algorithms referenced by surrounding text.
+[Code block omitted: Rust fns: load_skill.]
 
 ### 33.3 Structured CLI Error Types
 
 For CLI applications, create a structured error type that maps to exit codes:
 
-[Code block omitted: Rust example code (types/logic).]
-- Block length: 89 line(s).
-- Counts: 1 struct(s), 0 enum(s), 0 trait(s), 2 impl(s), 6 fn(s), 6 field(s).
-- Struct: CliError
-- Impl block: CliError
-- Impl block: Into
-- Function/method: usage
-- Function/method: not_found
-- Function/method: network
-- Function/method: timeout
-- Function/method: internal
-- Function/method: to_json
-- Field/key: code
-- Field/key: kind
-- Field/key: message
-- Field/key: hint
-- Field/key: retryable
-- Field/key: serde_json
-- Block defines core structures or algorithms referenced by surrounding text.
+[Code block omitted: Rust structs: CliError; fns: usage, not_found, network; fields: code, kind, message, hint, retryable, serde_json.]
 
 ### 33.4 Error Taxonomy Patterns
 
 For protocol or API libraries, define a comprehensive error taxonomy:
 
-[Code block omitted: Rust example code (types/logic).]
-- Block length: 99 line(s).
-- Counts: 1 struct(s), 0 enum(s), 0 trait(s), 2 impl(s), 6 fn(s), 6 field(s).
-- Struct: FcpError
-- Impl block: FcpError
-- Impl block: Into
-- Function/method: protocol
-- Function/method: auth
-- Function/method: rate_limited
-- Function/method: is_protocol_error
-- Function/method: is_auth_error
-- Function/method: is_external_error
-- Field/key: code
-- Field/key: message
-- Field/key: retryable
-- Field/key: retry_after_ms
-- Field/key: details
-- Field/key: ai_recovery_hint
-- Block defines core structures or algorithms referenced by surrounding text.
+[Code block omitted: Rust structs: FcpError; fns: protocol, auth, rate_limited; fields: code, message, retryable, retry_after_ms, details, ai_recovery_hint.]
 
 ### 33.5 Error Context Chaining
 
 Build rich error chains that explain the full failure path:
 
-[Code block omitted: Rust example code (types/logic).]
-- Block length: 38 line(s).
-- Counts: 0 struct(s), 0 enum(s), 0 trait(s), 1 impl(s), 2 fn(s), 4 field(s).
-- Impl block: From
-- Function/method: execute_skill
-- Function/method: from
-- Field/key: TemplateError
-- Field/key: SkillError
-- Field/key: line
-- Field/key: reason
-- Block defines core structures or algorithms referenced by surrounding text.
+[Code block omitted: Rust fns: execute_skill, from; fields: TemplateError, SkillError, line, reason.]
 
 ### 33.6 Error Recovery Patterns
 
 Implement retry logic with exponential backoff:
 
-[Code block omitted: Rust example code (types/logic).]
-- Block length: 152 line(s).
-- Counts: 2 struct(s), 1 enum(s), 0 trait(s), 2 impl(s), 6 fn(s), 15 field(s).
-- Struct: RetryConfig
-- Struct: CircuitBreaker
-- Enum: CircuitState
-- Impl block: Default
-- Impl block: CircuitBreaker
-- Function/method: default
-- Function/method: with_retry
-- Function/method: new
-- Function/method: allow_request
-- Function/method: record_success
-- Function/method: record_failure
-- Field/key: max_retries
-- Field/key: initial_delay
-- Field/key: max_delay
-- Field/key: backoff_factor
-- Field/key: jitter
-- Field/key: config
-- Field/key: F
-- Field/key: Fut
-- Field/key: E
-- Field/key: tracing
-- Field/key: failure_threshold
-- Field/key: reset_timeout
-- Field/key: state
-- Field/key: CircuitState
-- Field/key: opened_at
-- Block defines core structures or algorithms referenced by surrounding text.
+[Code block omitted: Rust structs: RetryConfig, CircuitBreaker; enums: CircuitState; fns: default, with_retry, new; fields: max_retries, initial_delay, max_delay, backoff_factor, jitter, config.]
 
 ### 33.7 Panic vs Result Guidelines
 
 **When to use panic (via `unwrap`, `expect`, `unreachable!`):**
 
-[Code block omitted: Rust example code (types/logic).]
-- Block length: 24 line(s).
-- Counts: 0 struct(s), 0 enum(s), 0 trait(s), 0 impl(s), 2 fn(s), 2 field(s).
-- Function/method: pop_from_non_empty_stack
-- Function/method: test_parsing
-- Field/key: Regex
-- Field/key: State
-- Block defines core structures or algorithms referenced by surrounding text.
+[Code block omitted: Rust fns: pop_from_non_empty_stack, test_parsing; fields: Regex, State.]
 
 **When to use Result (proper error handling):**
 
-[Code block omitted: Rust example code (types/logic).]
-- Block length: 31 line(s).
-- Counts: 0 struct(s), 0 enum(s), 0 trait(s), 0 impl(s), 3 fn(s), 2 field(s).
-- Function/method: parse_config
-- Function/method: read_settings
-- Function/method: fetch_data
-- Field/key: toml
-- Field/key: reqwest
-- Block defines core structures or algorithms referenced by surrounding text.
+[Code block omitted: Rust fns: parse_config, read_settings, fetch_data; fields: toml, reqwest.]
 
 ### 33.8 Error Boundary Patterns
 
 For systems with multiple error domains, create clear boundaries:
 
-[Code block omitted: Rust example code (types/logic).]
-- Block length: 58 line(s).
-- Counts: 0 struct(s), 2 enum(s), 0 trait(s), 2 impl(s), 2 fn(s), 4 field(s).
-- Enum: LibraryError
-- Enum: AppError
-- Impl block: From
-- Impl block: AppError
-- Function/method: from
-- Function/method: display
-- Field/key: LibraryError
-- Field/key: message
-- Field/key: hint
-- Field/key: AppError
-- Block defines core structures or algorithms referenced by surrounding text.
+[Code block omitted: Rust enums: LibraryError, AppError; fns: from, display; fields: LibraryError, message, hint, AppError.]
 
 ### 33.9 Error Logging Best Practices
 
-[Code block omitted: Rust example code (types/logic).]
-- Block length: 36 line(s).
-- Counts: 0 struct(s), 0 enum(s), 0 trait(s), 0 impl(s), 3 fn(s), 3 field(s).
-- Function/method: save_file
-- Function/method: handle_error
-- Function/method: log_structured_error
-- Field/key: std
-- Field/key: AppError
-- Field/key: tracing
-- Block defines core structures or algorithms referenced by surrounding text.
+[Code block omitted: Rust fns: save_file, handle_error, log_structured_error; fields: std, AppError, tracing.]
 
 ### 33.10 Application to meta_skill
 
@@ -7133,9 +3162,7 @@ Before shipping error handling:
 
 The observed philosophy is: **"NO mocks - test real implementations with real data fixtures."**
 
-[Code block omitted: example block (lang='n/a').]
-- Block length: 9 line(s).
-- Block contains illustrative content referenced by the surrounding text.
+[Code block omitted: example block (lang='n/a', 9 line(s)).]
 
 **When to mock**:
 1. **Animations**: Mock framer-motion to avoid flaky timing-dependent tests
@@ -7151,15 +3178,11 @@ The observed philosophy is: **"NO mocks - test real implementations with real da
 
 #### JavaScript/TypeScript (Vitest/Jest/Bun)
 
-[Code block omitted: example block (lang='typescript').]
-- Block length: 49 line(s).
-- Block contains illustrative content referenced by the surrounding text.
+[Code block omitted: example block (lang='typescript', 49 line(s)).]
 
 #### Go Table-Driven Tests
 
-[Code block omitted: example block (lang='go').]
-- Block length: 36 line(s).
-- Block contains illustrative content referenced by the surrounding text.
+[Code block omitted: example block (lang='go', 36 line(s)).]
 
 #### Test File Naming Conventions
 
@@ -7174,21 +3197,15 @@ The observed philosophy is: **"NO mocks - test real implementations with real da
 
 #### Real Filesystem Fixtures
 
-[Code block omitted: example block (lang='typescript').]
-- Block length: 32 line(s).
-- Block contains illustrative content referenced by the surrounding text.
+[Code block omitted: example block (lang='typescript', 32 line(s)).]
 
 #### Go Test Fixtures with t.TempDir()
 
-[Code block omitted: example block (lang='go').]
-- Block length: 18 line(s).
-- Block contains illustrative content referenced by the surrounding text.
+[Code block omitted: example block (lang='go', 18 line(s)).]
 
 #### Environment Variable Isolation
 
-[Code block omitted: example block (lang='typescript').]
-- Block length: 14 line(s).
-- Block contains illustrative content referenced by the surrounding text.
+[Code block omitted: example block (lang='typescript', 14 line(s)).]
 
 ### 34.4 Property-Based Testing
 
@@ -7196,16 +3213,7 @@ The observed philosophy is: **"NO mocks - test real implementations with real da
 
 **Source**: CASS mining of destructive_command_guard property tests
 
-[Code block omitted: Rust example code (types/logic).]
-- Block length: 55 line(s).
-- Counts: 0 struct(s), 0 enum(s), 0 trait(s), 1 impl(s), 5 fn(s), 0 field(s).
-- Impl block: Strategy
-- Function/method: command_strategy
-- Function/method: normalization_is_idempotent
-- Function/method: evaluation_is_deterministic
-- Function/method: evaluation_never_panics
-- Function/method: handles_large_inputs
-- Block defines core structures or algorithms referenced by surrounding text.
+[Code block omitted: Rust fns: command_strategy, normalization_is_idempotent, evaluation_is_deterministic.]
 
 #### Key Property Test Categories
 
@@ -7224,25 +3232,17 @@ The observed philosophy is: **"NO mocks - test real implementations with real da
 
 **Source**: CASS mining of Go codebase coverage analysis
 
-[Code block omitted: example block (lang='markdown').]
-- Block length: 25 line(s).
-- Block contains illustrative content referenced by the surrounding text.
+[Code block omitted: example block (lang='markdown', 25 line(s)).]
 
 ### 34.6 Snapshot Testing
 
 #### Vitest/Jest Snapshot Pattern
 
-[Code block omitted: example block (lang='typescript').]
-- Block length: 15 line(s).
-- Block contains illustrative content referenced by the surrounding text.
+[Code block omitted: example block (lang='typescript', 15 line(s)).]
 
 #### Managing Snapshot Updates
 
-[Code block omitted: shell command examples (8 lines).]
-- Unique tools referenced: 2.
-- Tool invoked: bun
-- Tool invoked: git
-- Commands illustrate typical workflows and integrations.
+[Code block omitted: shell commands using bun, git.]
 
 ### 34.7 E2E Testing Patterns
 
@@ -7250,15 +3250,11 @@ The observed philosophy is: **"NO mocks - test real implementations with real da
 
 **Source**: CASS mining of brenner_bot E2E test infrastructure
 
-[Code block omitted: example block (lang='typescript').]
-- Block length: 41 line(s).
-- Block contains illustrative content referenced by the surrounding text.
+[Code block omitted: example block (lang='typescript', 41 line(s)).]
 
 #### E2E Test Structure
 
-[Code block omitted: example block (lang='typescript').]
-- Block length: 25 line(s).
-- Block contains illustrative content referenced by the surrounding text.
+[Code block omitted: example block (lang='typescript', 25 line(s)).]
 
 ### 34.8 BATS Framework for Shell Testing
 
@@ -7266,129 +3262,37 @@ The observed philosophy is: **"NO mocks - test real implementations with real da
 
 #### Test Helper Structure
 
-[Code block omitted: shell command examples (29 lines).]
-- Unique tools referenced: 15.
-- Tool invoked: load
-- Tool invoked: setup_test_environment()
-- Tool invoked: export
-- Tool invoked: mkdir
-- Tool invoked: }
-- Tool invoked: teardown_test_environment()
-- Tool invoked: rm
-- Tool invoked: capture_streams()
-- Tool invoked: local
-- Tool invoked: STDOUT_FILE="$(mktemp)"
-- Tool invoked: STDERR_FILE="$(mktemp)"
-- Tool invoked: eval
-- Tool invoked: EXIT_CODE=$?
-- Tool invoked: CAPTURED_STDOUT="$(cat
-- Tool invoked: CAPTURED_STDERR="$(cat
-- Commands illustrate typical workflows and integrations.
+[Code block omitted: shell commands using load, setup_test_environment(), export, mkdir, }, teardown_test_environment(), rm, capture_streams()....]
 
 #### Custom Assertions
 
-[Code block omitted: shell command examples (28 lines).]
-- Unique tools referenced: 13.
-- Tool invoked: assert_stderr_only()
-- Tool invoked: assert
-- Tool invoked: }
-- Tool invoked: assert_stdout_only()
-- Tool invoked: assert_valid_json()
-- Tool invoked: echo
-- Tool invoked: assert_success
-- Tool invoked: assert_json_value()
-- Tool invoked: local
-- Tool invoked: actual=$(echo
-- Tool invoked: assert_equal
-- Tool invoked: assert_no_ansi()
-- Tool invoked: refute_output
-- Commands illustrate typical workflows and integrations.
+[Code block omitted: shell commands using assert_stderr_only(), assert, }, assert_stdout_only(), assert_valid_json(), echo, assert_success, assert_json_value()....]
 
 #### Unit Test Example
 
-[Code block omitted: shell command examples (29 lines).]
-- Unique tools referenced: 13.
-- Tool invoked: setup()
-- Tool invoked: load
-- Tool invoked: setup_test_environment
-- Tool invoked: source
-- Tool invoked: }
-- Tool invoked: teardown()
-- Tool invoked: teardown_test_environment
-- Tool invoked: @test
-- Tool invoked: run
-- Tool invoked: assert_success
-- Tool invoked: assert_failure
-- Tool invoked: assert_output
-- Tool invoked: export
-- Commands illustrate typical workflows and integrations.
+[Code block omitted: shell commands using setup(), load, setup_test_environment, source, }, teardown(), teardown_test_environment, @test....]
 
 ### 34.9 Real Clipboard Testing
 
 **Source**: CASS mining of jeffreysprompts.com copy command tests
 
-[Code block omitted: example block (lang='typescript').]
-- Block length: 66 line(s).
-- Block contains illustrative content referenced by the surrounding text.
+[Code block omitted: example block (lang='typescript', 66 line(s)).]
 
 ### 34.10 Test Harness Pattern
 
 **Source**: CASS mining of Go testutil.Harness pattern
 
-[Code block omitted: example block (lang='go').]
-- Block length: 66 line(s).
-- Block contains illustrative content referenced by the surrounding text.
+[Code block omitted: example block (lang='go', 66 line(s)).]
 
 ### 34.11 CI Integration Patterns
 
 #### JUnit XML Output for CI
 
-[Code block omitted: shell command examples (40 lines).]
-- Unique tools referenced: 22.
-- Tool invoked: set
-- Tool invoked: SCRIPT_DIR="$(cd
-- Tool invoked: cd
-- Tool invoked: preflight_check()
-- Tool invoked: echo
-- Tool invoked: if
-- Tool invoked: exit
-- Tool invoked: fi
-- Tool invoked: for
-- Tool invoked: done
-- Tool invoked: }
-- Tool invoked: run_tests()
-- Tool invoked: local
-- Tool invoked: ./libs/bats-core/bin/bats
-- Tool invoked: --formatter
-- Tool invoked: --output
-- Tool invoked: --tap
-- Tool invoked: unit/*.bats
-- Tool invoked: |
-- Tool invoked: return
-- Tool invoked: preflight_check
-- Tool invoked: run_tests
-- Commands illustrate typical workflows and integrations.
+[Code block omitted: shell commands using set, SCRIPT_DIR="$(cd, cd, preflight_check(), echo, if, exit, fi....]
 
 #### GitHub Actions Integration
 
-[Code block omitted: YAML example.]
-- Block length: 26 line(s).
-- Keys extracted: 14.
-- Key: name
-- Key: on
-- Key: jobs
-- Key: test
-- Key: runs-on
-- Key: steps
-- Key: - uses
-- Key: with
-- Key: submodules
-- Key: - name
-- Key: uses
-- Key: run
-- Key: if
-- Key: path
-- Example encodes structured test/spec or config data.
+[Code block omitted: YAML example; keys include name, on, jobs, test, runs-on, steps, ....]
 
 ### 34.12 Application to meta_skill
 
@@ -7436,79 +3340,20 @@ Before shipping tests:
 | `e2e.yml` | Full E2E test suite | push to main |
 | `dependabot.yml` | Automated dependency updates | schedule |
 
-[Code block omitted: YAML example.]
-- Block length: 103 line(s).
-- Keys extracted: 33.
-- Key: name
-- Key: on
-- Key: push
-- Key: branches
-- Key: pull_request
-- Key: workflow_dispatch
-- Key: jobs
-- Key: shellcheck
-- Key: runs-on
-- Key: steps
-- Key: - uses
-- Key: with
-- Key: severity
-- Key: scandir
-- Key: additional_files
-- Key: syntax
-- Key: - name
-- Key: run
-- Key: tests
-- Key: needs
-- Key: strategy
-- Key: matrix
-- Key: os
-- Key: fail-fast
-- Key: if
-- Key: continue-on-error
-- Key: uses
-- Key: path
-- Key: retention-days
-- Key: install-test
-- Key: version-check
-- Key: echo "
-- Key: echo "Version verified
-- Example encodes structured test/spec or config data.
+[Code block omitted: YAML example; keys include name, on, push, branches, pull_request, workflow_dispatch, ....]
 
 ### 35.2 Job Dependencies and Ordering
 
 #### Dependency Graph Patterns
 
-[Code block omitted: ASCII diagram illustrating a workflow/system layout.]
-- Block length: 5 line(s).
-- Diagram uses box-and-arrow flow to show major steps, loops, or dependencies.
-- Intended to give a visual map of the process described in nearby text.
+[Diagram omitted: workflow/system diagram.]
+- 5 line(s); see surrounding text for step labels.
 
-[Code block omitted: YAML example.]
-- Block length: 18 line(s).
-- Keys extracted: 8.
-- Key: jobs
-- Key: lint
-- Key: runs-on
-- Key: test
-- Key: needs
-- Key: build
-- Key: deploy
-- Key: if
-- Example encodes structured test/spec or config data.
+[Code block omitted: YAML example; keys include jobs, lint, runs-on, test, needs, build, ....]
 
 #### Conditional Execution
 
-[Code block omitted: YAML example.]
-- Block length: 15 line(s).
-- Keys extracted: 7.
-- Key: jobs
-- Key: deploy
-- Key: runs-on
-- Key: if
-- Key: steps
-- Key: - name
-- Key: run
-- Example encodes structured test/spec or config data.
+[Code block omitted: YAML example; keys include jobs, deploy, runs-on, if, steps, - name, ....]
 
 ### 35.3 Release Automation
 
@@ -7516,35 +3361,7 @@ Before shipping tests:
 
 **Source**: CASS mining of repo_updater release workflow
 
-[Code block omitted: YAML example.]
-- Block length: 69 line(s).
-- Keys extracted: 25.
-- Key: name
-- Key: on
-- Key: push
-- Key: tags
-- Key: permissions
-- Key: contents
-- Key: jobs
-- Key: release
-- Key: runs-on
-- Key: steps
-- Key: - uses
-- Key: - name
-- Key: id
-- Key: run
-- Key: echo "
-- Key: echo "Version verified
-- Key: echo "Generated checksums
-- Key: curl -fsSL https
-- Key: echo "$(curl -fsSL https
-- Key: uses
-- Key: with
-- Key: body_path
-- Key: files
-- Key: generate_release_notes
-- Key: append_body
-- Example encodes structured test/spec or config data.
+[Code block omitted: YAML example; keys include name, on, push, tags, permissions, contents, ....]
 
 ### 35.4 Version Management Patterns
 
@@ -7552,86 +3369,23 @@ Before shipping tests:
 
 **Source**: CASS mining of repo_updater version management
 
-[Code block omitted: shell command examples (14 lines).]
-- Unique tools referenced: 11.
-- Tool invoked: 1.2.1
-- Tool invoked: VERSION="1.2.1"
-- Tool invoked: get_version()
-- Tool invoked: local
-- Tool invoked: script_dir="$(dirname
-- Tool invoked: if
-- Tool invoked: cat
-- Tool invoked: else
-- Tool invoked: echo
-- Tool invoked: fi
-- Tool invoked: }
-- Commands illustrate typical workflows and integrations.
+[Code block omitted: shell commands using 1.2.1, VERSION="1.2.1", get_version(), local, script_dir="$(dirname, if, cat, else....]
 
 #### Semantic Version Comparison
 
-[Code block omitted: shell command examples (30 lines).]
-- Unique tools referenced: 13.
-- Tool invoked: version_gt()
-- Tool invoked: local
-- Tool invoked: IFS='.'
-- Tool invoked: for
-- Tool invoked: if
-- Tool invoked: return
-- Tool invoked: elif
-- Tool invoked: fi
-- Tool invoked: done
-- Tool invoked: }
-- Tool invoked: check_for_update()
-- Tool invoked: latest_version=$(curl
-- Tool invoked: echo
-- Commands illustrate typical workflows and integrations.
+[Code block omitted: shell commands using version_gt(), local, IFS='.', for, if, return, elif, fi....]
 
 ### 35.5 Matrix Testing Strategies
 
 #### Multi-OS Matrix
 
-[Code block omitted: YAML example.]
-- Block length: 14 line(s).
-- Keys extracted: 12.
-- Key: jobs
-- Key: test
-- Key: strategy
-- Key: matrix
-- Key: os
-- Key: node-version
-- Key: fail-fast
-- Key: runs-on
-- Key: steps
-- Key: - uses
-- Key: with
-- Key: - run
-- Example encodes structured test/spec or config data.
+[Code block omitted: YAML example; keys include jobs, test, strategy, matrix, os, node-version, ....]
 
 #### Browser Matrix for E2E
 
 **Source**: CASS mining of jeffreysprompts_premium E2E workflow
 
-[Code block omitted: YAML example.]
-- Block length: 25 line(s).
-- Keys extracted: 17.
-- Key: jobs
-- Key: e2e
-- Key: strategy
-- Key: matrix
-- Key: browser
-- Key: include
-- Key: - browser
-- Key: project
-- Key: fail-fast
-- Key: runs-on
-- Key: steps
-- Key: - uses
-- Key: - run
-- Key: if
-- Key: with
-- Key: name
-- Key: path
-- Example encodes structured test/spec or config data.
+[Code block omitted: YAML example; keys include jobs, e2e, strategy, matrix, browser, include, ....]
 
 ### 35.6 Container Image Pipelines
 
@@ -7639,125 +3393,25 @@ Before shipping tests:
 
 **Source**: CASS mining of flywheel_gateway tenant container pipeline
 
-[Code block omitted: example block (lang='dockerfile').]
-- Block length: 13 line(s).
-- Block contains illustrative content referenced by the surrounding text.
+[Code block omitted: example block (lang='dockerfile', 13 line(s)).]
 
-[Code block omitted: YAML example.]
-- Block length: 75 line(s).
-- Keys extracted: 39.
-- Key: name
-- Key: on
-- Key: push
-- Key: tags
-- Key: pull_request
-- Key: paths
-- Key: env
-- Key: REGISTRY
-- Key: IMAGE_NAME
-- Key: jobs
-- Key: build
-- Key: runs-on
-- Key: permissions
-- Key: contents
-- Key: packages
-- Key: steps
-- Key: - uses
-- Key: - name
-- Key: uses
-- Key: if
-- Key: with
-- Key: registry
-- Key: username
-- Key: password
-- Key: id
-- Key: images
-- Key: context
-- Key: platforms
-- Key: labels
-- Key: cache-from
-- Key: cache-to
-- Key: image-ref
-- Key: format
-- Key: output
-- Key: severity
-- Key: sarif_file
-- Key: image
-- Key: output-file
-- Key: path
-- Example encodes structured test/spec or config data.
+[Code block omitted: YAML example; keys include name, on, push, tags, pull_request, paths, ....]
 
 ### 35.7 Artifact Management
 
 #### Upload and Download Patterns
 
-[Code block omitted: YAML example.]
-- Block length: 34 line(s).
-- Keys extracted: 17.
-- Key: jobs
-- Key: build
-- Key: runs-on
-- Key: steps
-- Key: - uses
-- Key: - run
-- Key: - name
-- Key: uses
-- Key: with
-- Key: name
-- Key: path
-- Key: retention-days
-- Key: if-no-files-found
-- Key: test
-- Key: needs
-- Key: deploy
-- Key: run
-- Example encodes structured test/spec or config data.
+[Code block omitted: YAML example; keys include jobs, build, runs-on, steps, - uses, - run, ....]
 
 #### Caching Dependencies
 
-[Code block omitted: YAML example.]
-- Block length: 34 line(s).
-- Keys extracted: 14.
-- Key: jobs
-- Key: test
-- Key: runs-on
-- Key: steps
-- Key: - uses
-- Key: with
-- Key: node-version
-- Key: cache
-- Key: bun-version
-- Key: - name
-- Key: uses
-- Key: path
-- Key: key
-- Key: restore-keys
-- Example encodes structured test/spec or config data.
+[Code block omitted: YAML example; keys include jobs, test, runs-on, steps, - uses, with, ....]
 
 ### 35.8 Automated Dependency Updates
 
 #### Dependabot Configuration
 
-[Code block omitted: YAML example.]
-- Block length: 42 line(s).
-- Keys extracted: 16.
-- Key: version
-- Key: updates
-- Key: - package-ecosystem
-- Key: directory
-- Key: schedule
-- Key: interval
-- Key: day
-- Key: open-pull-requests-limit
-- Key: groups
-- Key: typescript
-- Key: patterns
-- Key: testing
-- Key: ignore
-- Key: - dependency-name
-- Key: update-types
-- Key: actions
-- Example encodes structured test/spec or config data.
+[Code block omitted: YAML example; keys include version, updates, - package-ecosystem, directory, schedule, interval, ....]
 
 ### 35.9 Pre-Commit Hook Integration
 
@@ -7765,31 +3419,9 @@ Before shipping tests:
 
 **Source**: CASS mining of destructive_command_guard hook patterns
 
-[Code block omitted: YAML example.]
-- Block length: 10 line(s).
-- Keys extracted: 7.
-- Key: jobs
-- Key: lint
-- Key: runs-on
-- Key: steps
-- Key: - uses
-- Key: - name
-- Key: run
-- Example encodes structured test/spec or config data.
+[Code block omitted: YAML example; keys include jobs, lint, runs-on, steps, - uses, - name, ....]
 
-[Code block omitted: YAML example.]
-- Block length: 21 line(s).
-- Keys extracted: 9.
-- Key: repos
-- Key: - repo
-- Key: rev
-- Key: hooks
-- Key: - id
-- Key: name
-- Key: entry
-- Key: language
-- Key: types
-- Example encodes structured test/spec or config data.
+[Code block omitted: YAML example; keys include repos, - repo, rev, hooks, - id, name, ....]
 
 ### 35.10 Deployment Workflows
 
@@ -7797,49 +3429,13 @@ Before shipping tests:
 
 **Source**: CASS mining of jeffreysprompts_premium deploy workflow
 
-[Code block omitted: YAML example.]
-- Block length: 36 line(s).
-- Keys extracted: 21.
-- Key: name
-- Key: on
-- Key: push
-- Key: tags
-- Key: jobs
-- Key: deploy
-- Key: runs-on
-- Key: steps
-- Key: - uses
-- Key: - name
-- Key: uses
-- Key: with
-- Key: node-version
-- Key: run
-- Key: vercel-token
-- Key: vercel-org-id
-- Key: vercel-project-id
-- Key: vercel-args
-- Key: env
-- Key: DATABASE_URL
-- Key: curl -f https
-- Example encodes structured test/spec or config data.
+[Code block omitted: YAML example; keys include name, on, push, tags, jobs, deploy, ....]
 
 ### 35.11 Quality Gates
 
 #### Comprehensive Quality Pipeline
 
-[Code block omitted: YAML example.]
-- Block length: 36 line(s).
-- Keys extracted: 9.
-- Key: jobs
-- Key: quality
-- Key: runs-on
-- Key: steps
-- Key: - uses
-- Key: - name
-- Key: uses
-- Key: run
-- Key: echo "
-- Example encodes structured test/spec or config data.
+[Code block omitted: YAML example; keys include jobs, quality, runs-on, steps, - uses, - name, ....]
 
 ### 35.12 Self-Update Mechanisms
 
@@ -7847,24 +3443,7 @@ Before shipping tests:
 
 **Source**: CASS mining of apr self-update implementation
 
-[Code block omitted: shell command examples (52 lines).]
-- Unique tools referenced: 15.
-- Tool invoked: RELEASE_URL="https://github.com/owner/repo/releases/latest/download"
-- Tool invoked: update_self()
-- Tool invoked: local
-- Tool invoked: temp_dir=$(mktemp
-- Tool invoked: echo
-- Tool invoked: if
-- Tool invoked: rm
-- Tool invoked: return
-- Tool invoked: fi
-- Tool invoked: expected_hash=$(cat
-- Tool invoked: actual_hash=$(sha256sum
-- Tool invoked: install_path=$(which
-- Tool invoked: chmod
-- Tool invoked: new_version=$("$install_path"
-- Tool invoked: }
-- Commands illustrate typical workflows and integrations.
+[Code block omitted: shell commands using RELEASE_URL="https://github.com/owner/repo/releases/latest/download", update_self(), local, temp_dir=$(mktemp, echo, if, rm, return....]
 
 ### 35.13 Application to meta_skill
 
@@ -7916,9 +3495,7 @@ Before shipping CI/CD:
 
 #### Caching Anti-Patterns
 
-[Code block omitted: example block (lang='n/a').]
-- Block length: 5 line(s).
-- Block contains illustrative content referenced by the surrounding text.
+[Code block omitted: example block (lang='n/a', 5 line(s)).]
 
 ### 36.2 Lazy Initialization Patterns
 
@@ -7926,13 +3503,7 @@ Before shipping CI/CD:
 
 **Source**: CASS mining of xf VectorIndex cache
 
-[Code block omitted: Rust example code (types/logic).]
-- Block length: 17 line(s).
-- Counts: 0 struct(s), 0 enum(s), 0 trait(s), 0 impl(s), 1 fn(s), 2 field(s).
-- Function/method: get_vector_index
-- Field/key: VectorIndex
-- Field/key: std
-- Block defines core structures or algorithms referenced by surrounding text.
+[Code block omitted: Rust fns: get_vector_index; fields: VectorIndex, std.]
 
 **When to use**:
 - Configuration that's expensive to compute
@@ -7941,15 +3512,11 @@ Before shipping CI/CD:
 
 #### Go: sync.Once for Thread-Safe Initialization
 
-[Code block omitted: example block (lang='go').]
-- Block length: 24 line(s).
-- Block contains illustrative content referenced by the surrounding text.
+[Code block omitted: example block (lang='go', 24 line(s)).]
 
 #### TypeScript: Lazy Accessor Pattern
 
-[Code block omitted: example block (lang='typescript').]
-- Block length: 23 line(s).
-- Block contains illustrative content referenced by the surrounding text.
+[Code block omitted: example block (lang='typescript', 23 line(s)).]
 
 ### 36.3 TriageContext Pattern: Unified Lazy Caching
 
@@ -7959,9 +3526,7 @@ This pattern provides a context object that lazily computes and caches multiple 
 
 #### Go Implementation
 
-[Code block omitted: example block (lang='go').]
-- Block length: 113 line(s).
-- Block contains illustrative content referenced by the surrounding text.
+[Code block omitted: appendix/example (lang='go', 113 line(s)).]
 
 #### Key Design Points
 
@@ -7982,27 +3547,11 @@ For selecting the top K items from a stream or large collection, a min-heap is m
 
 #### Go Generic Implementation
 
-[Code block omitted: example block (lang='go').]
-- Block length: 100 line(s).
-- Block contains illustrative content referenced by the surrounding text.
+[Code block omitted: example block (lang='go', 100 line(s)).]
 
 #### Rust BinaryHeap Implementation
 
-[Code block omitted: Rust example code (types/logic).]
-- Block length: 68 line(s).
-- Counts: 2 struct(s), 0 enum(s), 0 trait(s), 0 impl(s), 5 fn(s), 4 field(s).
-- Struct: TopKCollector
-- Struct: ScoredEntry
-- Function/method: partial_cmp
-- Function/method: cmp
-- Function/method: new
-- Function/method: add
-- Function/method: results
-- Field/key: k
-- Field/key: heap
-- Field/key: score
-- Field/key: item
-- Block defines core structures or algorithms referenced by surrounding text.
+[Code block omitted: Rust structs: TopKCollector, ScoredEntry; fns: partial_cmp, cmp, new; fields: k, heap, score, item.]
 
 #### Complexity Comparison
 
@@ -8020,70 +3569,31 @@ For selecting the top K items from a stream or large collection, a min-heap is m
 
 #### Go Implementation
 
-[Code block omitted: example block (lang='go').]
-- Block length: 143 line(s).
-- Block contains illustrative content referenced by the surrounding text.
+[Code block omitted: appendix/example (lang='go', 143 line(s)).]
 
 ### 36.6 In-Memory Cache with TTL
 
 **Source**: CASS mining of beads_viewer GlobalCache pattern
 
-[Code block omitted: example block (lang='go').]
-- Block length: 91 line(s).
-- Block contains illustrative content referenced by the surrounding text.
+[Code block omitted: example block (lang='go', 91 line(s)).]
 
 ### 36.7 SIMD-Optimized Dot Product
 
 **Source**: CASS mining of xf and cass vector search implementations
 
-[Code block omitted: Rust example code (types/logic).]
-- Block length: 43 line(s).
-- Counts: 0 struct(s), 0 enum(s), 0 trait(s), 0 impl(s), 3 fn(s), 1 field(s).
-- Function/method: dot_product_simd
-- Function/method: dot_product
-- Function/method: dot_product_scalar
-- Field/key: std
-- Block defines core structures or algorithms referenced by surrounding text.
+[Code block omitted: Rust fns: dot_product_simd, dot_product, dot_product_scalar; fields: std.]
 
 ### 36.8 Parallel K-NN Search with Thread-Local Heaps
 
 **Source**: CASS mining of cass vector index parallel search
 
-[Code block omitted: Rust example code (types/logic).]
-- Block length: 75 line(s).
-- Counts: 0 struct(s), 0 enum(s), 0 trait(s), 1 impl(s), 3 fn(s), 2 field(s).
-- Impl block: VectorIndex
-- Function/method: search_top_k
-- Function/method: search_top_k_sequential
-- Function/method: search_top_k_parallel
-- Field/key: BinaryHeap
-- Field/key: doc_id
-- Block defines core structures or algorithms referenced by surrounding text.
+[Code block omitted: Rust fns: search_top_k, search_top_k_sequential, search_top_k_parallel; fields: BinaryHeap, doc_id.]
 
 ### 36.9 Cache-Efficient Data Layout (Struct of Arrays)
 
 **Source**: CASS mining of cass vector index memory layout
 
-[Code block omitted: Rust example code (types/logic).]
-- Block length: 34 line(s).
-- Counts: 2 struct(s), 1 enum(s), 0 trait(s), 0 impl(s), 2 fn(s), 11 field(s).
-- Struct: VectorIndex
-- Struct: VectorRow
-- Enum: VectorStorage
-- Function/method: vector_slab_offset_bytes
-- Function/method: align_up
-- Field/key: rows
-- Field/key: vectors
-- Field/key: message_id
-- Field/key: created_at_ms
-- Field/key: agent_id
-- Field/key: workspace_id
-- Field/key: source_id
-- Field/key: role
-- Field/key: chunk_idx
-- Field/key: vec_offset
-- Field/key: content_hash
-- Block defines core structures or algorithms referenced by surrounding text.
+[Code block omitted: Rust structs: VectorIndex, VectorRow; enums: VectorStorage; fns: vector_slab_offset_bytes, align_up; fields: rows, vectors, message_id, created_at_ms, agent_id, workspace_id.]
 
 **Benefits of SoA Layout**:
 | Aspect | Array of Structs (AoS) | Struct of Arrays (SoA) |
@@ -8097,16 +3607,7 @@ For selecting the top K items from a stream or large collection, a min-heap is m
 
 **Source**: CASS mining of xf and cass embedding deduplication
 
-[Code block omitted: Rust example code (types/logic).]
-- Block length: 31 line(s).
-- Counts: 0 struct(s), 0 enum(s), 0 trait(s), 1 impl(s), 2 fn(s), 3 field(s).
-- Impl block: EmbeddingCache
-- Function/method: content_hash
-- Function/method: get_or_compute
-- Field/key: content
-- Field/key: compute
-- Field/key: F
-- Block defines core structures or algorithms referenced by surrounding text.
+[Code block omitted: Rust fns: content_hash, get_or_compute; fields: content, compute, F.]
 
 ### 36.11 Cache Invalidation Strategies
 
@@ -8170,9 +3671,7 @@ Effective debugging follows a methodical process rather than random experimentat
 
 #### Debugging Anti-Patterns
 
-[Code block omitted: example block (lang='n/a').]
-- Block length: 6 line(s).
-- Block contains illustrative content referenced by the surrounding text.
+[Code block omitted: example block (lang='n/a', 6 line(s)).]
 
 ### 37.2 Systematic Code Review for Bug Classes
 
@@ -8180,9 +3679,7 @@ Effective debugging follows a methodical process rather than random experimentat
 
 #### Race Condition Hunting
 
-[Code block omitted: example block (lang='go').]
-- Block length: 14 line(s).
-- Block contains illustrative content referenced by the surrounding text.
+[Code block omitted: example block (lang='go', 14 line(s)).]
 
 **Race Condition Detection Checklist:**
 - [ ] Map access from multiple goroutines → needs mutex
@@ -8192,16 +3689,11 @@ Effective debugging follows a methodical process rather than random experimentat
 
 #### Go Race Detector Usage
 
-[Code block omitted: shell command examples (6 lines).]
-- Unique tools referenced: 1.
-- Tool invoked: go
-- Commands illustrate typical workflows and integrations.
+[Code block omitted: shell commands using go.]
 
 **Example race condition fix:**
 
-[Code block omitted: example block (lang='go').]
-- Block length: 15 line(s).
-- Block contains illustrative content referenced by the surrounding text.
+[Code block omitted: example block (lang='go', 15 line(s)).]
 
 ### 37.3 Error Handling Issue Detection
 
@@ -8216,15 +3708,11 @@ Effective debugging follows a methodical process rather than random experimentat
 | **Half-handled error** | Error checked but not all paths covered | Complete error path coverage |
 | **Silent fallback** | Error replaced with default without logging | Log original error before fallback |
 
-[Code block omitted: example block (lang='go').]
-- Block length: 13 line(s).
-- Block contains illustrative content referenced by the surrounding text.
+[Code block omitted: example block (lang='go', 13 line(s)).]
 
 #### Resource Leak Detection
 
-[Code block omitted: example block (lang='go').]
-- Block length: 20 line(s).
-- Block contains illustrative content referenced by the surrounding text.
+[Code block omitted: example block (lang='go', 20 line(s)).]
 
 ### 37.4 Performance Debugging Methodology
 
@@ -8233,10 +3721,7 @@ Effective debugging follows a methodical process rather than random experimentat
 #### Profiling Hot Paths
 
 **Step 1: Identify the hot path**
-[Code block omitted: shell command examples (9 lines).]
-- Unique tools referenced: 1.
-- Tool invoked: go
-- Commands illustrate typical workflows and integrations.
+[Code block omitted: shell commands using go.]
 
 **Step 2: Measure allocation pressure**
 
@@ -8248,9 +3733,7 @@ Effective debugging follows a methodical process rather than random experimentat
 
 **Step 3: Apply targeted fixes**
 
-[Code block omitted: example block (lang='go').]
-- Block length: 23 line(s).
-- Block contains illustrative content referenced by the surrounding text.
+[Code block omitted: example block (lang='go', 23 line(s)).]
 
 ### 37.5 N+1 Query Pattern Detection
 
@@ -8258,13 +3741,9 @@ Effective debugging follows a methodical process rather than random experimentat
 
 #### Identifying N+1 Patterns
 
-[Code block omitted: example block (lang='python').]
-- Block length: 14 line(s).
-- Block contains illustrative content referenced by the surrounding text.
+[Code block omitted: example block (lang='python', 14 line(s)).]
 
-[Code block omitted: example block (lang='python').]
-- Block length: 10 line(s).
-- Block contains illustrative content referenced by the surrounding text.
+[Code block omitted: example block (lang='python', 10 line(s)).]
 
 #### N+1 Detection Checklist
 
@@ -8279,26 +3758,11 @@ Effective debugging follows a methodical process rather than random experimentat
 
 #### Analyzing Test Failures
 
-[Code block omitted: Rust example code (types/logic).]
-- Block length: 16 line(s).
-- Counts: 0 struct(s), 0 enum(s), 0 trait(s), 0 impl(s), 1 fn(s), 0 field(s).
-- Function/method: truncate_for_markdown
-- Block defines core structures or algorithms referenced by surrounding text.
+[Code block omitted: Rust fns: truncate_for_markdown.]
 
 #### Test Debugging Workflow
 
-[Code block omitted: shell command examples (15 lines).]
-- Unique tools referenced: 9.
-- Tool invoked: cargo
-- Tool invoked: fn
-- Tool invoked: let
-- Tool invoked: eprintln!("Input:
-- Tool invoked: eprintln!("Result:
-- Tool invoked: eprintln!("Result
-- Tool invoked: assert_eq!(result,
-- Tool invoked: }
-- Tool invoked: RUST_BACKTRACE=1
-- Commands illustrate typical workflows and integrations.
+[Code block omitted: shell commands using cargo, fn, let, eprintln!("Input:, eprintln!("Result:, eprintln!("Result, assert_eq!(result,, }....]
 
 ### 37.7 Comprehensive Investigation Report Format
 
@@ -8306,17 +3770,11 @@ Effective debugging follows a methodical process rather than random experimentat
 
 When debugging complex issues, use a structured report format:
 
-[Code block omitted: example block (lang='markdown').]
-- Block length: 9 line(s).
-- Block contains illustrative content referenced by the surrounding text.
+[Code block omitted: example block (lang='markdown', 9 line(s)).]
 // Current problematic code
-[Code block omitted: example block (lang='n/a').]
-- Block length: 1 line(s).
-- Block contains illustrative content referenced by the surrounding text.
+[Code block omitted: example block (lang='n/a', 1 line(s)).]
 // Corrected code
-[Code block omitted: example block (lang='n/a').]
-- Block length: 11 line(s).
-- Block contains illustrative content referenced by the surrounding text.
+[Code block omitted: example block (lang='n/a', 11 line(s)).]
 
 ### 37.8 Print Debugging Best Practices
 
@@ -8324,21 +3782,13 @@ When debugging complex issues, use a structured report format:
 
 #### Strategic Debug Output
 
-[Code block omitted: Rust example code (types/logic).]
-- Block length: 22 line(s).
-- Counts: 0 struct(s), 0 enum(s), 0 trait(s), 0 impl(s), 1 fn(s), 0 field(s).
-- Function/method: normalize_args
-- Block defines core structures or algorithms referenced by surrounding text.
+[Code block omitted: Rust fns: normalize_args.]
 
 #### Structured Logging for Debugging
 
-[Code block omitted: example block (lang='go').]
-- Block length: 22 line(s).
-- Block contains illustrative content referenced by the surrounding text.
+[Code block omitted: example block (lang='go', 22 line(s)).]
 
-[Code block omitted: example block (lang='python').]
-- Block length: 15 line(s).
-- Block contains illustrative content referenced by the surrounding text.
+[Code block omitted: example block (lang='python', 15 line(s)).]
 
 ### 37.9 Concurrency Debugging
 
@@ -8346,23 +3796,17 @@ When debugging complex issues, use a structured report format:
 
 #### Detecting Race Conditions in Async Code
 
-[Code block omitted: example block (lang='python').]
-- Block length: 27 line(s).
-- Block contains illustrative content referenced by the surrounding text.
+[Code block omitted: example block (lang='python', 27 line(s)).]
 
 #### Deadlock Prevention
 
-[Code block omitted: example block (lang='go').]
-- Block length: 25 line(s).
-- Block contains illustrative content referenced by the surrounding text.
+[Code block omitted: example block (lang='go', 25 line(s)).]
 
 ### 37.10 Timeout and Context Deadline Debugging
 
 **Source**: CASS mining of coding_agent_account_manager script test handling
 
-[Code block omitted: example block (lang='go').]
-- Block length: 26 line(s).
-- Block contains illustrative content referenced by the surrounding text.
+[Code block omitted: example block (lang='go', 26 line(s)).]
 
 ### 37.11 Debugging Checklist by Bug Type
 
@@ -8428,3 +3872,470 @@ After fixing:
 - [ ] Have you added a regression test?
 - [ ] Have you removed debug code?
 - [ ] Have you documented the fix in commit message?
+
+## Section 38: Refactoring Patterns and Methodology
+
+*Source: CASS mining of local coding agent sessions - refactoring workflows, clippy-driven improvements, code modernization*
+
+### 38.1 Introduction
+
+Refactoring is the disciplined technique of restructuring existing code without changing its external behavior. This section synthesizes patterns from real-world refactoring sessions across Rust, Go, Python, and TypeScript projects.
+
+**Key Principle**: Refactoring should be incremental, testable, and driven by concrete signals (linter warnings, performance data, maintainability concerns) rather than aesthetic preferences.
+
+### 38.2 Linter-Driven Refactoring (Clippy Workflow)
+
+One of the most effective refactoring triggers is linter feedback. The clippy workflow demonstrates systematic improvement:
+
+#### 38.2.1 The Clippy Fix Cycle
+
+[Code block omitted: shell commands using cargo.]
+
+#### 38.2.2 Common Clippy Fixes
+
+| Lint | Issue | Fix Pattern |
+|------|-------|-------------|
+| `format_push_string` | `push_str(&format!(...))` | Use `write!(buf, ...)` instead |
+| `manual_let_else` | Match that can be `let else` | Convert to `let Some(x) = expr else { return }` |
+| `needless_pass_by_value` | Owned type passed but not consumed | Take `&T` instead of `T` |
+| `cast_possible_truncation` | `u128` to `u64` without check | Add explicit truncation handling |
+| `single_match` | Match with one arm + wildcard | Convert to `if let` |
+| `map_unwrap_or` | `.map(...).unwrap_or(...)` | Use `.map_or(default, \|x\| ...)` |
+| `too_many_lines` | Function exceeds line limit | Extract helper functions |
+
+#### 38.2.3 Example: Fresh Eyes Review
+
+From a real session (destructive_command_guard):
+
+[Code block omitted: Rust types/logic.]
+
+### 38.3 Dead Code Removal
+
+#### 38.3.1 Detection Strategies
+
+1. **Compiler warnings**: `#[warn(dead_code)]` in Rust, unused import warnings
+2. **IDE analysis**: Gray/faded code indicating unused symbols
+3. **Search verification**: `rg "symbol_name"` to confirm no usages
+4. **Comment archaeology**: Check if code is referenced only in comments
+
+#### 38.3.2 Safe Removal Process
+
+[Code block omitted: shell commands using rg, cargo.]
+
+#### 38.3.3 Example: Orphaned File Detection
+
+From a real session (brenner_bot):
+
+[Code block omitted: example block (lang='n/a', 4 line(s)).]
+
+**Key Pattern**: Always flag orphaned files explicitly rather than silently removing them.
+
+### 38.4 Unused Variable Handling
+
+#### 38.4.1 The Underscore Convention
+
+[Code block omitted: example block (lang='typescript', 6 line(s)).]
+
+#### 38.4.2 Rust-Specific Patterns
+
+[Code block omitted: Rust fns: unused_callback, handler.]
+
+### 38.5 Function Extraction
+
+#### 38.5.1 When to Extract
+
+| Signal | Action |
+|--------|--------|
+| Function exceeds ~50 lines | Extract logical subsections |
+| Repeated code blocks | Extract shared helper |
+| Deep nesting (>3 levels) | Extract inner logic |
+| Comments explaining "what" | Code should be self-documenting via function name |
+| Multiple responsibilities | One function = one purpose |
+
+#### 38.5.2 Extraction Process
+
+1. **Identify boundaries**: Find natural cut points (after setup, before cleanup, between phases)
+2. **Name the concept**: The function name should explain "what", not "how"
+3. **Extract with parameters**: Pass only what's needed, return only what's used
+4. **Test both caller and extracted function**
+
+#### 38.5.3 Example: Too Many Lines Fix
+
+From clippy warning in dcg:
+
+[Code block omitted: Rust fns: run_command.]
+
+### 38.6 Code Organization Patterns
+
+#### 38.6.1 Module Structure (Rust Example)
+
+From beads_viewer architecture:
+
+[Diagram omitted: workflow/system diagram.]
+- 12 line(s); see surrounding text for step labels.
+
+**Key Principles**:
+1. **Clear separation of concerns**: loader, analysis, UI, export are independent
+2. **Flat-ish structure**: Avoid deep nesting of modules
+3. **Test files colocated**: `foo_test.go` next to `foo.go`
+4. **Shared types in `model/`**: Prevents circular dependencies
+
+#### 38.6.2 Layered Architecture
+
+[Diagram omitted: workflow/system diagram.]
+- 9 line(s); see surrounding text for step labels.
+
+### 38.7 Consistency Improvements
+
+#### 38.7.1 Pattern Normalization
+
+From mcp_agent_mail code review:
+
+[Code block omitted: example block (lang='python', 6 line(s)).]
+
+**Impact**: Cache key consistency improved (4 different path formats → 1 cache entry)
+
+#### 38.7.2 Error Handling Consistency
+
+[Code block omitted: example block (lang='go', 13 line(s)).]
+
+### 38.8 Defensive Refactoring
+
+#### 38.8.1 Redundant But Safe Checks
+
+From code review:
+
+[Code block omitted: example block (lang='python', 7 line(s)).]
+
+**Principle**: Accept minor redundancy when it protects against future regressions.
+
+#### 38.8.2 Array Mutation Prevention
+
+From brenner_bot bug fix:
+
+[Code block omitted: example block (lang='typescript', 5 line(s)).]
+
+### 38.9 Type System Improvements
+
+#### 38.9.1 Strengthening Types
+
+[Code block omitted: Rust enums: Status; fns: set_status.]
+
+#### 38.9.2 Narrowing Generic Constraints
+
+[Code block omitted: Rust fns: process.]
+
+### 38.10 Refactoring Triggers
+
+| Trigger | Response |
+|---------|----------|
+| Clippy/linter warnings | Fix systematically (see 38.2) |
+| Failing tests after change | Understand coupling, extract shared logic |
+| Performance bottleneck | Profile first, then optimize hot path |
+| New feature difficult to add | Refactor to make feature easy, then add |
+| Bug in complex function | Simplify first, then fix |
+| Code review feedback | Address systematically |
+| Upgrade to new language edition | Run migration tools, then fix manually |
+
+### 38.11 Refactoring Anti-Patterns
+
+#### 38.11.1 Big Bang Refactoring
+
+**Problem**: Attempting massive restructuring in one commit  
+**Solution**: Incremental changes, each tested and committed
+
+#### 38.11.2 Refactoring Without Tests
+
+**Problem**: Changing code without test coverage  
+**Solution**: Write characterization tests first, then refactor
+
+#### 38.11.3 Premature Abstraction
+
+**Problem**: Creating abstractions for single use cases  
+**Solution**: Wait for repetition (Rule of Three)
+
+#### 38.11.4 Aesthetic-Only Changes
+
+**Problem**: Reformatting working code for "cleanliness"  
+**Solution**: Only refactor when there's a concrete benefit (performance, maintainability, bug fix)
+
+### 38.12 Application to meta_skill
+
+| Refactoring Area | Pattern | meta_skill Application |
+|------------------|---------|------------------------|
+| **Linter compliance** | Clippy workflow | Run `cargo clippy` in CI, fix before merge |
+| **Dead code** | Detection + removal | Flag unused skills, orphaned templates |
+| **Function extraction** | Too-many-lines fix | Keep skill handlers focused |
+| **Module structure** | Clear separation | skills/, templates/, search/, cli/ |
+| **Type safety** | Enum over strings | SkillType, TemplateKind as enums |
+| **Consistency** | Normalize paths | Consistent skill path resolution |
+
+### 38.13 Refactoring Workflow Checklist
+
+Before refactoring:
+- [ ] Do you have test coverage for the code being changed?
+- [ ] Is there a concrete trigger (lint, perf, bug, feature)?
+- [ ] Have you identified the smallest useful change?
+
+During refactoring:
+- [ ] Are you making one logical change per commit?
+- [ ] Are tests passing after each change?
+- [ ] Are you avoiding behavior changes (pure restructuring)?
+
+After refactoring:
+- [ ] Does the code pass all linters?
+- [ ] Are there any new warnings?
+- [ ] Is the code more readable/maintainable?
+- [ ] Have you updated documentation if needed?
+
+### 38.14 Tool Reference
+
+| Task | Tool | Command |
+|------|------|---------|
+| Rust linting | clippy | `cargo clippy --all-targets -- -D warnings` |
+| Rust auto-fix | clippy | `cargo clippy --fix --allow-dirty` |
+| Go linting | golangci-lint | `golangci-lint run` |
+| Python linting | ruff | `ruff check .` |
+| TypeScript linting | eslint | `eslint --fix .` |
+| Dead code (Rust) | cargo | `cargo build 2>&1 \| grep "warning: unused"` |
+| Symbol search | ripgrep | `rg "symbol_name" --type rust` |
+| AST refactoring | ast-grep | `ast-grep run -p 'old_pattern' -r 'new_pattern'` |
+
+---
+
+## Section 39: REST API Design Patterns
+
+*CASS Research: Mined from flywheel_gateway, flywheel_private, jeffreysprompts_premium projects*
+
+### 39.1 Overview
+
+REST API design in agentic systems requires careful attention to schema validation, error taxonomies, authentication flows, and pagination. This section captures patterns observed across production implementations where AI agents both consume and expose APIs.
+
+**Key Themes from CASS Mining:**
+- Zod-based runtime validation with OpenAPI generation
+- Structured error taxonomies with AI-friendly hints
+- OAuth 2.0 Device Code flow for headless agents
+- Cursor-based pagination for streaming results
+- Idempotency middleware for safe retries
+- Semantic HTTP status codes
+
+### 39.2 Schema Validation Architecture
+
+#### 39.2.1 Zod as the Single Source of Truth
+
+A production gateway with 25+ route files and 133+ schemas demonstrates the pattern:
+
+[Code block omitted: example block (lang='typescript', 30 line(s)).]
+
+#### 39.2.2 Schema Categories
+
+| Category | Count | Purpose | Example |
+|----------|-------|---------|---------|
+| **Request Validation** | 46 | Validate POST/PUT bodies | CreateJobSchema, SendMessageSchema |
+| **Query/Filter** | 19 | Validate GET query params | ListReposQuerySchema, SearchQuerySchema |
+| **Discriminated Union** | 3 | Type-safe polymorphism | StepConfigSchema, BudgetStrategySchema |
+| **Enum** | 6 | Constrained string sets | ProviderSchema, ProfileStatusSchema |
+| **Configuration** | 8 | Complex nested configs | UpdateConfigSchema, RateCardSchema |
+
+#### 39.2.3 OpenAPI Generation
+
+[Code block omitted: example block (lang='typescript', 28 line(s)).]
+
+**Exposed Endpoints:**
+- `GET /openapi.json` - Raw OpenAPI 3.1 specification
+- `GET /docs` - Swagger UI interactive documentation
+- `GET /redoc` - ReDoc documentation
+
+### 39.3 Error Taxonomy
+
+#### 39.3.1 Structured Error Codes
+
+A production error taxonomy with 55+ codes across 7 categories:
+
+[Code block omitted: example block (lang='typescript', 109 line(s)).]
+
+#### 39.3.2 Error Response Format
+
+[Code block omitted: example block (lang='typescript', 29 line(s)).]
+
+#### 39.3.3 HTTP Status Code Semantics
+
+| Status | When to Use | Example Scenario |
+|--------|-------------|------------------|
+| **200 OK** | Successful GET, successful update returning data | Fetch reservation details |
+| **201 Created** | Resource created, return with Location header | Create new reservation |
+| **202 Accepted** | Async operation started, will complete later | Start long-running job |
+| **204 No Content** | Successful DELETE, update with no body needed | Delete reservation |
+| **400 Bad Request** | Malformed JSON, validation failure | Invalid schema |
+| **401 Unauthorized** | Missing or invalid token | Expired JWT |
+| **403 Forbidden** | Valid token but insufficient permissions | Wrong scope |
+| **404 Not Found** | Resource doesn't exist | Unknown reservation ID |
+| **409 Conflict** | State conflict, duplicate key | File already reserved |
+| **410 Gone** | Resource permanently deleted | Purged job history |
+| **422 Unprocessable** | Valid JSON but business rule violation | Invalid state transition |
+| **429 Too Many Requests** | Rate limited, include Retry-After | Burst limit exceeded |
+| **500 Internal Error** | Unexpected server error | Unhandled exception |
+| **502 Bad Gateway** | Upstream service error | LLM API failure |
+| **503 Unavailable** | Service temporarily unavailable | Database maintenance |
+
+### 39.4 Authentication Patterns
+
+#### 39.4.1 OAuth 2.0 Device Code Flow (RFC 8628)
+
+For headless agents without browser access:
+
+[Code block omitted: example block (lang='typescript', 30 line(s)).]
+
+#### 39.4.2 Token Management
+
+[Code block omitted: example block (lang='typescript', 30 line(s)).]
+
+#### 39.4.3 Security Analysis
+
+| Component | Implementation | Security Property |
+|-----------|----------------|-------------------|
+| Device code | 32-byte random (256-bit) | Unguessable, safe for polling |
+| User code | 8-char from 20-char alphabet | 25.8 bits entropy, human-friendly |
+| Access token | JWT, 15-min expiry | Short exposure window |
+| Refresh token | Opaque, single-use, rotation | Replay detection, family revocation |
+| PKCE | Required for public clients | Prevents authorization code interception |
+
+### 39.5 Pagination Patterns
+
+#### 39.5.1 Cursor-Based Pagination
+
+Preferred over offset-based for stability with concurrent modifications:
+
+[Code block omitted: example block (lang='typescript', 41 line(s)).]
+
+#### 39.5.2 Cursor Encoding
+
+[Code block omitted: example block (lang='typescript', 12 line(s)).]
+
+#### 39.5.3 Pagination Comparison
+
+| Aspect | Offset-Based | Cursor-Based |
+|--------|--------------|--------------|
+| **Stability** | Items shift with inserts/deletes | Stable position |
+| **Performance** | O(offset) for large offsets | O(1) seek |
+| **Random access** | Supported (page 50) | Not supported |
+| **Implementation** | Simple | More complex |
+| **Use when** | Static data, UI with page numbers | Dynamic data, infinite scroll |
+
+### 39.6 Idempotency Middleware
+
+#### 39.6.1 Purpose
+
+Ensures safe retries for non-idempotent operations (POST, DELETE with side effects):
+
+[Code block omitted: example block (lang='typescript', 64 line(s)).]
+
+#### 39.6.2 Client Usage
+
+[Code block omitted: example block (lang='typescript', 11 line(s)).]
+
+### 39.7 Route Organization
+
+#### 39.7.1 Hono-Based Route Structure
+
+[Code block omitted: example block (lang='typescript', 33 line(s)).]
+
+#### 39.7.2 Route File Organization
+
+[Diagram omitted: workflow/system diagram.]
+- 32 line(s); see surrounding text for step labels.
+
+### 39.8 Request/Response Patterns
+
+#### 39.8.1 Standard Response Helpers
+
+[Code block omitted: example block (lang='typescript', 33 line(s)).]
+
+#### 39.8.2 Validation Error Transformation
+
+[Code block omitted: example block (lang='typescript', 18 line(s)).]
+
+### 39.9 API Versioning Strategies
+
+#### 39.9.1 URL Path Versioning
+
+[Code block omitted: example block (lang='typescript', 5 line(s)).]
+
+#### 39.9.2 Header-Based Versioning
+
+[Code block omitted: example block (lang='typescript', 16 line(s)).]
+
+#### 39.9.3 Versioning Decision Matrix
+
+| Strategy | Pros | Cons | Use When |
+|----------|------|------|----------|
+| **URL Path** | Clear, cacheable, visible in logs | URL changes between versions | Breaking changes, public APIs |
+| **Header** | URL stable, granular | Hidden, harder to cache | Internal APIs, minor changes |
+| **Query Param** | Easy to switch | Pollutes URLs, caching issues | Rarely recommended |
+
+### 39.10 Rate Limiting
+
+#### 39.10.1 Multi-Tier Rate Limiting
+
+[Code block omitted: example block (lang='typescript', 31 line(s)).]
+
+### 39.11 Application to meta_skill
+
+| Pattern | meta_skill Application |
+|---------|------------------------|
+| **Zod Schemas** | Validate skill invocation parameters, template variables |
+| **OpenAPI Generation** | Auto-generate API docs for HTTP-based skill registry |
+| **Error Taxonomy** | Structured errors for skill execution failures |
+| **Cursor Pagination** | List skills, search results, template listings |
+| **Idempotency** | Safe skill installation/uninstallation |
+| **Auth** | Skill marketplace authentication, API keys |
+| **Versioning** | Skill version constraints, API evolution |
+
+### 39.12 REST API Checklist
+
+Before deploying an API endpoint:
+
+**Schema & Validation:**
+- [ ] Request body validated with Zod schema
+- [ ] Query parameters validated with coercion
+- [ ] Schema registered in OpenAPI registry
+- [ ] Response schema documented
+
+**Error Handling:**
+- [ ] Uses error codes from taxonomy
+- [ ] Includes aiHint for AI consumers
+- [ ] Validation errors include field details
+- [ ] Request ID included in error response
+
+**HTTP Semantics:**
+- [ ] Correct status code (201 for create, 204 for delete)
+- [ ] Location header for created resources
+- [ ] Proper Content-Type headers
+
+**Pagination & Performance:**
+- [ ] List endpoints use cursor-based pagination
+- [ ] Reasonable default and max limits
+- [ ] hasMore indicator in response
+
+**Security:**
+- [ ] Auth middleware applied
+- [ ] Rate limiting configured
+- [ ] Idempotency key support for mutations
+
+### 39.13 Anti-Patterns
+
+#### 39.13.1 Avoid: Offset Pagination for Mutable Data
+
+[Code block omitted: example block (lang='typescript', 4 line(s)).]
+
+#### 39.13.2 Avoid: Generic Error Responses
+
+[Code block omitted: example block (lang='typescript', 11 line(s)).]
+
+#### 39.13.3 Avoid: Inconsistent Naming
+
+[Code block omitted: example block (lang='typescript', 8 line(s)).]
+
+#### 39.13.4 Avoid: Overloaded Endpoints
+
+[Code block omitted: example block (lang='typescript', 6 line(s)).]
