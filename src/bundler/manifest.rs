@@ -41,6 +41,10 @@ pub struct BundledSkill {
     pub name: String,
     pub path: PathBuf,
     #[serde(default)]
+    pub version: Option<String>,
+    #[serde(default)]
+    pub hash: Option<String>,
+    #[serde(default)]
     pub optional: bool,
 }
 
@@ -114,6 +118,17 @@ impl BundleManifest {
                     skill.name
                 )));
             }
+            if let Some(version) = skill.version.as_ref() {
+                validate_semver("skills.version", version)?;
+            }
+            if let Some(hash) = skill.hash.as_ref() {
+                if hash.trim().is_empty() {
+                    return Err(MsError::ValidationFailed(format!(
+                        "skill hash is required for {}",
+                        skill.name
+                    )));
+                }
+            }
         }
 
         let mut seen_deps = HashSet::new();
@@ -136,6 +151,34 @@ impl BundleManifest {
             }
         }
 
+        Ok(())
+    }
+}
+
+pub trait SignatureVerifier {
+    fn verify(&self, payload: &[u8], signature: &BundleSignature) -> Result<()>;
+}
+
+pub struct NoopSignatureVerifier;
+
+impl SignatureVerifier for NoopSignatureVerifier {
+    fn verify(&self, _payload: &[u8], signature: &BundleSignature) -> Result<()> {
+        Err(MsError::ValidationFailed(format!(
+            "signature verification not configured for signer {}",
+            signature.signer
+        )))
+    }
+}
+
+impl BundleManifest {
+    pub fn verify_signatures(
+        &self,
+        payload: &[u8],
+        verifier: &impl SignatureVerifier,
+    ) -> Result<()> {
+        for sig in &self.signatures {
+            verifier.verify(payload, sig)?;
+        }
         Ok(())
     }
 }
@@ -182,10 +225,14 @@ ms_version = ">=0.1.0"
 [[skills]]
 name = "error-handling"
 path = "skills/error-handling"
+version = "1.2.0"
+hash = "sha256:deadbeef"
 
 [[skills]]
 name = "async-patterns"
 path = "skills/async-patterns"
+version = "0.5.0"
+hash = "sha256:cafebabe"
 optional = true
 
 [[dependencies]]
@@ -219,6 +266,8 @@ checksum = "sha256:abc123"
         manifest.skills.push(BundledSkill {
             name: "error-handling".to_string(),
             path: PathBuf::from("skills/dup"),
+            version: Some("1.2.0".to_string()),
+            hash: Some("sha256:abc123".to_string()),
             optional: false,
         });
         let err = manifest.validate().unwrap_err();

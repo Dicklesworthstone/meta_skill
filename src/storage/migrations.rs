@@ -4,12 +4,13 @@ use rusqlite::Connection;
 
 use crate::error::{MsError, Result};
 
-const MIGRATIONS: [&str; 5] = [
+const MIGRATIONS: [&str; 6] = [
     include_str!("../../migrations/001_initial_schema.sql"),
     include_str!("../../migrations/002_add_fts.sql"),
     include_str!("../../migrations/003_add_vectors.sql"),
     include_str!("../../migrations/004_add_acip_quarantine.sql"),
     include_str!("../../migrations/005_add_acip_quarantine_reviews.sql"),
+    include_str!("../../migrations/006_add_embedding_metadata.sql"),
 ];
 
 pub const SCHEMA_VERSION: u32 = MIGRATIONS.len() as u32;

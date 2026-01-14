@@ -175,6 +175,9 @@ impl Config {
         if let Some(value) = env_string("MS_SEARCH_EMBEDDING_BACKEND") {
             self.search.embedding_backend = value;
         }
+        if let Some(value) = env_u32("MS_SEARCH_EMBEDDING_DIMS")? {
+            self.search.embedding_dims = value;
+        }
         if let Some(value) = env_f32("MS_SEARCH_BM25_WEIGHT")? {
             self.search.bm25_weight = value;
         }
@@ -373,6 +376,8 @@ pub struct SearchConfig {
     #[serde(default)]
     pub embedding_backend: String,
     #[serde(default)]
+    pub embedding_dims: u32,
+    #[serde(default)]
     pub bm25_weight: f32,
     #[serde(default)]
     pub semantic_weight: f32,
@@ -383,6 +388,7 @@ impl Default for SearchConfig {
         Self {
             use_embeddings: true,
             embedding_backend: "hash".to_string(),
+            embedding_dims: 384,
             bm25_weight: 0.5,
             semantic_weight: 0.5,
         }
@@ -396,6 +402,9 @@ impl SearchConfig {
         }
         if let Some(value) = patch.embedding_backend {
             self.embedding_backend = value;
+        }
+        if let Some(value) = patch.embedding_dims {
+            self.embedding_dims = value;
         }
         if let Some(value) = patch.bm25_weight {
             self.bm25_weight = value;
@@ -598,6 +607,7 @@ struct DisclosurePatch {
 struct SearchPatch {
     pub use_embeddings: Option<bool>,
     pub embedding_backend: Option<String>,
+    pub embedding_dims: Option<u32>,
     pub bm25_weight: Option<f32>,
     pub semantic_weight: Option<f32>,
 }

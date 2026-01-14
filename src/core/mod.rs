@@ -7,6 +7,7 @@ pub mod registry;
 pub mod requirements;
 pub mod safety;
 pub mod skill;
+pub mod slicing;
 pub mod spec_lens;
 pub mod validation;
 
@@ -19,3 +20,4 @@ pub use layering::{
     MergeStrategy, ResolvedSkill, ResolutionOptions, SectionDiff, SkillCandidate,
 };
 pub use skill::{BlockType, Skill, SkillBlock, SkillMetadata, SkillSection, SkillSpec};
+pub use slicing::{SkillSliceIndex, SkillSlicer};

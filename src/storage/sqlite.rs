@@ -2,11 +2,12 @@
 
 use std::path::Path;
 
+use half::f16;
 use rusqlite::{params, Connection, Row};
 use serde_json::Value as JsonValue;
 use uuid::Uuid;
 
-use crate::error::Result;
+use crate::error::{MsError, Result};
 use crate::security::QuarantineRecord;
 use crate::storage::migrations;
 
@@ -37,6 +38,16 @@ pub struct SkillRecord {
     pub modified_at: String,
     pub is_deprecated: bool,
     pub deprecation_reason: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct EmbeddingRecord {
+    pub skill_id: String,
+    pub embedding: Vec<f32>,
+    pub dims: usize,
+    pub embedder_type: String,
+    pub content_hash: Option<String>,
+    pub computed_at: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -229,6 +240,77 @@ impl Database {
             ids.push(row?);
         }
         Ok(ids)
+    }
+
+    pub fn upsert_embedding(&self, record: &EmbeddingRecord) -> Result<()> {
+        if record.embedding.len() != record.dims {
+            return Err(MsError::Serialization(format!(
+                "embedding dims mismatch: expected {}, got {}",
+                record.dims,
+                record.embedding.len()
+            )));
+        }
+
+        let encoded = encode_embedding_f16(&record.embedding);
+        let computed_at = if record.computed_at.is_empty() {
+            chrono::Utc::now().to_rfc3339()
+        } else {
+            record.computed_at.clone()
+        };
+
+        self.conn.execute(
+            "INSERT INTO skill_embeddings (
+                skill_id, embedding, dims, embedder_type, content_hash, computed_at, created_at
+             ) VALUES (?, ?, ?, ?, ?, ?, ?)
+             ON CONFLICT(skill_id) DO UPDATE SET
+                embedding=excluded.embedding,
+                dims=excluded.dims,
+                embedder_type=excluded.embedder_type,
+                content_hash=excluded.content_hash,
+                computed_at=excluded.computed_at",
+            params![
+                record.skill_id,
+                encoded,
+                record.dims as i64,
+                record.embedder_type,
+                record.content_hash,
+                computed_at,
+                computed_at,
+            ],
+        )?;
+        Ok(())
+    }
+
+    pub fn get_embedding(&self, skill_id: &str) -> Result<Option<EmbeddingRecord>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT skill_id, embedding, dims, embedder_type, content_hash, computed_at, created_at
+             FROM skill_embeddings
+             WHERE skill_id = ?",
+        )?;
+        let mut rows = stmt.query([skill_id])?;
+        if let Some(row) = rows.next()? {
+            return Ok(Some(embedding_from_row(row)?));
+        }
+        Ok(None)
+    }
+
+    pub fn get_embedding_by_hash(
+        &self,
+        content_hash: &str,
+        embedder_type: &str,
+        dims: usize,
+    ) -> Result<Option<EmbeddingRecord>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT skill_id, embedding, dims, embedder_type, content_hash, computed_at, created_at
+             FROM skill_embeddings
+             WHERE content_hash = ? AND embedder_type = ? AND dims = ?
+             LIMIT 1",
+        )?;
+        let mut rows = stmt.query(params![content_hash, embedder_type, dims as i64])?;
+        if let Some(row) = rows.next()? {
+            return Ok(Some(embedding_from_row(row)?));
+        }
+        Ok(None)
     }
 
     pub fn insert_quarantine_record(&self, record: &QuarantineRecord) -> Result<()> {
@@ -498,6 +580,61 @@ fn skill_from_row(row: &Row<'_>) -> rusqlite::Result<SkillRecord> {
     })
 }
 
+fn embedding_from_row(row: &Row<'_>) -> Result<EmbeddingRecord> {
+    let skill_id: String = row.get(0)?;
+    let blob: Vec<u8> = row.get(1)?;
+    let dims: i64 = row.get(2)?;
+    let embedder_type: String = row.get(3)?;
+    let content_hash: Option<String> = row.get(4)?;
+    let computed_at: String = row.get(5)?;
+    let created_at: String = row.get(6)?;
+
+    let dims_usize = if dims <= 0 { 0 } else { dims as usize };
+    let computed_at = if computed_at.is_empty() {
+        created_at
+    } else {
+        computed_at
+    };
+
+    let embedding = decode_embedding_f16(&blob, dims_usize)?;
+
+    Ok(EmbeddingRecord {
+        skill_id,
+        embedding,
+        dims: dims_usize,
+        embedder_type,
+        content_hash,
+        computed_at,
+    })
+}
+
+fn encode_embedding_f16(values: &[f32]) -> Vec<u8> {
+    let mut out = Vec::with_capacity(values.len() * 2);
+    for value in values {
+        let bits = f16::from_f32(*value).to_bits();
+        out.extend_from_slice(&bits.to_le_bytes());
+    }
+    out
+}
+
+fn decode_embedding_f16(bytes: &[u8], dims: usize) -> Result<Vec<f32>> {
+    let expected = dims.saturating_mul(2);
+    if bytes.len() != expected {
+        return Err(MsError::Serialization(format!(
+            "embedding blob length mismatch: expected {}, got {}",
+            expected,
+            bytes.len()
+        )));
+    }
+
+    let mut out = Vec::with_capacity(dims);
+    for chunk in bytes.chunks_exact(2) {
+        let bits = u16::from_le_bytes([chunk[0], chunk[1]]);
+        out.push(f16::from_bits(bits).to_f32());
+    }
+    Ok(out)
+}
+
 fn quarantine_from_row(row: &Row<'_>) -> std::result::Result<QuarantineRecord, rusqlite::Error> {
     let classification_json: String = row.get(5)?;
     let classification: JsonValue = serde_json::from_str(&classification_json)
@@ -532,6 +669,7 @@ mod tests {
     use super::*;
     use tempfile::tempdir;
     use crate::security::AcipClassification;
+    use crate::search::embeddings::HashEmbedder;
 
     #[test]
     fn test_database_creation_and_schema_version() {
@@ -661,6 +799,65 @@ mod tests {
         db.upsert_skill(&record).unwrap();
         let results = db.search_fts("error", 10).unwrap();
         assert!(results.contains(&"rust-errors".to_string()));
+    }
+
+    #[test]
+    fn test_embedding_roundtrip_and_cache() {
+        let dir = tempdir().unwrap();
+        let db = Database::open(dir.path().join("test.db")).unwrap();
+
+        // First insert a skill record (required for foreign key)
+        let skill = SkillRecord {
+            id: "git".to_string(),
+            name: "Git Workflow".to_string(),
+            description: "Git commit workflow".to_string(),
+            version: Some("1.0.0".to_string()),
+            author: None,
+            source_path: "/skills/git".to_string(),
+            source_layer: "base".to_string(),
+            git_remote: None,
+            git_commit: None,
+            content_hash: "abc123".to_string(),
+            body: "Git body".to_string(),
+            metadata_json: "{}".to_string(),
+            assets_json: "{}".to_string(),
+            token_count: 100,
+            quality_score: 1.0,
+            indexed_at: "2026-01-01T00:00:00Z".to_string(),
+            modified_at: "2026-01-01T00:00:00Z".to_string(),
+            is_deprecated: false,
+            deprecation_reason: None,
+        };
+        db.upsert_skill(&skill).unwrap();
+
+        let embedder = HashEmbedder::new(32);
+        let embedding = embedder.embed("git commit workflow");
+
+        let record = EmbeddingRecord {
+            skill_id: "git".to_string(),
+            embedding: embedding.clone(),
+            dims: 32,
+            embedder_type: "hash".to_string(),
+            content_hash: Some("hash123".to_string()),
+            computed_at: "2026-01-01T00:00:00Z".to_string(),
+        };
+
+        db.upsert_embedding(&record).unwrap();
+
+        let fetched = db.get_embedding("git").unwrap().unwrap();
+        assert_eq!(fetched.skill_id, record.skill_id);
+        assert_eq!(fetched.dims, record.dims);
+        assert_eq!(fetched.embedder_type, record.embedder_type);
+        assert_eq!(fetched.content_hash, record.content_hash);
+
+        let sim = embedder.similarity(&embedding, &fetched.embedding);
+        assert!(sim > 0.97);
+
+        let cached = db
+            .get_embedding_by_hash("hash123", "hash", 32)
+            .unwrap()
+            .unwrap();
+        assert_eq!(cached.skill_id, "git");
     }
 
     #[test]

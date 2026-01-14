@@ -132,6 +132,7 @@ cooldown_seconds = 300
 [search]
 use_embeddings = true
 embedding_backend = "hash"
+embedding_dims = 384
 bm25_weight = 0.5
 semantic_weight = 0.5
 

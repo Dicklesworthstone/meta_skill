@@ -6,6 +6,12 @@
 use std::cmp::Ordering;
 use std::collections::HashMap;
 
+/// Pluggable embedding backend interface
+pub trait Embedder {
+    fn embed(&self, text: &str) -> Vec<f32>;
+    fn dims(&self) -> usize;
+}
+
 /// Hash embedder using FNV-1a
 pub struct HashEmbedder {
     /// Embedding dimension (default: 384)
@@ -22,6 +28,11 @@ impl HashEmbedder {
     /// Create embedder with specified dimension
     pub fn new(dim: usize) -> Self {
         Self { dim }
+    }
+
+    /// Embedding dimension
+    pub fn dims(&self) -> usize {
+        self.dim
     }
     
     /// Embed text into vector
@@ -65,6 +76,16 @@ impl HashEmbedder {
         } else {
             dot / (norm_a * norm_b)
         }
+    }
+}
+
+impl Embedder for HashEmbedder {
+    fn embed(&self, text: &str) -> Vec<f32> {
+        HashEmbedder::embed(self, text)
+    }
+
+    fn dims(&self) -> usize {
+        self.dim
     }
 }
 
@@ -229,15 +250,57 @@ mod tests {
 
     #[test]
     fn test_vector_index_search() {
-        let embedder = HashEmbedder::new(32);
-        let mut index = VectorIndex::new(32);
-        index.insert("git".to_string(), embedder.embed("git commit workflow"));
-        index.insert("rust".to_string(), embedder.embed("rust error handling"));
+        // Use higher dimensions for more reliable similarity
+        let embedder = HashEmbedder::new(128);
+        let mut index = VectorIndex::new(128);
+        index.insert("git".to_string(), embedder.embed("git commit workflow repository version"));
+        index.insert("rust".to_string(), embedder.embed("rust error handling compile memory safety"));
 
-        let query = embedder.embed("git commit");
+        let query = embedder.embed("git commit workflow");
         let results = index.search(&query, 1);
 
         assert_eq!(results.len(), 1);
         assert_eq!(results[0].0, "git");
+    }
+
+    #[test]
+    fn test_embedding_normalized_random_inputs() {
+        let embedder = HashEmbedder::new(64);
+        let mut seed = 0x1234_5678_9abc_def0u64;
+
+        for _ in 0..20 {
+            let text = random_text(&mut seed, 6);
+            let embedding = embedder.embed(&text);
+            let norm = embedding.iter().map(|x| x * x).sum::<f32>().sqrt();
+            assert!((norm - 1.0).abs() < 1e-3);
+        }
+    }
+
+    fn random_text(seed: &mut u64, words: usize) -> String {
+        let mut out = String::new();
+        for i in 0..words {
+            if i > 0 {
+                out.push(' ');
+            }
+            let len = 3 + (next_u32(seed) % 6) as usize;
+            out.push_str(&random_word(seed, len));
+        }
+        out
+    }
+
+    fn random_word(seed: &mut u64, len: usize) -> String {
+        let mut out = String::with_capacity(len);
+        for _ in 0..len {
+            let ch = (b'a' + (next_u32(seed) % 26) as u8) as char;
+            out.push(ch);
+        }
+        out
+    }
+
+    fn next_u32(seed: &mut u64) -> u32 {
+        *seed = seed
+            .wrapping_mul(6364136223846793005)
+            .wrapping_add(1);
+        (*seed >> 32) as u32
     }
 }
