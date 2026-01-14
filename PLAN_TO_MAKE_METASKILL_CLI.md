@@ -66,6 +66,28 @@ my-skill/
     └── architecture.png
 ```
 
+**Session Segmentation (Phase-Aware Mining):**
+- Segment sessions into phases: recon → hypothesis → change → validation → regression fix → wrap-up.
+- Use tool-call boundaries + language markers to avoid phase bleed.
+
+```rust
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum SessionPhase {
+    Recon,
+    Hypothesis,
+    Change,
+    Validation,
+    RegressionFix,
+    WrapUp,
+}
+```
+
+**Pattern IR (Typed Intermediate Representation):**
+- Compile extracted patterns into typed IR before synthesis (e.g., `CommandRecipe`,
+  `DiagnosticDecisionTree`, `Invariant`, `Pitfall`, `PromptMacro`, `RefactorPlaybook`,
+  `ChecklistItem`).
+- Normalize commands, filepaths, tool names, and error signatures for deterministic dedupe.
+
 **SKILL.md anatomy:**
 
 ```markdown
@@ -818,6 +840,11 @@ meta_skill/
 └── README.md
 ```
 
+**Runtime Artifacts:**
+- `.ms/skillpack.bin` (or per-skill pack objects) caches parsed spec, slices,
+  embeddings, and predicate analysis for low-latency load/suggest.
+- Markdown remains a compiled view; runtime uses the pack by default.
+
 ---
 
 ## 3. Core Data Models
@@ -1130,6 +1157,18 @@ pub struct SkillComputed {
     pub slices: SkillSliceIndex,
 }
 
+/// Precompiled runtime cache for low-latency load/suggest
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SkillPack {
+    pub skill_id: String,
+    pub pack_path: PathBuf,
+    pub spec_hash: String,
+    pub slices_hash: String,
+    pub embedding_hash: String,
+    pub predicate_index_hash: String,
+    pub generated_at: DateTime<Utc>,
+}
+
 /// A sliceable unit of a skill for token-aware packing
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SkillSlice {
@@ -1203,6 +1242,7 @@ pub enum SliceType {
     Pitfall,
     Overview,
     Reference,
+    Policy,   // Non-removable safety/policy invariants
 }
 
 /// Index of slices for packing
@@ -1210,6 +1250,16 @@ pub enum SliceType {
 pub struct SkillSliceIndex {
     pub slices: Vec<SkillSlice>,
     pub generated_at: DateTime<Utc>,
+}
+
+/// Pack contracts define minimal guidance guarantees for specific tasks
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PackContract {
+    pub id: String,                   // e.g., "DebugContract"
+    pub description: String,
+    pub required_groups: Vec<String>, // e.g., ["critical-rules", "validation"]
+    pub mandatory_slices: Vec<String>,
+    pub max_per_group: Option<usize>,
 }
 
 /// Rule-level evidence index for provenance and auditing
@@ -1239,11 +1289,21 @@ pub struct EvidenceRef {
     /// Optional pointer to archived excerpt file
     pub excerpt_path: Option<PathBuf>,
 
+    /// Storage level for provenance compression
+    pub level: EvidenceLevel,
+
     /// Confidence for this evidence link (0.0 - 1.0)
     pub confidence: f32,
 
     /// When this evidence was captured
     pub captured_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum EvidenceLevel {
+    Pointer,   // hash + message range only
+    Excerpt,   // minimal redacted excerpt
+    Expanded,  // full context available via CASS
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -1266,6 +1326,8 @@ pub struct UncertaintyItem {
     pub reason: String,
     pub confidence: f32,
     pub suggested_queries: Vec<String>,
+    pub auto_mine_attempts: u32,
+    pub last_mined_at: Option<DateTime<Utc>>,
     pub status: UncertaintyStatus,
     pub created_at: DateTime<Utc>,
 }
@@ -1364,6 +1426,17 @@ CREATE TABLE skill_embeddings (
     created_at TEXT NOT NULL
 );
 
+-- Precompiled runtime skillpack cache
+CREATE TABLE skill_packs (
+    skill_id TEXT PRIMARY KEY REFERENCES skills(id),
+    pack_path TEXT NOT NULL,
+    spec_hash TEXT NOT NULL,
+    slices_hash TEXT NOT NULL,
+    embedding_hash TEXT NOT NULL,
+    predicate_index_hash TEXT NOT NULL,
+    generated_at TEXT NOT NULL
+);
+
 -- Pre-sliced content blocks for token packing
 CREATE TABLE skill_slices (
     skill_id TEXT NOT NULL REFERENCES skills(id),
@@ -1400,6 +1473,8 @@ CREATE TABLE uncertainty_queue (
     reason TEXT NOT NULL,
     confidence REAL NOT NULL,
     suggested_queries TEXT NOT NULL, -- JSON array
+    auto_mine_attempts INTEGER NOT NULL DEFAULT 0,
+    last_mined_at TEXT,
     status TEXT NOT NULL,            -- pending | resolved | discarded
     created_at TEXT NOT NULL
 );
@@ -1468,10 +1543,22 @@ CREATE TABLE rule_outcomes (
 CREATE TABLE skill_experiments (
     id TEXT PRIMARY KEY,
     skill_id TEXT NOT NULL REFERENCES skills(id),
+    scope TEXT NOT NULL DEFAULT 'skill', -- skill | slice
+    scope_id TEXT,                       -- slice_id if scope = slice
     variants_json TEXT NOT NULL,      -- Vec<ExperimentVariant>
     allocation_json TEXT NOT NULL,    -- AllocationStrategy
     status TEXT NOT NULL,
     started_at TEXT NOT NULL
+);
+
+-- Local reservation fallback (when Agent Mail is unavailable)
+CREATE TABLE skill_reservations (
+    id TEXT PRIMARY KEY,
+    path_pattern TEXT NOT NULL,
+    holder TEXT NOT NULL,
+    exclusive INTEGER NOT NULL,
+    expires_at TEXT NOT NULL,
+    created_at TEXT NOT NULL
 );
 
 -- Skill relationships
@@ -1943,14 +2030,22 @@ that can be deterministically compiled into SKILL.md. This ensures reproducible
 output, stable diffs, and safe automated edits.
 
 ```rust
+pub enum CompileTarget {
+    Claude,
+    OpenAI,
+    Cursor,
+    GenericMarkdown,
+}
+
 pub struct SkillCompiler;
 
 impl SkillCompiler {
     /// Compile SkillSpec into SKILL.md (deterministic ordering)
-    pub fn compile(spec: &SkillSpec) -> Result<String> {
+    pub fn compile(spec: &SkillSpec, target: CompileTarget) -> Result<String> {
         // 1) render frontmatter
         // 2) render sections in order
         // 3) render blocks with stable formatting
+        // 4) apply target-specific frontmatter / tool hints
         unimplemented!()
     }
 
@@ -1963,15 +2058,30 @@ impl SkillCompiler {
 ```
 
 By default, `ms build` outputs `skill.spec.json`, then compiles it to SKILL.md.
-Manual edits should update the spec, not the rendered artifact.
+SKILL.md is always generated; direct edits are blocked by default.
 
 **Round-Trip Editing (Spec ↔ Markdown):**
 - `ms edit <skill>` opens a structured view, parses edits back into `SkillSpec`,
   and re-renders `SKILL.md` deterministically.
+- `ms edit --import-markdown` (or `ms repair`) can ingest Markdown diffs into
+  spec with warnings and a provenance note, but remains opt-in.
 - The compiler emits `spec.lens.json` to map block IDs to byte ranges so edits
   can be attributed to the correct spec blocks.
 - If parsing fails, `--allow-lossy` permits a best-effort import with warnings.
 - `ms fmt` re-renders from spec; `ms diff --semantic` compares spec blocks.
+
+**Agent Adapters (Multi-Target Compile):**
+- `ms compile --target claude|openai|cursor|generic-md`
+- Same `SkillSpec`, different frontmatter and optional tool-call hints.
+
+**Semantic Diff Everywhere:**
+- `ms review <skill>` shows spec-level changes grouped by rule type.
+- Conflict resolution and bundle updates default to semantic diffs.
+
+**Runtime Skillpack Cache:**
+- On `ms index`, emit `.ms/skillpack.bin` (or per-skill pack objects) containing:
+  parsed spec, pre-tokenized slices, embeddings, predicate pre-analysis, and
+  provenance pointers for low-latency `ms suggest/load`.
 
 ### 3.7 Two-Phase Commit for Dual Persistence
 
@@ -2020,6 +2130,10 @@ Recovery is automatic on startup and via `ms doctor --fix`.
 While SQLite handles internal concurrency with WAL mode, the dual-persistence
 pattern (SQLite + Git) requires coordination when multiple `ms` processes run
 concurrently (e.g., parallel agent invocations, IDE background indexer + CLI).
+
+**Optional Single-Writer Daemon (`msd`):**
+- Holds hot indices/caches in memory and serializes writes.
+- CLI becomes a thin client when daemon is running (lower p95 latency).
 
 ```rust
 use std::fs::{File, OpenOptions};
@@ -2259,8 +2373,10 @@ ms show ntm --layer user  # show a specific layer
 # Round-trip editing (Spec ↔ Markdown)
 ms edit ntm
 ms edit ntm --allow-lossy  # Allow lossy edits if parse fails
+ms edit ntm --import-markdown  # Repair/import Markdown into spec (opt-in)
 ms fmt ntm                 # Re-render deterministically
 ms diff ntm --semantic      # Spec-level diff, not raw markdown
+ms review ntm               # Semantic review grouped by rule type
 
 # Manage aliases and deprecations
 ms alias list ntm
@@ -2318,6 +2434,7 @@ ms build --auto --from-cass "testing patterns" --min-confidence 0.8
 
 # Compile a spec to SKILL.md (deterministic)
 ms compile skill.spec.json --out SKILL.md
+ms compile skill.spec.json --out SKILL.md --target claude
 ms spec validate skill.spec.json
 
 # Resolve low-confidence patterns
@@ -2378,6 +2495,8 @@ ms doctor --fix  # Attempt auto-fixes
 ms doctor --check=transactions
 ms doctor --check=security
 ms doctor --check=requirements
+ms doctor --check=perf
+ms doctor --preflight --context /tmp/ms_ctx.json
 
 # Prune tombstoned data (requires approval)
 ms prune --scope archive
@@ -2408,6 +2527,14 @@ ms stale --min-severity medium
 ms test ntm
 ms test ntm --report junit
 ms test --all
+
+# Live preview of packed content
+ms load ntm --pack 800 --preview
+
+# Optional single-writer daemon
+msd start
+msd status
+msd stop
 
 # Skill simulation sandbox
 ms simulate ntm
@@ -3328,6 +3455,21 @@ pub struct ExtractedPattern {
 }
 ```
 
+**Pattern IR (Typed Intermediate Representation):**
+
+```rust
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum PatternIR {
+    CommandRecipe { commands: Vec<String>, context: String },
+    DiagnosticDecisionTree { nodes: Vec<DecisionNode> },
+    Invariant { statement: String, severity: Severity },
+    Pitfall { warning: String, counterexample: Option<String> },
+    PromptMacro { template: String, variables: Vec<String> },
+    RefactorPlaybook { steps: Vec<String>, safeguards: Vec<String> },
+    ChecklistItem { item: String, category: String },
+}
+```
+
 ### 5.3 CASS Client Implementation
 
 ```rust
@@ -3530,6 +3672,11 @@ This is a **killer feature**: ms can run autonomously for hours, systematically 
 │                                                                             │
 └─────────────────────────────────────────────────────────────────────────────┘
 ```
+
+**Shared State Machine (Guided vs Autonomous):**
+- Guided mode and autonomous mode share the same state machine.
+- Autonomous = guided with zero user input; guided = autonomous with checkpoints.
+- One recovery path reduces drift and improves reliability.
 
 **Steady-State Detection:**
 
@@ -5449,6 +5596,11 @@ Rule → Pattern → Session → Messages
 
 This makes skills auditable, merge-safe, and self-correcting.
 
+**Provenance Compression (Pointer + Fetch):**
+- Level 0: hash pointers + message ranges (cheap default)
+- Level 1: minimal redacted excerpt for quick review
+- Level 2: expandable context fetched from CASS on demand
+
 **Provenance Graph Model:**
 
 ```rust
@@ -5618,6 +5770,11 @@ All CASS transcripts pass through a redaction pipeline before pattern extraction
 This prevents secrets, tokens, and PII from ever entering generated skills,
 evidence excerpts, or provenance graphs.
 
+**Reassembly Resistance:**
+- Redaction assigns stable `secret_id` values so multiple partial excerpts cannot
+  be combined to reconstruct a secret across rules/evidence.
+- High-risk secret types are blocked from excerpt storage entirely.
+
 **Redaction Report Model:**
 
 ```rust
@@ -5636,6 +5793,8 @@ pub struct RedactionFinding {
     pub matched_pattern: String,
     pub snippet_hash: String,
     pub location: RedactionLocation,
+    pub secret_id: Option<String>,     // stable id for reassembly resistance
+    pub secret_type: Option<SecretType>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -5649,6 +5808,18 @@ pub enum RedactionKind {
     PiiIp,
     HighEntropy,
     CustomPattern,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum SecretType {
+    ApiKey,
+    AccessToken,
+    Email,
+    Phone,
+    Hostname,
+    Filepath,
+    CustomerData,
+    Other,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -5837,6 +6008,10 @@ signals, marked anti-pattern sessions, and explicit “wrong” fixes in transcr
 These are presented as a dedicated "Avoid / When NOT to use" section and sliced
 as `Pitfall` blocks for token packing.
 
+**Symmetric Counterexample Pipeline:**
+- Counterexamples are first-class patterns: extraction → clustering → synthesis → packing.
+- Link each anti-pattern to the positive rule it constrains (conditionalization).
+
 **Anti-Pattern Extraction Sources:**
 - Session marks with `MarkType::AntiPattern`
 - Failure outcomes from the effectiveness loop
@@ -5859,6 +6034,10 @@ as `Pitfall` blocks for token packing.
 When generalization confidence is too low, ms does not discard the pattern. Instead,
 it queues the candidate for targeted evidence gathering. This turns "maybe" patterns
 into high-quality rules with minimal extra effort.
+
+**Precision Loop (Active Learning):**
+- Generate 3–7 targeted CASS queries per uncertainty (positive, negative, boundary).
+- Auto-run when idle or via `ms uncertainties --mine` and stop on confidence threshold.
 
 **Uncertainty Queue Flow:**
 
@@ -6059,6 +6238,10 @@ ms filters prompt-injection content before pattern extraction. Any session messa
 that attempt to override system rules or instruct the agent to ignore constraints
 are quarantined and excluded by default.
 
+**Forensic Quarantine Playback:**
+- Store snippet hash, minimal safe excerpt, triggered rule, and replay command.
+- Replay requires explicit user invocation to expand context from CASS.
+
 **Injection Report Model:**
 
 ```rust
@@ -6075,6 +6258,9 @@ pub struct InjectionFinding {
     pub pattern: String,
     pub message_index: u32,
     pub snippet_hash: String,
+    pub safe_excerpt: Option<String>,
+    pub triggered_rule: Option<String>,
+    pub replay_command: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -6108,6 +6294,10 @@ effect of what the command does. This is more robust because:
 - `rm -rf /` and `find . -delete` have the same effect (file deletion)
 - A command with harmless flags (e.g., `rm -i`) is safer than one without
 - Novel commands get correct classification based on what they do
+
+**Non-Removable Policy Lenses:**
+- Compile critical policies into `Policy` slices with `MandatoryPredicate::Always`.
+- Packer fails closed if these slices are omitted under any pack budget.
 
 ```rust
 /// Effect-based safety classification
@@ -6422,6 +6612,14 @@ greedy selection. This ensures predictable coverage, safer packs, and stable beh
 
 **Objective:** Maximize total utility with diminishing returns per group.
 
+**Injection-Time Optimization:**
+- Apply novelty penalties vs. already-loaded slices in the current prompt/context.
+- Boost missing facets (e.g., pitfalls/validation) based on task fingerprint.
+
+**Pack Contracts:**
+- `DebugContract`, `RefactorContract`, etc. define mandatory groups/slices.
+- Packer fails closed if contract cannot be satisfied within budget.
+
 ```rust
 #[derive(Debug, Clone)]
 pub struct PackConstraints {
@@ -6444,6 +6642,12 @@ pub struct PackConstraints {
     /// If true, fail the pack rather than omit mandatory slices
     /// Default: true (safe default - ensures critical content isn't silently dropped)
     pub fail_on_mandatory_omission: bool,
+
+    /// Recent slice IDs already in context (novelty penalty)
+    pub recent_slice_ids: Vec<String>,
+
+    /// Optional pack contract enforcing minimum guidance
+    pub contract: Option<PackContract>,
 }
 
 /// A mandatory slice specification
@@ -6458,6 +6662,8 @@ pub enum MandatorySlice {
 /// Predicates for mandatory slice matching
 #[derive(Debug, Clone)]
 pub enum MandatoryPredicate {
+    /// Always include (used for non-removable policy lenses)
+    Always,
     /// All slices tagged with a specific tag
     HasTag(String),
     /// All slices of a specific type
@@ -6986,6 +7192,7 @@ pub struct Suggester {
     searcher: HybridSearcher,
     registry: SkillRegistry,
     requirements: RequirementChecker,
+    bandit: Option<SignalBandit>,
 }
 
 impl Suggester {
@@ -7125,6 +7332,19 @@ impl Suggester {
 
 When `--for-ntm` is used, `ms suggest` returns `swarm_plan` in robot mode so
 each agent can load a complementary slice pack instead of duplicating content.
+
+**Bandit-Weighted Signal Selection:**
+- A contextual bandit learns per-project weighting over signals (bm25, embeddings,
+  triggers, freshness, project match) using usage/outcome rewards.
+- Replaces static tuning with adaptive, self-optimizing retrieval.
+
+```rust
+#[derive(Debug, Clone)]
+pub struct SignalBandit {
+    pub arms: Vec<SignalWeighting>,
+    pub prior: SignalWeighting,
+}
+```
 
 **Suggestion Context (partial):**
 
@@ -7267,6 +7487,13 @@ pub enum PackObjective {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum SwarmRole {
+    Leader,
+    Worker,
+    Reviewer,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SwarmPlan {
     pub agents: Vec<AgentPack>,
     pub objective: PackObjective,
@@ -7276,6 +7503,7 @@ pub struct SwarmPlan {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AgentPack {
     pub agent_id: usize,
+    pub role: SwarmRole,
     pub slice_ids: Vec<String>,
     pub token_estimate: usize,
 }
@@ -7289,6 +7517,8 @@ impl Suggester {
         // Greedy assignment: maximize marginal coverage, minimize duplicate groups
         // Ensure CRITICAL RULE slices appear in >= 1 agent
         // Optionally replicate Pitfall slices across all agents
+        // Role-aware packs: Leader gets decision structure + pitfalls, Workers get commands/examples,
+        // Reviewer gets semantic diff + safety invariants
         unimplemented!()
     }
 }
@@ -9502,6 +9732,27 @@ min_quality_score = 0.5
 # Maximum skills to suggest at once
 max_suggestions = 5
 
+[compiler]
+# Default compile target for SKILL.md
+default_target = "generic-md"
+
+# Block direct Markdown edits (spec-only workflow)
+block_markdown_edits = true
+
+[cache]
+# Enable precompiled skillpack artifacts for low-latency load/suggest
+skillpack_enabled = true
+
+# Pack cache path (per-skill objects or monolithic file)
+skillpack_path = ".ms/skillpack.bin"
+
+[bandit]
+# Adaptive weighting of suggestion signals
+enabled = true
+
+# Minimum samples before preferring a learned arm
+min_samples = 50
+
 [disclosure]
 # Default token budget for packed disclosure (0 = disabled)
 default_pack_budget = 800
@@ -9511,6 +9762,12 @@ default_pack_mode = "balanced"
 
 # Max slices per coverage group (anti-bloat)
 default_max_per_group = 2
+
+[pack_contracts]
+# Default contract for task types (optional)
+debug = "DebugContract"
+refactor = "RefactorContract"
+deploy = "DeployContract"
 
 [dependencies]
 # Auto-load prerequisites on ms load (auto resolves order)
@@ -9575,6 +9832,14 @@ exclude_patterns = [
     "**/target/**",
     "**/.git/**",
 ]
+
+[daemon]
+# Optional single-writer daemon for cache + concurrency
+enabled = false
+
+[perf]
+# Emit p50/p95/p99 latency in robot health output
+emit_latency = true
 
 [search]
 # Default result limit
@@ -9875,6 +10140,14 @@ skill_paths = [
 │                                                                             │
 └─────────────────────────────────────────────────────────────────────────────┘
 ```
+
+**Reordered Phasing (Hard Invariants First):**
+1. Spec-only editing + compilation + semantic diff
+2. Index + skillpack artifacts + fast suggest/load
+3. Provenance compression + taint/reassembly resistance
+4. Mining pipeline + Pattern IR
+5. Swarm orchestration + bandit scoring
+6. TUI polish + bundles + auto-update
 
 ---
 
@@ -11923,6 +12196,11 @@ impl SkillRequestUrgency {
 }
 ```
 
+**Reservation-Aware Editing (Fallback):**
+- If Agent Mail is unavailable, ms provides a local reservation mechanism with
+  compatible semantics (path/glob, TTL, exclusive/shared).
+- When Agent Mail is available, ms bridges to it transparently.
+
 ### 20.3 Coordination Protocol
 
 ```
@@ -12548,6 +12826,10 @@ impl LiveDraftGenerator {
 Track whether skills actually help agents accomplish their tasks. This data improves skill quality scores and informs future skill generation.
 When multiple variants exist, ms can run A/B experiments to select the most effective version.
 
+**Slice-Level Experiments:**
+- Experiments can target individual slices (rule wording, example blocks) while keeping
+  the rest of the skill constant for faster convergence.
+
 ```
 ┌─────────────────────────────────────────────────────────────────────────────┐
 │                    SKILL EFFECTIVENESS FEEDBACK LOOP                         │
@@ -12588,10 +12870,18 @@ pub struct EffectivenessTracker {
 pub struct SkillExperiment {
     pub id: String,
     pub skill_id: String,
+    pub scope: ExperimentScope,      // skill | slice
+    pub scope_id: Option<String>,    // slice_id if scope = slice
     pub variants: Vec<ExperimentVariant>,
     pub allocation: AllocationStrategy,
     pub started_at: DateTime<Utc>,
     pub status: ExperimentStatus,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum ExperimentScope {
+    Skill,
+    Slice,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -16003,7 +16293,7 @@ Every operation creates artifacts:
 | meta_skill-36x | P2 | Debugging Workflows | ✓ Complete |
 | meta_skill-avs | P2 | Refactoring Patterns | ✓ Complete |
 | meta_skill-cbx | P2 | Testing Patterns | ✓ Complete |
-| meta_skill-6st | P2 | REST API Design | Pending |
+| meta_skill-6st | P2 | REST API Design | ✓ Complete |
 
 ## Section 30: Performance Profiling Patterns
 
@@ -23303,3 +23593,902 @@ After refactoring:
 | Dead code (Rust) | cargo | `cargo build 2>&1 \| grep "warning: unused"` |
 | Symbol search | ripgrep | `rg "symbol_name" --type rust` |
 | AST refactoring | ast-grep | `ast-grep run -p 'old_pattern' -r 'new_pattern'` |
+
+---
+
+## Section 39: REST API Design Patterns
+
+*CASS Research: Mined from flywheel_gateway, flywheel_private, jeffreysprompts_premium projects*
+
+### 39.1 Overview
+
+REST API design in agentic systems requires careful attention to schema validation, error taxonomies, authentication flows, and pagination. This section captures patterns observed across production implementations where AI agents both consume and expose APIs.
+
+**Key Themes from CASS Mining:**
+- Zod-based runtime validation with OpenAPI generation
+- Structured error taxonomies with AI-friendly hints
+- OAuth 2.0 Device Code flow for headless agents
+- Cursor-based pagination for streaming results
+- Idempotency middleware for safe retries
+- Semantic HTTP status codes
+
+### 39.2 Schema Validation Architecture
+
+#### 39.2.1 Zod as the Single Source of Truth
+
+A production gateway with 25+ route files and 133+ schemas demonstrates the pattern:
+
+```typescript
+// schemas.ts - Centralized schema registry
+import { z } from 'zod';
+import { extendZodWithOpenApi } from '@asteasolutions/zod-to-openapi';
+
+extendZodWithOpenApi(z);
+
+// Request Validation Schemas
+export const CreateReservationSchema = z.object({
+  projectId: z.string().uuid().openapi({ description: 'Project identifier' }),
+  paths: z.array(z.string()).min(1).openapi({
+    description: 'File paths or glob patterns to reserve'
+  }),
+  ttlSeconds: z.number().int().min(60).max(86400).default(3600),
+  exclusive: z.boolean().default(true),
+  reason: z.string().max(500).optional()
+}).openapi('CreateReservationRequest');
+
+// Query/Filter Schemas
+export const ListReservationsQuerySchema = z.object({
+  projectId: z.string().uuid(),
+  limit: z.coerce.number().int().min(1).max(100).default(20),
+  startingAfter: z.string().optional(),
+  endingBefore: z.string().optional(),
+  status: z.enum(['active', 'expired', 'released']).optional()
+}).openapi('ListReservationsQuery');
+
+// Discriminated Union Schemas (for complex configs)
+export const StepConfigSchema = z.discriminatedUnion('type', [
+  z.object({ type: z.literal('agent_task'), prompt: z.string() }),
+  z.object({ type: z.literal('conditional'), condition: z.string() }),
+  z.object({ type: z.literal('parallel'), branches: z.array(z.lazy(() => StepConfigSchema)) }),
+  z.object({ type: z.literal('approval'), approvers: z.array(z.string()) }),
+  z.object({ type: z.literal('script'), command: z.string() }),
+]).openapi('StepConfig');
+```
+
+#### 39.2.2 Schema Categories
+
+| Category | Count | Purpose | Example |
+|----------|-------|---------|---------|
+| **Request Validation** | 46 | Validate POST/PUT bodies | CreateJobSchema, SendMessageSchema |
+| **Query/Filter** | 19 | Validate GET query params | ListReposQuerySchema, SearchQuerySchema |
+| **Discriminated Union** | 3 | Type-safe polymorphism | StepConfigSchema, BudgetStrategySchema |
+| **Enum** | 6 | Constrained string sets | ProviderSchema, ProfileStatusSchema |
+| **Configuration** | 8 | Complex nested configs | UpdateConfigSchema, RateCardSchema |
+
+#### 39.2.3 OpenAPI Generation
+
+```typescript
+// generate-openapi.ts
+import { OpenAPIRegistry, OpenApiGeneratorV31 } from '@asteasolutions/zod-to-openapi';
+import * as schemas from './schemas';
+
+const registry = new OpenAPIRegistry();
+
+// Register all schemas
+Object.entries(schemas).forEach(([name, schema]) => {
+  if (schema instanceof z.ZodType) {
+    registry.register(name, schema);
+  }
+});
+
+// Define routes
+registry.registerPath({
+  method: 'post',
+  path: '/api/v1/reservations',
+  description: 'Create a file reservation',
+  request: { body: { content: { 'application/json': { schema: CreateReservationSchema } } } },
+  responses: {
+    201: { description: 'Reservation created', content: { 'application/json': { schema: ReservationResponseSchema } } },
+    409: { description: 'Conflict with existing reservation', content: { 'application/json': { schema: ErrorResponseSchema } } }
+  }
+});
+
+// Generate spec
+const generator = new OpenApiGeneratorV31(registry.definitions);
+export const openApiDocument = generator.generateDocument({
+  openapi: '3.1.0',
+  info: { title: 'Flywheel Gateway API', version: '1.0.0' },
+  servers: [{ url: '/api/v1' }]
+});
+```
+
+**Exposed Endpoints:**
+- `GET /openapi.json` - Raw OpenAPI 3.1 specification
+- `GET /docs` - Swagger UI interactive documentation
+- `GET /redoc` - ReDoc documentation
+
+### 39.3 Error Taxonomy
+
+#### 39.3.1 Structured Error Codes
+
+A production error taxonomy with 55+ codes across 7 categories:
+
+```typescript
+// error-codes.ts
+export type ErrorCategory =
+  | 'RESOURCE'    // Entity not found, conflicts, gone
+  | 'VALIDATION'  // Input validation failures
+  | 'AUTH'        // Authentication/authorization
+  | 'QUOTA'       // Rate limits, usage limits
+  | 'STATE'       // Invalid state transitions
+  | 'DEPENDENCY'  // External service failures
+  | 'INTERNAL';   // Server errors
+
+export interface ErrorDefinition {
+  code: string;
+  httpStatus: number;
+  message: string;
+  retryable: boolean;
+  aiHint?: string;  // Guidance for AI agents
+}
+
+export const ERROR_CODES: Record<string, ErrorDefinition> = {
+  // RESOURCE errors (404, 409, 410)
+  RESOURCE_NOT_FOUND: {
+    code: 'RESOURCE_NOT_FOUND',
+    httpStatus: 404,
+    message: 'The requested resource does not exist',
+    retryable: false,
+    aiHint: 'Check the ID format and verify the resource was created'
+  },
+  RESOURCE_CONFLICT: {
+    code: 'RESOURCE_CONFLICT',
+    httpStatus: 409,
+    message: 'Resource already exists or conflicts with current state',
+    retryable: false,
+    aiHint: 'Use GET to check current state before PUT/POST'
+  },
+  RESOURCE_GONE: {
+    code: 'RESOURCE_GONE',
+    httpStatus: 410,
+    message: 'Resource has been permanently deleted',
+    retryable: false,
+    aiHint: 'This resource cannot be recovered; create a new one'
+  },
+
+  // VALIDATION errors (400)
+  VALIDATION_FAILED: {
+    code: 'VALIDATION_FAILED',
+    httpStatus: 400,
+    message: 'Request validation failed',
+    retryable: false,
+    aiHint: 'Check the errors array for specific field issues'
+  },
+  VALIDATION_SCHEMA_MISMATCH: {
+    code: 'VALIDATION_SCHEMA_MISMATCH',
+    httpStatus: 400,
+    message: 'Request body does not match expected schema',
+    retryable: false,
+    aiHint: 'Verify JSON structure against OpenAPI spec'
+  },
+
+  // AUTH errors (401, 403)
+  AUTH_TOKEN_EXPIRED: {
+    code: 'AUTH_TOKEN_EXPIRED',
+    httpStatus: 401,
+    message: 'Access token has expired',
+    retryable: true,
+    aiHint: 'Refresh the token using the refresh_token endpoint'
+  },
+  AUTH_INSUFFICIENT_SCOPE: {
+    code: 'AUTH_INSUFFICIENT_SCOPE',
+    httpStatus: 403,
+    message: 'Token lacks required permissions',
+    retryable: false,
+    aiHint: 'Request a new token with the required scope'
+  },
+
+  // QUOTA errors (429)
+  QUOTA_RATE_LIMITED: {
+    code: 'QUOTA_RATE_LIMITED',
+    httpStatus: 429,
+    message: 'Too many requests',
+    retryable: true,
+    aiHint: 'Retry after the time indicated in Retry-After header'
+  },
+  QUOTA_BUDGET_EXCEEDED: {
+    code: 'QUOTA_BUDGET_EXCEEDED',
+    httpStatus: 429,
+    message: 'Cost budget for this period exhausted',
+    retryable: false,
+    aiHint: 'Wait for budget reset or request budget increase'
+  },
+
+  // STATE errors (409, 422)
+  STATE_INVALID_TRANSITION: {
+    code: 'STATE_INVALID_TRANSITION',
+    httpStatus: 409,
+    message: 'Cannot transition from current state to requested state',
+    retryable: false,
+    aiHint: 'Check current state with GET, then apply valid transition'
+  },
+
+  // DEPENDENCY errors (502, 503)
+  DEPENDENCY_UNAVAILABLE: {
+    code: 'DEPENDENCY_UNAVAILABLE',
+    httpStatus: 503,
+    message: 'Required external service is unavailable',
+    retryable: true,
+    aiHint: 'Retry with exponential backoff; check status page'
+  },
+
+  // INTERNAL errors (500)
+  INTERNAL_ERROR: {
+    code: 'INTERNAL_ERROR',
+    httpStatus: 500,
+    message: 'An unexpected error occurred',
+    retryable: true,
+    aiHint: 'Retry once; if persistent, report with request ID'
+  }
+};
+```
+
+#### 39.3.2 Error Response Format
+
+```typescript
+// Standard error response structure
+export interface ApiError {
+  error: {
+    code: string;           // Machine-readable error code
+    message: string;        // Human-readable message
+    retryable: boolean;     // Can this be retried?
+    aiHint?: string;        // Guidance for AI agents
+    details?: {             // Validation errors
+      field: string;
+      issue: string;
+      received?: unknown;
+    }[];
+    requestId: string;      // For support/debugging
+  };
+}
+
+// Example response
+{
+  "error": {
+    "code": "VALIDATION_FAILED",
+    "message": "Request validation failed",
+    "retryable": false,
+    "aiHint": "Check the errors array for specific field issues",
+    "details": [
+      { "field": "ttlSeconds", "issue": "must be at least 60", "received": 30 },
+      { "field": "paths", "issue": "must contain at least 1 item", "received": [] }
+    ],
+    "requestId": "req_abc123xyz"
+  }
+}
+```
+
+#### 39.3.3 HTTP Status Code Semantics
+
+| Status | When to Use | Example Scenario |
+|--------|-------------|------------------|
+| **200 OK** | Successful GET, successful update returning data | Fetch reservation details |
+| **201 Created** | Resource created, return with Location header | Create new reservation |
+| **202 Accepted** | Async operation started, will complete later | Start long-running job |
+| **204 No Content** | Successful DELETE, update with no body needed | Delete reservation |
+| **400 Bad Request** | Malformed JSON, validation failure | Invalid schema |
+| **401 Unauthorized** | Missing or invalid token | Expired JWT |
+| **403 Forbidden** | Valid token but insufficient permissions | Wrong scope |
+| **404 Not Found** | Resource doesn't exist | Unknown reservation ID |
+| **409 Conflict** | State conflict, duplicate key | File already reserved |
+| **410 Gone** | Resource permanently deleted | Purged job history |
+| **422 Unprocessable** | Valid JSON but business rule violation | Invalid state transition |
+| **429 Too Many Requests** | Rate limited, include Retry-After | Burst limit exceeded |
+| **500 Internal Error** | Unexpected server error | Unhandled exception |
+| **502 Bad Gateway** | Upstream service error | LLM API failure |
+| **503 Unavailable** | Service temporarily unavailable | Database maintenance |
+
+### 39.4 Authentication Patterns
+
+#### 39.4.1 OAuth 2.0 Device Code Flow (RFC 8628)
+
+For headless agents without browser access:
+
+```typescript
+// device-codes.ts - Device authorization flow
+import { randomBytes } from 'crypto';
+
+interface DeviceCodeRecord {
+  deviceCode: string;      // 256-bit random, for polling
+  userCode: string;        // 8-char human-readable, for entry
+  expiresAt: Date;         // 15-minute window
+  interval: number;        // Polling interval (5s)
+  scope: string[];
+  clientId: string;
+  status: 'pending' | 'authorized' | 'denied' | 'expired';
+  userId?: string;         // Set when user authorizes
+}
+
+// Generate cryptographically secure device code
+function generateDeviceCode(): string {
+  return randomBytes(32).toString('base64url'); // 256 bits
+}
+
+// Generate user-friendly code (excludes confusing chars)
+function generateUserCode(): string {
+  const alphabet = 'BCDFGHJKLMNPQRSTVWXZ'; // No vowels, no 0/1/I/O
+  let code = '';
+  const bytes = randomBytes(8);
+  for (let i = 0; i < 8; i++) {
+    code += alphabet[bytes[i] % alphabet.length];
+  }
+  return code.slice(0, 4) + '-' + code.slice(4); // XXXX-XXXX format
+}
+
+// Endpoints
+// POST /oauth/device/code - Start device flow
+// POST /oauth/device/token - Poll for token (returns 'authorization_pending')
+// GET /device?user_code=XXXX-XXXX - User authorization page
+```
+
+#### 39.4.2 Token Management
+
+```typescript
+// JWT with refresh token rotation
+interface TokenPair {
+  accessToken: string;     // Short-lived (15 min)
+  refreshToken: string;    // Longer-lived (7 days), single-use
+  expiresIn: number;       // Seconds until access token expires
+  tokenType: 'Bearer';
+}
+
+interface RefreshTokenRecord {
+  token: string;           // The refresh token value
+  familyId: string;        // Token family for rotation tracking
+  userId: string;
+  scope: string[];
+  expiresAt: Date;
+  revokedAt?: Date;        // Set when used or explicitly revoked
+}
+
+// Security: Token family rotation
+// - Each refresh creates a new token in the same family
+// - If an old token is reused (replay attack), revoke entire family
+async function refreshTokens(refreshToken: string): Promise<TokenPair> {
+  const record = await findRefreshToken(refreshToken);
+
+  if (record.revokedAt) {
+    // Replay attack detected! Revoke entire family
+    await revokeTokenFamily(record.familyId);
+    throw new AuthError('AUTH_TOKEN_REPLAY');
+  }
+
+  // Mark current token as used
+  await revokeRefreshToken(refreshToken);
+
+  // Issue new token pair in same family
+  return issueTokenPair(record.userId, record.scope, record.familyId);
+}
+```
+
+#### 39.4.3 Security Analysis
+
+| Component | Implementation | Security Property |
+|-----------|----------------|-------------------|
+| Device code | 32-byte random (256-bit) | Unguessable, safe for polling |
+| User code | 8-char from 20-char alphabet | 25.8 bits entropy, human-friendly |
+| Access token | JWT, 15-min expiry | Short exposure window |
+| Refresh token | Opaque, single-use, rotation | Replay detection, family revocation |
+| PKCE | Required for public clients | Prevents authorization code interception |
+
+### 39.5 Pagination Patterns
+
+#### 39.5.1 Cursor-Based Pagination
+
+Preferred over offset-based for stability with concurrent modifications:
+
+```typescript
+// Cursor-based pagination interface
+export interface PaginatedRequest {
+  limit?: number;          // Page size (default 20, max 100)
+  startingAfter?: string;  // Cursor: fetch items after this ID
+  endingBefore?: string;   // Cursor: fetch items before this ID
+}
+
+export interface PaginatedResponse<T> {
+  data: T[];
+  hasMore: boolean;        // More items exist
+  nextCursor?: string;     // Cursor for next page (if hasMore)
+  prevCursor?: string;     // Cursor for previous page
+}
+
+// Implementation
+async function listReservations(params: ListReservationsParams): Promise<PaginatedResponse<FileReservation>> {
+  const limit = Math.min(params.limit ?? 20, 100);
+
+  let query = db.select().from(reservations)
+    .where(eq(reservations.projectId, params.projectId))
+    .orderBy(desc(reservations.createdAt), desc(reservations.id))
+    .limit(limit + 1); // Fetch one extra to detect hasMore
+
+  if (params.startingAfter) {
+    const cursor = await findReservation(params.startingAfter);
+    query = query.where(
+      or(
+        lt(reservations.createdAt, cursor.createdAt),
+        and(
+          eq(reservations.createdAt, cursor.createdAt),
+          lt(reservations.id, cursor.id)
+        )
+      )
+    );
+  }
+
+  const results = await query;
+  const hasMore = results.length > limit;
+  const data = hasMore ? results.slice(0, limit) : results;
+
+  return {
+    data,
+    hasMore,
+    nextCursor: hasMore ? data[data.length - 1].id : undefined,
+    prevCursor: params.startingAfter
+  };
+}
+```
+
+#### 39.5.2 Cursor Encoding
+
+```typescript
+// Opaque cursor encoding (hides implementation details)
+function encodeCursor(item: { id: string; createdAt: Date }): string {
+  const payload = JSON.stringify({
+    i: item.id,
+    t: item.createdAt.getTime()
+  });
+  return Buffer.from(payload).toString('base64url');
+}
+
+function decodeCursor(cursor: string): { id: string; timestamp: number } {
+  const payload = JSON.parse(Buffer.from(cursor, 'base64url').toString());
+  return { id: payload.i, timestamp: payload.t };
+}
+```
+
+#### 39.5.3 Pagination Comparison
+
+| Aspect | Offset-Based | Cursor-Based |
+|--------|--------------|--------------|
+| **Stability** | Items shift with inserts/deletes | Stable position |
+| **Performance** | O(offset) for large offsets | O(1) seek |
+| **Random access** | Supported (page 50) | Not supported |
+| **Implementation** | Simple | More complex |
+| **Use when** | Static data, UI with page numbers | Dynamic data, infinite scroll |
+
+### 39.6 Idempotency Middleware
+
+#### 39.6.1 Purpose
+
+Ensures safe retries for non-idempotent operations (POST, DELETE with side effects):
+
+```typescript
+// idempotency-middleware.ts
+interface IdempotencyRecord {
+  key: string;             // Client-provided idempotency key
+  requestFingerprint: string;  // Hash of request body
+  status: 'processing' | 'completed' | 'failed';
+  response?: {
+    status: number;
+    body: unknown;
+    headers: Record<string, string>;
+  };
+  expiresAt: Date;         // TTL for cached response
+}
+
+// Middleware implementation
+async function idempotencyMiddleware(c: Context, next: Next) {
+  const key = c.req.header('Idempotency-Key');
+  if (!key) return next(); // No key = normal processing
+
+  const fingerprint = hashRequestBody(await c.req.text());
+  const existing = await getIdempotencyRecord(key);
+
+  if (existing) {
+    // Check for request mismatch (same key, different request)
+    if (existing.requestFingerprint !== fingerprint) {
+      return c.json({
+        error: {
+          code: 'IDEMPOTENCY_KEY_MISMATCH',
+          message: 'Idempotency key was used with a different request'
+        }
+      }, 422);
+    }
+
+    // Return cached response if completed
+    if (existing.status === 'completed') {
+      return new Response(JSON.stringify(existing.response.body), {
+        status: existing.response.status,
+        headers: existing.response.headers
+      });
+    }
+
+    // Still processing - client should retry later
+    if (existing.status === 'processing') {
+      return c.json({
+        error: {
+          code: 'IDEMPOTENCY_KEY_IN_PROGRESS',
+          message: 'Request is still being processed'
+        }
+      }, 409);
+    }
+  }
+
+  // Create processing record
+  await createIdempotencyRecord({
+    key,
+    requestFingerprint: fingerprint,
+    status: 'processing',
+    expiresAt: new Date(Date.now() + 24 * 60 * 60 * 1000) // 24 hours
+  });
+
+  // Execute request
+  await next();
+
+  // Store response for future retries
+  await updateIdempotencyRecord(key, {
+    status: c.res.ok ? 'completed' : 'failed',
+    response: {
+      status: c.res.status,
+      body: await c.res.json(),
+      headers: Object.fromEntries(c.res.headers)
+    }
+  });
+}
+```
+
+#### 39.6.2 Client Usage
+
+```typescript
+// Client generating idempotency keys
+const idempotencyKey = `${userId}-${operationType}-${Date.now()}-${randomBytes(8).toString('hex')}`;
+
+const response = await fetch('/api/reservations', {
+  method: 'POST',
+  headers: {
+    'Content-Type': 'application/json',
+    'Idempotency-Key': idempotencyKey
+  },
+  body: JSON.stringify(reservationRequest)
+});
+
+// Safe to retry on network error with same key
+```
+
+### 39.7 Route Organization
+
+#### 39.7.1 Hono-Based Route Structure
+
+```typescript
+// routes/reservations.ts
+import { Hono } from 'hono';
+import { zValidator } from '@hono/zod-validator';
+import { CreateReservationSchema, ListReservationsQuerySchema } from '../schemas';
+
+const app = new Hono()
+  .post('/',
+    zValidator('json', CreateReservationSchema),
+    async (c) => {
+      const body = c.req.valid('json');
+      const reservation = await reservationService.create(body);
+      return c.json(reservation, 201);
+    }
+  )
+  .get('/',
+    zValidator('query', ListReservationsQuerySchema),
+    async (c) => {
+      const query = c.req.valid('query');
+      const result = await reservationService.list(query);
+      return c.json(result);
+    }
+  )
+  .get('/:id', async (c) => {
+    const reservation = await reservationService.findById(c.req.param('id'));
+    if (!reservation) {
+      return c.json({ error: ERROR_CODES.RESOURCE_NOT_FOUND }, 404);
+    }
+    return c.json(reservation);
+  })
+  .delete('/:id', async (c) => {
+    await reservationService.release(c.req.param('id'));
+    return c.body(null, 204);
+  });
+
+export default app;
+```
+
+#### 39.7.2 Route File Organization
+
+```
+apps/gateway/src/
+├── routes/
+│   ├── accounts.ts        # Account management
+│   ├── agents.ts          # Agent lifecycle
+│   ├── alerts.ts          # Alert configuration
+│   ├── analytics.ts       # Usage analytics
+│   ├── audit.ts           # Audit logs
+│   ├── beads.ts           # Issue tracking
+│   ├── cass.ts            # Session search
+│   ├── checkpoints.ts     # State snapshots
+│   ├── conflicts.ts       # Conflict detection
+│   ├── context.ts         # Context building
+│   ├── handoffs.ts        # Agent handoffs
+│   ├── history.ts         # Conversation history
+│   ├── jobs.ts            # Job orchestration
+│   ├── mail.ts            # Agent messaging
+│   ├── memory.ts          # Shared memory
+│   ├── metrics.ts         # Performance metrics
+│   ├── notifications.ts   # User notifications
+│   ├── pipelines.ts       # Multi-step workflows
+│   ├── reservations.ts    # File locking
+│   └── utilities.ts       # Health, version, etc.
+├── api/
+│   ├── schemas.ts         # Centralized Zod schemas
+│   └── generate-openapi.ts # OpenAPI generator
+├── middleware/
+│   ├── auth.ts            # JWT validation
+│   ├── idempotency.ts     # Idempotency handling
+│   └── rate-limit.ts      # Rate limiting
+└── utils/
+    ├── validation.ts      # Zod error transformation
+    └── response.ts        # Standard response helpers
+```
+
+### 39.8 Request/Response Patterns
+
+#### 39.8.1 Standard Response Helpers
+
+```typescript
+// utils/response.ts
+export function sendResource<T>(c: Context, data: T, status = 200) {
+  return c.json({ data }, status);
+}
+
+export function sendCreated<T>(c: Context, data: T, location?: string) {
+  if (location) {
+    c.header('Location', location);
+  }
+  return c.json({ data }, 201);
+}
+
+export function sendNoContent(c: Context) {
+  return c.body(null, 204);
+}
+
+export function sendError(c: Context, error: ErrorDefinition, details?: unknown) {
+  return c.json({
+    error: {
+      code: error.code,
+      message: error.message,
+      retryable: error.retryable,
+      aiHint: error.aiHint,
+      details,
+      requestId: c.get('requestId')
+    }
+  }, error.httpStatus);
+}
+
+export function sendValidationError(c: Context, zodError: ZodError) {
+  const details = zodError.errors.map(e => ({
+    field: e.path.join('.'),
+    issue: e.message,
+    received: e.received
+  }));
+  return sendError(c, ERROR_CODES.VALIDATION_FAILED, details);
+}
+```
+
+#### 39.8.2 Validation Error Transformation
+
+```typescript
+// utils/validation.ts
+export function transformZodError(error: ZodError): string {
+  return error.errors.map(e => {
+    const path = e.path.join('.');
+    switch (e.code) {
+      case 'invalid_type':
+        return `${path}: expected ${e.expected}, received ${e.received}`;
+      case 'too_small':
+        return `${path}: must be at least ${e.minimum}`;
+      case 'too_big':
+        return `${path}: must be at most ${e.maximum}`;
+      case 'invalid_enum_value':
+        return `${path}: must be one of ${e.options.join(', ')}`;
+      default:
+        return `${path}: ${e.message}`;
+    }
+  }).join('; ');
+}
+```
+
+### 39.9 API Versioning Strategies
+
+#### 39.9.1 URL Path Versioning
+
+```typescript
+// Preferred for clarity
+app.route('/api/v1', v1Routes);
+app.route('/api/v2', v2Routes);
+
+// Version in path makes caching easier, clearer in logs
+// GET /api/v1/reservations vs GET /api/v2/reservations
+```
+
+#### 39.9.2 Header-Based Versioning
+
+```typescript
+// For more granular control
+app.use(async (c, next) => {
+  const version = c.req.header('API-Version') ?? 'v1';
+  c.set('apiVersion', version);
+  await next();
+});
+
+// Handler checks version for behavior differences
+app.get('/reservations', async (c) => {
+  const version = c.get('apiVersion');
+  if (version === 'v2') {
+    // New response format
+    return c.json({ data: reservations, meta: { total } });
+  }
+  // Legacy format
+  return c.json(reservations);
+});
+```
+
+#### 39.9.3 Versioning Decision Matrix
+
+| Strategy | Pros | Cons | Use When |
+|----------|------|------|----------|
+| **URL Path** | Clear, cacheable, visible in logs | URL changes between versions | Breaking changes, public APIs |
+| **Header** | URL stable, granular | Hidden, harder to cache | Internal APIs, minor changes |
+| **Query Param** | Easy to switch | Pollutes URLs, caching issues | Rarely recommended |
+
+### 39.10 Rate Limiting
+
+#### 39.10.1 Multi-Tier Rate Limiting
+
+```typescript
+// rate-limit.ts
+interface RateLimitConfig {
+  windowMs: number;        // Time window in ms
+  max: number;             // Max requests per window
+  keyGenerator: (c: Context) => string;
+}
+
+const rateLimits: Record<string, RateLimitConfig> = {
+  // Global per-IP (burst protection)
+  global: {
+    windowMs: 1000,        // 1 second
+    max: 100,
+    keyGenerator: (c) => c.req.header('x-forwarded-for') ?? 'unknown'
+  },
+
+  // Per-user sustained rate
+  user: {
+    windowMs: 60 * 1000,   // 1 minute
+    max: 300,
+    keyGenerator: (c) => c.get('userId') ?? 'anonymous'
+  },
+
+  // Per-endpoint for expensive operations
+  expensive: {
+    windowMs: 60 * 1000,
+    max: 10,
+    keyGenerator: (c) => `${c.get('userId')}:${c.req.path}`
+  }
+};
+
+// Response headers for clients
+c.header('X-RateLimit-Limit', limit.toString());
+c.header('X-RateLimit-Remaining', remaining.toString());
+c.header('X-RateLimit-Reset', resetTime.toString());
+c.header('Retry-After', retryAfter.toString());
+```
+
+### 39.11 Application to meta_skill
+
+| Pattern | meta_skill Application |
+|---------|------------------------|
+| **Zod Schemas** | Validate skill invocation parameters, template variables |
+| **OpenAPI Generation** | Auto-generate API docs for HTTP-based skill registry |
+| **Error Taxonomy** | Structured errors for skill execution failures |
+| **Cursor Pagination** | List skills, search results, template listings |
+| **Idempotency** | Safe skill installation/uninstallation |
+| **Auth** | Skill marketplace authentication, API keys |
+| **Versioning** | Skill version constraints, API evolution |
+
+### 39.12 REST API Checklist
+
+Before deploying an API endpoint:
+
+**Schema & Validation:**
+- [ ] Request body validated with Zod schema
+- [ ] Query parameters validated with coercion
+- [ ] Schema registered in OpenAPI registry
+- [ ] Response schema documented
+
+**Error Handling:**
+- [ ] Uses error codes from taxonomy
+- [ ] Includes aiHint for AI consumers
+- [ ] Validation errors include field details
+- [ ] Request ID included in error response
+
+**HTTP Semantics:**
+- [ ] Correct status code (201 for create, 204 for delete)
+- [ ] Location header for created resources
+- [ ] Proper Content-Type headers
+
+**Pagination & Performance:**
+- [ ] List endpoints use cursor-based pagination
+- [ ] Reasonable default and max limits
+- [ ] hasMore indicator in response
+
+**Security:**
+- [ ] Auth middleware applied
+- [ ] Rate limiting configured
+- [ ] Idempotency key support for mutations
+
+### 39.13 Anti-Patterns
+
+#### 39.13.1 Avoid: Offset Pagination for Mutable Data
+
+```typescript
+// BAD: Items shift as data changes
+GET /items?offset=100&limit=20
+
+// GOOD: Stable cursor
+GET /items?startingAfter=item_abc&limit=20
+```
+
+#### 39.13.2 Avoid: Generic Error Responses
+
+```typescript
+// BAD: No structure, no guidance
+{ "error": "Something went wrong" }
+
+// GOOD: Actionable, machine-readable
+{
+  "error": {
+    "code": "QUOTA_RATE_LIMITED",
+    "message": "Too many requests",
+    "retryable": true,
+    "aiHint": "Retry after the time indicated in Retry-After header"
+  }
+}
+```
+
+#### 39.13.3 Avoid: Inconsistent Naming
+
+```typescript
+// BAD: Mixed conventions
+GET /getUsers
+POST /create-reservation
+PUT /update_job
+
+// GOOD: Consistent REST nouns
+GET /users
+POST /reservations
+PUT /jobs/:id
+```
+
+#### 39.13.4 Avoid: Overloaded Endpoints
+
+```typescript
+// BAD: One endpoint doing many things
+POST /api/actions { "action": "create" | "update" | "delete", ... }
+
+// GOOD: RESTful resources
+POST /resources      # Create
+PUT /resources/:id   # Update
+DELETE /resources/:id # Delete
+```
