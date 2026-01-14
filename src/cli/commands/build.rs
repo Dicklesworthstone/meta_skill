@@ -957,6 +957,7 @@ fn run_resolve_uncertainties(ctx: &AppContext, args: &BuildArgs) -> Result<()> {
 
         let mut resolved_count = 0;
         let mut escalated_count = 0;
+        let mut rejected_count = 0;
         let mut updated_items = items.clone();
 
         for item in pending_items.into_iter() {
@@ -1063,6 +1064,7 @@ fn run_resolve_uncertainties(ctx: &AppContext, args: &BuildArgs) -> Result<()> {
                         reason: reason.clone(),
                         rejected_at: chrono::Utc::now(),
                     };
+                    rejected_count += 1;
                     if !ctx.robot_mode {
                         println!(
                             "  {} Rejected: {} - {}",
@@ -1094,6 +1096,7 @@ fn run_resolve_uncertainties(ctx: &AppContext, args: &BuildArgs) -> Result<()> {
                 "status": "resolution_complete",
                 "resolved": resolved_count,
                 "escalated": escalated_count,
+                "rejected": rejected_count,
                 "counts_before": {
                     "pending": counts.pending,
                     "in_progress": counts.in_progress,
@@ -1120,6 +1123,7 @@ fn run_resolve_uncertainties(ctx: &AppContext, args: &BuildArgs) -> Result<()> {
             println!("{} Resolution complete", "Done:".green());
             println!("  Resolved:  {}", resolved_count);
             println!("  Escalated: {}", escalated_count);
+            println!("  Rejected:  {}", rejected_count);
         }
     } else if args.auto && pending_items.is_empty() {
         // Auto-resolution requested but no pending items (e.g., only in_progress)

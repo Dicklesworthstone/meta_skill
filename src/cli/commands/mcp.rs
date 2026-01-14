@@ -786,4 +786,21 @@ mod tests {
         let result = ToolResult::error("failed".to_string());
         assert!(result.is_error == Some(true));
     }
+
+    #[test]
+    fn test_handle_initialized_notification() {
+        // JSON-RPC 2.0: Notifications (no id) MUST NOT receive a response
+        let result = handle_initialized(None);
+        assert!(result.is_none(), "Notification should not produce a response");
+    }
+
+    #[test]
+    fn test_handle_initialized_with_id() {
+        // When id is present (unusual but permitted), respond
+        let result = handle_initialized(Some(serde_json::json!(42)));
+        assert!(result.is_some(), "Request with id should produce a response");
+        let response = result.unwrap();
+        assert!(response.result.is_some());
+        assert!(response.error.is_none());
+    }
 }
