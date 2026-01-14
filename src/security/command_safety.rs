@@ -77,6 +77,7 @@ impl SafetyGate {
             if self.require_verbatim_approval && decision.tier >= SafetyTier::Danger {
                 if approval_matches(command) {
                     decision.approved = true;
+                    decision.allowed = true;
                     final_allowed = true;
                 } else {
                     self.log_event(command, &decision, session_id)?;
