@@ -259,7 +259,7 @@ fn test_build_auto_requires_from_cass() {
 
 #[test]
 fn test_build_resolve_uncertainties_empty() {
-    let mut fixture = TestFixture::new("test_build_resolve_uncertainties_empty");
+    let fixture = TestFixture::new("test_build_resolve_uncertainties_empty");
     let init = fixture.init();
     assert!(init.success, "init failed");
 
