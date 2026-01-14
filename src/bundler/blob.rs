@@ -65,7 +65,7 @@ impl BlobStore {
         }
 
         let mut entries = Vec::new();
-        collect_files(path, path, &mut entries)?;
+        collect_files_for_bundle(path, path, &mut entries)?;
         entries.sort_by(|a, b| a.0.cmp(&b.0));
 
         let mut hasher = Sha256::new();
@@ -88,7 +88,7 @@ impl BlobStore {
     }
 }
 
-fn collect_files(
+pub(crate) fn collect_files_for_bundle(
     root: &Path,
     current: &Path,
     out: &mut Vec<(PathBuf, PathBuf)>,

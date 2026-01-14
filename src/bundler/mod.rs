@@ -6,6 +6,6 @@ pub mod install;
 pub mod manifest;
 pub mod blob;
 
-pub use package::Bundle;
+pub use package::{Bundle, BundlePackage, BundleBlob, missing_blobs};
 pub use manifest::{BundleManifest, BundleInfo, BundledSkill, BundleDependency, BundleSignature};
 pub use blob::BlobStore;
