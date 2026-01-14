@@ -144,7 +144,7 @@ pub struct SkillSource {
 }
 
 /// Skill layer for priority resolution
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Debug, Clone, Copy, Hash, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
 #[serde(rename_all = "lowercase")]
 pub enum SkillLayer {
     /// Base/system skills

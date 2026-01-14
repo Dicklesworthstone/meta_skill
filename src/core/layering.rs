@@ -349,12 +349,13 @@ impl LayeredRegistry {
             conflicts.extend(section_conflicts);
         }
 
+        let needs_resolution = !conflicts.is_empty();
         Ok(Some(ResolvedSkill {
             spec: winner.spec.clone(),
             source_layer: *winner_layer,
             candidate_layers,
             conflicts,
-            needs_resolution: !conflicts.is_empty(),
+            needs_resolution,
         }))
     }
 
@@ -498,31 +499,41 @@ fn merge_specs(
 
 /// Merge non-overlapping sections from source into target
 fn merge_non_overlapping_sections(target: &mut SkillSpec, source: &SkillSpec) {
-    let existing_ids: std::collections::HashSet<_> = target.sections.iter().map(|s| &s.id).collect();
+    let existing_ids: std::collections::HashSet<String> =
+        target.sections.iter().map(|s| s.id.clone()).collect();
 
-    for section in &source.sections {
-        if !existing_ids.contains(&section.id) {
-            target.sections.push(section.clone());
-        }
-    }
+    let to_add: Vec<_> = source
+        .sections
+        .iter()
+        .filter(|section| !existing_ids.contains(&section.id))
+        .cloned()
+        .collect();
+
+    target.sections.extend(to_add);
 }
 
 /// Merge by section preference: keep higher-layer rules/pitfalls, add lower-layer examples
 fn merge_by_section_preference(target: &mut SkillSpec, source: &SkillSpec) {
-    let existing_ids: std::collections::HashSet<_> = target.sections.iter().map(|s| &s.id).collect();
+    let existing_ids: std::collections::HashSet<String> =
+        target.sections.iter().map(|s| s.id.clone()).collect();
 
-    for section in &source.sections {
-        if !existing_ids.contains(&section.id) {
-            // Section doesn't exist - check if it's an example/reference type
+    let to_add: Vec<_> = source
+        .sections
+        .iter()
+        .filter(|section| {
+            if existing_ids.contains(&section.id) {
+                return false;
+            }
+            // Only add example/reference type sections from lower layers
             let section_lower = section.title.to_lowercase();
-            if section_lower.contains("example")
+            section_lower.contains("example")
                 || section_lower.contains("reference")
                 || section_lower.contains("template")
-            {
-                target.sections.push(section.clone());
-            }
-        }
-    }
+        })
+        .cloned()
+        .collect();
+
+    target.sections.extend(to_add);
 }
 
 // =============================================================================
