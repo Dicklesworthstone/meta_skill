@@ -113,6 +113,7 @@ insta = "1"
 criterion = { version = "0.5", features = ["html_reports"] }
 proptest = "1.4"
 proptest-derive = "0.4"
+httpmock = "0.7"
 
 [features]
 default = []

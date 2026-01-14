@@ -6,6 +6,9 @@ pub mod logging;
 #[cfg(test)]
 pub mod arbitrary;
 
+#[cfg(test)]
+pub mod mock_server;
+
 /// Table-driven test case structure.
 #[derive(Debug, Clone)]
 pub struct TestCase<I, E> {
