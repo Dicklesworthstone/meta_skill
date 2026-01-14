@@ -98,10 +98,6 @@ fn arb_config() -> impl Strategy<Value = Config> {
 }
 
 proptest! {
-    // =========================================================================
-    // Parser Safety Tests
-    // =========================================================================
-
     #[test]
     fn test_parse_markdown_never_panics(input in ".*") {
         let _ = parse_markdown(&input);
@@ -112,10 +108,6 @@ proptest! {
         let input = String::from_utf8_lossy(&bytes);
         let _ = parse_markdown(&input);
     }
-
-    // =========================================================================
-    // Search Safety Tests
-    // =========================================================================
 
     #[test]
     fn test_search_tags_never_panics(input in ".*") {
@@ -128,10 +120,6 @@ proptest! {
         let _ = SearchFilters::parse_tags(&input);
     }
 
-    // =========================================================================
-    // Validation Safety Tests
-    // =========================================================================
-
     #[test]
     fn test_validate_spec_never_panics(spec in arb_skill_spec()) {
         let _ = validate(&spec);
@@ -142,10 +130,6 @@ proptest! {
         let spec = SkillSpec::new("", "");
         let _ = validate(&spec);
     }
-
-    // =========================================================================
-    // Serialization Safety Tests
-    // =========================================================================
 
     #[test]
     fn test_skill_spec_json_serialize_never_panics(spec in arb_skill_spec()) {
@@ -167,18 +151,10 @@ proptest! {
         let _: Result<Config, _> = toml::from_str(&input);
     }
 
-    // =========================================================================
-    // Config Default Safety Tests
-    // =========================================================================
-
     #[test]
     fn test_config_default_never_panics(_seed in any::<u64>()) {
         let _ = Config::default();
     }
-
-    // =========================================================================
-    // SkillSpec Construction Safety Tests
-    // =========================================================================
 
     #[test]
     fn test_skill_spec_new_never_panics(
