@@ -280,7 +280,7 @@ fn test_build_resolve_uncertainties_empty() {
 
 #[test]
 fn test_build_resume_nonexistent() {
-    let mut fixture = TestFixture::new("test_build_resume_nonexistent");
+    let fixture = TestFixture::new("test_build_resume_nonexistent");
     let init = fixture.init();
     assert!(init.success, "init failed");
 
@@ -300,7 +300,7 @@ fn test_build_resume_nonexistent() {
 
 #[test]
 fn test_build_auto_no_cass_available() {
-    let mut fixture = TestFixture::new("test_build_auto_no_cass_available");
+    let fixture = TestFixture::new("test_build_auto_no_cass_available");
     let init = fixture.init();
     assert!(init.success, "init failed");
 
