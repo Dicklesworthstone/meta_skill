@@ -307,13 +307,19 @@ impl SegmentedSession {
 /// Segment a session into phases based on tool usage and message patterns
 pub fn segment_session(session: &Session) -> SegmentedSession {
     let mut segments = Vec::new();
-    let mut current_phase = SessionPhase::Reconnaissance;
+
+    // Initialize phase from first message instead of defaulting to Reconnaissance
+    let mut current_phase = session
+        .messages
+        .first()
+        .map(classify_message_phase)
+        .unwrap_or(SessionPhase::Reconnaissance);
     let mut phase_start = 0;
 
     for (idx, msg) in session.messages.iter().enumerate() {
         let detected_phase = classify_message_phase(msg);
 
-        // Phase transition detected
+        // Phase transition detected (skip first message since we used it to initialize)
         if detected_phase != current_phase && idx > phase_start {
             // Only record segment if it has messages
             segments.push(SessionSegment {
@@ -481,9 +487,14 @@ fn merge_adjacent_segments(segments: Vec<SessionSegment>) -> Vec<SessionSegment>
             // Recompute confidence as weighted average
             let current_len = current.end_idx - current.start_idx;
             let seg_len = seg.end_idx - seg.start_idx;
-            current.confidence = (current.confidence * (current_len - seg_len) as f32
-                + seg.confidence * seg_len as f32)
-                / current_len as f32;
+            // Use saturating_sub to prevent underflow if segments have unexpected values
+            let old_len = current_len.saturating_sub(seg_len);
+            current.confidence = if current_len > 0 {
+                (current.confidence * old_len as f32 + seg.confidence * seg_len as f32)
+                    / current_len as f32
+            } else {
+                0.0
+            };
         } else {
             merged.push(current);
             current = seg;
@@ -700,7 +711,7 @@ fn extract_command_patterns(session: &Session) -> Option<ExtractedPattern> {
 
     let frequency = evidence.len();
     Some(ExtractedPattern {
-        id: format!("cmd_{}", &session.id[..8.min(session.id.len())]),
+        id: format!("cmd_{}", safe_prefix(&session.id, 8)),
         pattern_type: PatternType::CommandPattern {
             commands,
             frequency,
@@ -736,7 +747,7 @@ fn extract_code_patterns(session: &Session) -> Vec<ExtractedPattern> {
                     patterns.push(ExtractedPattern {
                         id: format!(
                             "code_{}_{}_{}",
-                            &session.id[..8.min(session.id.len())],
+                            safe_prefix(&session.id, 8),
                             msg.index,
                             patterns.len()
                         ),
@@ -835,7 +846,7 @@ fn extract_workflow_pattern(
         / segmented.segments.len() as f32;
 
     Some(ExtractedPattern {
-        id: format!("workflow_{}", &session.id[..8.min(session.id.len())]),
+        id: format!("workflow_{}", safe_prefix(&session.id, 8)),
         pattern_type: PatternType::WorkflowPattern {
             steps,
             triggers,
@@ -996,7 +1007,7 @@ fn extract_error_patterns(session: &Session) -> Vec<ExtractedPattern> {
                     patterns.push(ExtractedPattern {
                         id: format!(
                             "error_{}_{}_{}",
-                            &session.id[..8.min(session.id.len())],
+                            safe_prefix(&session.id, 8),
                             err_ctx.error_idx,
                             patterns.len()
                         ),
@@ -1215,7 +1226,13 @@ fn patterns_are_similar(a: &ExtractedPattern, b: &ExtractedPattern) -> bool {
             },
         ) => {
             // Similar if same language and code starts similarly
-            la == lb && ca.len() > 20 && cb.len() > 20 && ca[..20.min(ca.len())] == cb[..20.min(cb.len())]
+            // Use chars() iterator for UTF-8 safety instead of byte slicing
+            if la != lb || ca.chars().count() <= 20 || cb.chars().count() <= 20 {
+                return false;
+            }
+            let prefix_a: String = ca.chars().take(20).collect();
+            let prefix_b: String = cb.chars().take(20).collect();
+            prefix_a == prefix_b
         }
         (
             PatternType::ErrorPattern {
@@ -1369,6 +1386,11 @@ pub fn pattern_to_ir(pattern: &ExtractedPattern) -> PatternIR {
     }
 }
 
+/// Get a safe prefix of a string by character count (UTF-8 safe)
+fn safe_prefix(s: &str, max_chars: usize) -> String {
+    s.chars().take(max_chars).collect()
+}
+
 /// Truncate string to max length
 fn truncate(s: &str, max_len: usize) -> String {
     let mut out = String::new();
@@ -1419,6 +1441,25 @@ And more text.
     fn test_truncate() {
         assert_eq!(truncate("hello", 10), "hello");
         assert_eq!(truncate("hello world", 8), "hello...");
+    }
+
+    #[test]
+    fn test_safe_prefix() {
+        // ASCII
+        assert_eq!(safe_prefix("hello", 3), "hel");
+        assert_eq!(safe_prefix("hello", 10), "hello");
+
+        // UTF-8 multi-byte characters (e.g., Japanese)
+        // "こんにちは" = 5 characters, but 15 bytes
+        let japanese = "こんにちは";
+        assert_eq!(japanese.len(), 15); // Verify it's multi-byte
+        assert_eq!(safe_prefix(japanese, 3), "こんに");
+        assert_eq!(safe_prefix(japanese, 5), "こんにちは");
+        assert_eq!(safe_prefix(japanese, 10), "こんにちは"); // Doesn't panic on oversized
+
+        // Mix of ASCII and multi-byte
+        let mixed = "abc日本語def";
+        assert_eq!(safe_prefix(mixed, 5), "abc日本");
     }
 
     #[test]

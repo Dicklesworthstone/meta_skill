@@ -46,7 +46,7 @@ toml = "0.8"
 rusqlite = { version = "0.32", features = ["bundled", "modern_sqlite"] }
 
 # Search
-tantivy = "0.22"
+tantivy = "0.25"
 
 # Git
 git2 = "0.19"

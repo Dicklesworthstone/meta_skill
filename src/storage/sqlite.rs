@@ -84,6 +84,15 @@ pub struct SessionQualityRecord {
     pub computed_at: String,
 }
 
+/// Evidence record for provenance graph export
+#[derive(Debug, Clone)]
+pub struct EvidenceRecord {
+    pub skill_id: String,
+    pub rule_id: String,
+    pub evidence: Vec<crate::core::EvidenceRef>,
+    pub updated_at: String,
+}
+
 impl Database {
     /// Open database at the given path
     pub fn open(path: impl AsRef<Path>) -> Result<Self> {
@@ -791,6 +800,152 @@ impl Database {
         Ok(())
     }
 
+    // =========================================================================
+    // SKILL EVIDENCE METHODS (PROVENANCE GRAPH)
+    // =========================================================================
+
+    /// Upsert evidence for a specific rule in a skill.
+    /// Each rule can have multiple evidence references from CASS sessions.
+    pub fn upsert_evidence(
+        &self,
+        skill_id: &str,
+        rule_id: &str,
+        evidence: &[crate::core::EvidenceRef],
+        coverage: &crate::core::EvidenceCoverage,
+    ) -> Result<()> {
+        let evidence_json = serde_json::to_string(evidence)
+            .map_err(|err| MsError::Config(format!("encode evidence: {err}")))?;
+        let coverage_json = serde_json::to_string(coverage)
+            .map_err(|err| MsError::Config(format!("encode coverage: {err}")))?;
+        let updated_at = chrono::Utc::now().to_rfc3339();
+
+        self.conn.execute(
+            "INSERT INTO skill_evidence (skill_id, rule_id, evidence_json, coverage_json, updated_at)
+             VALUES (?, ?, ?, ?, ?)
+             ON CONFLICT(skill_id, rule_id) DO UPDATE SET
+                evidence_json=excluded.evidence_json,
+                coverage_json=excluded.coverage_json,
+                updated_at=excluded.updated_at",
+            params![skill_id, rule_id, evidence_json, coverage_json, updated_at],
+        )?;
+        Ok(())
+    }
+
+    /// Get all evidence for a skill, reconstructing the SkillEvidenceIndex.
+    pub fn get_evidence(&self, skill_id: &str) -> Result<crate::core::SkillEvidenceIndex> {
+        let mut stmt = self.conn.prepare(
+            "SELECT rule_id, evidence_json, coverage_json
+             FROM skill_evidence
+             WHERE skill_id = ?
+             ORDER BY rule_id",
+        )?;
+
+        let mut rules = std::collections::BTreeMap::new();
+        let mut total_confidence = 0.0f32;
+        let mut evidence_count = 0usize;
+
+        let rows = stmt.query_map([skill_id], |row| {
+            let rule_id: String = row.get(0)?;
+            let evidence_json: String = row.get(1)?;
+            Ok((rule_id, evidence_json))
+        })?;
+
+        for row in rows {
+            let (rule_id, evidence_json) = row?;
+            let evidence_refs: Vec<crate::core::EvidenceRef> =
+                serde_json::from_str(&evidence_json).map_err(|err| {
+                    MsError::Config(format!("decode evidence for rule {}: {}", rule_id, err))
+                })?;
+
+            for e in &evidence_refs {
+                total_confidence += e.confidence;
+                evidence_count += 1;
+            }
+            rules.insert(rule_id, evidence_refs);
+        }
+
+        let rules_with_evidence = rules.values().filter(|v| !v.is_empty()).count();
+        let avg_confidence = if evidence_count > 0 {
+            total_confidence / evidence_count as f32
+        } else {
+            0.0
+        };
+
+        Ok(crate::core::SkillEvidenceIndex {
+            rules,
+            coverage: crate::core::EvidenceCoverage {
+                total_rules: rules_with_evidence, // We only know about rules with evidence stored
+                rules_with_evidence,
+                avg_confidence,
+            },
+        })
+    }
+
+    /// Get evidence for a specific rule in a skill.
+    pub fn get_rule_evidence(
+        &self,
+        skill_id: &str,
+        rule_id: &str,
+    ) -> Result<Vec<crate::core::EvidenceRef>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT evidence_json FROM skill_evidence WHERE skill_id = ? AND rule_id = ?",
+        )?;
+
+        let mut rows = stmt.query(params![skill_id, rule_id])?;
+        if let Some(row) = rows.next()? {
+            let evidence_json: String = row.get(0)?;
+            let evidence_refs: Vec<crate::core::EvidenceRef> =
+                serde_json::from_str(&evidence_json).map_err(|err| {
+                    MsError::Config(format!("decode evidence: {err}"))
+                })?;
+            return Ok(evidence_refs);
+        }
+        Ok(vec![])
+    }
+
+    /// List all evidence records for provenance graph export.
+    /// Returns (skill_id, rule_id, evidence_refs, updated_at) tuples.
+    pub fn list_all_evidence(&self) -> Result<Vec<EvidenceRecord>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT skill_id, rule_id, evidence_json, updated_at
+             FROM skill_evidence
+             ORDER BY skill_id, rule_id",
+        )?;
+
+        let rows = stmt.query_map([], |row| {
+            let skill_id: String = row.get(0)?;
+            let rule_id: String = row.get(1)?;
+            let evidence_json: String = row.get(2)?;
+            let updated_at: String = row.get(3)?;
+            Ok((skill_id, rule_id, evidence_json, updated_at))
+        })?;
+
+        let mut records = Vec::new();
+        for row in rows {
+            let (skill_id, rule_id, evidence_json, updated_at) = row?;
+            let evidence: Vec<crate::core::EvidenceRef> =
+                serde_json::from_str(&evidence_json).map_err(|err| {
+                    MsError::Config(format!("decode evidence: {err}"))
+                })?;
+            records.push(EvidenceRecord {
+                skill_id,
+                rule_id,
+                evidence,
+                updated_at,
+            });
+        }
+        Ok(records)
+    }
+
+    /// Delete all evidence for a skill.
+    pub fn delete_skill_evidence(&self, skill_id: &str) -> Result<usize> {
+        let count = self.conn.execute(
+            "DELETE FROM skill_evidence WHERE skill_id = ?",
+            [skill_id],
+        )?;
+        Ok(count)
+    }
+
     fn configure_pragmas(conn: &Connection) -> Result<()> {
         conn.execute_batch(
             "PRAGMA journal_mode = WAL;
@@ -1266,5 +1421,231 @@ mod tests {
         let second = db.list_skills(1, 1).unwrap();
         assert_eq!(second.len(), 1);
         assert_eq!(second[0].id, "skill-older");
+    }
+
+    #[test]
+    fn test_evidence_upsert_and_get() {
+        use crate::core::{EvidenceCoverage, EvidenceLevel, EvidenceRef};
+
+        let dir = tempdir().unwrap();
+        let db = Database::open(dir.path().join("test.db")).unwrap();
+
+        // First insert a skill record (required for foreign key)
+        let skill = SkillRecord {
+            id: "test-skill".to_string(),
+            name: "Test Skill".to_string(),
+            description: "A test skill".to_string(),
+            version: Some("1.0.0".to_string()),
+            author: None,
+            source_path: "/skills/test".to_string(),
+            source_layer: "project".to_string(),
+            git_remote: None,
+            git_commit: None,
+            content_hash: "test123".to_string(),
+            body: "Test body".to_string(),
+            metadata_json: "{}".to_string(),
+            assets_json: "{}".to_string(),
+            token_count: 100,
+            quality_score: 0.8,
+            indexed_at: "2026-01-01T00:00:00Z".to_string(),
+            modified_at: "2026-01-01T00:00:00Z".to_string(),
+            is_deprecated: false,
+            deprecation_reason: None,
+        };
+        db.upsert_skill(&skill).unwrap();
+
+        // Create evidence references
+        let evidence = vec![
+            EvidenceRef {
+                session_id: "sess-001".to_string(),
+                message_range: (5, 12),
+                snippet_hash: "hash-abc".to_string(),
+                excerpt: Some("Example code pattern".to_string()),
+                level: EvidenceLevel::Excerpt,
+                confidence: 0.85,
+            },
+            EvidenceRef {
+                session_id: "sess-002".to_string(),
+                message_range: (20, 25),
+                snippet_hash: "hash-def".to_string(),
+                excerpt: None,
+                level: EvidenceLevel::Pointer,
+                confidence: 0.72,
+            },
+        ];
+
+        let coverage = EvidenceCoverage {
+            total_rules: 5,
+            rules_with_evidence: 1,
+            avg_confidence: 0.785,
+        };
+
+        // Upsert evidence for rule-1
+        db.upsert_evidence("test-skill", "rule-1", &evidence, &coverage)
+            .unwrap();
+
+        // Get evidence for specific rule
+        let fetched = db.get_rule_evidence("test-skill", "rule-1").unwrap();
+        assert_eq!(fetched.len(), 2);
+        assert_eq!(fetched[0].session_id, "sess-001");
+        assert_eq!(fetched[0].message_range, (5, 12));
+        assert_eq!(fetched[0].confidence, 0.85);
+        assert_eq!(fetched[1].session_id, "sess-002");
+
+        // Get all evidence for skill (as SkillEvidenceIndex)
+        let index = db.get_evidence("test-skill").unwrap();
+        assert_eq!(index.rules.len(), 1);
+        assert!(index.rules.contains_key("rule-1"));
+        assert_eq!(index.coverage.rules_with_evidence, 1);
+
+        // Count evidence
+        let count = db.count_skill_evidence("test-skill").unwrap();
+        assert_eq!(count, 1); // One rule with evidence
+    }
+
+    #[test]
+    fn test_evidence_multiple_rules_and_list_all() {
+        use crate::core::{EvidenceCoverage, EvidenceLevel, EvidenceRef};
+
+        let dir = tempdir().unwrap();
+        let db = Database::open(dir.path().join("test.db")).unwrap();
+
+        // Insert skill
+        let skill = SkillRecord {
+            id: "multi-rule-skill".to_string(),
+            name: "Multi Rule Skill".to_string(),
+            description: "Skill with multiple rules".to_string(),
+            version: Some("1.0.0".to_string()),
+            author: None,
+            source_path: "/skills/multi".to_string(),
+            source_layer: "project".to_string(),
+            git_remote: None,
+            git_commit: None,
+            content_hash: "multi123".to_string(),
+            body: "Multi rule body".to_string(),
+            metadata_json: "{}".to_string(),
+            assets_json: "{}".to_string(),
+            token_count: 200,
+            quality_score: 0.9,
+            indexed_at: "2026-01-01T00:00:00Z".to_string(),
+            modified_at: "2026-01-01T00:00:00Z".to_string(),
+            is_deprecated: false,
+            deprecation_reason: None,
+        };
+        db.upsert_skill(&skill).unwrap();
+
+        let coverage = EvidenceCoverage::default();
+
+        // Add evidence for multiple rules
+        for i in 1..=3 {
+            let evidence = vec![EvidenceRef {
+                session_id: format!("sess-{:03}", i),
+                message_range: (i as u32 * 10, i as u32 * 10 + 5),
+                snippet_hash: format!("hash-{}", i),
+                excerpt: None,
+                level: EvidenceLevel::Pointer,
+                confidence: 0.7 + (i as f32 * 0.05),
+            }];
+            db.upsert_evidence("multi-rule-skill", &format!("rule-{}", i), &evidence, &coverage)
+                .unwrap();
+        }
+
+        // List all evidence
+        let all_evidence = db.list_all_evidence().unwrap();
+        assert_eq!(all_evidence.len(), 3);
+        assert_eq!(all_evidence[0].skill_id, "multi-rule-skill");
+        assert_eq!(all_evidence[0].rule_id, "rule-1");
+        assert_eq!(all_evidence[2].rule_id, "rule-3");
+
+        // Get evidence index
+        let index = db.get_evidence("multi-rule-skill").unwrap();
+        assert_eq!(index.rules.len(), 3);
+        assert_eq!(index.coverage.rules_with_evidence, 3);
+
+        // Delete evidence
+        let deleted = db.delete_skill_evidence("multi-rule-skill").unwrap();
+        assert_eq!(deleted, 3);
+
+        let after_delete = db.list_all_evidence().unwrap();
+        assert!(after_delete.is_empty());
+    }
+
+    #[test]
+    fn test_evidence_update_existing_rule() {
+        use crate::core::{EvidenceCoverage, EvidenceLevel, EvidenceRef};
+
+        let dir = tempdir().unwrap();
+        let db = Database::open(dir.path().join("test.db")).unwrap();
+
+        // Insert skill
+        let skill = SkillRecord {
+            id: "update-skill".to_string(),
+            name: "Update Skill".to_string(),
+            description: "Skill for update test".to_string(),
+            version: Some("1.0.0".to_string()),
+            author: None,
+            source_path: "/skills/update".to_string(),
+            source_layer: "project".to_string(),
+            git_remote: None,
+            git_commit: None,
+            content_hash: "upd123".to_string(),
+            body: "Update body".to_string(),
+            metadata_json: "{}".to_string(),
+            assets_json: "{}".to_string(),
+            token_count: 50,
+            quality_score: 0.7,
+            indexed_at: "2026-01-01T00:00:00Z".to_string(),
+            modified_at: "2026-01-01T00:00:00Z".to_string(),
+            is_deprecated: false,
+            deprecation_reason: None,
+        };
+        db.upsert_skill(&skill).unwrap();
+
+        let coverage = EvidenceCoverage::default();
+
+        // Initial evidence
+        let evidence_v1 = vec![EvidenceRef {
+            session_id: "sess-v1".to_string(),
+            message_range: (1, 5),
+            snippet_hash: "v1-hash".to_string(),
+            excerpt: None,
+            level: EvidenceLevel::Pointer,
+            confidence: 0.6,
+        }];
+        db.upsert_evidence("update-skill", "rule-1", &evidence_v1, &coverage)
+            .unwrap();
+
+        // Update with new evidence
+        let evidence_v2 = vec![
+            EvidenceRef {
+                session_id: "sess-v2".to_string(),
+                message_range: (10, 20),
+                snippet_hash: "v2-hash".to_string(),
+                excerpt: Some("Updated excerpt".to_string()),
+                level: EvidenceLevel::Excerpt,
+                confidence: 0.9,
+            },
+            EvidenceRef {
+                session_id: "sess-v2b".to_string(),
+                message_range: (30, 35),
+                snippet_hash: "v2b-hash".to_string(),
+                excerpt: None,
+                level: EvidenceLevel::Pointer,
+                confidence: 0.8,
+            },
+        ];
+        db.upsert_evidence("update-skill", "rule-1", &evidence_v2, &coverage)
+            .unwrap();
+
+        // Verify update replaced old evidence
+        let fetched = db.get_rule_evidence("update-skill", "rule-1").unwrap();
+        assert_eq!(fetched.len(), 2);
+        assert_eq!(fetched[0].session_id, "sess-v2");
+        assert_eq!(fetched[0].confidence, 0.9);
+        assert_eq!(fetched[1].session_id, "sess-v2b");
+
+        // Still only one rule with evidence
+        let count = db.count_skill_evidence("update-skill").unwrap();
+        assert_eq!(count, 1);
     }
 }
