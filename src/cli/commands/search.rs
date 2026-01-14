@@ -7,10 +7,11 @@ use clap::Args;
 use colored::Colorize;
 
 use crate::app::AppContext;
-use crate::error::Result;
+use crate::error::{MsError, Result};
 use crate::search::{
-    fuse_simple, HashEmbedder, RrfConfig, SearchFilters, SearchLayer, VectorIndex,
+    build_embedder, fuse_simple, RrfConfig, SearchFilters, SearchLayer, VectorIndex,
 };
+use crate::storage::sqlite::SkillRecord;
 
 #[derive(Args, Debug)]
 pub struct SearchArgs {
@@ -25,7 +26,7 @@ pub struct SearchArgs {
     #[arg(long, short)]
     pub tags: Option<String>,
 
-    /// Filter by layer: system, global, project, local
+    /// Filter by layer: base, org, project, user (aliases: system, global, local)
     #[arg(long)]
     pub layer: Option<String>,
 
@@ -63,12 +64,12 @@ pub fn run(ctx: &AppContext, args: &SearchArgs) -> Result<()> {
                     "{}",
                     serde_json::json!({
                         "status": "error",
-                        "message": format!("Invalid layer: {}. Valid: system, global, project, local", layer_str)
+                        "message": format!("Invalid layer: {}. Valid: base, org, project, user", layer_str)
                     })
                 );
             } else {
                 println!(
-                    "{} Invalid layer '{}'. Valid: system, global, project, local",
+                    "{} Invalid layer '{}'. Valid: base, org, project, user",
                     "!".yellow(),
                     layer_str
                 );
@@ -86,8 +87,20 @@ pub fn run(ctx: &AppContext, args: &SearchArgs) -> Result<()> {
     // Execute search
     match args.search_type.as_str() {
         "bm25" => search_bm25(ctx, args, &filters),
-        "semantic" => search_semantic(ctx, args, &filters),
-        "hybrid" | _ => search_hybrid(ctx, args, &filters),
+        "semantic" => {
+            if !ctx.config.search.use_embeddings {
+                return Err(MsError::Config(
+                    "semantic search disabled (search.use_embeddings=false)".to_string(),
+                ));
+            }
+            search_semantic(ctx, args, &filters)
+        }
+        "hybrid" | _ => {
+            if !ctx.config.search.use_embeddings {
+                return search_bm25(ctx, args, &filters);
+            }
+            search_hybrid(ctx, args, &filters)
+        }
     }
 }
 
@@ -99,16 +112,16 @@ fn search_hybrid(ctx: &AppContext, args: &SearchArgs, filters: &SearchFilters) -
     let bm25_ids = ctx.db.search_fts(&args.query, fetch_limit)?;
 
     // Build semantic search using embeddings
-    let embedder = HashEmbedder::default();
+    let embedder = build_embedder(&ctx.config.search)?;
     let query_embedding = embedder.embed(&args.query);
 
     // Load embeddings from database
     let mut vector_index = VectorIndex::new(embedder.dims());
-    let all_skills = ctx.db.list_skills(1000, 0)?; // Get all skills for embedding lookup
+    let all_skills = load_all_skills(ctx)?;
 
     for skill in &all_skills {
         if let Ok(Some(emb)) = ctx.db.get_embedding(&skill.id) {
-            vector_index.insert(&skill.id, emb.embedding);
+            let _ = vector_index.insert(&skill.id, emb.embedding);
         }
     }
 
@@ -123,7 +136,10 @@ fn search_hybrid(ctx: &AppContext, args: &SearchArgs, filters: &SearchFilters) -
         .collect();
 
     // RRF fusion
-    let config = RrfConfig::default();
+    let config = RrfConfig::with_weights(
+        ctx.config.search.bm25_weight,
+        ctx.config.search.semantic_weight,
+    );
     let fused = fuse_simple(&bm25_results, &semantic_results, &config);
 
     // Fetch full skill records and apply filters
@@ -180,16 +196,16 @@ fn search_bm25(ctx: &AppContext, args: &SearchArgs, filters: &SearchFilters) -> 
 }
 
 fn search_semantic(ctx: &AppContext, args: &SearchArgs, filters: &SearchFilters) -> Result<()> {
-    let embedder = HashEmbedder::default();
+    let embedder = build_embedder(&ctx.config.search)?;
     let query_embedding = embedder.embed(&args.query);
 
     // Load embeddings
     let mut vector_index = VectorIndex::new(embedder.dims());
-    let all_skills = ctx.db.list_skills(1000, 0)?;
+    let all_skills = load_all_skills(ctx)?;
 
     for skill in &all_skills {
         if let Ok(Some(emb)) = ctx.db.get_embedding(&skill.id) {
-            vector_index.insert(&skill.id, emb.embedding);
+            let _ = vector_index.insert(&skill.id, emb.embedding);
         }
     }
 
@@ -275,10 +291,10 @@ fn display_results(
             let rank = format!("{}.", i + 1);
             let layer = skill.source_layer.as_str();
             let layer_colored = match layer {
-                "system" => layer.blue(),
-                "global" => layer.green(),
+                "base" => layer.blue(),
+                "org" => layer.green(),
                 "project" => layer.yellow(),
-                "local" => layer.magenta(),
+                "user" => layer.magenta(),
                 _ => layer.normal(),
             };
 
@@ -337,6 +353,27 @@ fn parse_tags_from_metadata(metadata_json: &str) -> Vec<String> {
         }
     }
     Vec::new()
+}
+
+fn load_all_skills(ctx: &AppContext) -> Result<Vec<SkillRecord>> {
+    let mut all = Vec::new();
+    let mut offset = 0;
+    let limit = 1000;
+
+    loop {
+        let batch = ctx.db.list_skills(limit, offset)?;
+        let batch_len = batch.len();
+        if batch_len == 0 {
+            break;
+        }
+        all.extend(batch);
+        offset += batch_len;
+        if batch_len < limit {
+            break;
+        }
+    }
+
+    Ok(all)
 }
 
 fn find_snippet(body: &str, query: &str) -> Option<String> {

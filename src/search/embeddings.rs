@@ -6,10 +6,37 @@
 use std::cmp::Ordering;
 use std::collections::HashMap;
 
+use crate::config::SearchConfig;
+use crate::error::{MsError, Result};
+
 /// Pluggable embedding backend interface
 pub trait Embedder {
     fn embed(&self, text: &str) -> Vec<f32>;
     fn dims(&self) -> usize;
+}
+
+/// Build an embedder from search config.
+pub fn build_embedder(config: &SearchConfig) -> Result<Box<dyn Embedder>> {
+    let backend = config.embedding_backend.trim().to_lowercase();
+    let dims = config.embedding_dims as usize;
+    if dims == 0 {
+        return Err(MsError::Config(
+            "search.embedding_dims must be greater than 0".to_string(),
+        ));
+    }
+
+    match backend.as_str() {
+        "" | "hash" => Ok(Box::new(HashEmbedder::new(dims))),
+        "local" => Err(MsError::Config(
+            "search.embedding_backend=local is not implemented yet".to_string(),
+        )),
+        "api" => Err(MsError::Config(
+            "search.embedding_backend=api is not implemented yet".to_string(),
+        )),
+        other => Err(MsError::Config(format!(
+            "unknown embedding backend: {other}"
+        ))),
+    }
 }
 
 /// Hash embedder using FNV-1a
