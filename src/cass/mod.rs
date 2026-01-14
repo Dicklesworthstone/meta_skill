@@ -7,6 +7,7 @@ pub mod mining;
 pub mod quality;
 pub mod refinement;
 pub mod synthesis;
+pub mod transformation;
 
 // Re-export main types
 pub use client::{
@@ -18,3 +19,8 @@ pub use mining::{
 };
 pub use quality::{MissingSignal, QualityConfig, QualityScorer, SessionQuality};
 pub use synthesis::SkillDraft;
+pub use transformation::{
+    GeneralPattern, GeneralizationRefiner, GeneralizationValidation, InstanceCluster,
+    RefinementCritique, SpecificInstance, SpecificToGeneralTransformer, TransformerConfig,
+    UncertaintyQueueSink,
+};
