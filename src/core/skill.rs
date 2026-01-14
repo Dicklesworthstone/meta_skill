@@ -88,10 +88,11 @@ pub struct SkillBlock {
 }
 
 /// Block type
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
 #[serde(rename_all = "lowercase")]
 pub enum BlockType {
     /// Plain text
+    #[default]
     Text,
     /// Code example
     Code,
