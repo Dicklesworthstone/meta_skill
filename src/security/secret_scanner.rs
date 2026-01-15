@@ -260,12 +260,8 @@ pub fn scan_secrets(content: &str) -> Vec<SecretMatch> {
         // Check for any overlap: either endpoint is inside the other range,
         // or one range fully contains the other
         let overlaps = matches.iter().any(|m| {
-            // entropy_match.start is inside m
-            (entropy_match.start >= m.start && entropy_match.start < m.end)
-                // entropy_match.end is inside m
-                || (entropy_match.end > m.start && entropy_match.end <= m.end)
-                // entropy_match fully contains m
-                || (entropy_match.start <= m.start && entropy_match.end >= m.end)
+            // Check for any overlap: start1 < end2 && start2 < end1
+            entropy_match.start < m.end && m.start < entropy_match.end
         });
         if !overlaps {
             matches.push(entropy_match);
