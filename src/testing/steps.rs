@@ -11,8 +11,8 @@ use crate::error::{MsError, Result};
 use crate::security::SafetyGate;
 
 use super::definition::{
-    Assertions, Condition, CopyStep, IfStep, LoadSkillStep, MkdirStep, RemoveStep,
-    RunStep, SetStep, SleepStep, TestStep, WriteFileStep,
+    Assertions, Condition, CopyStep, IfStep, LoadSkillStep, MkdirStep, RemoveStep, RunStep,
+    SetStep, SleepStep, TestStep, WriteFileStep,
 };
 
 /// Step executor that manages test context and executes steps
@@ -174,9 +174,9 @@ fn execute_run(
     let _timeout = step.timeout.unwrap_or(std::time::Duration::from_secs(30));
 
     // Execute with timeout
-    let output = command.output().map_err(|err| {
-        MsError::Config(format!("failed to execute command '{}': {err}", cmd))
-    })?;
+    let output = command
+        .output()
+        .map_err(|err| MsError::Config(format!("failed to execute command '{}': {err}", cmd)))?;
 
     ctx.last_stdout = String::from_utf8_lossy(&output.stdout).to_string();
     ctx.last_stderr = String::from_utf8_lossy(&output.stderr).to_string();
@@ -215,20 +215,14 @@ fn execute_assert(step: &Assertions, ctx: &mut TestContext, verbose: bool) -> Re
     // Check stdout contains
     if let Some(ref text) = step.stdout_contains {
         if !ctx.last_stdout.contains(text) {
-            failures.push(format!(
-                "stdout_contains: '{}' not found in stdout",
-                text
-            ));
+            failures.push(format!("stdout_contains: '{}' not found in stdout", text));
         }
     }
 
     // Check stdout not contains
     if let Some(ref text) = step.stdout_not_contains {
         if ctx.last_stdout.contains(text) {
-            failures.push(format!(
-                "stdout_not_contains: '{}' found in stdout",
-                text
-            ));
+            failures.push(format!("stdout_not_contains: '{}' found in stdout", text));
         }
     }
 
@@ -279,11 +273,12 @@ fn execute_assert(step: &Assertions, ctx: &mut TestContext, verbose: bool) -> Re
     if let Some(ref expected_sections) = step.sections_present {
         if let Some(ref skill) = ctx.loaded_skill {
             for section in expected_sections {
-                if !skill.sections.iter().any(|s| s.eq_ignore_ascii_case(section)) {
-                    failures.push(format!(
-                        "sections_present: section '{}' not found",
-                        section
-                    ));
+                if !skill
+                    .sections
+                    .iter()
+                    .any(|s| s.eq_ignore_ascii_case(section))
+                {
+                    failures.push(format!("sections_present: section '{}' not found", section));
                 }
             }
         } else {
@@ -294,10 +289,7 @@ fn execute_assert(step: &Assertions, ctx: &mut TestContext, verbose: bool) -> Re
     // Check tokens used
     if let Some(max) = step.tokens_used_lt {
         if ctx.tokens_used >= max {
-            failures.push(format!(
-                "tokens_used_lt: {} >= {}",
-                ctx.tokens_used, max
-            ));
+            failures.push(format!("tokens_used_lt: {} >= {}", ctx.tokens_used, max));
         }
     }
 
@@ -305,10 +297,7 @@ fn execute_assert(step: &Assertions, ctx: &mut TestContext, verbose: bool) -> Re
     if let Some(max_rank) = step.retrieval_rank_le {
         if let Some(rank) = ctx.retrieval_rank {
             if rank > max_rank {
-                failures.push(format!(
-                    "retrieval_rank_le: {} > {}",
-                    rank, max_rank
-                ));
+                failures.push(format!("retrieval_rank_le: {} > {}", rank, max_rank));
             }
         }
     }
@@ -520,7 +509,8 @@ mod tests {
     #[test]
     fn test_context_expand() {
         let mut ctx = TestContext::default();
-        ctx.variables.insert("name".to_string(), "world".to_string());
+        ctx.variables
+            .insert("name".to_string(), "world".to_string());
         ctx.variables.insert("path".to_string(), "/tmp".to_string());
 
         assert_eq!(ctx.expand("hello ${name}"), "hello world");

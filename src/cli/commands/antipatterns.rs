@@ -7,7 +7,7 @@ use clap::{Args, Subcommand};
 use colored::{Color, Colorize};
 
 use crate::antipatterns::{
-    format_anti_patterns, mine_anti_patterns, AntiPattern, AntiPatternSeverity, DefaultDetector,
+    AntiPattern, AntiPatternSeverity, DefaultDetector, format_anti_patterns, mine_anti_patterns,
 };
 use crate::app::AppContext;
 use crate::cass::CassClient;
@@ -115,14 +115,21 @@ fn run_mine(ctx: &AppContext, args: &MineArgs) -> Result<()> {
             Ok(session) => sessions.push(session),
             Err(e) => {
                 if !ctx.robot_mode {
-                    eprintln!("{}: failed to load {}: {}", "warning".yellow(), session_id, e);
+                    eprintln!(
+                        "{}: failed to load {}: {}",
+                        "warning".yellow(),
+                        session_id,
+                        e
+                    );
                 }
             }
         }
     }
 
     if sessions.is_empty() {
-        return Err(MsError::ValidationFailed("no valid sessions found".to_string()));
+        return Err(MsError::ValidationFailed(
+            "no valid sessions found".to_string(),
+        ));
     }
 
     // Mine anti-patterns
@@ -269,8 +276,12 @@ fn output_mine_human(anti_patterns: &[AntiPattern]) -> Result<()> {
     let section = format_anti_patterns(anti_patterns);
     println!(
         "{}",
-        format!("Total: {} anti-patterns ({} formatted)", anti_patterns.len(), section.patterns.len())
-            .dimmed()
+        format!(
+            "Total: {} anti-patterns ({} formatted)",
+            anti_patterns.len(),
+            section.patterns.len()
+        )
+        .dimmed()
     );
 
     Ok(())

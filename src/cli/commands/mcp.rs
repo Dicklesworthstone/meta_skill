@@ -339,10 +339,7 @@ fn run_serve(ctx: &AppContext, args: &ServeArgs) -> Result<()> {
 
     if debug {
         eprintln!("[ms-mcp] Starting MCP server (stdio mode)");
-        eprintln!(
-            "[ms-mcp] Server: {} v{}",
-            SERVER_NAME, SERVER_VERSION
-        );
+        eprintln!("[ms-mcp] Server: {} v{}", SERVER_NAME, SERVER_VERSION);
         eprintln!("[ms-mcp] Protocol: {}", PROTOCOL_VERSION);
     }
 
@@ -450,7 +447,9 @@ fn handle_initialize(id: Option<Value>, _params: &Value) -> JsonRpcResponse {
     let result = InitializeResult {
         protocol_version: PROTOCOL_VERSION.to_string(),
         capabilities: ServerCapabilities {
-            tools: ToolsCapability { list_changed: false },
+            tools: ToolsCapability {
+                list_changed: false,
+            },
         },
         server_info: ServerInfo {
             name: SERVER_NAME.to_string(),
@@ -509,16 +508,11 @@ fn handle_tools_call(
         "list" => handle_tool_list(ctx, &arguments),
         "show" => handle_tool_show(ctx, &arguments),
         "doctor" => handle_tool_doctor(ctx, &arguments),
-        _ => Err(MsError::ValidationFailed(format!(
-            "Unknown tool: {}",
-            name
-        ))),
+        _ => Err(MsError::ValidationFailed(format!("Unknown tool: {}", name))),
     };
 
     match result {
-        Ok(tool_result) => {
-            JsonRpcResponse::success(id, serde_json::to_value(tool_result).unwrap())
-        }
+        Ok(tool_result) => JsonRpcResponse::success(id, serde_json::to_value(tool_result).unwrap()),
         Err(e) => {
             let tool_result = ToolResult::error(e.to_string());
             JsonRpcResponse::success(id, serde_json::to_value(tool_result).unwrap())
@@ -539,10 +533,9 @@ fn handle_shutdown(id: Option<Value>) -> JsonRpcResponse {
 // ============================================================================
 
 fn handle_tool_search(ctx: &AppContext, args: &Value) -> Result<ToolResult> {
-    let query = args
-        .get("query")
-        .and_then(|v| v.as_str())
-        .ok_or_else(|| MsError::ValidationFailed("Missing required parameter: query".to_string()))?;
+    let query = args.get("query").and_then(|v| v.as_str()).ok_or_else(|| {
+        MsError::ValidationFailed("Missing required parameter: query".to_string())
+    })?;
 
     let limit = args.get("limit").and_then(|v| v.as_u64()).unwrap_or(20) as usize;
 
@@ -564,15 +557,16 @@ fn handle_tool_search(ctx: &AppContext, args: &Value) -> Result<ToolResult> {
 }
 
 fn handle_tool_load(ctx: &AppContext, args: &Value) -> Result<ToolResult> {
-    let skill_id = args
-        .get("skill")
-        .and_then(|v| v.as_str())
-        .ok_or_else(|| MsError::ValidationFailed("Missing required parameter: skill".to_string()))?;
+    let skill_id = args.get("skill").and_then(|v| v.as_str()).ok_or_else(|| {
+        MsError::ValidationFailed("Missing required parameter: skill".to_string())
+    })?;
 
     let full = args.get("full").and_then(|v| v.as_bool()).unwrap_or(false);
 
     // Look up skill
-    let skill = ctx.db.get_skill(skill_id)?
+    let skill = ctx
+        .db
+        .get_skill(skill_id)?
         .ok_or_else(|| MsError::SkillNotFound(skill_id.to_string()))?;
 
     let output = if full {
@@ -597,10 +591,9 @@ fn handle_tool_load(ctx: &AppContext, args: &Value) -> Result<ToolResult> {
 }
 
 fn handle_tool_evidence(ctx: &AppContext, args: &Value) -> Result<ToolResult> {
-    let skill_id = args
-        .get("skill")
-        .and_then(|v| v.as_str())
-        .ok_or_else(|| MsError::ValidationFailed("Missing required parameter: skill".to_string()))?;
+    let skill_id = args.get("skill").and_then(|v| v.as_str()).ok_or_else(|| {
+        MsError::ValidationFailed("Missing required parameter: skill".to_string())
+    })?;
 
     let rule_id = args.get("rule_id").and_then(|v| v.as_str());
 
@@ -674,14 +667,15 @@ fn handle_tool_list(ctx: &AppContext, args: &Value) -> Result<ToolResult> {
 }
 
 fn handle_tool_show(ctx: &AppContext, args: &Value) -> Result<ToolResult> {
-    let skill_id = args
-        .get("skill")
-        .and_then(|v| v.as_str())
-        .ok_or_else(|| MsError::ValidationFailed("Missing required parameter: skill".to_string()))?;
+    let skill_id = args.get("skill").and_then(|v| v.as_str()).ok_or_else(|| {
+        MsError::ValidationFailed("Missing required parameter: skill".to_string())
+    })?;
 
     let full = args.get("full").and_then(|v| v.as_bool()).unwrap_or(false);
 
-    let skill = ctx.db.get_skill(skill_id)?
+    let skill = ctx
+        .db
+        .get_skill(skill_id)?
         .ok_or_else(|| MsError::SkillNotFound(skill_id.to_string()))?;
 
     let output = if full {
@@ -736,7 +730,9 @@ fn handle_tool_doctor(ctx: &AppContext, args: &Value) -> Result<ToolResult> {
         "message": if git_ok { "Git archive accessible" } else { "Git archive failed" }
     }));
 
-    let all_ok = checks.iter().all(|c| c.get("status").and_then(|s| s.as_str()) == Some("ok"));
+    let all_ok = checks
+        .iter()
+        .all(|c| c.get("status").and_then(|s| s.as_str()) == Some("ok"));
 
     let output = serde_json::json!({
         "status": if all_ok { "healthy" } else { "unhealthy" },
@@ -761,14 +757,20 @@ mod tests {
 
     #[test]
     fn test_jsonrpc_response_success() {
-        let resp = JsonRpcResponse::success(Some(serde_json::json!(1)), serde_json::json!({"ok": true}));
+        let resp =
+            JsonRpcResponse::success(Some(serde_json::json!(1)), serde_json::json!({"ok": true}));
         assert!(resp.result.is_some());
         assert!(resp.error.is_none());
     }
 
     #[test]
     fn test_jsonrpc_response_error() {
-        let resp = JsonRpcResponse::error(Some(serde_json::json!(1)), -32600, "Invalid".to_string(), None);
+        let resp = JsonRpcResponse::error(
+            Some(serde_json::json!(1)),
+            -32600,
+            "Invalid".to_string(),
+            None,
+        );
         assert!(resp.result.is_none());
         assert!(resp.error.is_some());
     }
@@ -791,14 +793,20 @@ mod tests {
     fn test_handle_initialized_notification() {
         // JSON-RPC 2.0: Notifications (no id) MUST NOT receive a response
         let result = handle_initialized(None);
-        assert!(result.is_none(), "Notification should not produce a response");
+        assert!(
+            result.is_none(),
+            "Notification should not produce a response"
+        );
     }
 
     #[test]
     fn test_handle_initialized_with_id() {
         // When id is present (unusual but permitted), respond
         let result = handle_initialized(Some(serde_json::json!(42)));
-        assert!(result.is_some(), "Request with id should produce a response");
+        assert!(
+            result.is_some(),
+            "Request with id should produce a response"
+        );
         let response = result.unwrap();
         assert!(response.result.is_some());
         assert!(response.error.is_none());

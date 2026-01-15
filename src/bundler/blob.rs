@@ -31,18 +31,16 @@ impl BlobStore {
                     MsError::Config(format!("create blob dir {}: {err}", parent.display()))
                 })?;
             }
-            fs::write(&path, bytes).map_err(|err| {
-                MsError::Config(format!("write blob {}: {err}", path.display()))
-            })?;
+            fs::write(&path, bytes)
+                .map_err(|err| MsError::Config(format!("write blob {}: {err}", path.display())))?;
         }
         Ok(hash)
     }
 
     pub fn read_blob(&self, hash: &str) -> Result<Vec<u8>> {
         let path = self.blob_path(hash)?;
-        fs::read(&path).map_err(|err| {
-            MsError::Config(format!("read blob {}: {err}", path.display()))
-        })
+        fs::read(&path)
+            .map_err(|err| MsError::Config(format!("read blob {}: {err}", path.display())))
     }
 
     pub fn has_blob(&self, hash: &str) -> bool {
@@ -56,9 +54,8 @@ impl BlobStore {
 
     pub fn hash_path(path: &Path) -> Result<String> {
         if path.is_file() {
-            let data = fs::read(path).map_err(|err| {
-                MsError::Config(format!("read {}: {err}", path.display()))
-            })?;
+            let data = fs::read(path)
+                .map_err(|err| MsError::Config(format!("read {}: {err}", path.display())))?;
             return Ok(hash_bytes(&data));
         }
 
@@ -78,9 +75,8 @@ impl BlobStore {
             let rel_str = rel.to_string_lossy();
             hasher.update(rel_str.as_bytes());
             hasher.update(&[0u8]);
-            let data = fs::read(&abs).map_err(|err| {
-                MsError::Config(format!("read {}: {err}", abs.display()))
-            })?;
+            let data = fs::read(&abs)
+                .map_err(|err| MsError::Config(format!("read {}: {err}", abs.display())))?;
             hasher.update(data);
         }
 
@@ -98,17 +94,17 @@ impl BlobStore {
         // Validate hash doesn't contain path traversal sequences
         if hash.contains('/') || hash.contains('\\') || hash.contains('\0') {
             return Err(MsError::ValidationFailed(
-                "invalid blob hash: contains path separator or null byte".to_string()
+                "invalid blob hash: contains path separator or null byte".to_string(),
             ));
         }
         if hash.contains("..") {
             return Err(MsError::ValidationFailed(
-                "invalid blob hash: contains path traversal sequence".to_string()
+                "invalid blob hash: contains path traversal sequence".to_string(),
             ));
         }
         if hash.is_empty() {
             return Err(MsError::ValidationFailed(
-                "invalid blob hash: empty".to_string()
+                "invalid blob hash: empty".to_string(),
             ));
         }
         // Additional validation: hash should match expected format (sha256:hex)
@@ -145,9 +141,9 @@ pub(crate) fn collect_files_for_bundle(
     queue.push_back(current.to_path_buf());
 
     while let Some(dir) = queue.pop_front() {
-        for entry in fs::read_dir(&dir).map_err(|err| {
-            MsError::Config(format!("read dir {}: {err}", dir.display()))
-        })? {
+        for entry in fs::read_dir(&dir)
+            .map_err(|err| MsError::Config(format!("read dir {}: {err}", dir.display())))?
+        {
             let entry = entry.map_err(|err| {
                 MsError::Config(format!("read dir entry {}: {err}", dir.display()))
             })?;
@@ -155,10 +151,7 @@ pub(crate) fn collect_files_for_bundle(
             if path.is_dir() {
                 queue.push_back(path);
             } else if path.is_file() {
-                let rel = path
-                    .strip_prefix(root)
-                    .unwrap_or(&path)
-                    .to_path_buf();
+                let rel = path.strip_prefix(root).unwrap_or(&path).to_path_buf();
                 out.push((rel, path));
             }
         }
@@ -220,7 +213,13 @@ mod tests {
 
         // Invalid hex (wrong length or non-hex chars)
         assert!(store.blob_path("sha256:abc").is_err());
-        assert!(store.blob_path("sha256:gggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggg").is_err());
+        assert!(
+            store
+                .blob_path(
+                    "sha256:gggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggg"
+                )
+                .is_err()
+        );
     }
 
     #[test]

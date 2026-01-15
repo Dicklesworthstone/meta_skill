@@ -18,11 +18,7 @@ impl QualityScorer {
         Self::new(QualityWeights::default())
     }
 
-    pub fn score_spec(
-        &self,
-        spec: &SkillSpec,
-        context: &QualityContext,
-    ) -> QualityScore {
+    pub fn score_spec(&self, spec: &SkillSpec, context: &QualityContext) -> QualityScore {
         let structure = score_structure(spec);
         let content = score_content(spec);
         let evidence = score_evidence(context.evidence_count);
@@ -30,18 +26,17 @@ impl QualityScorer {
         let toolchain = if context.toolchain_match { 1.0 } else { 0.4 };
         let freshness = score_freshness(context.modified_at);
 
-        let overall = weighted_average(
-            &[
-                (structure, self.weights.structure_weight),
-                (content, self.weights.content_weight),
-                (evidence, self.weights.evidence_weight),
-                (usage, self.weights.usage_weight),
-                (toolchain, self.weights.toolchain_weight),
-                (freshness, self.weights.freshness_weight),
-            ],
-        );
+        let overall = weighted_average(&[
+            (structure, self.weights.structure_weight),
+            (content, self.weights.content_weight),
+            (evidence, self.weights.evidence_weight),
+            (usage, self.weights.usage_weight),
+            (toolchain, self.weights.toolchain_weight),
+            (freshness, self.weights.freshness_weight),
+        ]);
 
-        let (issues, suggestions) = collect_issues(spec, context, structure, content, evidence, usage);
+        let (issues, suggestions) =
+            collect_issues(spec, context, structure, content, evidence, usage);
 
         QualityScore {
             overall,
@@ -196,7 +191,10 @@ fn score_freshness(modified_at: Option<DateTime<Utc>>) -> f32 {
     let Some(modified_at) = modified_at else {
         return 0.5;
     };
-    let age = Utc::now().signed_duration_since(modified_at).num_days().max(0) as u64;
+    let age = Utc::now()
+        .signed_duration_since(modified_at)
+        .num_days()
+        .max(0) as u64;
     match age {
         0..=30 => 1.0,
         31..=90 => 0.7,
@@ -245,7 +243,10 @@ fn collect_issues(
 
     let has_examples = spec.sections.iter().any(|section| {
         section.title.to_lowercase().contains("example")
-            || section.blocks.iter().any(|b| b.block_type == BlockType::Code)
+            || section
+                .blocks
+                .iter()
+                .any(|b| b.block_type == BlockType::Code)
     });
     if !has_examples {
         issues.push(QualityIssue::NoExamples);

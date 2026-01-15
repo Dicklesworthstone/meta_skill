@@ -5,8 +5,8 @@ use clap::Args;
 use crate::app::AppContext;
 use crate::cli::commands::resolve_skill_markdown;
 use crate::cli::output;
-use crate::core::spec_lens::parse_markdown;
 use crate::core::SkillSpec;
+use crate::core::spec_lens::parse_markdown;
 use crate::error::Result;
 
 #[derive(Args, Debug)]
@@ -116,18 +116,17 @@ fn diff_specs(a: &SkillSpec, b: &SkillSpec, structure_only: bool) -> Vec<String>
             ));
         }
 
-        for (bidx, (block_a, block_b)) in
-            section_a.blocks.iter().zip(section_b.blocks.iter()).enumerate()
+        for (bidx, (block_a, block_b)) in section_a
+            .blocks
+            .iter()
+            .zip(section_b.blocks.iter())
+            .enumerate()
         {
             if block_a.block_type != block_b.block_type {
-                diffs.push(format!(
-                    "section[{idx}].blocks[{bidx}].type differs"
-                ));
+                diffs.push(format!("section[{idx}].blocks[{bidx}].type differs"));
             }
             if !structure_only && block_a.content != block_b.content {
-                diffs.push(format!(
-                    "section[{idx}].blocks[{bidx}].content differs"
-                ));
+                diffs.push(format!("section[{idx}].blocks[{bidx}].content differs"));
             }
         }
     }

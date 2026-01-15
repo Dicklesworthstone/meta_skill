@@ -5,11 +5,10 @@ use colored::Colorize;
 
 use crate::app::AppContext;
 use crate::core::dependencies::{
-    DependencyGraph, DependencyLoadMode, DependencyResolver,
-    DisclosureLevel as DepDisclosure,
+    DependencyGraph, DependencyLoadMode, DependencyResolver, DisclosureLevel as DepDisclosure,
 };
 use crate::core::disclosure::{
-    disclose, DisclosedContent, DisclosureLevel, DisclosurePlan, PackMode, TokenBudget,
+    DisclosedContent, DisclosureLevel, DisclosurePlan, PackMode, TokenBudget, disclose,
 };
 use crate::core::skill::{SkillAssets, SkillMetadata};
 use crate::core::spec_lens::parse_markdown;
@@ -115,9 +114,8 @@ pub fn run(ctx: &AppContext, args: &LoadArgs) -> Result<()> {
     let disclosure_plan = determine_disclosure_plan(args);
 
     // Parse skill body into SkillSpec
-    let spec = parse_markdown(&skill.body).map_err(|e| {
-        MsError::ValidationFailed(format!("failed to parse skill body: {}", e))
-    })?;
+    let spec = parse_markdown(&skill.body)
+        .map_err(|e| MsError::ValidationFailed(format!("failed to parse skill body: {}", e)))?;
 
     // Merge metadata from database into spec metadata
     let metadata = merge_metadata(&skill, &spec.metadata);
@@ -207,8 +205,7 @@ fn determine_disclosure_plan(args: &LoadArgs) -> DisclosurePlan {
 
 fn merge_metadata(skill: &SkillRecord, parsed_meta: &SkillMetadata) -> SkillMetadata {
     // Parse metadata_json from database
-    let db_meta: serde_json::Value =
-        serde_json::from_str(&skill.metadata_json).unwrap_or_default();
+    let db_meta: serde_json::Value = serde_json::from_str(&skill.metadata_json).unwrap_or_default();
 
     SkillMetadata {
         id: skill.id.clone(),
@@ -254,8 +251,7 @@ fn load_dependencies(
     args: &LoadArgs,
 ) -> Result<Vec<String>> {
     // Parse requires from metadata
-    let meta: serde_json::Value =
-        serde_json::from_str(&skill.metadata_json).unwrap_or_default();
+    let meta: serde_json::Value = serde_json::from_str(&skill.metadata_json).unwrap_or_default();
 
     let requires: Vec<String> = meta
         .get("requires")
@@ -683,7 +679,8 @@ mod tests {
             args: LoadArgs,
         }
 
-        let cli = TestCli::parse_from(["test", "skill", "--pack", "1000", "--mode", "utility-first"]);
+        let cli =
+            TestCli::parse_from(["test", "skill", "--pack", "1000", "--mode", "utility-first"]);
         assert_eq!(cli.args.pack, Some(1000));
         assert!(matches!(cli.args.mode, CliPackMode::UtilityFirst));
     }

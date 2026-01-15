@@ -5,15 +5,13 @@
 
 #![cfg(test)]
 
+use std::path::PathBuf;
 use std::process::Command;
 use std::time::Duration;
-use std::path::PathBuf;
 
 use tempfile::TempDir;
 
-use crate::beads::{
-    BeadsClient, CreateIssueRequest, IssueStatus, TestLogger, WorkFilter,
-};
+use crate::beads::{BeadsClient, CreateIssueRequest, IssueStatus, TestLogger, WorkFilter};
 
 /// Test fixture that creates an isolated beads environment.
 ///
@@ -199,9 +197,7 @@ fn test_wal_integrity_during_operations() {
         // Check WAL state after each operation
         let wal_path = db_dir.join("beads.db-wal");
         if wal_path.exists() {
-            let wal_size = std::fs::metadata(&wal_path)
-                .map(|m| m.len())
-                .unwrap_or(0);
+            let wal_size = std::fs::metadata(&wal_path).map(|m| m.len()).unwrap_or(0);
             log.debug(
                 "WAL",
                 &format!("WAL size after op {}: {} bytes", i, wal_size),
@@ -277,21 +273,25 @@ fn test_operation_continuity() {
                 log.success("PASS", "Operations completed without corruption", None);
             } else {
                 // Issue not found but database is queryable - not corruption
-                log.warn(
-                    "PARTIAL",
-                    "Issue not found but database is queryable",
-                    None,
-                );
+                log.warn("PARTIAL", "Issue not found but database is queryable", None);
             }
         }
         Err(e) => {
             let err_str = e.to_string().to_lowercase();
             // Only fail on actual corruption indicators
             if err_str.contains("corrupt") || err_str.contains("malformed") {
-                log.error("FAIL", &format!("Database corruption detected: {}", e), None);
+                log.error(
+                    "FAIL",
+                    &format!("Database corruption detected: {}", e),
+                    None,
+                );
                 panic!("Database appears corrupted: {}", e);
             } else {
-                log.warn("SKIP", &format!("List failed (not corruption): {}", e), None);
+                log.warn(
+                    "SKIP",
+                    &format!("List failed (not corruption): {}", e),
+                    None,
+                );
             }
         }
     }
@@ -418,11 +418,7 @@ fn test_database_lock_detection_via_flock() {
                         "Should not get corruption error: {}",
                         e
                     );
-                    log.info(
-                        "RESULT",
-                        &format!("Got non-corruption error: {}", e),
-                        None,
-                    );
+                    log.info("RESULT", &format!("Got non-corruption error: {}", e), None);
                 }
             }
 
@@ -503,7 +499,11 @@ fn test_wal_files_not_deleted_during_operations() {
         "Database file must exist"
     );
 
-    log.success("PASS", "WAL files properly preserved during operations", None);
+    log.success(
+        "PASS",
+        "WAL files properly preserved during operations",
+        None,
+    );
 }
 
 #[test]
@@ -531,11 +531,7 @@ fn test_rapid_create_operations() {
         match client.create(&req) {
             Ok(issue) => created_ids.push(issue.id),
             Err(e) => {
-                log.warn(
-                    "CREATE",
-                    &format!("Failed at iteration {}: {}", i, e),
-                    None,
-                );
+                log.warn("CREATE", &format!("Failed at iteration {}: {}", i, e), None);
             }
         }
     }

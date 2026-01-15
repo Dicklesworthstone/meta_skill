@@ -2,7 +2,7 @@ use std::fs;
 use std::path::PathBuf;
 
 use ms::core::spec_lens::parse_markdown;
-use ms::test_utils::{run_table_tests, TestCase};
+use ms::test_utils::{TestCase, run_table_tests};
 
 fn fixture_path(relative: &str) -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(relative)

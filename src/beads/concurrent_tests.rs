@@ -238,7 +238,10 @@ fn test_concurrent_reads() {
 
     log.success(
         "PASS",
-        &format!("Concurrent reads: {}/{} succeeded", total_success, total_attempts),
+        &format!(
+            "Concurrent reads: {}/{} succeeded",
+            total_success, total_attempts
+        ),
         None,
     );
 }
@@ -333,7 +336,11 @@ fn test_concurrent_writes_no_corruption() {
                 "Database corrupted after concurrent writes: {}",
                 e
             );
-            log.warn("VERIFY", &format!("List failed (not corruption): {}", e), None);
+            log.warn(
+                "VERIFY",
+                &format!("List failed (not corruption): {}", e),
+                None,
+            );
         }
     }
 
@@ -410,10 +417,7 @@ fn test_sync_after_each_agent_pattern() {
     let filter = WorkFilter::default();
     match client.list(&filter) {
         Ok(issues) => {
-            let agent_issues = issues
-                .iter()
-                .filter(|i| i.title.contains("Agent"))
-                .count();
+            let agent_issues = issues.iter().filter(|i| i.title.contains("Agent")).count();
             log.info(
                 "VERIFY",
                 &format!(
@@ -558,16 +562,20 @@ fn test_interleaved_read_write() {
                 &format!("Database has {} issues after interleaved ops", issues.len()),
                 None,
             );
-            log.success("PASS", "Interleaved read-write completed without corruption", None);
+            log.success(
+                "PASS",
+                "Interleaved read-write completed without corruption",
+                None,
+            );
         }
         Err(e) => {
             let err_str = e.to_string().to_lowercase();
-            assert!(
-                !err_str.contains("corrupt"),
-                "Database corrupted: {}",
-                e
+            assert!(!err_str.contains("corrupt"), "Database corrupted: {}", e);
+            log.warn(
+                "PARTIAL",
+                &format!("List failed (not corruption): {}", e),
+                None,
             );
-            log.warn("PARTIAL", &format!("List failed (not corruption): {}", e), None);
         }
     }
 }
@@ -610,8 +618,7 @@ fn test_stress_rapid_concurrent_ops() {
                 for j in 0..5 {
                     // Alternate between read and write
                     if j % 2 == 0 {
-                        let req =
-                            CreateIssueRequest::new(&format!("Stress {} - {}", thread_id, j));
+                        let req = CreateIssueRequest::new(&format!("Stress {} - {}", thread_id, j));
                         if client.create(&req).is_ok() {
                             ops += 1;
                         }
@@ -658,7 +665,11 @@ fn test_stress_rapid_concurrent_ops() {
                 "Database corrupted after stress: {}",
                 e
             );
-            log.warn("PARTIAL", &format!("List failed (not corruption): {}", e), None);
+            log.warn(
+                "PARTIAL",
+                &format!("List failed (not corruption): {}", e),
+                None,
+            );
         }
     }
 }

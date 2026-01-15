@@ -11,8 +11,8 @@ fn test_init_creates_config() {
     assert!(output.success, "init command failed");
     assert!(fixture.config_path.exists(), "config.toml not created");
 
-    let config_content = std::fs::read_to_string(&fixture.config_path)
-        .expect("Failed to read config");
+    let config_content =
+        std::fs::read_to_string(&fixture.config_path).expect("Failed to read config");
     assert!(
         config_content.contains("[skill_paths]"),
         "config missing [skill_paths] section"
@@ -78,8 +78,14 @@ fn test_index_empty_directory() {
 #[test]
 fn test_index_with_skills() {
     let skills = vec![
-        TestSkill::new("rust-error-handling", "Best practices for error handling in Rust"),
-        TestSkill::new("git-workflow", "Standard git branching and merging workflow"),
+        TestSkill::new(
+            "rust-error-handling",
+            "Best practices for error handling in Rust",
+        ),
+        TestSkill::new(
+            "git-workflow",
+            "Standard git branching and merging workflow",
+        ),
     ];
 
     let fixture = TestFixture::with_indexed_skills("test_index_with_skills", &skills);
@@ -107,8 +113,14 @@ fn test_list_shows_indexed_skills() {
     let output = fixture.run_ms(&["list"]);
 
     assert!(output.success, "list command failed");
-    assert!(output.stdout.contains("test-skill-1"), "Missing skill-1 in output");
-    assert!(output.stdout.contains("test-skill-2"), "Missing skill-2 in output");
+    assert!(
+        output.stdout.contains("test-skill-1"),
+        "Missing skill-1 in output"
+    );
+    assert!(
+        output.stdout.contains("test-skill-2"),
+        "Missing skill-2 in output"
+    );
 
     fixture.open_db();
     fixture.verify_db_state(
@@ -181,14 +193,24 @@ fn test_search_finds_matching_skills() {
         TestSkill::new("git-basics", "Basic git commands and workflow"),
     ];
 
-    let mut fixture = TestFixture::with_indexed_skills("test_search_finds_matching_skills", &skills);
+    let mut fixture =
+        TestFixture::with_indexed_skills("test_search_finds_matching_skills", &skills);
 
     let output = fixture.run_ms(&["search", "async"]);
 
     assert!(output.success, "search command failed");
-    assert!(output.stdout.contains("rust-async"), "Missing rust-async in results");
-    assert!(output.stdout.contains("python-async"), "Missing python-async in results");
-    assert!(!output.stdout.contains("git-basics"), "git-basics should not match 'async'");
+    assert!(
+        output.stdout.contains("rust-async"),
+        "Missing rust-async in results"
+    );
+    assert!(
+        output.stdout.contains("python-async"),
+        "Missing python-async in results"
+    );
+    assert!(
+        !output.stdout.contains("git-basics"),
+        "git-basics should not match 'async'"
+    );
 
     fixture.open_db();
     fixture.verify_db_state(
@@ -230,7 +252,10 @@ fn test_build_guided_and_auto_mutually_exclusive() {
     // --guided and --auto should fail
     let output = fixture.run_ms(&["build", "--guided", "--auto", "--from-cass", "test"]);
 
-    assert!(!output.success, "guided and auto should be mutually exclusive");
+    assert!(
+        !output.success,
+        "guided and auto should be mutually exclusive"
+    );
     assert!(
         output.stderr.contains("mutually exclusive") || output.stderr.contains("error"),
         "Should report mutual exclusivity"
@@ -246,7 +271,10 @@ fn test_build_auto_requires_from_cass() {
     // --auto without --from-cass should fail
     let output = fixture.run_ms(&["--robot", "build", "--auto"]);
 
-    assert!(!output.success, "auto build without --from-cass should fail");
+    assert!(
+        !output.success,
+        "auto build without --from-cass should fail"
+    );
 
     let json: Value = serde_json::from_str(&output.stdout).unwrap_or_default();
     assert!(
@@ -287,7 +315,10 @@ fn test_build_resume_nonexistent() {
     // Resume with nonexistent checkpoint
     let output = fixture.run_ms(&["--robot", "build", "--resume", "nonexistent-session-id"]);
 
-    assert!(output.success, "resume should handle missing checkpoint gracefully");
+    assert!(
+        output.success,
+        "resume should handle missing checkpoint gracefully"
+    );
 
     let json: Value = serde_json::from_str(&output.stdout).expect("Invalid JSON output");
 

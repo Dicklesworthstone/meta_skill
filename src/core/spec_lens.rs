@@ -2,8 +2,8 @@
 
 use serde_json::Value as JsonValue;
 
-use crate::error::{MsError, Result};
 use super::skill::{BlockType, SkillBlock, SkillMetadata, SkillSection, SkillSpec};
+use crate::error::{MsError, Result};
 
 /// Bidirectional mapping between SkillSpec and SKILL.md.
 pub struct SpecLens;
@@ -185,12 +185,12 @@ pub fn parse_markdown(content: &str) -> Result<SkillSpec> {
     if metadata.description.is_empty() {
         metadata.description = description_lines.join("\n").trim().to_string();
     }
-    
+
     // If name wasn't in frontmatter, use extracted one
     if metadata.name.is_empty() {
         metadata.name = name;
     }
-    
+
     if metadata.version.is_empty() {
         metadata.version = "0.1.0".to_string();
     }
@@ -291,9 +291,9 @@ mod tests {
         let md = "# Sample Skill\n\nA short description.\n\n## Usage\n\nDo the thing.\n\n```bash\nls -la\n```\n";
         let parsed = parse_markdown(md).expect("parse");
         let compiled = compile_markdown(&parsed);
-        
+
         let expected = "---\nid: sample-skill\nname: Sample Skill\nversion: 0.1.0\ndescription: A short description.\ntags: []\nrequires: []\nprovides: []\nplatforms: []\nauthor: null\nlicense: null\n---\n\n# Sample Skill\n\nA short description.\n\n## Usage\n\nDo the thing.\n\n```bash\nls -la\n```\n";
-        
+
         assert_eq!(compiled, expected);
     }
     #[test]

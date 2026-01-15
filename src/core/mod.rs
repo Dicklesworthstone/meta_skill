@@ -27,13 +27,13 @@ pub use packing::{
     ConstrainedPacker, CoverageQuota, MandatoryPredicate, MandatorySlice, PackConstraints,
     PackError, PackResult,
 };
-pub use skill::{
-    BlockType, EvidenceCoverage, EvidenceLevel, EvidenceRef, Skill, SkillBlock,
-    SkillEvidenceIndex, SkillLayer, SkillMetadata, SkillSection, SkillSpec,
-};
 pub use recovery::{
-    with_retry, with_retry_if, Checkpoint, FailureMode, RecoveryIssue, RecoveryManager,
-    RecoveryReport, RetryConfig,
+    Checkpoint, FailureMode, RecoveryIssue, RecoveryManager, RecoveryReport, RetryConfig,
+    with_retry, with_retry_if,
+};
+pub use skill::{
+    BlockType, EvidenceCoverage, EvidenceLevel, EvidenceRef, Skill, SkillBlock, SkillEvidenceIndex,
+    SkillLayer, SkillMetadata, SkillSection, SkillSpec,
 };
 pub use slicing::{SkillSliceIndex, SkillSlicer};
 pub use spec_migration::migrate_spec;

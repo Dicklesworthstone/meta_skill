@@ -76,29 +76,21 @@ struct CreateReleaseRequest<'a> {
 
 /// Publish a bundle file to GitHub releases.
 pub fn publish_bundle(path: &Path, config: &GitHubConfig) -> Result<PublishResult> {
-    let bytes = std::fs::read(path).map_err(|err| {
-        MsError::Config(format!("read bundle {}: {err}", path.display()))
-    })?;
+    let bytes = std::fs::read(path)
+        .map_err(|err| MsError::Config(format!("read bundle {}: {err}", path.display())))?;
     let package = BundlePackage::from_bytes(&bytes)?;
     package.verify()?;
 
     let repo = parse_repo(&config.repo)?;
     let (owner, repo_name) = (repo.owner, repo.repo);
-    let token = config
-        .token
-        .clone()
-        .or_else(|| token_from_env());
+    let token = config.token.clone().or_else(|| token_from_env());
     if token.is_none() {
         return Err(MsError::ValidationFailed(
             "GitHub token required for bundle publish".to_string(),
         ));
     }
 
-    let version = package
-        .manifest
-        .bundle
-        .version
-        .clone();
+    let version = package.manifest.bundle.version.clone();
     let tag = config
         .tag
         .clone()
@@ -163,10 +155,7 @@ pub fn download_bundle(
     let release = match tag {
         Some(tag) => client
             .get_release_by_tag(&owner, &repo_name, tag)?
-            .ok_or_else(|| MsError::ValidationFailed(format!(
-                "release tag not found: {}",
-                tag
-            )))?,
+            .ok_or_else(|| MsError::ValidationFailed(format!("release tag not found: {}", tag)))?,
         None => client.get_latest_release(&owner, &repo_name)?,
     };
 
@@ -211,10 +200,7 @@ fn select_asset(assets: &[ReleaseAsset], requested: Option<&str>) -> Result<Rele
             .iter()
             .find(|asset| asset.name == name)
             .cloned()
-            .ok_or_else(|| MsError::ValidationFailed(format!(
-                "bundle asset not found: {}",
-                name
-            )));
+            .ok_or_else(|| MsError::ValidationFailed(format!("bundle asset not found: {}", name)));
     }
 
     let mut candidates = assets
@@ -298,12 +284,7 @@ impl GitHubClient {
         }
     }
 
-    fn get_release_by_tag(
-        &self,
-        owner: &str,
-        repo: &str,
-        tag: &str,
-    ) -> Result<Option<Release>> {
+    fn get_release_by_tag(&self, owner: &str, repo: &str, tag: &str) -> Result<Option<Release>> {
         let url = format!("{GH_API}/repos/{owner}/{repo}/releases/tags/{tag}");
         let response = self.get(&url)?;
         if response.status() == reqwest::StatusCode::NOT_FOUND {
@@ -315,9 +296,9 @@ impl GitHubClient {
                 response.status()
             )));
         }
-        let release = response.json::<Release>().map_err(|err| {
-            MsError::Config(format!("parse release response: {err}"))
-        })?;
+        let release = response
+            .json::<Release>()
+            .map_err(|err| MsError::Config(format!("parse release response: {err}")))?;
         Ok(Some(release))
     }
 
@@ -416,12 +397,7 @@ impl GitHubClient {
         Ok(bytes)
     }
 
-    fn download_release_asset(
-        &self,
-        owner: &str,
-        repo: &str,
-        asset_id: u64,
-    ) -> Result<Vec<u8>> {
+    fn download_release_asset(&self, owner: &str, repo: &str, asset_id: u64) -> Result<Vec<u8>> {
         use std::io::Read;
 
         let url = format!("{GH_API}/repos/{owner}/{repo}/releases/assets/{asset_id}");
@@ -529,9 +505,9 @@ fn parse_json_response<T: for<'de> Deserialize<'de>>(
             response.status()
         )));
     }
-    response.json::<T>().map_err(|err| {
-        MsError::Config(format!("{label} parse failed: {err}"))
-    })
+    response
+        .json::<T>()
+        .map_err(|err| MsError::Config(format!("{label} parse failed: {err}")))
 }
 
 #[cfg(test)]
@@ -650,8 +626,12 @@ mod tests {
     fn is_github_url_accepts_github_domains() {
         assert!(is_github_url("https://github.com/owner/repo"));
         assert!(is_github_url("https://api.github.com/repos/owner/repo"));
-        assert!(is_github_url("https://raw.githubusercontent.com/owner/repo/main/file"));
-        assert!(is_github_url("https://objects.githubusercontent.com/some/path"));
+        assert!(is_github_url(
+            "https://raw.githubusercontent.com/owner/repo/main/file"
+        ));
+        assert!(is_github_url(
+            "https://objects.githubusercontent.com/some/path"
+        ));
         // Case insensitive
         assert!(is_github_url("HTTPS://GITHUB.COM/owner/repo"));
     }

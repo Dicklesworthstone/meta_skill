@@ -143,7 +143,11 @@ pub fn fuse_results(
 
     // Sort by RRF score (descending)
     let mut results: Vec<HybridResult> = scores.into_values().collect();
-    results.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap_or(std::cmp::Ordering::Equal));
+    results.sort_by(|a, b| {
+        b.score
+            .partial_cmp(&a.score)
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
 
     results
 }
@@ -194,10 +198,7 @@ mod tests {
     #[test]
     fn test_bm25_only() {
         let config = RrfConfig::default();
-        let bm25 = vec![
-            ("skill-1".to_string(), 5.0),
-            ("skill-2".to_string(), 3.0),
-        ];
+        let bm25 = vec![("skill-1".to_string(), 5.0), ("skill-2".to_string(), 3.0)];
 
         let results = fuse_results(&bm25, &[], &config);
 
@@ -211,10 +212,7 @@ mod tests {
     #[test]
     fn test_semantic_only() {
         let config = RrfConfig::default();
-        let semantic = vec![
-            ("skill-a".to_string(), 0.9),
-            ("skill-b".to_string(), 0.7),
-        ];
+        let semantic = vec![("skill-a".to_string(), 0.9), ("skill-b".to_string(), 0.7)];
 
         let results = fuse_results(&[], &semantic, &config);
 
@@ -229,14 +227,8 @@ mod tests {
         let config = RrfConfig::default();
 
         // Both systems rank the same skills
-        let bm25 = vec![
-            ("skill-1".to_string(), 5.0),
-            ("skill-2".to_string(), 3.0),
-        ];
-        let semantic = vec![
-            ("skill-2".to_string(), 0.9),
-            ("skill-1".to_string(), 0.8),
-        ];
+        let bm25 = vec![("skill-1".to_string(), 5.0), ("skill-2".to_string(), 3.0)];
+        let semantic = vec![("skill-2".to_string(), 0.9), ("skill-1".to_string(), 0.8)];
 
         let results = fuse_results(&bm25, &semantic, &config);
 

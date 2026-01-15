@@ -46,11 +46,11 @@ fn test_list_filters() {
 #[test]
 fn test_init_global() {
     let fixture = TestFixture::new("test_init_global");
-    
+
     // Set XDG vars to point to fixture's temp dir
     let data_home = fixture.temp_dir.path().join(".local/share");
     let config_home = fixture.temp_dir.path().join(".config");
-    
+
     // We need to run this command with specific env vars
     let output = fixture.run_ms_with_env(
         &["init", "--global"],
@@ -61,10 +61,13 @@ fn test_init_global() {
     );
 
     assert!(output.success, "init --global failed");
-    
+
     // Verify config created
-    assert!(config_home.join("ms/config.toml").exists(), "Global config not created");
-    
+    assert!(
+        config_home.join("ms/config.toml").exists(),
+        "Global config not created"
+    );
+
     // Global init does not create data directories immediately (they are created on demand)
     // So we don't assert data_home exists yet.
 }
@@ -72,30 +75,36 @@ fn test_init_global() {
 #[test]
 fn test_shell_hooks() {
     let fixture = TestFixture::new("test_shell_hooks");
-    
+
     // Test bash hook
     let output = fixture.run_ms(&["shell", "--shell", "bash"]);
     assert!(output.success);
-    assert!(output.stdout.contains("ms_suggest_prompt"), "bash hook missing ms_suggest_prompt");
-    
+    assert!(
+        output.stdout.contains("ms_suggest_prompt"),
+        "bash hook missing ms_suggest_prompt"
+    );
+
     // Test zsh hook
     let output = fixture.run_ms(&["shell", "--shell", "zsh"]);
     assert!(output.success);
-    assert!(output.stdout.contains("ms_suggest_precmd"), "zsh hook missing ms_suggest_precmd");
+    assert!(
+        output.stdout.contains("ms_suggest_precmd"),
+        "zsh hook missing ms_suggest_precmd"
+    );
 }
 
 #[test]
 fn test_evidence_cli() {
     let skills = vec![TestSkill::new("skill-with-evidence", "Skill with evidence")];
     let mut fixture = TestFixture::with_indexed_skills("test_evidence_cli", &skills);
-    
+
     fixture.open_db();
-    
+
     // Manually insert evidence into DB
     if let Some(conn) = &fixture.db {
         let evidence_json = r#"[{"session_id":"session-abc","message_range":[0,1],"snippet_hash":"hash123","level":"pointer","confidence":0.95}]"#;
         let coverage_json = r#"{"total_rules":1,"rules_with_evidence":1,"avg_confidence":0.95}"#;
-        
+
         conn.execute(
             "INSERT INTO skill_evidence (skill_id, rule_id, evidence_json, coverage_json, updated_at) 
              VALUES (?1, ?2, ?3, ?4, ?5)",
@@ -114,7 +123,7 @@ fn test_evidence_cli() {
     assert!(output.success);
     assert!(output.stdout.contains("skill-with-evidence"));
     assert!(output.stdout.contains("rule-1"));
-    
+
     // Test show
     let output = fixture.run_ms(&["evidence", "show", "skill-with-evidence"]);
     assert!(output.success);

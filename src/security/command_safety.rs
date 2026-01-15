@@ -63,7 +63,10 @@ impl SafetyGate {
         let db = match Database::open(&db_path) {
             Ok(db) => Some(Arc::new(db)),
             Err(err) => {
-                warn!("safety gate: could not open database at {}: {err}", db_path.display());
+                warn!(
+                    "safety gate: could not open database at {}: {err}",
+                    db_path.display()
+                );
                 None
             }
         };
@@ -95,7 +98,10 @@ impl SafetyGate {
             Ok(decision) => (decision, false),
             Err(err) => {
                 warn!("dcg unavailable: {err}");
-                (DcgDecision::unavailable(format!("dcg unavailable: {err}")), true)
+                (
+                    DcgDecision::unavailable(format!("dcg unavailable: {err}")),
+                    true,
+                )
             }
         };
 
@@ -106,7 +112,10 @@ impl SafetyGate {
                 return Err(MsError::DestructiveBlocked(format!(
                     "command blocked (safety system unavailable): {}. {}",
                     decision.reason,
-                    decision.remediation.as_deref().unwrap_or("Install DCG to enable command evaluation")
+                    decision
+                        .remediation
+                        .as_deref()
+                        .unwrap_or("Install DCG to enable command evaluation")
                 )));
             }
 
@@ -136,7 +145,12 @@ impl SafetyGate {
         Ok(())
     }
 
-    fn log_event(&self, command: &str, decision: &DcgDecision, session_id: Option<&str>) -> Result<()> {
+    fn log_event(
+        &self,
+        command: &str,
+        decision: &DcgDecision,
+        session_id: Option<&str>,
+    ) -> Result<()> {
         let Some(db) = self.db.as_ref() else {
             return Ok(());
         };
@@ -150,7 +164,6 @@ impl SafetyGate {
         };
         db.insert_command_safety_event(&event)
     }
-
 }
 
 fn approval_matches(command: &str) -> bool {
@@ -159,16 +172,11 @@ fn approval_matches(command: &str) -> bool {
         std::env::var("MS_APPROVE").ok(),
     ];
 
-    candidates
-        .iter()
-        .flatten()
-        .any(|value| value == command)
+    candidates.iter().flatten().any(|value| value == command)
 }
 
 fn approval_hint(command: &str) -> String {
-    format!(
-        "approval required: set MS_APPROVE_COMMAND to exact command: {command}"
-    )
+    format!("approval required: set MS_APPROVE_COMMAND to exact command: {command}")
 }
 
 fn find_ms_root() -> Result<PathBuf> {
@@ -264,7 +272,8 @@ mod tests {
     fn find_upwards_stops_at_root() {
         // Start from temp, look for something that definitely doesn't exist
         let temp = TempDir::new().unwrap();
-        let result = find_upwards(temp.path(), "definitely_not_a_real_directory_name_xyz123").unwrap();
+        let result =
+            find_upwards(temp.path(), "definitely_not_a_real_directory_name_xyz123").unwrap();
         assert_eq!(result, None);
     }
 

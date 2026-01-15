@@ -5,11 +5,11 @@
 use std::process::ExitCode;
 
 use clap::Parser;
-use tracing_subscriber::{fmt, prelude::*, EnvFilter};
+use tracing_subscriber::{EnvFilter, fmt, prelude::*};
 
+use ms::Result;
 use ms::app::AppContext;
 use ms::cli::{Cli, Commands};
-use ms::Result;
 
 fn main() -> ExitCode {
     let cli = Cli::parse();
@@ -59,8 +59,7 @@ fn init_tracing(cli: &Cli) {
         _ => "trace",
     };
 
-    let env_filter = EnvFilter::try_from_default_env()
-        .unwrap_or_else(|_| EnvFilter::new(filter));
+    let env_filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new(filter));
 
     if cli.robot {
         // JSON logging for robot mode

@@ -21,11 +21,7 @@ pub fn matches_skill_record(filters: &SearchFilters, skill: &SkillRecord) -> boo
 }
 
 /// Filter a list of skill IDs based on a lookup function
-pub fn filter_skill_ids<F>(
-    skill_ids: &[String],
-    filters: &SearchFilters,
-    lookup: F,
-) -> Vec<String>
+pub fn filter_skill_ids<F>(skill_ids: &[String], filters: &SearchFilters, lookup: F) -> Vec<String>
 where
     F: Fn(&str) -> Option<SkillRecord>,
 {
@@ -75,10 +71,16 @@ fn parse_tags_from_metadata(metadata_json: &str) -> Vec<String> {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use super::super::context::SearchLayer;
+    use super::*;
 
-    fn make_skill(id: &str, layer: &str, quality: f64, deprecated: bool, tags: &[&str]) -> SkillRecord {
+    fn make_skill(
+        id: &str,
+        layer: &str,
+        quality: f64,
+        deprecated: bool,
+        tags: &[&str],
+    ) -> SkillRecord {
         let tags_json = serde_json::json!({ "tags": tags });
         SkillRecord {
             id: id.to_string(),
@@ -131,7 +133,7 @@ mod tests {
         let python_skill = make_skill("s3", "project", 0.8, false, &["python"]);
 
         assert!(matches_skill_record(&filters, &rust_skill)); // has "rust"
-        assert!(matches_skill_record(&filters, &cli_skill));  // has "cli"
+        assert!(matches_skill_record(&filters, &cli_skill)); // has "cli"
         assert!(!matches_skill_record(&filters, &python_skill)); // no match
     }
 
@@ -221,7 +223,11 @@ mod tests {
         let lookup = |id: &str| skills.iter().find(|s| s.id == id).cloned();
 
         let filters = SearchFilters::new().layer(SearchLayer::Project);
-        let ids = vec!["rust-cli".to_string(), "python-web".to_string(), "deprecated".to_string()];
+        let ids = vec![
+            "rust-cli".to_string(),
+            "python-web".to_string(),
+            "deprecated".to_string(),
+        ];
 
         // Should filter to project layer, excluding deprecated
         let filtered = filter_skill_ids(&ids, &filters, lookup);

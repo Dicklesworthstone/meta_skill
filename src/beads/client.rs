@@ -12,7 +12,7 @@ use crate::security::SafetyGate;
 
 use super::types::{CreateIssueRequest, Issue, IssueStatus, UpdateIssueRequest, WorkFilter};
 use super::version::{
-    BeadsVersion, VersionCompatibility, MINIMUM_SUPPORTED_VERSION, RECOMMENDED_VERSION,
+    BeadsVersion, MINIMUM_SUPPORTED_VERSION, RECOMMENDED_VERSION, VersionCompatibility,
 };
 
 /// Client for interacting with the beads (bd) issue tracker.
@@ -120,9 +120,9 @@ impl BeadsClient {
             }
         }
 
-        let raw = self.version().ok_or_else(|| {
-            MsError::BeadsUnavailable("bd version not available".to_string())
-        })?;
+        let raw = self
+            .version()
+            .ok_or_else(|| MsError::BeadsUnavailable("bd version not available".to_string()))?;
         BeadsVersion::parse(&raw)
     }
 
@@ -181,22 +181,28 @@ impl BeadsClient {
         }
 
         // Label filters
-        let label_args: Vec<String> = filter.labels.iter().map(|l| format!("--label={}", l)).collect();
+        let label_args: Vec<String> = filter
+            .labels
+            .iter()
+            .map(|l| format!("--label={}", l))
+            .collect();
         for label_arg in &label_args {
             args.push(label_arg);
         }
 
         let output = self.run_command(&args)?;
-        let issues: Vec<Issue> = serde_json::from_slice(&output)
-            .map_err(|e| MsError::BeadsUnavailable(format!("failed to parse list output: {}", e)))?;
+        let issues: Vec<Issue> = serde_json::from_slice(&output).map_err(|e| {
+            MsError::BeadsUnavailable(format!("failed to parse list output: {}", e))
+        })?;
         Ok(issues)
     }
 
     /// List issues ready to work (open and unblocked).
     pub fn ready(&self) -> Result<Vec<Issue>> {
         let output = self.run_command(&["ready", "--json"])?;
-        let issues: Vec<Issue> = serde_json::from_slice(&output)
-            .map_err(|e| MsError::BeadsUnavailable(format!("failed to parse ready output: {}", e)))?;
+        let issues: Vec<Issue> = serde_json::from_slice(&output).map_err(|e| {
+            MsError::BeadsUnavailable(format!("failed to parse ready output: {}", e))
+        })?;
         Ok(issues)
     }
 
@@ -208,12 +214,14 @@ impl BeadsClient {
         let output = self.run_command(&["show", issue_id, "--json"])?;
 
         // bd show returns an array with one element
-        let issues: Vec<Issue> = serde_json::from_slice(&output)
-            .map_err(|e| MsError::BeadsUnavailable(format!("failed to parse show output: {}", e)))?;
+        let issues: Vec<Issue> = serde_json::from_slice(&output).map_err(|e| {
+            MsError::BeadsUnavailable(format!("failed to parse show output: {}", e))
+        })?;
 
-        issues.into_iter().next().ok_or_else(|| {
-            MsError::NotFound(format!("issue not found: {}", issue_id))
-        })
+        issues
+            .into_iter()
+            .next()
+            .ok_or_else(|| MsError::NotFound(format!("issue not found: {}", issue_id)))
     }
 
     /// Create a new issue.
@@ -248,8 +256,9 @@ impl BeadsClient {
         let output = self.run_command(&args_refs)?;
 
         // bd create --json returns a single object (not an array)
-        let issue: Issue = serde_json::from_slice(&output)
-            .map_err(|e| MsError::BeadsUnavailable(format!("failed to parse create output: {}", e)))?;
+        let issue: Issue = serde_json::from_slice(&output).map_err(|e| {
+            MsError::BeadsUnavailable(format!("failed to parse create output: {}", e))
+        })?;
         Ok(issue)
     }
 
@@ -297,12 +306,14 @@ impl BeadsClient {
         let output = self.run_command(&args_refs)?;
 
         // bd update --json returns an array with one element
-        let issues: Vec<Issue> = serde_json::from_slice(&output)
-            .map_err(|e| MsError::BeadsUnavailable(format!("failed to parse update output: {}", e)))?;
+        let issues: Vec<Issue> = serde_json::from_slice(&output).map_err(|e| {
+            MsError::BeadsUnavailable(format!("failed to parse update output: {}", e))
+        })?;
 
-        issues.into_iter().next().ok_or_else(|| {
-            MsError::NotFound(format!("issue not found: {}", issue_id))
-        })
+        issues
+            .into_iter()
+            .next()
+            .ok_or_else(|| MsError::NotFound(format!("issue not found: {}", issue_id)))
     }
 
     /// Update just the status of an issue (convenience method).
@@ -326,12 +337,14 @@ impl BeadsClient {
         let output = self.run_command(&args_refs)?;
 
         // bd close --json returns an array with one element
-        let issues: Vec<Issue> = serde_json::from_slice(&output)
-            .map_err(|e| MsError::BeadsUnavailable(format!("failed to parse close output: {}", e)))?;
+        let issues: Vec<Issue> = serde_json::from_slice(&output).map_err(|e| {
+            MsError::BeadsUnavailable(format!("failed to parse close output: {}", e))
+        })?;
 
-        issues.into_iter().next().ok_or_else(|| {
-            MsError::NotFound(format!("issue not found: {}", issue_id))
-        })
+        issues
+            .into_iter()
+            .next()
+            .ok_or_else(|| MsError::NotFound(format!("issue not found: {}", issue_id)))
     }
 
     /// Close multiple issues at once.
@@ -350,8 +363,9 @@ impl BeadsClient {
         let args_refs: Vec<&str> = args.iter().map(|s| s.as_str()).collect();
         let output = self.run_command(&args_refs)?;
 
-        let issues: Vec<Issue> = serde_json::from_slice(&output)
-            .map_err(|e| MsError::BeadsUnavailable(format!("failed to parse close output: {}", e)))?;
+        let issues: Vec<Issue> = serde_json::from_slice(&output).map_err(|e| {
+            MsError::BeadsUnavailable(format!("failed to parse close output: {}", e))
+        })?;
         Ok(issues)
     }
 
@@ -480,7 +494,9 @@ pub enum SyncStatus {
 /// (e.g., "meta_skill-abc123", "proj-7t2", ".tmpXXX-abc").
 fn validate_issue_id(id: &str) -> Result<()> {
     if id.is_empty() {
-        return Err(MsError::ValidationFailed("issue ID cannot be empty".to_string()));
+        return Err(MsError::ValidationFailed(
+            "issue ID cannot be empty".to_string(),
+        ));
     }
 
     // Check for path traversal and shell metacharacters
@@ -497,7 +513,10 @@ fn validate_issue_id(id: &str) -> Result<()> {
     }
 
     // Check for shell metacharacters that could enable injection
-    const FORBIDDEN: &[char] = &['|', '&', ';', '$', '`', '(', ')', '{', '}', '<', '>', '!', '*', '?', '[', ']', '#', '~', '\'', '"', '\n', '\r'];
+    const FORBIDDEN: &[char] = &[
+        '|', '&', ';', '$', '`', '(', ')', '{', '}', '<', '>', '!', '*', '?', '[', ']', '#', '~',
+        '\'', '"', '\n', '\r',
+    ];
     if id.chars().any(|c| FORBIDDEN.contains(&c)) {
         return Err(MsError::ValidationFailed(
             "issue ID contains shell metacharacters".to_string(),
@@ -507,7 +526,10 @@ fn validate_issue_id(id: &str) -> Result<()> {
     // Must match expected format: word-word or word_word-alphanum
     // Allow alphanumeric, underscore, hyphen, and dots (for temp dir names like .tmpXXX)
     // Single dots are OK; double dots are blocked above for path traversal
-    if !id.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_' || c == '.') {
+    if !id
+        .chars()
+        .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_' || c == '.')
+    {
         return Err(MsError::ValidationFailed(format!(
             "issue ID contains invalid characters: {}",
             id
@@ -546,7 +568,9 @@ fn classify_beads_error(exit_code: i32, stderr: &str) -> MsError {
     }
 
     // Sync errors
-    if stderr_lower.contains("sync") && (stderr_lower.contains("fail") || stderr_lower.contains("error")) {
+    if stderr_lower.contains("sync")
+        && (stderr_lower.contains("fail") || stderr_lower.contains("error"))
+    {
         return MsError::TransactionFailed(format!("beads sync failed: {}", stderr));
     }
 
@@ -574,8 +598,8 @@ mod tests {
 
     #[test]
     fn test_beads_client_builder() {
-        let client = BeadsClient::with_binary("/usr/local/bin/bd")
-            .with_work_dir("/data/projects/test");
+        let client =
+            BeadsClient::with_binary("/usr/local/bin/bd").with_work_dir("/data/projects/test");
         assert_eq!(client.bd_bin, PathBuf::from("/usr/local/bin/bd"));
         assert_eq!(client.work_dir, Some(PathBuf::from("/data/projects/test")));
     }
@@ -769,7 +793,8 @@ mod integration_tests {
             client.is_available(),
             "bd should be available in test environment"
         );
-        env.log().success("VERIFY", "is_available() returns true", None);
+        env.log()
+            .success("VERIFY", "is_available() returns true", None);
     }
 
     #[test]
@@ -777,7 +802,10 @@ mod integration_tests {
         let mut log = TestLogger::new("test_unavailable");
 
         let client = BeadsClient::with_binary("/nonexistent/path/to/bd");
-        assert!(!client.is_available(), "Should be unavailable with bad path");
+        assert!(
+            !client.is_available(),
+            "Should be unavailable with bad path"
+        );
 
         log.success("VERIFY", "is_available() returns false for bad path", None);
     }
@@ -827,7 +855,8 @@ mod integration_tests {
 
         let updated = client.show(&issue.id).expect("Should still be readable");
         assert_eq!(updated.status, IssueStatus::InProgress);
-        env.log().success("UPDATE", "Status updated to in_progress", None);
+        env.log()
+            .success("UPDATE", "Status updated to in_progress", None);
 
         // CLOSE
         env.log().info("LIFECYCLE", "Phase 4: Close", None);
@@ -837,9 +866,11 @@ mod integration_tests {
 
         let closed = client.show(&issue.id).expect("Should still be readable");
         assert_eq!(closed.status, IssueStatus::Closed);
-        env.log().success("CLOSE", "Issue closed successfully", None);
+        env.log()
+            .success("CLOSE", "Issue closed successfully", None);
 
-        env.log().success("LIFECYCLE", "Full lifecycle completed", None);
+        env.log()
+            .success("LIFECYCLE", "Full lifecycle completed", None);
     }
 
     #[test]
@@ -875,20 +906,24 @@ mod integration_tests {
             .expect("Update should succeed");
 
         // Close one
-        client.close(&created_ids[1], None).expect("Close should succeed");
+        client
+            .close(&created_ids[1], None)
+            .expect("Close should succeed");
 
         // Verify we created all issues
-        assert_eq!(
-            created_ids.len(),
-            5,
-            "Should have created 5 issues"
-        );
+        assert_eq!(created_ids.len(), 5, "Should have created 5 issues");
 
         // Test list()
-        let all_issues = client.list(&WorkFilter::default()).expect("List should succeed");
+        let all_issues = client
+            .list(&WorkFilter::default())
+            .expect("List should succeed");
         env.log().info(
             "LIST",
-            &format!("Total issues: {} (created {})", all_issues.len(), created_ids.len()),
+            &format!(
+                "Total issues: {} (created {})",
+                all_issues.len(),
+                created_ids.len()
+            ),
             None,
         );
 
@@ -963,7 +998,8 @@ mod integration_tests {
         client
             .add_dependency(&task.id, &epic.id)
             .expect("Add dependency should succeed");
-        env.log().info("DEP", "Added dependency: task -> epic", None);
+        env.log()
+            .info("DEP", "Added dependency: task -> epic", None);
 
         // Verify dependency via show
         let task_details = client.show(&task.id).expect("Show should succeed");
@@ -974,10 +1010,7 @@ mod integration_tests {
         );
 
         // Task should depend on epic
-        let has_dependency = task_details
-            .dependencies
-            .iter()
-            .any(|d| d.id == epic.id);
+        let has_dependency = task_details.dependencies.iter().any(|d| d.id == epic.id);
 
         assert!(has_dependency, "Task should depend on epic");
 
@@ -994,23 +1027,27 @@ mod integration_tests {
 
         // Test NotFound error - bd may return different error types for non-existent issues
         let result = client.show("nonexistent-issue-xyz-123");
-        assert!(result.is_err(), "Should return an error for non-existent issue");
+        assert!(
+            result.is_err(),
+            "Should return an error for non-existent issue"
+        );
         let err = result.unwrap_err();
         env.log()
             .info("ERROR", &format!("Got error: {:?}", err), None);
 
         // Accept NotFound or BeadsUnavailable (bd may not distinguish these)
-        let is_expected_error = matches!(
-            err,
-            MsError::NotFound(_) | MsError::BeadsUnavailable(_)
-        );
+        let is_expected_error = matches!(err, MsError::NotFound(_) | MsError::BeadsUnavailable(_));
         assert!(
             is_expected_error,
             "Expected NotFound or BeadsUnavailable, got: {:?}",
             err
         );
 
-        env.log().success("ERROR", "Error handling works for non-existent issues", None);
+        env.log().success(
+            "ERROR",
+            "Error handling works for non-existent issues",
+            None,
+        );
     }
 
     #[test]
@@ -1022,11 +1059,19 @@ mod integration_tests {
 
         let result = client.show("../../../etc/passwd");
         assert!(result.is_err());
-        log.info("SECURITY", &format!("Path traversal blocked: {}", result.unwrap_err()), None);
+        log.info(
+            "SECURITY",
+            &format!("Path traversal blocked: {}", result.unwrap_err()),
+            None,
+        );
 
         let result = client.show("test;rm -rf /");
         assert!(result.is_err());
-        log.info("SECURITY", &format!("Shell injection blocked: {}", result.unwrap_err()), None);
+        log.info(
+            "SECURITY",
+            &format!("Shell injection blocked: {}", result.unwrap_err()),
+            None,
+        );
 
         log.success("SECURITY", "Path traversal and injection blocked", None);
     }
@@ -1105,7 +1150,8 @@ mod integration_tests {
             "Should have urgent label"
         );
 
-        env.log().success("LABELS", "Labels applied correctly", None);
+        env.log()
+            .success("LABELS", "Labels applied correctly", None);
     }
 
     #[test]

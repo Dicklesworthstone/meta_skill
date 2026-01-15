@@ -3,7 +3,7 @@ use std::collections::HashMap;
 use clap::Args;
 
 use crate::app::AppContext;
-use crate::cli::output::{emit_json, emit_human, HumanLayout};
+use crate::cli::output::{HumanLayout, emit_human, emit_json};
 use crate::error::Result;
 use crate::sync::{MachineIdentity, SyncConfig, SyncEngine, SyncOptions, SyncState};
 
@@ -103,7 +103,9 @@ fn status(ctx: &AppContext, _args: &SyncArgs) -> Result<()> {
 
     let mut status_counts = HashMap::new();
     for entry in state.skill_states.values() {
-        *status_counts.entry(format!("{:?}", entry.status)).or_insert(0usize) += 1;
+        *status_counts
+            .entry(format!("{:?}", entry.status))
+            .or_insert(0usize) += 1;
     }
 
     if ctx.robot_mode {

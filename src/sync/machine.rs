@@ -49,11 +49,9 @@ impl MachineIdentity {
     ) -> Result<Self> {
         let path = Self::identity_path()?;
         if path.exists() {
-            let contents = std::fs::read_to_string(&path)
-                .map_err(|err| MsError::Config(format!(
-                    "read machine identity {}: {err}",
-                    path.display()
-                )))?;
+            let contents = std::fs::read_to_string(&path).map_err(|err| {
+                MsError::Config(format!("read machine identity {}: {err}", path.display()))
+            })?;
             let identity: Self = serde_json::from_str(&contents)?;
             Ok(identity)
         } else {
@@ -65,7 +63,8 @@ impl MachineIdentity {
     }
 
     pub fn record_sync(&mut self, remote_name: &str) {
-        self.sync_timestamps.insert(remote_name.to_string(), Utc::now());
+        self.sync_timestamps
+            .insert(remote_name.to_string(), Utc::now());
     }
 
     pub fn rename(&mut self, new_name: String) {

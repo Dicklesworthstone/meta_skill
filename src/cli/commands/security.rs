@@ -7,8 +7,8 @@ use std::path::PathBuf;
 use crate::app::AppContext;
 use crate::cli::output::emit_json;
 use crate::error::{MsError, Result};
-use crate::security::{AcipClassification, AcipEngine, ContentSource};
 use crate::security::acip::prompt_version;
+use crate::security::{AcipClassification, AcipEngine, ContentSource};
 
 #[derive(Args, Debug)]
 pub struct SecurityArgs {
@@ -233,7 +233,12 @@ fn scan(ctx: &AppContext, args: &ScanArgs) -> Result<()> {
 
     let mut quarantined = false;
     let mut quarantine_id = None;
-    if args.persist && matches!(analysis.classification, AcipClassification::Disallowed { .. }) {
+    if args.persist
+        && matches!(
+            analysis.classification,
+            AcipClassification::Disallowed { .. }
+        )
+    {
         let session_id = args
             .session_id
             .as_ref()
@@ -278,7 +283,9 @@ fn quarantine(ctx: &AppContext, args: &QuarantineArgs) -> Result<()> {
             } else {
                 match record {
                     Some(rec) => emit_output(ctx, &rec),
-                    None => Err(MsError::Config(format!("quarantine record not found: {id}"))),
+                    None => Err(MsError::Config(format!(
+                        "quarantine record not found: {id}"
+                    ))),
                 }
             }
         }
@@ -329,9 +336,9 @@ fn review_quarantine(
         )
     };
 
-    let review_id = ctx
-        .db
-        .insert_quarantine_review(&record.quarantine_id, &action, reason.as_deref())?;
+    let review_id =
+        ctx.db
+            .insert_quarantine_review(&record.quarantine_id, &action, reason.as_deref())?;
     let payload = ReviewOutput {
         quarantine_id: record.quarantine_id,
         review_id: Some(review_id),
@@ -399,7 +406,6 @@ fn hash_content(content: &str) -> String {
     let digest = hasher.finalize();
     hex::encode(digest)
 }
-
 
 fn emit_output<T: Serialize>(ctx: &AppContext, payload: &T) -> Result<()> {
     if ctx.robot_mode {

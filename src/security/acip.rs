@@ -17,12 +17,9 @@ static DISALLOWED_PATTERNS: Lazy<Vec<Regex>> = Lazy::new(|| {
             .expect("ACIP: invalid regex for 'ignore instructions'"),
         Regex::new("(?i)disregard (all|any|previous) instructions")
             .expect("ACIP: invalid regex for 'disregard instructions'"),
-        Regex::new("(?i)system prompt")
-            .expect("ACIP: invalid regex for 'system prompt'"),
-        Regex::new("(?i)reveal (the )?system")
-            .expect("ACIP: invalid regex for 'reveal system'"),
-        Regex::new("(?i)exfiltrate")
-            .expect("ACIP: invalid regex for 'exfiltrate'"),
+        Regex::new("(?i)system prompt").expect("ACIP: invalid regex for 'system prompt'"),
+        Regex::new("(?i)reveal (the )?system").expect("ACIP: invalid regex for 'reveal system'"),
+        Regex::new("(?i)exfiltrate").expect("ACIP: invalid regex for 'exfiltrate'"),
         Regex::new("(?i)leak (secrets|keys|tokens)")
             .expect("ACIP: invalid regex for 'leak secrets'"),
     ]
@@ -30,16 +27,11 @@ static DISALLOWED_PATTERNS: Lazy<Vec<Regex>> = Lazy::new(|| {
 
 static SENSITIVE_PATTERNS: Lazy<Vec<Regex>> = Lazy::new(|| {
     vec![
-        Regex::new("(?i)api[-_ ]?key")
-            .expect("ACIP: invalid regex for 'api key'"),
-        Regex::new("(?i)access[-_ ]?token")
-            .expect("ACIP: invalid regex for 'access token'"),
-        Regex::new("(?i)secret")
-            .expect("ACIP: invalid regex for 'secret'"),
-        Regex::new("(?i)password")
-            .expect("ACIP: invalid regex for 'password'"),
-        Regex::new("(?i)private[-_ ]?key")
-            .expect("ACIP: invalid regex for 'private key'"),
+        Regex::new("(?i)api[-_ ]?key").expect("ACIP: invalid regex for 'api key'"),
+        Regex::new("(?i)access[-_ ]?token").expect("ACIP: invalid regex for 'access token'"),
+        Regex::new("(?i)secret").expect("ACIP: invalid regex for 'secret'"),
+        Regex::new("(?i)password").expect("ACIP: invalid regex for 'password'"),
+        Regex::new("(?i)private[-_ ]?key").expect("ACIP: invalid regex for 'private key'"),
     ]
 });
 
@@ -145,9 +137,7 @@ pub struct AcipEngine {
 impl AcipEngine {
     pub fn load(config: AcipConfig) -> Result<Self> {
         if !config.enabled {
-            return Err(MsError::AcipError(
-                "ACIP disabled in config".to_string(),
-            ));
+            return Err(MsError::AcipError("ACIP disabled in config".to_string()));
         }
         let prompt = load_prompt(&config.prompt_path)?;
         let detected = detect_version(&prompt)

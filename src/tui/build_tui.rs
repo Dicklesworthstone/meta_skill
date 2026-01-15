@@ -9,20 +9,18 @@ use std::time::Duration;
 use crossterm::{
     event::{self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode, KeyModifiers},
     execute,
-    terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
+    terminal::{EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode},
 };
 use ratatui::{
+    Frame, Terminal,
     backend::CrosstermBackend,
     layout::{Constraint, Direction, Layout, Rect},
     style::{Color, Modifier, Style},
     text::{Line, Span, Text},
     widgets::{Block, Borders, List, ListItem, ListState, Paragraph, Wrap},
-    Frame, Terminal,
 };
 
-use crate::cass::brenner::{
-    BrennerConfig, BrennerWizard, MoveDecision, WizardOutput, WizardState,
-};
+use crate::cass::brenner::{BrennerConfig, BrennerWizard, MoveDecision, WizardOutput, WizardState};
 use crate::cass::{CassClient, QualityScorer};
 use crate::error::Result;
 
@@ -181,9 +179,9 @@ impl BuildTui {
         let chunks = Layout::default()
             .direction(Direction::Vertical)
             .constraints([
-                Constraint::Length(3),  // Status bar
-                Constraint::Min(10),    // Main content
-                Constraint::Length(3),  // Action bar
+                Constraint::Length(3), // Status bar
+                Constraint::Min(10),   // Main content
+                Constraint::Length(3), // Action bar
             ])
             .split(f.area());
 
@@ -197,7 +195,8 @@ impl BuildTui {
         let quality = self.get_quality_score();
         let quality_color = self.quality_color(quality);
 
-        let checkpoint_info = self.last_checkpoint
+        let checkpoint_info = self
+            .last_checkpoint
             .as_ref()
             .map(|t| format!(" | Checkpoint: {}", t))
             .unwrap_or_default();
@@ -207,7 +206,10 @@ impl BuildTui {
             Span::raw(" | Phase: "),
             Span::styled(phase, Style::default().fg(Color::Cyan)),
             Span::raw(" | Quality: "),
-            Span::styled(format!("{:.0}%", quality * 100.0), Style::default().fg(quality_color)),
+            Span::styled(
+                format!("{:.0}%", quality * 100.0),
+                Style::default().fg(quality_color),
+            ),
             Span::raw(&checkpoint_info),
             Span::raw(format!(" | Tokens: ~{}", self.draft_token_count)),
         ]);
@@ -250,7 +252,10 @@ impl BuildTui {
             .map(|(text, confidence)| {
                 let color = self.quality_color(*confidence);
                 ListItem::new(Line::from(vec![
-                    Span::styled(format!("[{:.0}%] ", confidence * 100.0), Style::default().fg(color)),
+                    Span::styled(
+                        format!("[{:.0}%] ", confidence * 100.0),
+                        Style::default().fg(color),
+                    ),
                     Span::raw(text),
                 ]))
             })
@@ -261,7 +266,11 @@ impl BuildTui {
                 Block::default()
                     .borders(Borders::ALL)
                     .border_style(border_style)
-                    .title(if is_focused { " Patterns [*] " } else { " Patterns " }),
+                    .title(if is_focused {
+                        " Patterns [*] "
+                    } else {
+                        " Patterns "
+                    }),
             )
             .highlight_style(Style::default().add_modifier(Modifier::REVERSED))
             .highlight_symbol("> ");
@@ -284,7 +293,11 @@ impl BuildTui {
                 Block::default()
                     .borders(Borders::ALL)
                     .border_style(border_style)
-                    .title(if is_focused { " Details [*] " } else { " Details " }),
+                    .title(if is_focused {
+                        " Details [*] "
+                    } else {
+                        " Details "
+                    }),
             )
             .wrap(Wrap { trim: true });
 
@@ -306,7 +319,11 @@ impl BuildTui {
                 Block::default()
                     .borders(Borders::ALL)
                     .border_style(border_style)
-                    .title(if is_focused { " Draft Preview [*] " } else { " Draft Preview " }),
+                    .title(if is_focused {
+                        " Draft Preview [*] "
+                    } else {
+                        " Draft Preview "
+                    }),
             )
             .wrap(Wrap { trim: true });
 
@@ -330,13 +347,12 @@ impl BuildTui {
             actions.join(" | ")
         };
 
-        let paragraph = Paragraph::new(action_text)
-            .block(
-                Block::default()
-                    .borders(Borders::ALL)
-                    .border_style(border_style)
-                    .title(" Actions "),
-            );
+        let paragraph = Paragraph::new(action_text).block(
+            Block::default()
+                .borders(Borders::ALL)
+                .border_style(border_style)
+                .title(" Actions "),
+        );
 
         f.render_widget(paragraph, area);
     }
@@ -411,7 +427,11 @@ impl BuildTui {
 
         // State-specific handling
         match self.wizard.state().clone() {
-            WizardState::SessionSelection { query, results, selected } => {
+            WizardState::SessionSelection {
+                query,
+                results,
+                selected,
+            } => {
                 self.handle_session_selection_key(key, &query, &results, &selected, client)?;
             }
             WizardState::MoveExtraction { .. } => {
@@ -566,7 +586,11 @@ impl BuildTui {
         Ok(())
     }
 
-    fn handle_formalization_key(&mut self, key: KeyCode, _quality_scorer: &QualityScorer) -> Result<()> {
+    fn handle_formalization_key(
+        &mut self,
+        key: KeyCode,
+        _quality_scorer: &QualityScorer,
+    ) -> Result<()> {
         match key {
             KeyCode::Char('t') => {
                 // Run test
@@ -591,7 +615,8 @@ impl BuildTui {
             }
             KeyCode::Char('r') => {
                 // Return to formalization
-                if let WizardState::MaterializationTest { draft, .. } = self.wizard.state().clone() {
+                if let WizardState::MaterializationTest { draft, .. } = self.wizard.state().clone()
+                {
                     self.wizard.return_to_formalization(draft);
                 }
             }
@@ -616,12 +641,16 @@ impl BuildTui {
 
     fn get_quality_score(&self) -> f32 {
         match self.wizard.state() {
-            WizardState::SkillFormalization { draft, .. } => {
-                draft.validation.as_ref().map(|v| v.confidence).unwrap_or(0.7)
-            }
-            WizardState::MaterializationTest { draft, .. } => {
-                draft.validation.as_ref().map(|v| v.confidence).unwrap_or(0.7)
-            }
+            WizardState::SkillFormalization { draft, .. } => draft
+                .validation
+                .as_ref()
+                .map(|v| v.confidence)
+                .unwrap_or(0.7),
+            WizardState::MaterializationTest { draft, .. } => draft
+                .validation
+                .as_ref()
+                .map(|v| v.confidence)
+                .unwrap_or(0.7),
             _ => 0.7,
         }
     }
@@ -638,45 +667,50 @@ impl BuildTui {
 
     fn get_pattern_items(&self) -> Vec<(String, f32)> {
         match self.wizard.state() {
-            WizardState::SessionSelection { results, selected, .. } => {
-                results
-                    .iter()
-                    .enumerate()
-                    .map(|(i, r)| {
-                        let prefix = if selected.contains(&i) { "[x]" } else { "[ ]" };
+            WizardState::SessionSelection {
+                results, selected, ..
+            } => results
+                .iter()
+                .enumerate()
+                .map(|(i, r)| {
+                    let prefix = if selected.contains(&i) { "[x]" } else { "[ ]" };
+                    (
+                        format!(
+                            "{} {}",
+                            prefix,
+                            r.snippet.as_deref().unwrap_or(&r.session_id)
+                        ),
+                        r.score as f32,
+                    )
+                })
+                .collect(),
+            WizardState::MoveExtraction { moves, .. } => moves
+                .iter()
+                .map(|m| (format!("{:?}: {}", m.tag, m.description), m.confidence))
+                .collect(),
+            WizardState::ThirdAlternativeGuard {
+                moves,
+                flagged_indices,
+                current_idx,
+            } => flagged_indices
+                .iter()
+                .enumerate()
+                .filter_map(|(i, &idx)| {
+                    let prefix = if i == *current_idx { "→" } else { " " };
+                    moves.get(idx).map(|m| {
                         (
-                            format!("{} {}", prefix, r.snippet.as_deref().unwrap_or(&r.session_id)),
-                            r.score as f32,
+                            format!("{} {:?}: {}", prefix, m.tag, m.description),
+                            m.confidence,
                         )
                     })
-                    .collect()
-            }
-            WizardState::MoveExtraction { moves, .. } => {
-                moves
-                    .iter()
-                    .map(|m| (format!("{:?}: {}", m.tag, m.description), m.confidence))
-                    .collect()
-            }
-            WizardState::ThirdAlternativeGuard { moves, flagged_indices, current_idx } => {
-                flagged_indices
-                    .iter()
-                    .enumerate()
-                    .filter_map(|(i, &idx)| {
-                        let prefix = if i == *current_idx { "→" } else { " " };
-                        moves.get(idx).map(|m| {
-                            (format!("{} {:?}: {}", prefix, m.tag, m.description), m.confidence)
-                        })
-                    })
-                    .collect()
-            }
+                })
+                .collect(),
             WizardState::SkillFormalization { draft, .. }
-            | WizardState::MaterializationTest { draft, .. } => {
-                draft
-                    .rules
-                    .iter()
-                    .map(|r| (r.description.clone(), r.confidence))
-                    .collect()
-            }
+            | WizardState::MaterializationTest { draft, .. } => draft
+                .rules
+                .iter()
+                .map(|r| (r.description.clone(), r.confidence))
+                .collect(),
             _ => vec![],
         }
     }
@@ -695,7 +729,10 @@ impl BuildTui {
                         Line::from(""),
                         Line::from(mov.description.clone()),
                         Line::from(""),
-                        Line::from(Span::styled("Evidence:".to_string(), Style::default().add_modifier(Modifier::BOLD))),
+                        Line::from(Span::styled(
+                            "Evidence:".to_string(),
+                            Style::default().add_modifier(Modifier::BOLD),
+                        )),
                         Line::from(mov.evidence.excerpt.clone()),
                         Line::from(""),
                         Line::from(format!("Confidence: {:.0}%", mov.confidence * 100.0)),
@@ -708,17 +745,26 @@ impl BuildTui {
             | WizardState::MaterializationTest { draft, .. } => {
                 if let Some(rule) = draft.rules.get(idx) {
                     let mut lines: Vec<Line<'static>> = vec![
-                        Line::from(Span::styled(rule.id.clone(), Style::default().add_modifier(Modifier::BOLD))),
+                        Line::from(Span::styled(
+                            rule.id.clone(),
+                            Style::default().add_modifier(Modifier::BOLD),
+                        )),
                         Line::from(""),
                         Line::from(rule.description.clone()),
                         Line::from(""),
-                        Line::from(Span::styled("Evidence:".to_string(), Style::default().add_modifier(Modifier::BOLD))),
+                        Line::from(Span::styled(
+                            "Evidence:".to_string(),
+                            Style::default().add_modifier(Modifier::BOLD),
+                        )),
                     ];
                     for ev in &rule.evidence {
                         lines.push(Line::from(format!("  - {}", ev)));
                     }
                     lines.push(Line::from(""));
-                    lines.push(Line::from(format!("Confidence: {:.0}%", rule.confidence * 100.0)));
+                    lines.push(Line::from(format!(
+                        "Confidence: {:.0}%",
+                        rule.confidence * 100.0
+                    )));
                     Text::from(lines)
                 } else {
                     Text::from("No rule selected")
@@ -761,10 +807,7 @@ impl BuildTui {
                 ]);
             }
             WizardState::MoveExtraction { .. } => {
-                actions.extend(vec![
-                    "n: next session".to_string(),
-                    "f: finish".to_string(),
-                ]);
+                actions.extend(vec!["n: next session".to_string(), "f: finish".to_string()]);
             }
             WizardState::ThirdAlternativeGuard { .. } => {
                 actions.extend(vec![
@@ -775,16 +818,10 @@ impl BuildTui {
                 ]);
             }
             WizardState::SkillFormalization { .. } => {
-                actions.extend(vec![
-                    "t: run test".to_string(),
-                    "s: save".to_string(),
-                ]);
+                actions.extend(vec!["t: run test".to_string(), "s: save".to_string()]);
             }
             WizardState::MaterializationTest { .. } => {
-                actions.extend(vec![
-                    "s: save".to_string(),
-                    "r: return".to_string(),
-                ]);
+                actions.extend(vec!["s: save".to_string(), "r: return".to_string()]);
             }
             _ => {}
         }

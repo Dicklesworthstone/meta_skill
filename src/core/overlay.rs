@@ -56,7 +56,11 @@ pub struct SkillOverlay {
 
 impl SkillOverlay {
     /// Apply this overlay to a skill spec
-    pub fn apply_to(&self, spec: &mut SkillSpec, context: &OverlayContext) -> OverlayApplicationResult {
+    pub fn apply_to(
+        &self,
+        spec: &mut SkillSpec,
+        context: &OverlayContext,
+    ) -> OverlayApplicationResult {
         // Check if conditions are met
         if !self.conditions_met(context) {
             return OverlayApplicationResult {
@@ -94,7 +98,11 @@ impl SkillOverlay {
     }
 
     /// Apply this overlay (alias for apply_to).
-    pub fn apply(&self, spec: &mut SkillSpec, context: &OverlayContext) -> OverlayApplicationResult {
+    pub fn apply(
+        &self,
+        spec: &mut SkillSpec,
+        context: &OverlayContext,
+    ) -> OverlayApplicationResult {
         self.apply_to(spec, context)
     }
 
@@ -130,9 +138,7 @@ pub enum OverlayCondition {
 impl OverlayCondition {
     fn is_met(&self, context: &OverlayContext) -> bool {
         match self {
-            OverlayCondition::Environment(env) => {
-                context.environment.as_ref() == Some(env)
-            }
+            OverlayCondition::Environment(env) => context.environment.as_ref() == Some(env),
             OverlayCondition::UserSetting { key, value } => {
                 context.user_settings.get(key) == Some(value)
             }

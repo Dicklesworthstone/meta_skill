@@ -204,8 +204,9 @@ impl MockRegistryServer {
         // Set up default GitHub API mock handlers
         // Mock GET /repos/{owner}/{repo}/releases/tags/{tag}
         server.mock(|when, then| {
-            when.method(GET)
-                .path_matches(regex::Regex::new(r"^/repos/[^/]+/[^/]+/releases/tags/[^/]+$").unwrap());
+            when.method(GET).path_matches(
+                regex::Regex::new(r"^/repos/[^/]+/[^/]+/releases/tags/[^/]+$").unwrap(),
+            );
             then.status(200).body("{}"); // Will be overridden by specific mocks
         });
 
@@ -223,10 +224,7 @@ impl MockRegistryServer {
             then.status(201).body("{}");
         });
 
-        Self {
-            state,
-            base_url,
-        }
+        Self { state, base_url }
     }
 
     /// Get the base URL of the mock server.
@@ -271,7 +269,8 @@ impl MockServerBuilder {
 
     /// Add a release to the mock server.
     pub fn with_release(mut self, owner: &str, repo: &str, release: MockRelease) -> Self {
-        self.releases.push((owner.to_string(), repo.to_string(), release));
+        self.releases
+            .push((owner.to_string(), repo.to_string(), release));
         self
     }
 

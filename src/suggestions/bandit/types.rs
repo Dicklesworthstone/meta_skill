@@ -50,7 +50,10 @@ pub struct BetaDistribution {
 
 impl Default for BetaDistribution {
     fn default() -> Self {
-        Self { alpha: 1.0, beta: 1.0 }
+        Self {
+            alpha: 1.0,
+            beta: 1.0,
+        }
     }
 }
 

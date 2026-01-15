@@ -4,8 +4,8 @@ use clap::Args;
 
 use std::path::PathBuf;
 
-use crate::cli::output;
 use crate::app::AppContext;
+use crate::cli::output;
 use crate::config::Config;
 use crate::error::Result;
 
@@ -226,5 +226,3 @@ fn format_value(value: &toml::Value) -> String {
         _ => value.to_string(),
     }
 }
-
-

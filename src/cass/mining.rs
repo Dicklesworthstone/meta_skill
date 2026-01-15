@@ -12,7 +12,7 @@ use tracing::warn;
 
 use crate::error::Result;
 use crate::quality::ubs::UbsClient;
-use crate::security::{contains_injection_patterns, contains_sensitive_data, SafetyGate};
+use crate::security::{SafetyGate, contains_injection_patterns, contains_sensitive_data};
 
 use super::client::Session;
 
@@ -838,11 +838,7 @@ fn extract_workflow_pattern(
     }
 
     // Compute overall confidence based on segment confidences
-    let avg_confidence = segmented
-        .segments
-        .iter()
-        .map(|s| s.confidence)
-        .sum::<f32>()
+    let avg_confidence = segmented.segments.iter().map(|s| s.confidence).sum::<f32>()
         / segmented.segments.len() as f32;
 
     Some(ExtractedPattern {
@@ -875,22 +871,19 @@ fn collect_phase_actions(session: &Session, segment: &SessionSegment) -> Vec<Str
                         }
                     }
                     "Edit" | "edit" => {
-                        if let Some(path) =
-                            tool.arguments.get("file_path").and_then(|v| v.as_str())
+                        if let Some(path) = tool.arguments.get("file_path").and_then(|v| v.as_str())
                         {
                             actions.push(format!("Edit: {}", path_basename(path)));
                         }
                     }
                     "Read" | "read" => {
-                        if let Some(path) =
-                            tool.arguments.get("file_path").and_then(|v| v.as_str())
+                        if let Some(path) = tool.arguments.get("file_path").and_then(|v| v.as_str())
                         {
                             actions.push(format!("Read: {}", path_basename(path)));
                         }
                     }
                     "Write" | "write" => {
-                        if let Some(path) =
-                            tool.arguments.get("file_path").and_then(|v| v.as_str())
+                        if let Some(path) = tool.arguments.get("file_path").and_then(|v| v.as_str())
                         {
                             actions.push(format!("Write: {}", path_basename(path)));
                         }
@@ -973,8 +966,7 @@ fn extract_error_patterns(session: &Session) -> Vec<ExtractedPattern> {
             for tool in &msg.tool_calls {
                 match tool.name.as_str() {
                     "Edit" | "edit" | "Write" | "write" => {
-                        if let Some(path) =
-                            tool.arguments.get("file_path").and_then(|v| v.as_str())
+                        if let Some(path) = tool.arguments.get("file_path").and_then(|v| v.as_str())
                         {
                             err_ctx
                                 .resolution_steps
@@ -1057,7 +1049,9 @@ fn extract_error_symptoms(error_text: &str) -> Vec<String> {
     if error_text.contains("undefined") || error_text.contains("undeclared") {
         symptoms.push("Undefined identifier".to_string());
     }
-    if error_text.contains("type") && (error_text.contains("mismatch") || error_text.contains("expected")) {
+    if error_text.contains("type")
+        && (error_text.contains("mismatch") || error_text.contains("expected"))
+    {
         symptoms.push("Type mismatch".to_string());
     }
     if error_text.contains("borrow") || error_text.contains("lifetime") {
@@ -1180,15 +1174,18 @@ fn deduplicate_patterns(patterns: Vec<ExtractedPattern>) -> Vec<ExtractedPattern
 
     for pattern in patterns {
         // Check if a similar pattern already exists
-        let is_duplicate = unique.iter().any(|existing| {
-            patterns_are_similar(existing, &pattern)
-        });
+        let is_duplicate = unique
+            .iter()
+            .any(|existing| patterns_are_similar(existing, &pattern));
 
         if !is_duplicate {
             unique.push(pattern);
         } else {
             // Merge with existing similar pattern - increase frequency
-            if let Some(existing) = unique.iter_mut().find(|e| patterns_are_similar(e, &pattern)) {
+            if let Some(existing) = unique
+                .iter_mut()
+                .find(|e| patterns_are_similar(e, &pattern))
+            {
                 existing.frequency += pattern.frequency;
                 existing.evidence.extend(pattern.evidence);
                 // Boost confidence when pattern is seen multiple times
@@ -1262,11 +1259,7 @@ fn patterns_are_similar(a: &ExtractedPattern, b: &ExtractedPattern) -> bool {
             PatternType::WorkflowPattern { steps: sb, .. },
         ) => {
             // Similar if same number of steps with matching phases
-            sa.len() == sb.len()
-                && sa
-                    .iter()
-                    .zip(sb.iter())
-                    .all(|(a, b)| a.action == b.action)
+            sa.len() == sb.len() && sa.iter().zip(sb.iter()).all(|(a, b)| a.action == b.action)
         }
         _ => false,
     }
@@ -1883,28 +1876,34 @@ And more text.
 
     #[test]
     fn test_generate_pattern_description() {
-        assert!(generate_pattern_description(&PatternType::CommandPattern {
-            commands: vec!["a".to_string(), "b".to_string()],
-            frequency: 2,
-            contexts: vec![],
-        })
-        .contains("2 commands"));
+        assert!(
+            generate_pattern_description(&PatternType::CommandPattern {
+                commands: vec!["a".to_string(), "b".to_string()],
+                frequency: 2,
+                contexts: vec![],
+            })
+            .contains("2 commands")
+        );
 
-        assert!(generate_pattern_description(&PatternType::CodePattern {
-            language: "rust".to_string(),
-            code: "".to_string(),
-            purpose: "".to_string(),
-            frequency: 1,
-        })
-        .contains("rust"));
+        assert!(
+            generate_pattern_description(&PatternType::CodePattern {
+                language: "rust".to_string(),
+                code: "".to_string(),
+                purpose: "".to_string(),
+                frequency: 1,
+            })
+            .contains("rust")
+        );
 
-        assert!(generate_pattern_description(&PatternType::ErrorPattern {
-            error_type: "compilation".to_string(),
-            symptoms: vec![],
-            resolution_steps: vec![],
-            prevention: None,
-        })
-        .contains("compilation"));
+        assert!(
+            generate_pattern_description(&PatternType::ErrorPattern {
+                error_type: "compilation".to_string(),
+                symptoms: vec![],
+                resolution_steps: vec![],
+                prevention: None,
+            })
+            .contains("compilation")
+        );
     }
 
     #[test]
@@ -1934,7 +1933,10 @@ And more text.
         }];
 
         let result = apply_taint_labels(patterns, &tainted);
-        assert!(result.is_empty(), "Pattern with injection evidence should be excluded");
+        assert!(
+            result.is_empty(),
+            "Pattern with injection evidence should be excluded"
+        );
     }
 
     #[test]
@@ -1964,7 +1966,11 @@ And more text.
         }];
 
         let result = apply_taint_labels(patterns, &tainted);
-        assert_eq!(result.len(), 1, "Pattern with sensitive evidence should be kept");
+        assert_eq!(
+            result.len(),
+            1,
+            "Pattern with sensitive evidence should be kept"
+        );
         assert_eq!(
             result[0].taint_label,
             Some(TaintLabel::RequiresReview),
@@ -1999,7 +2005,10 @@ And more text.
 
         let result = apply_taint_labels(patterns, &tainted);
         assert_eq!(result.len(), 1, "Clean pattern should be kept");
-        assert_eq!(result[0].taint_label, None, "Clean pattern should have no taint label");
+        assert_eq!(
+            result[0].taint_label, None,
+            "Clean pattern should have no taint label"
+        );
     }
 
     #[test]

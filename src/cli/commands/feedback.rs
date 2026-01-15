@@ -3,7 +3,7 @@
 use clap::{Args, Subcommand};
 
 use crate::app::AppContext;
-use crate::cli::output::{emit_json, HumanLayout};
+use crate::cli::output::{HumanLayout, emit_json};
 use crate::error::{MsError, Result};
 
 #[derive(Args, Debug)]
@@ -96,8 +96,17 @@ fn run_add(ctx: &AppContext, args: &FeedbackAddArgs) -> Result<()> {
         .title("Feedback Recorded")
         .kv("Skill", &record.skill_id)
         .kv("Type", &record.feedback_type)
-        .kv("Rating", &record.rating.map(|r| r.to_string()).unwrap_or_else(|| "-".to_string()))
-        .kv("Comment", &record.comment.clone().unwrap_or_else(|| "-".to_string()));
+        .kv(
+            "Rating",
+            &record
+                .rating
+                .map(|r| r.to_string())
+                .unwrap_or_else(|| "-".to_string()),
+        )
+        .kv(
+            "Comment",
+            &record.comment.clone().unwrap_or_else(|| "-".to_string()),
+        );
     crate::cli::output::emit_human(layout);
     Ok(())
 }

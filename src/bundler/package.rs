@@ -126,9 +126,8 @@ impl BundlePackage {
             )));
         }
         let manifest_bytes = read_slice(bytes, &mut cursor, manifest_len)?;
-        let manifest_str = std::str::from_utf8(manifest_bytes).map_err(|_| {
-            MsError::ValidationFailed("manifest is not valid UTF-8".to_string())
-        })?;
+        let manifest_str = std::str::from_utf8(manifest_bytes)
+            .map_err(|_| MsError::ValidationFailed("manifest is not valid UTF-8".to_string()))?;
         let manifest = BundleManifest::from_toml_str(manifest_str)?;
 
         let blob_count = read_u64(bytes, &mut cursor)? as usize;
@@ -159,7 +158,10 @@ impl BundlePackage {
                 )));
             }
             let blob_bytes = read_slice(bytes, &mut cursor, blob_len)?.to_vec();
-            blobs.push(BundleBlob { hash, bytes: blob_bytes });
+            blobs.push(BundleBlob {
+                hash,
+                bytes: blob_bytes,
+            });
         }
 
         Ok(Self { manifest, blobs })
@@ -236,9 +238,8 @@ pub fn missing_blobs(manifest: &BundleManifest, store: &BlobStore) -> Vec<String
 
 fn build_blob_bytes(path: &Path) -> Result<Vec<u8>> {
     if path.is_file() {
-        return std::fs::read(path).map_err(|err| {
-            MsError::Config(format!("read {}: {err}", path.display()))
-        });
+        return std::fs::read(path)
+            .map_err(|err| MsError::Config(format!("read {}: {err}", path.display())));
     }
 
     if !path.is_dir() {
@@ -257,9 +258,8 @@ fn build_blob_bytes(path: &Path) -> Result<Vec<u8>> {
         let rel_str = rel.to_string_lossy();
         write_u64(&mut out, rel_str.len() as u64);
         out.extend_from_slice(rel_str.as_bytes());
-        let data = std::fs::read(&abs).map_err(|err| {
-            MsError::Config(format!("read {}: {err}", abs.display()))
-        })?;
+        let data = std::fs::read(&abs)
+            .map_err(|err| MsError::Config(format!("read {}: {err}", abs.display())))?;
         write_u64(&mut out, data.len() as u64);
         out.extend_from_slice(&data);
     }
@@ -296,9 +296,9 @@ fn write_u64(out: &mut Vec<u8>, value: u64) {
 }
 
 fn read_u64(input: &[u8], cursor: &mut usize) -> Result<u64> {
-    let end = cursor.checked_add(8).ok_or_else(|| {
-        MsError::ValidationFailed("bundle parse overflow".to_string())
-    })?;
+    let end = cursor
+        .checked_add(8)
+        .ok_or_else(|| MsError::ValidationFailed("bundle parse overflow".to_string()))?;
     if end > input.len() {
         return Err(MsError::ValidationFailed(
             "bundle parse truncated".to_string(),
@@ -311,9 +311,9 @@ fn read_u64(input: &[u8], cursor: &mut usize) -> Result<u64> {
 }
 
 fn read_slice<'a>(input: &'a [u8], cursor: &mut usize, len: usize) -> Result<&'a [u8]> {
-    let end = cursor.checked_add(len).ok_or_else(|| {
-        MsError::ValidationFailed("bundle parse overflow".to_string())
-    })?;
+    let end = cursor
+        .checked_add(len)
+        .ok_or_else(|| MsError::ValidationFailed("bundle parse overflow".to_string()))?;
     if end > input.len() {
         return Err(MsError::ValidationFailed(
             "bundle parse truncated".to_string(),
@@ -327,8 +327,8 @@ fn read_slice<'a>(input: &'a [u8], cursor: &mut usize, len: usize) -> Result<&'a
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::bundler::manifest::{BundleDependency, BundleInfo, BundledSkill};
     use crate::bundler::BlobStore;
+    use crate::bundler::manifest::{BundleDependency, BundleInfo, BundledSkill};
     use tempfile::tempdir;
 
     #[test]

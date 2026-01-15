@@ -46,7 +46,9 @@ pub struct SuggestionCooldownCache {
 
 impl SuggestionCooldownCache {
     pub fn new() -> Self {
-        Self { entries: Vec::new() }
+        Self {
+            entries: Vec::new(),
+        }
     }
 
     pub fn load(path: &Path) -> Result<Self> {

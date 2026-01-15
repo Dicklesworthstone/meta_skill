@@ -5,11 +5,11 @@ use semver::Version;
 
 use crate::app::AppContext;
 use crate::error::Result;
-use serde_json;
 use crate::updater::{
     UpdateChannel, UpdateCheckResponse, UpdateChecker, UpdateDownloader, UpdateInstallResponse,
     UpdateInstaller,
 };
+use serde_json;
 
 /// Default repository for updates.
 const DEFAULT_REPO: &str = "Dicklesworthstone/meta_skill";
@@ -35,14 +35,11 @@ pub struct UpdateArgs {
 }
 
 pub fn run(ctx: &AppContext, args: &UpdateArgs) -> Result<()> {
-    let current_version = Version::parse(env!("CARGO_PKG_VERSION"))
-        .unwrap_or_else(|_| Version::new(0, 1, 0));
+    let current_version =
+        Version::parse(env!("CARGO_PKG_VERSION")).unwrap_or_else(|_| Version::new(0, 1, 0));
 
     // Determine channel from args or config
-    let channel_str = args
-        .channel
-        .as_ref()
-        .unwrap_or(&ctx.config.update.channel);
+    let channel_str = args.channel.as_ref().unwrap_or(&ctx.config.update.channel);
     let channel: UpdateChannel = channel_str.parse()?;
 
     let checker = UpdateChecker::new(current_version.clone(), channel, DEFAULT_REPO.to_string());
@@ -66,7 +63,9 @@ fn run_robot(args: &UpdateArgs, checker: &UpdateChecker) -> Result<()> {
             update_available: update.is_some(),
             latest_version: update.as_ref().map(|u| u.version.to_string()),
             changelog: update.as_ref().map(|u| u.changelog.clone()),
-            download_size: update.as_ref().and_then(|u| u.assets.first().map(|a| a.size)),
+            download_size: update
+                .as_ref()
+                .and_then(|u| u.assets.first().map(|a| a.size)),
             html_url: update.as_ref().map(|u| u.html_url.clone()),
         };
         println!("{}", serde_json::to_string_pretty(&response)?);

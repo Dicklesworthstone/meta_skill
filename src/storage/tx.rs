@@ -15,7 +15,7 @@ use serde::{Deserialize, Serialize};
 use tracing::{debug, info, warn};
 use uuid::Uuid;
 
-use crate::core::{spec_lens::compile_markdown, SkillLayer, SkillSpec, SkillSlicer};
+use crate::core::{SkillLayer, SkillSlicer, SkillSpec, spec_lens::compile_markdown};
 use crate::error::{MsError, Result};
 
 use super::git::GitArchive;
@@ -165,9 +165,7 @@ impl GlobalLock {
                 return Ok(None);
             }
             Err(e) => {
-                return Err(MsError::TransactionFailed(format!(
-                    "try acquire lock: {e}"
-                )));
+                return Err(MsError::TransactionFailed(format!("try acquire lock: {e}")));
             }
         }
 
@@ -193,10 +191,7 @@ impl GlobalLock {
             std::thread::sleep(poll_interval);
         }
 
-        warn!(
-            "Timeout waiting for lock after {:?}",
-            start.elapsed()
-        );
+        warn!("Timeout waiting for lock after {:?}", start.elapsed());
         Ok(None)
     }
 
@@ -400,7 +395,10 @@ impl TxManager {
     /// Write a skill with 2PC guarantees and an explicit layer
     pub fn write_skill_with_layer(&self, skill: &SkillSpec, layer: SkillLayer) -> Result<()> {
         let tx = TxRecord::prepare("skill", &skill.metadata.id, skill)?;
-        debug!("Starting 2PC transaction {} for skill {}", tx.id, skill.metadata.id);
+        debug!(
+            "Starting 2PC transaction {} for skill {}",
+            tx.id, skill.metadata.id
+        );
 
         // Phase 1: Prepare - write intent
         self.write_tx_record(&tx)?;
@@ -417,7 +415,10 @@ impl TxManager {
         // Cleanup
         self.cleanup_tx(&tx)?;
 
-        info!("2PC transaction {} completed for skill {}", tx.id, skill.metadata.id);
+        info!(
+            "2PC transaction {} completed for skill {}",
+            tx.id, skill.metadata.id
+        );
         Ok(())
     }
 
@@ -584,7 +585,8 @@ impl TxManager {
         // Compile skill to markdown for FTS-searchable body
         let body = compile_markdown(&skill);
 
-        self.db.finalize_skill_commit(&skill.metadata.id, &git_path_str, &content_hash, &body)?;
+        self.db
+            .finalize_skill_commit(&skill.metadata.id, &git_path_str, &content_hash, &body)?;
 
         // Update phase
         let mut tx = tx.clone();
@@ -728,10 +730,7 @@ impl TxManager {
                     // Skill gone from Git - delete happened, complete SQLite delete
                     info!("Completing delete tx (Git already deleted): {}", tx.id);
                     if let Err(e) = self.db.delete_skill(&tx.entity_id) {
-                        debug!(
-                            "SQLite delete during recovery (may already be gone): {}",
-                            e
-                        );
+                        debug!("SQLite delete during recovery (may already be gone): {}", e);
                     }
                     self.db.delete_tx_record(&tx.id)?;
                     let tx_path = self.tx_dir.join(format!("{}.json", tx.id));
@@ -752,10 +751,7 @@ impl TxManager {
                 } else {
                     // Skill gone from Git - complete SQLite delete
                     if let Err(e) = self.db.delete_skill(&tx.entity_id) {
-                        debug!(
-                            "SQLite delete during recovery (may already be gone): {}",
-                            e
-                        );
+                        debug!("SQLite delete during recovery (may already be gone): {}", e);
                     }
                     self.db.delete_tx_record(&tx.id)?;
                     let tx_path = self.tx_dir.join(format!("{}.json", tx.id));
@@ -768,10 +764,7 @@ impl TxManager {
                 info!("Completing committed delete tx: {}", tx.id);
                 // Try to delete from SQLite (may already be gone, that's ok)
                 if let Err(e) = self.db.delete_skill(&tx.entity_id) {
-                    debug!(
-                        "SQLite delete during recovery (may already be gone): {}",
-                        e
-                    );
+                    debug!("SQLite delete during recovery (may already be gone): {}", e);
                 }
                 self.db.delete_tx_record(&tx.id)?;
                 let tx_path = self.tx_dir.join(format!("{}.json", tx.id));
@@ -994,10 +987,7 @@ mod tests {
         // Verify no tx files remain
         assert!(
             !dir.path().join("tx").exists()
-                || fs::read_dir(dir.path().join("tx"))
-                    .unwrap()
-                    .count()
-                    == 0
+                || fs::read_dir(dir.path().join("tx")).unwrap().count() == 0
         );
     }
 
@@ -1081,7 +1071,11 @@ mod tests {
         // Create a lock file manually (simulating a stale lock from a dead process)
         let lock_path = ms_root.join("ms.lock");
         fs::create_dir_all(&ms_root).unwrap();
-        fs::write(&lock_path, r#"{"pid":999999,"acquired_at":"2020-01-01T00:00:00Z","hostname":"test"}"#).unwrap();
+        fs::write(
+            &lock_path,
+            r#"{"pid":999999,"acquired_at":"2020-01-01T00:00:00Z","hostname":"test"}"#,
+        )
+        .unwrap();
 
         // break_lock should remove it (no flock is held)
         let result = GlobalLock::break_lock(&ms_root).unwrap();

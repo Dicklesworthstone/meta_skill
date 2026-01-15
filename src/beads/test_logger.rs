@@ -336,8 +336,7 @@ mod tests {
     #[test]
     fn test_logger_bd_command_failure() {
         let mut logger = TestLogger::new("test_bd_failure");
-        let result: Result<String, MsError> =
-            Err(MsError::NotFound("Issue not found".to_string()));
+        let result: Result<String, MsError> = Err(MsError::NotFound("Issue not found".to_string()));
         logger.log_bd_command(&["show", "nonexistent"], &result);
 
         assert!(logger.has_errors());

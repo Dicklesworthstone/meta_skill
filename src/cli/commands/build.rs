@@ -24,13 +24,13 @@ use serde::{Deserialize, Serialize};
 use crate::app::AppContext;
 use crate::beads::{BeadsClient, IssueStatus, UpdateIssueRequest};
 use crate::cass::{
-    brenner::{generate_skill_md, run_interactive, BrennerConfig, BrennerWizard, WizardOutput},
     CassClient, QualityScorer,
+    brenner::{BrennerConfig, BrennerWizard, WizardOutput, generate_skill_md, run_interactive},
 };
-use crate::core::recovery::Checkpoint;
-use crate::tui::build_tui::run_build_tui;
 use crate::cm::CmClient;
+use crate::core::recovery::Checkpoint;
 use crate::error::{MsError, Result};
+use crate::tui::build_tui::run_build_tui;
 
 // =============================================================================
 // BuildSession State Machine
@@ -259,10 +259,9 @@ impl BuildSession {
         self.checkpoint.updated_at = chrono::Utc::now();
 
         // Store state - including query for resume
-        self.checkpoint.state.insert(
-            "query".to_string(),
-            self.query.clone(),
-        );
+        self.checkpoint
+            .state
+            .insert("query".to_string(), self.query.clone());
         self.checkpoint.state.insert(
             "qualified_sessions".to_string(),
             self.state.qualified_session_ids.join(","),
@@ -297,8 +296,7 @@ impl BuildSession {
         if self.state.patterns_filtered < self.gates.min_patterns {
             return Err(format!(
                 "Insufficient patterns: {} < {} required",
-                self.state.patterns_filtered,
-                self.gates.min_patterns
+                self.state.patterns_filtered, self.gates.min_patterns
             ));
         }
         Ok(())
@@ -358,9 +356,9 @@ pub fn parse_duration(s: &str) -> Result<Duration> {
 
     // Handle trailing number (e.g., "30" defaults to minutes)
     if !current_num.is_empty() {
-        let num: u64 = current_num.parse().map_err(|_| {
-            MsError::Config(format!("Invalid number in duration: {}", current_num))
-        })?;
+        let num: u64 = current_num
+            .parse()
+            .map_err(|_| MsError::Config(format!("Invalid number in duration: {}", current_num)))?;
         // If no unit specified, assume minutes for backwards compatibility
         total_secs += num * 60;
     }
@@ -616,13 +614,12 @@ impl BeadsTracker {
 
     /// Mark the bead as in_progress at build start.
     pub fn on_start(&self) -> Result<()> {
-        match self.client.update_status(&self.bead_id, IssueStatus::InProgress) {
+        match self
+            .client
+            .update_status(&self.bead_id, IssueStatus::InProgress)
+        {
             Ok(_) => {
-                eprintln!(
-                    "{} {} set to in_progress",
-                    "Bead:".cyan(),
-                    self.bead_id
-                );
+                eprintln!("{} {} set to in_progress", "Bead:".cyan(), self.bead_id);
                 Ok(())
             }
             Err(e) => {
@@ -790,7 +787,10 @@ pub fn run(ctx: &AppContext, args: &BuildArgs) -> Result<()> {
             }
             Ok(None) => {
                 if !ctx.robot_mode {
-                    eprintln!("{} CM not available, proceeding without CM context", "Warning:".yellow());
+                    eprintln!(
+                        "{} CM not available, proceeding without CM context",
+                        "Warning:".yellow()
+                    );
                 }
                 None
             }
@@ -972,16 +972,14 @@ fn run_auto(
     tracker: Option<BeadsTracker>,
     query_override: Option<&str>,
 ) -> Result<()> {
-    use crate::cass::mining::{extract_from_session, ExtractedPattern};
     use crate::cass::QualityConfig;
+    use crate::cass::mining::{ExtractedPattern, extract_from_session};
 
     // Use query_override (from checkpoint resume) or fall back to args.from_cass
     let query = query_override
         .map(|s| s.to_string())
         .or_else(|| args.from_cass.clone())
-        .ok_or_else(|| {
-            MsError::Config("--from-cass is required for --auto builds".into())
-        })?;
+        .ok_or_else(|| MsError::Config("--from-cass is required for --auto builds".into()))?;
 
     let output_dir = args.output.clone().unwrap_or_else(|| {
         ctx.ms_root.join("builds").join(
@@ -1128,7 +1126,10 @@ fn run_auto(
                 let quality = quality_scorer.score(&cass_session);
                 if quality.passes_threshold(&quality_config) {
                     quality_sessions.push((cass_session, quality));
-                    session.state.qualified_session_ids.push(session_match.session_id.clone());
+                    session
+                        .state
+                        .qualified_session_ids
+                        .push(session_match.session_id.clone());
                     if quality_sessions.len() >= args.sessions {
                         break;
                     }
@@ -1138,7 +1139,10 @@ fn run_auto(
             }
             Err(e) => {
                 if !ctx.robot_mode {
-                    eprintln!("  Warning: Failed to fetch session {}: {}", session_match.session_id, e);
+                    eprintln!(
+                        "  Warning: Failed to fetch session {}: {}",
+                        session_match.session_id, e
+                    );
                 }
             }
         }
@@ -1159,7 +1163,13 @@ fn run_auto(
         if let Some(t) = &tracker {
             t.on_failure("No sessions passed quality threshold")?;
         }
-        return output_no_quality(ctx, &session, &query, &skipped_sessions, args.min_session_quality);
+        return output_no_quality(
+            ctx,
+            &session,
+            &query,
+            &skipped_sessions,
+            args.min_session_quality,
+        );
     }
 
     if !ctx.robot_mode {
@@ -1211,7 +1221,10 @@ fn run_auto(
             }
             Err(e) => {
                 if !ctx.robot_mode {
-                    eprintln!("  Warning: Failed to extract from {}: {}", cass_session.id, e);
+                    eprintln!(
+                        "  Warning: Failed to extract from {}: {}",
+                        cass_session.id, e
+                    );
                 }
             }
         }
@@ -1438,7 +1451,11 @@ fn output_no_sessions(ctx: &AppContext, session: &BuildSession, query: &str) -> 
         });
         println!("{}", serde_json::to_string_pretty(&output)?);
     } else {
-        println!("{} No sessions found matching query: {}", "Error:".red(), query);
+        println!(
+            "{} No sessions found matching query: {}",
+            "Error:".red(),
+            query
+        );
     }
     Ok(())
 }
@@ -1516,12 +1533,15 @@ fn output_gate_fail(ctx: &AppContext, session: &BuildSession, error: &str) -> Re
         println!("{}", serde_json::to_string_pretty(&output)?);
     } else {
         println!("{} Quality gate failed: {}", "Error:".red(), error);
-        println!("  Required: {} sessions, {} patterns",
-            session.gates.min_sessions,
-            session.gates.min_patterns);
-        println!("  Actual: {} sessions, {} patterns",
+        println!(
+            "  Required: {} sessions, {} patterns",
+            session.gates.min_sessions, session.gates.min_patterns
+        );
+        println!(
+            "  Actual: {} sessions, {} patterns",
             session.state.qualified_session_ids.len(),
-            session.state.patterns_filtered);
+            session.state.patterns_filtered
+        );
     }
     Ok(())
 }
@@ -1682,7 +1702,10 @@ fn run_resume(
                 });
 
             if !ctx.robot_mode {
-                println!("\n{} Checkpoint indicates Brenner wizard session", "Info:".cyan());
+                println!(
+                    "\n{} Checkpoint indicates Brenner wizard session",
+                    "Info:".cyan()
+                );
                 println!("  Use --guided flag to continue wizard workflow:");
                 println!(
                     "    ms build --guided --from-cass \"{}\" --output {:?}",
@@ -1804,11 +1827,7 @@ fn run_resolve_uncertainties(ctx: &AppContext, args: &BuildArgs) -> Result<()> {
             counts.needs_human,
             if counts.needs_human > 0 { " 👤" } else { "" }
         );
-        println!(
-            "  Resolved:    {} {}",
-            counts.resolved,
-            "✓".green()
-        );
+        println!("  Resolved:    {} {}", counts.resolved, "✓".green());
         println!("  Rejected:    {}", counts.rejected);
         println!("  Expired:     {}", counts.expired);
         println!("  ──────────────────");
@@ -1881,8 +1900,7 @@ fn run_resolve_uncertainties(ctx: &AppContext, args: &BuildArgs) -> Result<()> {
                     Ok(matches) => {
                         let session_ids: Vec<_> =
                             matches.iter().map(|m| m.session_id.clone()).collect();
-                        let relevance_scores: Vec<_> =
-                            matches.iter().map(|m| m.score).collect();
+                        let relevance_scores: Vec<_> = matches.iter().map(|m| m.score).collect();
 
                         query.executed = true;
                         query.results = Some(crate::cass::QueryResults {
@@ -1899,7 +1917,11 @@ fn run_resolve_uncertainties(ctx: &AppContext, args: &BuildArgs) -> Result<()> {
                             println!(
                                 "    Query '{}': {} sessions found",
                                 query.query.chars().take(40).collect::<String>(),
-                                query.results.as_ref().map(|r| r.sessions_found).unwrap_or(0)
+                                query
+                                    .results
+                                    .as_ref()
+                                    .map(|r| r.sessions_found)
+                                    .unwrap_or(0)
                             );
                         }
                     }
@@ -2065,16 +2087,18 @@ fn run_resolve_uncertainties(ctx: &AppContext, args: &BuildArgs) -> Result<()> {
 /// Load uncertainties from JSON file
 fn load_uncertainties(
     path: &std::path::Path,
-) -> Result<(crate::cass::UncertaintyQueue, Vec<crate::cass::UncertaintyItem>)> {
+) -> Result<(
+    crate::cass::UncertaintyQueue,
+    Vec<crate::cass::UncertaintyItem>,
+)> {
     use crate::cass::{UncertaintyConfig, UncertaintyItem, UncertaintyQueue};
 
     let queue = UncertaintyQueue::new(UncertaintyConfig::default());
 
     if path.exists() {
         let content = fs::read_to_string(path)?;
-        let items: Vec<UncertaintyItem> = serde_json::from_str(&content).map_err(|e| {
-            MsError::Config(format!("Failed to parse uncertainties file: {}", e))
-        })?;
+        let items: Vec<UncertaintyItem> = serde_json::from_str(&content)
+            .map_err(|e| MsError::Config(format!("Failed to parse uncertainties file: {}", e)))?;
         Ok((queue, items))
     } else {
         Ok((queue, Vec::new()))
@@ -2128,7 +2152,10 @@ fn format_uncertainty_reason(reason: &crate::cass::UncertaintyReason) -> String 
             format!("High variance ({:.0}%)", variance_score * 100.0)
         }
         UncertaintyReason::CounterExampleFound { contradiction, .. } => {
-            format!("Counter-example: {}", contradiction.chars().take(30).collect::<String>())
+            format!(
+                "Counter-example: {}",
+                contradiction.chars().take(30).collect::<String>()
+            )
         }
         UncertaintyReason::AmbiguousScope { possible_scopes } => {
             format!("Ambiguous scope ({} candidates)", possible_scopes.len())
@@ -2140,7 +2167,10 @@ fn format_uncertainty_reason(reason: &crate::cass::UncertaintyReason) -> String 
             format!("Unknown boundaries: {}", dimension)
         }
         UncertaintyReason::OvergeneralizationFlagged { critique_summary } => {
-            format!("Overgeneralization: {}", critique_summary.chars().take(30).collect::<String>())
+            format!(
+                "Overgeneralization: {}",
+                critique_summary.chars().take(30).collect::<String>()
+            )
         }
         UncertaintyReason::ConflictingPatterns { pattern_ids, .. } => {
             format!("Conflicting patterns ({})", pattern_ids.len())
@@ -2163,10 +2193,22 @@ mod tests {
     #[test]
     fn test_build_phase_transitions() {
         // Test the phase transition chain
-        assert_eq!(BuildPhase::SearchSessions.next(), Some(BuildPhase::QualityFilter));
-        assert_eq!(BuildPhase::QualityFilter.next(), Some(BuildPhase::ExtractPatterns));
-        assert_eq!(BuildPhase::ExtractPatterns.next(), Some(BuildPhase::FilterPatterns));
-        assert_eq!(BuildPhase::FilterPatterns.next(), Some(BuildPhase::Synthesize));
+        assert_eq!(
+            BuildPhase::SearchSessions.next(),
+            Some(BuildPhase::QualityFilter)
+        );
+        assert_eq!(
+            BuildPhase::QualityFilter.next(),
+            Some(BuildPhase::ExtractPatterns)
+        );
+        assert_eq!(
+            BuildPhase::ExtractPatterns.next(),
+            Some(BuildPhase::FilterPatterns)
+        );
+        assert_eq!(
+            BuildPhase::FilterPatterns.next(),
+            Some(BuildPhase::Synthesize)
+        );
         assert_eq!(BuildPhase::Synthesize.next(), Some(BuildPhase::Complete));
 
         // Terminal states have no next phase
@@ -2185,7 +2227,10 @@ mod tests {
         ];
 
         let total_weight: f64 = phases.iter().map(|p| p.weight()).sum();
-        assert!((total_weight - 1.0).abs() < 0.001, "Phase weights should sum to 1.0");
+        assert!(
+            (total_weight - 1.0).abs() < 0.001,
+            "Phase weights should sum to 1.0"
+        );
     }
 
     #[test]
@@ -2203,7 +2248,10 @@ mod tests {
     fn test_build_phase_display() {
         assert_eq!(format!("{}", BuildPhase::SearchSessions), "search_sessions");
         assert_eq!(format!("{}", BuildPhase::QualityFilter), "quality_filter");
-        assert_eq!(format!("{}", BuildPhase::ExtractPatterns), "extract_patterns");
+        assert_eq!(
+            format!("{}", BuildPhase::ExtractPatterns),
+            "extract_patterns"
+        );
         assert_eq!(format!("{}", BuildPhase::FilterPatterns), "filter_patterns");
         assert_eq!(format!("{}", BuildPhase::Synthesize), "synthesize");
         assert_eq!(format!("{}", BuildPhase::Complete), "complete");
@@ -2303,11 +2351,8 @@ mod tests {
         assert!(session.check_quality_gates().is_err());
 
         // Add enough sessions
-        session.state.qualified_session_ids = vec![
-            "s1".to_string(),
-            "s2".to_string(),
-            "s3".to_string(),
-        ];
+        session.state.qualified_session_ids =
+            vec!["s1".to_string(), "s2".to_string(), "s3".to_string()];
         // Still fails (not enough patterns)
         assert!(session.check_quality_gates().is_err());
 
@@ -2428,8 +2473,13 @@ mod tests {
         session.save_checkpoint(ms_root).unwrap();
 
         // Verify checkpoint exists
-        let checkpoint_path = ms_root.join("checkpoints").join(format!("{}.json", session.session_id));
-        assert!(checkpoint_path.exists(), "Checkpoint file should be created");
+        let checkpoint_path = ms_root
+            .join("checkpoints")
+            .join(format!("{}.json", session.session_id));
+        assert!(
+            checkpoint_path.exists(),
+            "Checkpoint file should be created"
+        );
 
         // Load checkpoint
         let loaded = Checkpoint::load(ms_root, &session.session_id)
@@ -2443,7 +2493,10 @@ mod tests {
 
         // Verify state data including query (critical for resume)
         assert_eq!(loaded.get_state("query"), Some("test-checkpoint"));
-        assert_eq!(loaded.get_state("qualified_sessions"), Some("sess-1,sess-2"));
+        assert_eq!(
+            loaded.get_state("qualified_sessions"),
+            Some("sess-1,sess-2")
+        );
         assert_eq!(loaded.get_state("patterns_extracted"), Some("42"));
         assert_eq!(loaded.get_state("patterns_filtered"), Some("35"));
     }

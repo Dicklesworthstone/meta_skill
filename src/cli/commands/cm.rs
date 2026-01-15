@@ -63,23 +63,19 @@ pub fn run(ctx: &AppContext, args: &CmArgs) -> Result<()> {
     }
 
     if !client.is_available() {
-        return Err(MsError::CmUnavailable("cm binary not available".to_string()));
+        return Err(MsError::CmUnavailable(
+            "cm binary not available".to_string(),
+        ));
     }
 
     match &args.command {
         CmCommand::Context { task } => {
             let context = client.context(task)?;
             if ctx.robot_mode {
-                println!(
-                    "{}",
-                    serde_json::to_string(&context).unwrap_or_default()
-                );
+                println!("{}", serde_json::to_string(&context).unwrap_or_default());
             } else {
                 println!("CM context for: {}", task);
-                println!(
-                    "relevant_bullets: {}",
-                    context.relevant_bullets.len()
-                );
+                println!("relevant_bullets: {}", context.relevant_bullets.len());
                 println!("anti_patterns: {}", context.anti_patterns.len());
                 println!("history_snippets: {}", context.history_snippets.len());
                 if !context.suggested_cass_queries.is_empty() {
@@ -137,10 +133,7 @@ pub fn run(ctx: &AppContext, args: &CmArgs) -> Result<()> {
                 } else {
                     println!("Similar rules for: {}\n", query);
                     for m in &matches {
-                        println!(
-                            "[{}] {} (similarity: {:.2})",
-                            m.id, m.content, m.similarity
-                        );
+                        println!("[{}] {} (similarity: {:.2})", m.id, m.content, m.similarity);
                     }
                 }
             }

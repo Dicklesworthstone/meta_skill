@@ -139,17 +139,19 @@ fn slice_type_tag(slice_type: SliceType) -> &'static str {
 }
 
 fn coverage_group(slice_type: SliceType) -> Option<String> {
-    Some(match slice_type {
-        SliceType::Rule => "rules",
-        SliceType::Command => "commands",
-        SliceType::Example => "examples",
-        SliceType::Checklist => "checklists",
-        SliceType::Pitfall => "pitfalls",
-        SliceType::Overview => "overview",
-        SliceType::Reference => "reference",
-        SliceType::Policy => "policy",
-    }
-    .to_string())
+    Some(
+        match slice_type {
+            SliceType::Rule => "rules",
+            SliceType::Command => "commands",
+            SliceType::Example => "examples",
+            SliceType::Checklist => "checklists",
+            SliceType::Pitfall => "pitfalls",
+            SliceType::Overview => "overview",
+            SliceType::Reference => "reference",
+            SliceType::Policy => "policy",
+        }
+        .to_string(),
+    )
 }
 
 fn utility_score(slice_type: SliceType) -> f32 {

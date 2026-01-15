@@ -1,7 +1,7 @@
 use clap::{Args, Subcommand};
 
 use crate::app::AppContext;
-use crate::cli::output::{emit_json, emit_human, HumanLayout};
+use crate::cli::output::{HumanLayout, emit_human, emit_json};
 use crate::error::{MsError, Result};
 use crate::sync::{
     ConflictStrategy, MachineIdentity, SkillSyncStatus, SyncConfig, SyncEngine, SyncOptions,
@@ -51,7 +51,12 @@ fn list(ctx: &AppContext) -> Result<()> {
     let mut conflicts: Vec<_> = state
         .skill_states
         .values()
-        .filter(|entry| matches!(entry.status, SkillSyncStatus::Conflict | SkillSyncStatus::Diverged))
+        .filter(|entry| {
+            matches!(
+                entry.status,
+                SkillSyncStatus::Conflict | SkillSyncStatus::Diverged
+            )
+        })
         .map(|entry| entry.skill_id.clone())
         .collect();
     conflicts.sort();
@@ -134,9 +139,7 @@ fn parse_strategy(raw: &str) -> Result<ConflictStrategy> {
         "prefer-remote" | "remote" => Ok(ConflictStrategy::PreferRemote),
         "prefer-newest" | "newest" => Ok(ConflictStrategy::PreferNewest),
         "keep-both" | "both" => Ok(ConflictStrategy::KeepBoth),
-        _ => Err(MsError::Config(format!(
-            "unknown conflict strategy: {raw}"
-        ))),
+        _ => Err(MsError::Config(format!("unknown conflict strategy: {raw}"))),
     }
 }
 

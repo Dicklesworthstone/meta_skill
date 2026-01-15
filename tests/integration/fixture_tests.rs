@@ -2,7 +2,9 @@
 
 use std::time::Duration;
 
-use super::fixture::{sample_bundles, sample_skills, CommandOutput, TestBundle, TestFixture, TestSkill};
+use super::fixture::{
+    CommandOutput, TestBundle, TestFixture, TestSkill, sample_bundles, sample_skills,
+};
 
 // Re-export macros for use in this test file
 use crate::{
@@ -24,7 +26,10 @@ fn test_fixture_with_sample_skills() {
 
     // Check that sample skills were added
     let rust_error_skill = fixture.skills_dir.join("rust-error-handling");
-    assert!(rust_error_skill.exists(), "rust-error-handling skill should exist");
+    assert!(
+        rust_error_skill.exists(),
+        "rust-error-handling skill should exist"
+    );
 
     let git_skill = fixture.skills_dir.join("git-workflow");
     assert!(git_skill.exists(), "git-workflow skill should exist");
@@ -109,7 +114,10 @@ fn test_test_bundle_with_skills() {
     let bundle = TestBundle::with_skills(
         "skill-bundle",
         "Bundle with skills",
-        vec![("skill1", "# Skill 1\n\nContent"), ("skill2", "# Skill 2\n\nContent")],
+        vec![
+            ("skill1", "# Skill 1\n\nContent"),
+            ("skill2", "# Skill 2\n\nContent"),
+        ],
     );
 
     assert_eq!(bundle.name, "skill-bundle");
@@ -204,6 +212,9 @@ fn test_add_bundle_to_fixture() {
     let manifest = bundle_dir.join("bundle.json");
     assert!(manifest.exists());
 
-    let skill_file = bundle_dir.join("skills").join("bundled-skill").join("SKILL.md");
+    let skill_file = bundle_dir
+        .join("skills")
+        .join("bundled-skill")
+        .join("SKILL.md");
     assert!(skill_file.exists());
 }

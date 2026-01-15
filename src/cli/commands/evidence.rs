@@ -78,9 +78,10 @@ pub fn run(ctx: &AppContext, args: &EvidenceArgs) -> Result<()> {
 
 fn run_show(ctx: &AppContext, args: &ShowEvidenceArgs) -> Result<()> {
     // Check if skill exists
-    let skill = ctx.db.get_skill(&args.skill_id)?.ok_or_else(|| {
-        MsError::SkillNotFound(format!("skill not found: {}", args.skill_id))
-    })?;
+    let skill = ctx
+        .db
+        .get_skill(&args.skill_id)?
+        .ok_or_else(|| MsError::SkillNotFound(format!("skill not found: {}", args.skill_id)))?;
 
     // Get evidence
     if let Some(ref rule_id) = args.rule {
@@ -143,7 +144,7 @@ fn run_export(ctx: &AppContext, args: &ExportEvidenceArgs) -> Result<()> {
             return Err(MsError::Config(format!(
                 "unsupported export format: {} (use json or dot)",
                 other
-            )))
+            )));
         }
     };
 
@@ -239,7 +240,10 @@ fn show_evidence_index_human(
             }
 
             if i >= 2 && refs.len() > 3 {
-                println!("    {} more...", format!("... {} ", refs.len() - 3).dimmed());
+                println!(
+                    "    {} more...",
+                    format!("... {} ", refs.len() - 3).dimmed()
+                );
                 break;
             }
         }
@@ -248,7 +252,11 @@ fn show_evidence_index_human(
     println!();
     println!(
         "{}",
-        format!("Jump to source: ms evidence show {} --rule <rule-id>", skill_id).dimmed()
+        format!(
+            "Jump to source: ms evidence show {} --rule <rule-id>",
+            skill_id
+        )
+        .dimmed()
     );
 
     Ok(())
@@ -292,7 +300,11 @@ fn show_rule_evidence_human(
             eref.message_range.0,
             eref.message_range.1
         );
-        println!("  {}: {}", "Hash".dimmed(), &eref.snippet_hash[..16.min(eref.snippet_hash.len())]);
+        println!(
+            "  {}: {}",
+            "Hash".dimmed(),
+            &eref.snippet_hash[..16.min(eref.snippet_hash.len())]
+        );
 
         if show_excerpts || eref.level != EvidenceLevel::Pointer {
             if let Some(ref excerpt) = eref.excerpt {
@@ -377,11 +389,7 @@ fn show_evidence_index_robot(
     Ok(())
 }
 
-fn show_rule_evidence_robot(
-    skill_id: &str,
-    rule_id: &str,
-    evidence: &[EvidenceRef],
-) -> Result<()> {
+fn show_rule_evidence_robot(skill_id: &str, rule_id: &str, evidence: &[EvidenceRef]) -> Result<()> {
     let output = serde_json::json!({
         "status": "ok",
         "skill_id": skill_id,
@@ -481,9 +489,7 @@ fn export_dot(records: &[crate::storage::sqlite::EvidenceRecord]) -> Result<Stri
     Ok(dot)
 }
 
-fn build_nodes(
-    records: &[crate::storage::sqlite::EvidenceRecord],
-) -> Vec<serde_json::Value> {
+fn build_nodes(records: &[crate::storage::sqlite::EvidenceRecord]) -> Vec<serde_json::Value> {
     let mut nodes = Vec::new();
     let mut seen_skills = std::collections::HashSet::new();
     let mut seen_sessions = std::collections::HashSet::new();
@@ -521,9 +527,7 @@ fn build_nodes(
     nodes
 }
 
-fn build_edges(
-    records: &[crate::storage::sqlite::EvidenceRecord],
-) -> Vec<serde_json::Value> {
+fn build_edges(records: &[crate::storage::sqlite::EvidenceRecord]) -> Vec<serde_json::Value> {
     let mut edges = Vec::new();
 
     for record in records {

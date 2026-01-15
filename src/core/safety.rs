@@ -85,11 +85,7 @@ impl DcgGuard {
             return None;
         }
         let raw = String::from_utf8_lossy(&output.stdout).trim().to_string();
-        if raw.is_empty() {
-            None
-        } else {
-            Some(raw)
-        }
+        if raw.is_empty() { None } else { Some(raw) }
     }
 
     pub fn evaluate_command(&self, command: &str) -> Result<DcgDecision> {
@@ -244,10 +240,12 @@ mod tests {
         assert_eq!(decision.tier, SafetyTier::Critical);
         assert_eq!(decision.reason, "dcg not found");
         assert!(decision.remediation.is_some());
-        assert!(decision
-            .remediation
-            .unwrap()
-            .contains("Install or configure DCG"));
+        assert!(
+            decision
+                .remediation
+                .unwrap()
+                .contains("Install or configure DCG")
+        );
     }
 
     #[test]
@@ -335,11 +333,7 @@ mod tests {
 
     #[test]
     fn dcg_guard_empty_command_allowed() {
-        let guard = DcgGuard::new(
-            PathBuf::from("/nonexistent"),
-            vec![],
-            "json".to_string(),
-        );
+        let guard = DcgGuard::new(PathBuf::from("/nonexistent"), vec![], "json".to_string());
 
         // Empty commands are always allowed
         let decision = guard.evaluate_command("").unwrap();
@@ -349,11 +343,7 @@ mod tests {
 
     #[test]
     fn dcg_guard_whitespace_only_allowed() {
-        let guard = DcgGuard::new(
-            PathBuf::from("/nonexistent"),
-            vec![],
-            "json".to_string(),
-        );
+        let guard = DcgGuard::new(PathBuf::from("/nonexistent"), vec![], "json".to_string());
 
         let decision = guard.evaluate_command("   \t  \n  ").unwrap();
         assert!(decision.allowed);

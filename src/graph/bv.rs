@@ -79,7 +79,8 @@ impl BvClient {
             let stderr = String::from_utf8_lossy(&output.stderr);
             return Err(MsError::Config(format!(
                 "bv command failed ({}): {}",
-                output.status, stderr.trim()
+                output.status,
+                stderr.trim()
             )));
         }
         Ok(output.stdout)
@@ -115,11 +116,7 @@ pub fn run_bv_on_issues<T: DeserializeOwned>(
 }
 
 /// Helper to run bv on a temporary beads JSONL and return raw stdout.
-pub fn run_bv_on_issues_raw(
-    client: &BvClient,
-    issues: &[Issue],
-    args: &[&str],
-) -> Result<Vec<u8>> {
+pub fn run_bv_on_issues_raw(client: &BvClient, issues: &[Issue], args: &[&str]) -> Result<Vec<u8>> {
     let temp = tempfile::tempdir().map_err(MsError::from)?;
     write_beads_jsonl(issues, temp.path())?;
     client.run_robot_raw(args, temp.path())

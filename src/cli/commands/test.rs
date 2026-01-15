@@ -3,7 +3,7 @@
 use clap::Args;
 
 use crate::app::AppContext;
-use crate::cli::output::{emit_json, HumanLayout};
+use crate::cli::output::{HumanLayout, emit_json};
 use crate::error::Result;
 use crate::testing::{SkillTestRunner, TestOptions, TestStatus};
 
@@ -78,11 +78,7 @@ fn render_human(reports: &[crate::testing::SkillTestReport]) {
     layout.title("Skill Tests");
 
     for report in reports {
-        let status = if report.failed == 0 {
-            "PASS"
-        } else {
-            "FAIL"
-        };
+        let status = if report.failed == 0 { "PASS" } else { "FAIL" };
         layout
             .section(&format!("{} ({})", report.skill_id, status))
             .kv("Tests", &report.tests_run.to_string())

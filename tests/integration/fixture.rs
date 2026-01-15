@@ -334,7 +334,12 @@ impl TestFixture {
                 if let Some(mut err) = child.stderr.take() {
                     let _ = err.read_to_string(&mut stderr_str);
                 }
-                (status.success(), status.code().unwrap_or(-1), stdout_str, stderr_str)
+                (
+                    status.success(),
+                    status.code().unwrap_or(-1),
+                    stdout_str,
+                    stderr_str,
+                )
             }
             Err(msg) => (false, -1, String::new(), msg),
         };
@@ -345,7 +350,10 @@ impl TestFixture {
         // Warn about slow operations (threshold: 5 seconds)
         const SLOW_THRESHOLD: Duration = Duration::from_secs(5);
         if elapsed > SLOW_THRESHOLD {
-            println!("[SLOW] ⚠ Command took {:?} (threshold: {:?})", elapsed, SLOW_THRESHOLD);
+            println!(
+                "[SLOW] ⚠ Command took {:?} (threshold: {:?})",
+                elapsed, SLOW_THRESHOLD
+            );
         }
 
         if !stdout.is_empty() {
@@ -367,7 +375,11 @@ impl TestFixture {
     /// Run ms CLI command with environment variables
     pub fn run_ms_with_env(&self, args: &[&str], env_vars: &[(&str, &str)]) -> CommandOutput {
         let start = std::time::Instant::now();
-        println!("\n[CMD] ms {} (with {} env vars)", args.join(" "), env_vars.len());
+        println!(
+            "\n[CMD] ms {} (with {} env vars)",
+            args.join(" "),
+            env_vars.len()
+        );
 
         let mut cmd = Command::new(env!("CARGO_BIN_EXE_ms"));
         cmd.args(args)
@@ -392,7 +404,10 @@ impl TestFixture {
         // Warn about slow operations (threshold: 5 seconds)
         const SLOW_THRESHOLD: Duration = Duration::from_secs(5);
         if elapsed > SLOW_THRESHOLD {
-            println!("[SLOW] ⚠ Command took {:?} (threshold: {:?})", elapsed, SLOW_THRESHOLD);
+            println!(
+                "[SLOW] ⚠ Command took {:?} (threshold: {:?})",
+                elapsed, SLOW_THRESHOLD
+            );
         }
 
         if !stdout.is_empty() {
@@ -454,7 +469,10 @@ impl TestFixture {
 
             println!("[DB CHECK] {} - PASSED", description);
         } else {
-            println!("[DB CHECK] Skipped (no database connection): {}", description);
+            println!(
+                "[DB CHECK] Skipped (no database connection): {}",
+                description
+            );
         }
     }
 
@@ -470,10 +488,14 @@ impl TestFixture {
     fn dump_db_state(&self, db: &Connection) -> String {
         let mut state = String::new();
 
-        if let Ok(count) = db.query_row::<i64, _, _>("SELECT COUNT(*) FROM skills", [], |r| r.get(0)) {
+        if let Ok(count) =
+            db.query_row::<i64, _, _>("SELECT COUNT(*) FROM skills", [], |r| r.get(0))
+        {
             state.push_str(&format!("skills={} ", count));
         }
-        if let Ok(count) = db.query_row::<i64, _, _>("SELECT COUNT(*) FROM skills_fts", [], |r| r.get(0)) {
+        if let Ok(count) =
+            db.query_row::<i64, _, _>("SELECT COUNT(*) FROM skills_fts", [], |r| r.get(0))
+        {
             state.push_str(&format!("fts={} ", count));
         }
 
@@ -637,7 +659,7 @@ impl TestSkill {
 
     pub fn to_markdown(&self) -> String {
         let mut md = String::new();
-        
+
         // Add frontmatter if we have metadata
         if !self.tags.is_empty() || self.layer.is_some() {
             md.push_str("---\n");
@@ -645,18 +667,18 @@ impl TestSkill {
             if !self.tags.is_empty() {
                 md.push_str(&format!("tags: [{}]\n", self.tags.join(", ")));
             }
-            // Note: layer is usually determined by directory structure in ms, 
-            // but for tests we might want to simulate it or put it in frontmatter 
-            // if ms supports overriding it via frontmatter (which it generally doesn't for security/structure reasons, 
+            // Note: layer is usually determined by directory structure in ms,
+            // but for tests we might want to simulate it or put it in frontmatter
+            // if ms supports overriding it via frontmatter (which it generally doesn't for security/structure reasons,
             // but let's check. Actually ms determines layer by path).
-            // 
+            //
             // However, we can still put it in metadata for 'ms list' to pick up if it parses it?
             // Re-reading list.rs: it filters by s.source_layer.
             // s.source_layer comes from where the file was found.
             // So to test layer filtering, we need to place the file in the correct directory structure.
             md.push_str("---\n\n");
         }
-        
+
         md.push_str(&self.content);
         md
     }

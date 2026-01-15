@@ -274,7 +274,10 @@ func BenchmarkAdd(b *testing.B) {
 
     // Verify python-debugging skill appears (may be first depending on scoring)
     let has_python_skill = results.iter().any(|r| {
-        r["id"].as_str().map(|id| id.contains("python")).unwrap_or(false)
+        r["id"]
+            .as_str()
+            .map(|id| id.contains("python"))
+            .unwrap_or(false)
     });
     println!("[SEARCH] Python skill found: {}", has_python_skill);
 
@@ -284,8 +287,14 @@ func BenchmarkAdd(b *testing.B) {
 
     let json = output.json();
     let results = json["results"].as_array().expect("results array");
-    println!("[SEARCH] 'error handling' returned {} results", results.len());
-    assert!(!results.is_empty(), "Should find results for 'error handling'");
+    println!(
+        "[SEARCH] 'error handling' returned {} results",
+        results.len()
+    );
+    assert!(
+        !results.is_empty(),
+        "Should find results for 'error handling'"
+    );
 
     fixture.log_step("Search for 'testing'");
     let output = fixture.run_ms(&["--robot", "search", "go testing table driven"]);
@@ -347,7 +356,10 @@ func BenchmarkAdd(b *testing.B) {
     fixture.assert_success(&output, "load with pack budget");
 
     let packed_len = output.stdout.len();
-    println!("[PACK] Packed output (200 token budget): {} bytes", packed_len);
+    println!(
+        "[PACK] Packed output (200 token budget): {} bytes",
+        packed_len
+    );
 
     // Packed should fit within approximate token budget
     // (rough estimate: 4 chars per token, so 200 tokens ~800 chars + overhead)
@@ -444,7 +456,10 @@ Pods are the smallest deployable units in Kubernetes.
     fixture.assert_success(&output, "search container management");
     let json = output.json();
     let results = json["results"].as_array().expect("results");
-    println!("[SEARCH] 'container management' found {} results", results.len());
+    println!(
+        "[SEARCH] 'container management' found {} results",
+        results.len()
+    );
 
     // Test tag search
     fixture.log_step("Search: by tag");

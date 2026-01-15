@@ -200,13 +200,7 @@ fn test_safety_check_with_session() -> Result<()> {
 
     // Verify session can be used to filter log
     fixture.log_step("Filter log by session");
-    let output = fixture.run_ms(&[
-        "--robot",
-        "safety",
-        "log",
-        "--session",
-        "test-session-123",
-    ]);
+    let output = fixture.run_ms(&["--robot", "safety", "log", "--session", "test-session-123"]);
     fixture.assert_success(&output, "safety log by session");
 
     let json = output.json();
@@ -229,13 +223,7 @@ fn test_safety_check_dry_run() -> Result<()> {
     // Check command in dry-run mode
     // ==========================================
     fixture.log_step("Check command in dry-run mode");
-    let output = fixture.run_ms(&[
-        "--robot",
-        "safety",
-        "check",
-        "ls -la",
-        "--dry-run",
-    ]);
+    let output = fixture.run_ms(&["--robot", "safety", "check", "ls -la", "--dry-run"]);
 
     println!("[SAFETY] Dry-run check: {:?}", output.stdout);
 
@@ -331,13 +319,7 @@ fn test_safety_workflow_complete() -> Result<()> {
     // Step 5: Filter log by session
     // ==========================================
     fixture.log_step("Filter log by session");
-    let output = fixture.run_ms(&[
-        "--robot",
-        "safety",
-        "log",
-        "--session",
-        "workflow-test",
-    ]);
+    let output = fixture.run_ms(&["--robot", "safety", "log", "--session", "workflow-test"]);
     fixture.assert_success(&output, "filter log");
 
     let json = output.json();

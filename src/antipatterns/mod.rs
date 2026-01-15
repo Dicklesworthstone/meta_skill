@@ -229,7 +229,10 @@ fn synthesize_from_clusters(clusters: Vec<EvidenceCluster>) -> Vec<AntiPattern> 
 
 /// Synthesize a negative rule from a cluster
 fn synthesize_rule(cluster: &EvidenceCluster) -> NegativeRule {
-    let first = cluster.evidence.first().expect("cluster should not be empty");
+    let first = cluster
+        .evidence
+        .first()
+        .expect("cluster should not be empty");
 
     // Generate statement based on source type
     let statement = match &first.source {
@@ -282,7 +285,8 @@ fn synthesize_rule(cluster: &EvidenceCluster) -> NegativeRule {
 
 /// Extract failure modes from evidence
 fn extract_failure_modes(evidence: &[AntiPatternEvidence]) -> Vec<FailureMode> {
-    let mut modes: std::collections::HashMap<String, FailureMode> = std::collections::HashMap::new();
+    let mut modes: std::collections::HashMap<String, FailureMode> =
+        std::collections::HashMap::new();
 
     for ev in evidence {
         let desc = &ev.incident.description;
@@ -347,7 +351,10 @@ pub fn format_anti_patterns(anti_patterns: &[AntiPattern]) -> AntiPatternSection
                 count_unique_sessions(&ap.evidence),
                 ap.evidence.len()
             ),
-            example: ap.evidence.first().map(|e| e.incident.failed_action.clone()),
+            example: ap
+                .evidence
+                .first()
+                .map(|e| e.incident.failed_action.clone()),
         };
 
         section.patterns.push(formatted);

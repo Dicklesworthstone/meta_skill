@@ -82,7 +82,9 @@ impl FileStatus {
     pub fn needs_attention(&self) -> bool {
         matches!(
             self.status,
-            ModificationStatus::Modified | ModificationStatus::Conflict | ModificationStatus::Deleted
+            ModificationStatus::Modified
+                | ModificationStatus::Conflict
+                | ModificationStatus::Deleted
         )
     }
 }
@@ -180,9 +182,8 @@ pub struct ConflictDetail {
 
 /// Compute SHA256 hash of file contents
 pub fn hash_file(path: &Path) -> Result<String> {
-    let content = std::fs::read(path).map_err(|e| {
-        MsError::Config(format!("failed to read {}: {e}", path.display()))
-    })?;
+    let content = std::fs::read(path)
+        .map_err(|e| MsError::Config(format!("failed to read {}: {e}", path.display())))?;
     Ok(hash_bytes(&content))
 }
 
@@ -251,11 +252,7 @@ pub fn detect_modifications(
                 current_hash: Some(current_hash.clone()),
                 expected_hash: Some(expected_hash.clone()),
                 size: metadata.as_ref().map(|m| m.len()),
-                modified_at: metadata.and_then(|m| {
-                    m.modified()
-                        .ok()
-                        .map(|t| format_time(t))
-                }),
+                modified_at: metadata.and_then(|m| m.modified().ok().map(|t| format_time(t))),
             });
         } else {
             summary.deleted += 1;
@@ -283,11 +280,7 @@ pub fn detect_modifications(
                 current_hash: Some(current_hash.clone()),
                 expected_hash: None,
                 size: metadata.as_ref().map(|m| m.len()),
-                modified_at: metadata.and_then(|m| {
-                    m.modified()
-                        .ok()
-                        .map(|t| format_time(t))
-                }),
+                modified_at: metadata.and_then(|m| m.modified().ok().map(|t| format_time(t))),
             });
         }
     }
@@ -364,10 +357,7 @@ pub struct BackupInfo {
 }
 
 /// Create backup of a file before overwriting
-pub fn backup_file(
-    original_path: &Path,
-    backup_root: &Path,
-) -> Result<BackupInfo> {
+pub fn backup_file(original_path: &Path, backup_root: &Path) -> Result<BackupInfo> {
     if !original_path.exists() {
         return Err(MsError::Config(format!(
             "cannot backup non-existent file: {}",
@@ -389,9 +379,8 @@ pub fn backup_file(
 
     let backup_path = backup_root.join(&backup_name);
 
-    std::fs::create_dir_all(backup_root).map_err(|e| {
-        MsError::Config(format!("create backup dir: {e}"))
-    })?;
+    std::fs::create_dir_all(backup_root)
+        .map_err(|e| MsError::Config(format!("create backup dir: {e}")))?;
 
     std::fs::copy(original_path, &backup_path).map_err(|e| {
         MsError::Config(format!(
@@ -429,9 +418,8 @@ pub fn restore_from_backup(backup: &BackupInfo) -> Result<()> {
 
     // Create parent directories if needed
     if let Some(parent) = backup.original_path.parent() {
-        std::fs::create_dir_all(parent).map_err(|e| {
-            MsError::Config(format!("create restore dir: {e}"))
-        })?;
+        std::fs::create_dir_all(parent)
+            .map_err(|e| MsError::Config(format!("create restore dir: {e}")))?;
     }
 
     std::fs::copy(&backup.backup_path, &backup.original_path).map_err(|e| {
@@ -537,10 +525,7 @@ mod tests {
         std::fs::write(dir.path().join("SKILL.md"), "# Skill").unwrap();
 
         let mut expected = HashMap::new();
-        expected.insert(
-            PathBuf::from("SKILL.md"),
-            hash_bytes(b"# Skill"),
-        );
+        expected.insert(PathBuf::from("SKILL.md"), hash_bytes(b"# Skill"));
 
         let report = detect_modifications(dir.path(), "test-skill", &expected).unwrap();
         assert_eq!(report.status, ModificationStatus::Clean);
@@ -554,10 +539,7 @@ mod tests {
         std::fs::write(dir.path().join("SKILL.md"), "# Modified Skill").unwrap();
 
         let mut expected = HashMap::new();
-        expected.insert(
-            PathBuf::from("SKILL.md"),
-            hash_bytes(b"# Original Skill"),
-        );
+        expected.insert(PathBuf::from("SKILL.md"), hash_bytes(b"# Original Skill"));
 
         let report = detect_modifications(dir.path(), "test-skill", &expected).unwrap();
         assert_eq!(report.status, ModificationStatus::Modified);
@@ -571,10 +553,7 @@ mod tests {
         std::fs::write(dir.path().join("custom.txt"), "user content").unwrap();
 
         let mut expected = HashMap::new();
-        expected.insert(
-            PathBuf::from("SKILL.md"),
-            hash_bytes(b"# Skill"),
-        );
+        expected.insert(PathBuf::from("SKILL.md"), hash_bytes(b"# Skill"));
 
         let report = detect_modifications(dir.path(), "test-skill", &expected).unwrap();
         assert_eq!(report.status, ModificationStatus::New);
@@ -588,10 +567,7 @@ mod tests {
         // Don't create the expected file
 
         let mut expected = HashMap::new();
-        expected.insert(
-            PathBuf::from("SKILL.md"),
-            hash_bytes(b"# Skill"),
-        );
+        expected.insert(PathBuf::from("SKILL.md"), hash_bytes(b"# Skill"));
 
         let report = detect_modifications(dir.path(), "test-skill", &expected).unwrap();
         assert_eq!(report.status, ModificationStatus::Modified);
@@ -630,12 +606,7 @@ mod tests {
         let mut bundle_hashes = HashMap::new();
         bundle_hashes.insert(PathBuf::from("SKILL.md"), hash_bytes(b"bundle content"));
 
-        let conflicts = detect_conflicts(
-            dir.path(),
-            "test-skill",
-            &bundle_hashes,
-            &local_hashes,
-        );
+        let conflicts = detect_conflicts(dir.path(), "test-skill", &bundle_hashes, &local_hashes);
 
         assert_eq!(conflicts.len(), 1);
         assert_eq!(conflicts[0].file_path, PathBuf::from("SKILL.md"));

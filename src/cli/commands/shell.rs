@@ -4,7 +4,7 @@ use clap::Args;
 use colored::Colorize;
 
 use crate::app::AppContext;
-use crate::cli::output::{emit_json, HumanLayout};
+use crate::cli::output::{HumanLayout, emit_json};
 use crate::error::{MsError, Result};
 
 #[derive(Args, Debug)]
@@ -57,20 +57,14 @@ pub fn run(ctx: &AppContext, args: &ShellArgs) -> Result<()> {
 
 fn resolve_shell(input: Option<&str>) -> Result<String> {
     if let Some(value) = input {
-        return normalize_shell(value).ok_or_else(|| {
-            MsError::ValidationFailed(format!("unsupported shell: {value}"))
-        });
+        return normalize_shell(value)
+            .ok_or_else(|| MsError::ValidationFailed(format!("unsupported shell: {value}")));
     }
 
     let env_shell = std::env::var("SHELL").unwrap_or_default();
-    let detected = env_shell
-        .split('/')
-        .last()
-        .unwrap_or("")
-        .to_string();
-    normalize_shell(&detected).ok_or_else(|| {
-        MsError::ValidationFailed("unable to detect shell; use --shell".to_string())
-    })
+    let detected = env_shell.split('/').last().unwrap_or("").to_string();
+    normalize_shell(&detected)
+        .ok_or_else(|| MsError::ValidationFailed("unable to detect shell; use --shell".to_string()))
 }
 
 fn normalize_shell(value: &str) -> Option<String> {

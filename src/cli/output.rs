@@ -38,7 +38,10 @@ pub fn robot_ok<T: Serialize>(data: T) -> RobotResponse<T> {
     }
 }
 
-pub fn robot_error(code: impl Into<String>, message: impl Into<String>) -> RobotResponse<serde_json::Value> {
+pub fn robot_error(
+    code: impl Into<String>,
+    message: impl Into<String>,
+) -> RobotResponse<serde_json::Value> {
     RobotResponse {
         status: RobotStatus::Error {
             code: code.into(),
@@ -89,8 +92,10 @@ impl HumanLayout {
 
     pub fn kv(&mut self, key: &str, value: &str) -> &mut Self {
         let key_style = style(key).dim().to_string();
-        self.lines
-            .push(format!("{key_style:width$} {value}", width = self.key_width));
+        self.lines.push(format!(
+            "{key_style:width$} {value}",
+            width = self.key_width
+        ));
         self
     }
 

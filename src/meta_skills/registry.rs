@@ -161,8 +161,8 @@ fn parse_if_meta_skill(path: &Path) -> Result<Option<MetaSkill>> {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use super::super::types::MetaSkillMetadata;
+    use super::*;
 
     #[test]
     fn registry_indexes_tags_and_stacks() {

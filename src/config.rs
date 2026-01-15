@@ -859,27 +859,30 @@ fn env_bool(key: &str) -> Result<Option<bool>> {
 
 fn env_u32(key: &str) -> Result<Option<u32>> {
     match std::env::var(key) {
-        Ok(value) => value.parse::<u32>().map(Some).map_err(|err| {
-            MsError::Config(format!("invalid {key} value {value}: {err}"))
-        }),
+        Ok(value) => value
+            .parse::<u32>()
+            .map(Some)
+            .map_err(|err| MsError::Config(format!("invalid {key} value {value}: {err}"))),
         Err(_) => Ok(None),
     }
 }
 
 fn env_u64(key: &str) -> Result<Option<u64>> {
     match std::env::var(key) {
-        Ok(value) => value.parse::<u64>().map(Some).map_err(|err| {
-            MsError::Config(format!("invalid {key} value {value}: {err}"))
-        }),
+        Ok(value) => value
+            .parse::<u64>()
+            .map(Some)
+            .map_err(|err| MsError::Config(format!("invalid {key} value {value}: {err}"))),
         Err(_) => Ok(None),
     }
 }
 
 fn env_f32(key: &str) -> Result<Option<f32>> {
     match std::env::var(key) {
-        Ok(value) => value.parse::<f32>().map(Some).map_err(|err| {
-            MsError::Config(format!("invalid {key} value {value}: {err}"))
-        }),
+        Ok(value) => value
+            .parse::<f32>()
+            .map(Some)
+            .map_err(|err| MsError::Config(format!("invalid {key} value {value}: {err}"))),
         Err(_) => Ok(None),
     }
 }
@@ -937,7 +940,10 @@ mod tests {
         let config = Config::default();
         let json = serde_json::to_string(&config).unwrap();
         let deserialized: Config = serde_json::from_str(&json).unwrap();
-        assert_eq!(config.disclosure.default_level, deserialized.disclosure.default_level);
+        assert_eq!(
+            config.disclosure.default_level,
+            deserialized.disclosure.default_level
+        );
         assert_eq!(config.cache.enabled, deserialized.cache.enabled);
     }
 
@@ -1211,16 +1217,34 @@ mod tests {
 
     #[test]
     fn parse_trust_level_untrusted() {
-        assert_eq!(parse_trust_level("untrusted").unwrap(), TrustLevel::Untrusted);
-        assert_eq!(parse_trust_level("UNTRUSTED").unwrap(), TrustLevel::Untrusted);
+        assert_eq!(
+            parse_trust_level("untrusted").unwrap(),
+            TrustLevel::Untrusted
+        );
+        assert_eq!(
+            parse_trust_level("UNTRUSTED").unwrap(),
+            TrustLevel::Untrusted
+        );
     }
 
     #[test]
     fn parse_trust_level_verify_required_variants() {
-        assert_eq!(parse_trust_level("verify_required").unwrap(), TrustLevel::VerifyRequired);
-        assert_eq!(parse_trust_level("verifyrequired").unwrap(), TrustLevel::VerifyRequired);
-        assert_eq!(parse_trust_level("verify-required").unwrap(), TrustLevel::VerifyRequired);
-        assert_eq!(parse_trust_level("VERIFY_REQUIRED").unwrap(), TrustLevel::VerifyRequired);
+        assert_eq!(
+            parse_trust_level("verify_required").unwrap(),
+            TrustLevel::VerifyRequired
+        );
+        assert_eq!(
+            parse_trust_level("verifyrequired").unwrap(),
+            TrustLevel::VerifyRequired
+        );
+        assert_eq!(
+            parse_trust_level("verify-required").unwrap(),
+            TrustLevel::VerifyRequired
+        );
+        assert_eq!(
+            parse_trust_level("VERIFY_REQUIRED").unwrap(),
+            TrustLevel::VerifyRequired
+        );
     }
 
     #[test]
@@ -1245,11 +1269,15 @@ mod tests {
     fn load_patch_valid_toml() {
         let temp = TempDir::new().unwrap();
         let path = temp.path().join("config.toml");
-        std::fs::write(&path, r#"
+        std::fs::write(
+            &path,
+            r#"
 [cache]
 enabled = false
 max_size_mb = 200
-"#).unwrap();
+"#,
+        )
+        .unwrap();
 
         let patch = Config::load_patch(&path).unwrap().unwrap();
         assert!(patch.cache.is_some());
@@ -1262,10 +1290,14 @@ max_size_mb = 200
     fn load_patch_partial_config() {
         let temp = TempDir::new().unwrap();
         let path = temp.path().join("config.toml");
-        std::fs::write(&path, r#"
+        std::fs::write(
+            &path,
+            r#"
 [disclosure]
 token_budget = 1000
-"#).unwrap();
+"#,
+        )
+        .unwrap();
 
         let patch = Config::load_patch(&path).unwrap().unwrap();
         assert!(patch.disclosure.is_some());
@@ -1317,7 +1349,10 @@ token_budget = 1000
 
         // Values unchanged
         assert_eq!(config.cache.enabled, config_before.cache.enabled);
-        assert_eq!(config.disclosure.token_budget, config_before.disclosure.token_budget);
+        assert_eq!(
+            config.disclosure.token_budget,
+            config_before.disclosure.token_budget
+        );
     }
 
     #[test]
@@ -1359,10 +1394,14 @@ token_budget = 1000
         let ms_root = temp.path().join(".ms");
         std::fs::create_dir_all(&ms_root).unwrap();
 
-        std::fs::write(&config_path, r#"
+        std::fs::write(
+            &config_path,
+            r#"
 [cache]
 enabled = false
-"#).unwrap();
+"#,
+        )
+        .unwrap();
 
         let config = Config::load(Some(&config_path), &ms_root).unwrap();
         assert!(!config.cache.enabled);
@@ -1375,10 +1414,14 @@ enabled = false
         std::fs::create_dir_all(&ms_root).unwrap();
 
         let project_config = ms_root.join("config.toml");
-        std::fs::write(&project_config, r#"
+        std::fs::write(
+            &project_config,
+            r#"
 [disclosure]
 token_budget = 1500
-"#).unwrap();
+"#,
+        )
+        .unwrap();
 
         let config = Config::load(None, &ms_root).unwrap();
         assert_eq!(config.disclosure.token_budget, 1500);

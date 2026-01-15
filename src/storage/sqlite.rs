@@ -3,7 +3,7 @@
 use std::path::Path;
 
 use half::f16;
-use rusqlite::{params, Connection, Row};
+use rusqlite::{Connection, Row, params};
 use serde_json::Value as JsonValue;
 use uuid::Uuid;
 
@@ -128,12 +128,12 @@ impl Database {
     /// Open database at the given path
     pub fn open(path: impl AsRef<Path>) -> Result<Self> {
         let path = path.as_ref();
-        
+
         // Ensure parent directory exists
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent)?;
         }
-        
+
         let conn = Connection::open(path)?;
 
         Self::configure_pragmas(&conn)?;
@@ -144,7 +144,7 @@ impl Database {
             schema_version,
         })
     }
-    
+
     /// Get a reference to the connection
     pub fn conn(&self) -> &Connection {
         &self.conn
@@ -197,25 +197,21 @@ impl Database {
 
     /// Count usage events for a skill.
     pub fn count_skill_usage(&self, skill_id: &str) -> Result<u64> {
-        let count: i64 = self
-            .conn
-            .query_row(
-                "SELECT COUNT(*) FROM skill_usage WHERE skill_id = ?",
-                [skill_id],
-                |row| row.get(0),
-            )?;
+        let count: i64 = self.conn.query_row(
+            "SELECT COUNT(*) FROM skill_usage WHERE skill_id = ?",
+            [skill_id],
+            |row| row.get(0),
+        )?;
         Ok(count.max(0) as u64)
     }
 
     /// Count evidence records for a skill.
     pub fn count_skill_evidence(&self, skill_id: &str) -> Result<u64> {
-        let count: i64 = self
-            .conn
-            .query_row(
-                "SELECT COUNT(*) FROM skill_evidence WHERE skill_id = ?",
-                [skill_id],
-                |row| row.get(0),
-            )?;
+        let count: i64 = self.conn.query_row(
+            "SELECT COUNT(*) FROM skill_evidence WHERE skill_id = ?",
+            [skill_id],
+            |row| row.get(0),
+        )?;
         Ok(count.max(0) as u64)
     }
 
@@ -288,8 +284,7 @@ impl Database {
 
     /// Delete a transaction record from tx_log
     pub fn delete_tx_record(&self, id: &str) -> Result<()> {
-        self.conn
-            .execute("DELETE FROM tx_log WHERE id = ?", [id])?;
+        self.conn.execute("DELETE FROM tx_log WHERE id = ?", [id])?;
         Ok(())
     }
 
@@ -480,8 +475,10 @@ impl Database {
     }
 
     pub fn insert_quarantine_record(&self, record: &QuarantineRecord) -> Result<()> {
-        let classification_json = serde_json::to_string(&record.acip_classification)
-            .map_err(|err| crate::error::MsError::Config(format!("encode classification: {err}")))?;
+        let classification_json =
+            serde_json::to_string(&record.acip_classification).map_err(|err| {
+                crate::error::MsError::Config(format!("encode classification: {err}"))
+            })?;
         self.conn.execute(
             "INSERT INTO injection_quarantine (
                 quarantine_id, session_id, message_index, content_hash, safe_excerpt,
@@ -800,7 +797,9 @@ impl Database {
 
     /// Run SQLite integrity check
     pub fn integrity_check(&self) -> Result<bool> {
-        let result: String = self.conn.query_row("PRAGMA integrity_check", [], |row| row.get(0))?;
+        let result: String = self
+            .conn
+            .query_row("PRAGMA integrity_check", [], |row| row.get(0))?;
         Ok(result == "ok")
     }
 
@@ -902,8 +901,8 @@ impl Database {
 
         for row in rows {
             let (rule_id, evidence_json) = row?;
-            let evidence_refs: Vec<crate::core::EvidenceRef> =
-                serde_json::from_str(&evidence_json).map_err(|err| {
+            let evidence_refs: Vec<crate::core::EvidenceRef> = serde_json::from_str(&evidence_json)
+                .map_err(|err| {
                     MsError::Config(format!("decode evidence for rule {}: {}", rule_id, err))
                 })?;
 
@@ -944,10 +943,8 @@ impl Database {
         let mut rows = stmt.query(params![skill_id, rule_id])?;
         if let Some(row) = rows.next()? {
             let evidence_json: String = row.get(0)?;
-            let evidence_refs: Vec<crate::core::EvidenceRef> =
-                serde_json::from_str(&evidence_json).map_err(|err| {
-                    MsError::Config(format!("decode evidence: {err}"))
-                })?;
+            let evidence_refs: Vec<crate::core::EvidenceRef> = serde_json::from_str(&evidence_json)
+                .map_err(|err| MsError::Config(format!("decode evidence: {err}")))?;
             return Ok(evidence_refs);
         }
         Ok(vec![])
@@ -973,10 +970,8 @@ impl Database {
         let mut records = Vec::new();
         for row in rows {
             let (skill_id, rule_id, evidence_json, updated_at) = row?;
-            let evidence: Vec<crate::core::EvidenceRef> =
-                serde_json::from_str(&evidence_json).map_err(|err| {
-                    MsError::Config(format!("decode evidence: {err}"))
-                })?;
+            let evidence: Vec<crate::core::EvidenceRef> = serde_json::from_str(&evidence_json)
+                .map_err(|err| MsError::Config(format!("decode evidence: {err}")))?;
             records.push(EvidenceRecord {
                 skill_id,
                 rule_id,
@@ -989,10 +984,9 @@ impl Database {
 
     /// Delete all evidence for a skill.
     pub fn delete_skill_evidence(&self, skill_id: &str) -> Result<usize> {
-        let count = self.conn.execute(
-            "DELETE FROM skill_evidence WHERE skill_id = ?",
-            [skill_id],
-        )?;
+        let count = self
+            .conn
+            .execute("DELETE FROM skill_evidence WHERE skill_id = ?", [skill_id])?;
         Ok(count)
     }
 
@@ -1017,7 +1011,7 @@ impl Database {
     ) -> Result<SkillFeedbackRecord> {
         let id = Uuid::new_v4().to_string();
         let created_at = chrono::Utc::now().to_rfc3339();
-        
+
         self.conn.execute(
             "INSERT INTO skill_feedback (id, skill_id, feedback_type, rating, comment, created_at)
              VALUES (?, ?, ?, ?, ?, ?)",
@@ -1041,19 +1035,20 @@ impl Database {
         offset: usize,
     ) -> Result<Vec<SkillFeedbackRecord>> {
         let mut sql = "SELECT id, skill_id, feedback_type, rating, comment, created_at 
-                       FROM skill_feedback".to_string();
+                       FROM skill_feedback"
+            .to_string();
         let mut args = Vec::new();
-        
+
         if let Some(sid) = skill_id {
             sql.push_str(" WHERE skill_id = ?");
             args.push(sid.to_string()); // Ownership work-around
         }
-        
+
         sql.push_str(" ORDER BY created_at DESC LIMIT ? OFFSET ?");
-        
+
         // Use a simpler query flow to avoid borrowing issues
         let mut stmt = self.conn.prepare(&sql)?;
-        
+
         let mut rows = if let Some(sid) = skill_id {
             stmt.query(params![sid, limit as i64, offset as i64])?
         } else {
@@ -1090,7 +1085,16 @@ impl Database {
             "INSERT INTO skill_experiments (
                 id, skill_id, scope, scope_id, variants_json, allocation_json, status, started_at
              ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-            params![id, skill_id, scope, scope_id, variants_json, allocation_json, status, started_at],
+            params![
+                id,
+                skill_id,
+                scope,
+                scope_id,
+                variants_json,
+                allocation_json,
+                status,
+                started_at
+            ],
         )?;
 
         Ok(ExperimentRecord {
@@ -1113,15 +1117,15 @@ impl Database {
     ) -> Result<Vec<ExperimentRecord>> {
         let mut sql = "SELECT id, skill_id, scope, scope_id, variants_json, allocation_json, status, started_at 
                        FROM skill_experiments".to_string();
-        
+
         if let Some(_) = skill_id {
             sql.push_str(" WHERE skill_id = ?");
         }
-        
+
         sql.push_str(" ORDER BY started_at DESC LIMIT ? OFFSET ?");
-        
+
         let mut stmt = self.conn.prepare(&sql)?;
-        
+
         let mut rows = if let Some(sid) = skill_id {
             stmt.query(params![sid, limit as i64, offset as i64])?
         } else {
@@ -1238,10 +1242,12 @@ fn decode_embedding_f16(bytes: &[u8], dims: usize) -> Result<Vec<f32>> {
 
 fn quarantine_from_row(row: &Row<'_>) -> std::result::Result<QuarantineRecord, rusqlite::Error> {
     let classification_json: String = row.get(5)?;
-    let classification: JsonValue = serde_json::from_str(&classification_json)
-        .map_err(|err| rusqlite::Error::FromSqlConversionFailure(5, rusqlite::types::Type::Text, Box::new(err)))?;
-    let acip_classification = serde_json::from_value(classification)
-        .map_err(|err| rusqlite::Error::FromSqlConversionFailure(5, rusqlite::types::Type::Text, Box::new(err)))?;
+    let classification: JsonValue = serde_json::from_str(&classification_json).map_err(|err| {
+        rusqlite::Error::FromSqlConversionFailure(5, rusqlite::types::Type::Text, Box::new(err))
+    })?;
+    let acip_classification = serde_json::from_value(classification).map_err(|err| {
+        rusqlite::Error::FromSqlConversionFailure(5, rusqlite::types::Type::Text, Box::new(err))
+    })?;
 
     Ok(QuarantineRecord {
         quarantine_id: row.get(0)?,
@@ -1278,9 +1284,9 @@ fn session_quality_from_row(row: &Row<'_>) -> Result<SessionQualityRecord> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use tempfile::tempdir;
-    use crate::security::AcipClassification;
     use crate::search::embeddings::HashEmbedder;
+    use crate::security::AcipClassification;
+    use tempfile::tempdir;
 
     #[test]
     fn test_database_creation_and_schema_version() {
@@ -1499,8 +1505,13 @@ mod tests {
         };
 
         db.upsert_skill(&record).unwrap();
-        db.upsert_alias("legacy-id", "alias-target", "deprecated", "2026-01-01T00:00:00Z")
-            .unwrap();
+        db.upsert_alias(
+            "legacy-id",
+            "alias-target",
+            "deprecated",
+            "2026-01-01T00:00:00Z",
+        )
+        .unwrap();
 
         let alias = db.resolve_alias("legacy-id").unwrap().unwrap();
         assert_eq!(alias.canonical_id, "alias-target");
@@ -1528,7 +1539,8 @@ mod tests {
             },
             audit_tag: Some("ACIP_AUDIT_MODE=ENABLED".to_string()),
             created_at: "2026-01-01T00:00:00Z".to_string(),
-            replay_command: "ms security quarantine replay q_test --i-understand-the-risks".to_string(),
+            replay_command: "ms security quarantine replay q_test --i-understand-the-risks"
+                .to_string(),
         };
 
         db.insert_quarantine_record(&record).unwrap();
@@ -1735,8 +1747,13 @@ mod tests {
                 level: EvidenceLevel::Pointer,
                 confidence: 0.7 + (i as f32 * 0.05),
             }];
-            db.upsert_evidence("multi-rule-skill", &format!("rule-{}", i), &evidence, &coverage)
-                .unwrap();
+            db.upsert_evidence(
+                "multi-rule-skill",
+                &format!("rule-{}", i),
+                &evidence,
+                &coverage,
+            )
+            .unwrap();
         }
 
         // List all evidence

@@ -1,5 +1,5 @@
 use ms::search::HashEmbedder;
-use ms::test_utils::{run_table_tests, TestCase};
+use ms::test_utils::{TestCase, run_table_tests};
 
 #[test]
 fn hash_embedding_dimensions_table() -> Result<(), String> {

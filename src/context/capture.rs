@@ -149,8 +149,9 @@ impl ContextCapture {
         if !history_path.exists() {
             return Ok(Vec::new());
         }
-        let content = std::fs::read_to_string(&history_path)
-            .map_err(|err| MsError::Config(format!("read history {}: {err}", history_path.display())))?;
+        let content = std::fs::read_to_string(&history_path).map_err(|err| {
+            MsError::Config(format!("read history {}: {err}", history_path.display()))
+        })?;
         let commands = content
             .lines()
             .rev()

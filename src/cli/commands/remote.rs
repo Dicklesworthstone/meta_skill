@@ -1,7 +1,7 @@
 use clap::{Args, Subcommand};
 
 use crate::app::AppContext;
-use crate::cli::output::{emit_json, emit_human, HumanLayout};
+use crate::cli::output::{HumanLayout, emit_human, emit_json};
 use crate::error::{MsError, Result};
 use crate::sync::{RemoteConfig, RemoteType, SyncConfig, SyncDirection};
 

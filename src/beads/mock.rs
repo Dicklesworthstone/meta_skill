@@ -80,9 +80,7 @@ impl BeadsErrorKind {
         match self {
             Self::Unavailable => MsError::BeadsUnavailable(format!("mock error: {}", context)),
             Self::NotFound => MsError::NotFound(format!("mock error: {}", context)),
-            Self::ValidationFailed => {
-                MsError::ValidationFailed(format!("mock error: {}", context))
-            }
+            Self::ValidationFailed => MsError::ValidationFailed(format!("mock error: {}", context)),
             Self::TransactionFailed => {
                 MsError::TransactionFailed(format!("mock error: {}", context))
             }
@@ -830,7 +828,9 @@ mod tests {
     fn mock_client_create_persists_issue() {
         let mock = MockBeadsClient::new();
 
-        let created = mock.create(&CreateIssueRequest::new("Persist Test")).unwrap();
+        let created = mock
+            .create(&CreateIssueRequest::new("Persist Test"))
+            .unwrap();
 
         // Should be able to retrieve it
         let fetched = mock.show(&created.id).unwrap();
@@ -914,9 +914,7 @@ mod tests {
     fn mock_client_update_sets_closed_at() {
         let mock = MockBeadsClient::new().with_issues(vec![test_issue("close-at", "Test")]);
 
-        let updated = mock
-            .update_status("close-at", IssueStatus::Closed)
-            .unwrap();
+        let updated = mock.update_status("close-at", IssueStatus::Closed).unwrap();
 
         assert!(updated.closed_at.is_some());
     }
@@ -953,7 +951,9 @@ mod tests {
     fn mock_client_close_with_reason_sets_notes() {
         let mock = MockBeadsClient::new().with_issues(vec![test_issue("close-reason", "Test")]);
 
-        let closed = mock.close("close-reason", Some("Completed successfully")).unwrap();
+        let closed = mock
+            .close("close-reason", Some("Completed successfully"))
+            .unwrap();
 
         assert_eq!(closed.notes, Some("Completed successfully".to_string()));
     }

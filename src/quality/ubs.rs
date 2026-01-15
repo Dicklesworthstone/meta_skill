@@ -60,7 +60,8 @@ impl UbsClient {
             let command_str = command_string(&git_cmd);
             gate.enforce(&command_str, None)?;
         }
-        let output = git_cmd.output()
+        let output = git_cmd
+            .output()
             .map_err(|err| MsError::Config(format!("git diff: {err}")))?;
 
         if !output.status.success() {
@@ -182,7 +183,9 @@ fn parse_findings(output: &str) -> Vec<UbsFinding> {
         }
 
         if let Some((left, _)) = line.split_once('(') {
-            let trimmed = left.trim().trim_start_matches(|c: char| !c.is_ascii_alphanumeric());
+            let trimmed = left
+                .trim()
+                .trim_start_matches(|c: char| !c.is_ascii_alphanumeric());
             if !trimmed.is_empty() {
                 current_category = trimmed.to_string();
             }
@@ -206,7 +209,9 @@ fn parse_findings(output: &str) -> Vec<UbsFinding> {
             continue;
         }
 
-        if line.to_lowercase().starts_with("suggested fix") || line.to_lowercase().starts_with("fix") {
+        if line.to_lowercase().starts_with("suggested fix")
+            || line.to_lowercase().starts_with("fix")
+        {
             if let Some(idx) = last_index {
                 findings[idx].suggested_fix = Some(line.to_string());
             }

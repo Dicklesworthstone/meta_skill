@@ -223,9 +223,7 @@ pub enum WizardState {
         draft: BrennerSkillDraft,
     },
     /// Wizard cancelled
-    Cancelled {
-        reason: String,
-    },
+    Cancelled { reason: String },
 }
 
 /// Test results from materialization
@@ -443,8 +441,7 @@ impl BrennerWizard {
     /// Set session search results
     pub fn set_session_results(&mut self, new_results: Vec<SessionMatch>) {
         if let WizardState::SessionSelection {
-            ref mut results,
-            ..
+            ref mut results, ..
         } = self.state
         {
             *results = new_results;
@@ -662,7 +659,10 @@ impl BrennerWizard {
 
         BrennerSkillDraft {
             name: self.checkpoint.query.clone(),
-            description: format!("Skill extracted using Brenner method from query: {}", self.checkpoint.query),
+            description: format!(
+                "Skill extracted using Brenner method from query: {}",
+                self.checkpoint.query
+            ),
             rules,
             examples: Vec::new(),
             avoid_when,
@@ -796,7 +796,11 @@ pub fn run_interactive(
 
     loop {
         match wizard.state() {
-            WizardState::SessionSelection { query, results, selected } => {
+            WizardState::SessionSelection {
+                query,
+                results,
+                selected,
+            } => {
                 println!("\n{}", "=".repeat(60));
                 println!("BRENNER WIZARD - Session Selection");
                 println!("{}", "=".repeat(60));
@@ -865,7 +869,11 @@ pub fn run_interactive(
                 }
             }
 
-            WizardState::MoveExtraction { sessions, moves, current_session_idx } => {
+            WizardState::MoveExtraction {
+                sessions,
+                moves,
+                current_session_idx,
+            } => {
                 println!("\n{}", "=".repeat(60));
                 println!("BRENNER WIZARD - Cognitive Move Extraction");
                 println!("{}", "=".repeat(60));
@@ -873,7 +881,8 @@ pub fn run_interactive(
                     "\nSession {}/{}: {}",
                     current_session_idx + 1,
                     sessions.len(),
-                    sessions.get(*current_session_idx)
+                    sessions
+                        .get(*current_session_idx)
                         .map(|s| s.session.session_id.as_str())
                         .unwrap_or("?")
                 );
@@ -924,7 +933,9 @@ pub fn run_interactive(
                                     tag,
                                     description: parts[2].to_string(),
                                     evidence: MoveEvidence {
-                                        session_id: session.map(|s| s.session.session_id.clone()).unwrap_or_default(),
+                                        session_id: session
+                                            .map(|s| s.session.session_id.clone())
+                                            .unwrap_or_default(),
                                         message_indices: vec![],
                                         excerpt: "...".to_string(),
                                         notes: None,
@@ -946,7 +957,11 @@ pub fn run_interactive(
                 }
             }
 
-            WizardState::ThirdAlternativeGuard { moves, flagged_indices, current_idx } => {
+            WizardState::ThirdAlternativeGuard {
+                moves,
+                flagged_indices,
+                current_idx,
+            } => {
                 println!("\n{}", "=".repeat(60));
                 println!("BRENNER WIZARD - Third Alternative Guard");
                 println!("{}", "=".repeat(60));
@@ -1014,7 +1029,11 @@ pub fn run_interactive(
                     Some("f") => {
                         let reason = input.strip_prefix("f ").unwrap_or("").to_string();
                         wizard.review_move(MoveDecision::Flagged {
-                            reason: if reason.is_empty() { "Unspecified".to_string() } else { reason },
+                            reason: if reason.is_empty() {
+                                "Unspecified".to_string()
+                            } else {
+                                reason
+                            },
                         })?;
                         if !wizard.next_flagged_move() {
                             wizard.finish_guard()?;
@@ -1067,7 +1086,10 @@ pub fn run_interactive(
                 }
             }
 
-            WizardState::MaterializationTest { draft, test_results: _ } => {
+            WizardState::MaterializationTest {
+                draft,
+                test_results: _,
+            } => {
                 // Extract data first to avoid borrow issues
                 let draft_clone = draft.clone();
                 let draft_name = draft_clone.name.clone();
@@ -1095,7 +1117,11 @@ pub fn run_interactive(
                 );
                 println!(
                     "  Validation: {}",
-                    if results.validation_passed { "PASSED" } else { "FAILED" }
+                    if results.validation_passed {
+                        "PASSED"
+                    } else {
+                        "FAILED"
+                    }
                 );
 
                 println!("\nCommands:");
@@ -1125,7 +1151,12 @@ pub fn run_interactive(
                 }
             }
 
-            WizardState::Complete { skill_path, manifest_path, draft, .. } => {
+            WizardState::Complete {
+                skill_path,
+                manifest_path,
+                draft,
+                ..
+            } => {
                 println!("\n{}", "=".repeat(60));
                 println!("BRENNER WIZARD - Complete!");
                 println!("{}", "=".repeat(60));
@@ -1164,7 +1195,10 @@ mod tests {
     #[test]
     fn test_wizard_creation() {
         let wizard = BrennerWizard::new("test query", BrennerConfig::default());
-        assert!(matches!(wizard.state(), WizardState::SessionSelection { .. }));
+        assert!(matches!(
+            wizard.state(),
+            WizardState::SessionSelection { .. }
+        ));
     }
 
     #[test]

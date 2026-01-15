@@ -16,7 +16,11 @@ fn test_path_traversal_in_skill_name_blocked() {
     std::fs::create_dir_all(&traversal_skill_dir).ok();
 
     let traversal_skill = traversal_skill_dir.join("SKILL.md");
-    std::fs::write(&traversal_skill, "# Malicious Skill\n\nShould not be indexed.\n").ok();
+    std::fs::write(
+        &traversal_skill,
+        "# Malicious Skill\n\nShould not be indexed.\n",
+    )
+    .ok();
 
     // Index should not index skills with traversal paths
     let output = fixture.run_ms(&["--robot", "index"]);
@@ -137,7 +141,7 @@ fn test_null_byte_in_path_rejected() {
 /// Test secret scanner detection
 #[test]
 fn test_secret_scanner_integration() {
-    use ms::security::{contains_secrets, redact_secrets, SecretType, scan_secrets};
+    use ms::security::{SecretType, contains_secrets, redact_secrets, scan_secrets};
 
     let content_with_secrets = r#"
         config = {
@@ -155,8 +159,12 @@ fn test_secret_scanner_integration() {
 
     // Should find AWS key
     let matches = scan_secrets(content_with_secrets);
-    let has_aws = matches.iter().any(|m| m.secret_type == SecretType::AwsAccessKey);
-    let has_github = matches.iter().any(|m| m.secret_type == SecretType::GitHubToken);
+    let has_aws = matches
+        .iter()
+        .any(|m| m.secret_type == SecretType::AwsAccessKey);
+    let has_github = matches
+        .iter()
+        .any(|m| m.secret_type == SecretType::GitHubToken);
 
     assert!(has_aws, "Should detect AWS access key");
     assert!(has_github, "Should detect GitHub token");
@@ -180,8 +188,8 @@ fn test_secret_scanner_integration() {
 /// Test path policy utilities
 #[test]
 fn test_path_policy_integration() {
+    use ms::security::path_policy::{is_under_root, normalize_path, safe_join};
     use std::path::Path;
-    use ms::security::path_policy::{safe_join, is_under_root, normalize_path};
 
     let root = Path::new("/data/skills");
 

@@ -56,13 +56,15 @@ impl RequirementCheck {
             Ok(path) => {
                 self.path = Some(path);
                 self.present = true;
-                
+
                 // Try to get version
                 if let Ok(output) = Command::new(&self.bin).arg("--version").output() {
                     if output.status.success() {
                         let v = String::from_utf8_lossy(&output.stdout).trim().to_string();
                         // Clean up version string (e.g. "git version 2.34.1" -> "2.34.1")
-                        let clean_v = if v.to_lowercase().starts_with(&self.bin) || v.to_lowercase().starts_with("git version") {
+                        let clean_v = if v.to_lowercase().starts_with(&self.bin)
+                            || v.to_lowercase().starts_with("git version")
+                        {
                             v.split_whitespace().last().unwrap_or(&v).to_string()
                         } else {
                             v
@@ -121,11 +123,15 @@ pub fn run(ctx: &AppContext, args: &RequirementsArgs) -> Result<()> {
             "-".yellow()
         };
 
-        let path_str = check.path.as_ref()
+        let path_str = check
+            .path
+            .as_ref()
             .map(|p| p.to_string_lossy().to_string())
             .unwrap_or_else(|| "Not found".dimmed().to_string());
 
-        let version_str = check.version.as_ref()
+        let version_str = check
+            .version
+            .as_ref()
             .map(|v| format!("(v{})", v))
             .unwrap_or_default();
 

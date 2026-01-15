@@ -43,9 +43,9 @@ pub mod prune;
 pub mod quality;
 pub mod remote;
 pub mod requirements;
+pub mod safety;
 pub mod search;
 pub mod security;
-pub mod safety;
 pub mod shell;
 pub mod show;
 pub mod suggest;
@@ -108,9 +108,8 @@ pub(crate) fn discover_skill_markdowns(ctx: &AppContext) -> Result<Vec<PathBuf>>
             continue;
         }
         for entry in WalkDir::new(root).follow_links(true) {
-            let entry = entry.map_err(|err| {
-                crate::error::MsError::Config(format!("walk skill paths: {err}"))
-            })?;
+            let entry = entry
+                .map_err(|err| crate::error::MsError::Config(format!("walk skill paths: {err}")))?;
             if !entry.file_type().is_file() {
                 continue;
             }

@@ -9,7 +9,10 @@ pub struct MetaSkillParser;
 impl MetaSkillParser {
     pub fn parse_str(content: &str, source: &Path) -> Result<MetaSkill> {
         let doc: MetaSkillDoc = toml::from_str(content).map_err(|err| {
-            MsError::InvalidSkill(format!("meta-skill parse error ({}): {err}", source.display()))
+            MsError::InvalidSkill(format!(
+                "meta-skill parse error ({}): {err}",
+                source.display()
+            ))
         })?;
         doc.into_meta_skill()
     }

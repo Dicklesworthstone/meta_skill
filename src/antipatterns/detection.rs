@@ -168,11 +168,7 @@ impl DefaultDetector {
     }
 
     /// Extract preceding action from context
-    fn find_preceding_action(
-        &self,
-        session: &Session,
-        signal_idx: usize,
-    ) -> Option<ActionSummary> {
+    fn find_preceding_action(&self, session: &Session, signal_idx: usize) -> Option<ActionSummary> {
         // Look backwards for the most recent action
         for i in (0..signal_idx).rev() {
             if let Some(msg) = session.messages.get(i) {
@@ -668,7 +664,10 @@ pub fn signals_to_evidence(
                         .map(|m| m.content_preview.clone())
                         .collect(),
                     location: None,
-                    tool: signal.preceding_action.as_ref().and_then(|a| a.tool_name.clone()),
+                    tool: signal
+                        .preceding_action
+                        .as_ref()
+                        .and_then(|a| a.tool_name.clone()),
                 },
                 correction: context.correction,
             };

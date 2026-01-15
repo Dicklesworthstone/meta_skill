@@ -17,7 +17,10 @@ fn migrate_sets_missing_format_version() {
     let mut json: serde_json::Value =
         serde_json::from_str(&fs::read_to_string(&spec_path).unwrap()).unwrap();
     if let Some(obj) = json.as_object_mut() {
-        obj.insert("format_version".to_string(), serde_json::Value::String("".to_string()));
+        obj.insert(
+            "format_version".to_string(),
+            serde_json::Value::String("".to_string()),
+        );
     }
     fs::write(&spec_path, serde_json::to_string_pretty(&json).unwrap()).unwrap();
 

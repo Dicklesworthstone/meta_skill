@@ -18,7 +18,11 @@ pub struct BeadsVersion {
 impl BeadsVersion {
     /// Create a new version.
     pub const fn new(major: u32, minor: u32, patch: u32) -> Self {
-        Self { major, minor, patch }
+        Self {
+            major,
+            minor,
+            patch,
+        }
     }
 
     /// Parse version string like "bd version 1.2.3" or "1.2.3-abc123".
@@ -37,7 +41,11 @@ impl BeadsVersion {
         let minor = parts[1].parse().unwrap_or(0);
         let patch = parts.get(2).and_then(|p| p.parse().ok()).unwrap_or(0);
 
-        Ok(Self { major, minor, patch })
+        Ok(Self {
+            major,
+            minor,
+            patch,
+        })
     }
 }
 
@@ -66,12 +74,10 @@ impl PartialOrd for BeadsVersion {
 }
 
 /// Minimum bd version this client supports.
-pub static MINIMUM_SUPPORTED_VERSION: Lazy<BeadsVersion> =
-    Lazy::new(|| BeadsVersion::new(0, 9, 0));
+pub static MINIMUM_SUPPORTED_VERSION: Lazy<BeadsVersion> = Lazy::new(|| BeadsVersion::new(0, 9, 0));
 
 /// Recommended bd version for full feature support.
-pub static RECOMMENDED_VERSION: Lazy<BeadsVersion> =
-    Lazy::new(|| BeadsVersion::new(1, 0, 0));
+pub static RECOMMENDED_VERSION: Lazy<BeadsVersion> = Lazy::new(|| BeadsVersion::new(1, 0, 0));
 
 #[derive(Debug, Clone)]
 pub enum VersionCompatibility {

@@ -6,7 +6,7 @@ use clap::{Args, Subcommand};
 
 use crate::app::AppContext;
 use crate::error::{MsError, Result};
-use crate::graph::bv::{run_bv_on_issues, run_bv_on_issues_raw, BvClient};
+use crate::graph::bv::{BvClient, run_bv_on_issues, run_bv_on_issues_raw};
 use crate::graph::skills::skills_to_issues;
 
 #[derive(Args, Debug)]
@@ -183,8 +183,7 @@ fn run_export(
 ) -> Result<()> {
     let arg = format!("--graph-format={}", args.format);
     if args.format == "json" {
-        let value: serde_json::Value =
-            run_bv_on_issues(client, issues, &["--robot-graph", &arg])?;
+        let value: serde_json::Value = run_bv_on_issues(client, issues, &["--robot-graph", &arg])?;
         if ctx.robot_mode {
             return crate::cli::output::emit_json(&value);
         }

@@ -20,7 +20,7 @@ use ms::core::disclosure::PackMode;
 use ms::core::packing::{ConstrainedPacker, PackConstraints};
 use ms::core::skill::{SkillSlice, SliceType};
 use ms::search::embeddings::{HashEmbedder, VectorIndex};
-use ms::search::hybrid::{fuse_results, RrfConfig};
+use ms::search::hybrid::{RrfConfig, fuse_results};
 
 /// Helper to measure operation time with warmup
 fn measure_op<F, R>(warmup_iterations: usize, measure_iterations: usize, mut op: F) -> Duration
@@ -79,7 +79,10 @@ fn test_rrf_fusion_performance_target() {
         )
     });
 
-    println!("[PERF] rrf_fusion (500+500 results): {:?} per operation", per_op);
+    println!(
+        "[PERF] rrf_fusion (500+500 results): {:?} per operation",
+        per_op
+    );
 
     // Target: < 10ms
     assert!(
@@ -109,7 +112,10 @@ fn test_vector_search_performance_target() {
 
     let per_op = measure_op(10, 100, || index.search(black_box(&query_embedding), 10));
 
-    println!("[PERF] vector_search (1000 embeddings): {:?} per operation", per_op);
+    println!(
+        "[PERF] vector_search (1000 embeddings): {:?} per operation",
+        per_op
+    );
 
     // Target: < 50ms p99 (we use mean, so target should be lower)
     assert!(
@@ -145,10 +151,17 @@ fn test_packing_performance_target() {
     let constraints = PackConstraints::new(5000, 10);
 
     let per_op = measure_op(10, 100, || {
-        packer.pack(black_box(&slices), black_box(&constraints), PackMode::Balanced)
+        packer.pack(
+            black_box(&slices),
+            black_box(&constraints),
+            PackMode::Balanced,
+        )
     });
 
-    println!("[PERF] packing (100 slices, 5000 budget): {:?} per operation", per_op);
+    println!(
+        "[PERF] packing (100 slices, 5000 budget): {:?} per operation",
+        per_op
+    );
 
     // Target: < 50ms
     assert!(

@@ -68,8 +68,8 @@ impl RetryConfig {
 
     /// Calculate delay for a given attempt number (0-indexed).
     pub fn delay_for_attempt(&self, attempt: u32) -> Duration {
-        let base_delay = self.initial_delay.as_secs_f64()
-            * self.backoff_multiplier.powi(attempt as i32);
+        let base_delay =
+            self.initial_delay.as_secs_f64() * self.backoff_multiplier.powi(attempt as i32);
         let capped_delay = base_delay.min(self.max_delay.as_secs_f64());
 
         // Add random jitter to prevent thundering herd
@@ -111,13 +111,13 @@ impl FailureMode {
     /// Whether this failure mode is typically recoverable.
     pub fn is_recoverable(&self) -> bool {
         match self {
-            FailureMode::Database => true,  // Often can recover via WAL checkpoint
+            FailureMode::Database => true, // Often can recover via WAL checkpoint
             FailureMode::GitArchive => true, // Can rebuild/fsck
             FailureMode::SearchIndex => true, // Can rebuild from source
-            FailureMode::Cache => true,      // Always rebuildable
+            FailureMode::Cache => true,    // Always rebuildable
             FailureMode::Transaction => true, // 2PC recovery
-            FailureMode::Lock => true,       // Can break stale locks
-            FailureMode::Config => false,    // Needs user intervention
+            FailureMode::Lock => true,     // Can break stale locks
+            FailureMode::Config => false,  // Needs user intervention
         }
     }
 
@@ -205,7 +205,9 @@ impl RecoveryReport {
 
     /// Whether there are critical issues remaining.
     pub fn has_critical_issues(&self) -> bool {
-        self.issues.iter().any(|i| i.severity == 1 && !i.auto_recoverable)
+        self.issues
+            .iter()
+            .any(|i| i.severity == 1 && !i.auto_recoverable)
     }
 
     /// Summary string suitable for logging.
@@ -341,8 +343,12 @@ impl RecoveryManager {
                 Ok(true) => {}
                 Ok(false) => {
                     report.issues.push(
-                        RecoveryIssue::new(FailureMode::Database, 1, "Database integrity check failed")
-                            .with_fix("Run 'ms doctor --fix' or restore from backup"),
+                        RecoveryIssue::new(
+                            FailureMode::Database,
+                            1,
+                            "Database integrity check failed",
+                        )
+                        .with_fix("Run 'ms doctor --fix' or restore from backup"),
                     );
                 }
                 Err(e) => {
@@ -375,8 +381,12 @@ impl RecoveryManager {
         let git_dir = archive_path.join(".git");
         if !git_dir.exists() {
             report.issues.push(
-                RecoveryIssue::new(FailureMode::GitArchive, 1, "Archive is not a Git repository")
-                    .with_fix("Run 'git init' in the archive directory"),
+                RecoveryIssue::new(
+                    FailureMode::GitArchive,
+                    1,
+                    "Archive is not a Git repository",
+                )
+                .with_fix("Run 'git init' in the archive directory"),
             );
             return Ok(());
         }
@@ -445,13 +455,11 @@ impl RecoveryManager {
             // Check if there are any segment files at all
             let has_segments = std::fs::read_dir(&index_path)
                 .map(|entries| {
-                    entries
-                        .filter_map(|e| e.ok())
-                        .any(|e| {
-                            e.file_name()
-                                .to_str()
-                                .is_some_and(|n| n.ends_with(".managed.json") || n.starts_with("seg_"))
-                        })
+                    entries.filter_map(|e| e.ok()).any(|e| {
+                        e.file_name()
+                            .to_str()
+                            .is_some_and(|n| n.ends_with(".managed.json") || n.starts_with("seg_"))
+                    })
                 })
                 .unwrap_or(false);
 
@@ -600,11 +608,7 @@ fn is_process_alive(pid: u32) -> bool {
     // On other Unix systems (or if /proc is missing), use `kill -0` command
     // This avoids unsafe blocks required for libc::kill, satisfying -F unsafe-code
     use std::process::Command;
-    match Command::new("kill")
-        .arg("-0")
-        .arg(pid.to_string())
-        .output()
-    {
+    match Command::new("kill").arg("-0").arg(pid.to_string()).output() {
         Ok(output) => {
             if output.status.success() {
                 true
@@ -620,7 +624,7 @@ fn is_process_alive(pid: u32) -> bool {
                     false
                 }
             }
-        },
+        }
         Err(_) => {
             // If we can't run kill, assume alive to avoid breaking valid locks
             true
@@ -770,18 +774,15 @@ impl Checkpoint {
         let safe_id = Self::sanitize_operation_id(&self.operation_id)?;
 
         let checkpoints_dir = ms_root.join("checkpoints");
-        std::fs::create_dir_all(&checkpoints_dir).map_err(|e| {
-            MsError::Config(format!("Failed to create checkpoints dir: {}", e))
-        })?;
+        std::fs::create_dir_all(&checkpoints_dir)
+            .map_err(|e| MsError::Config(format!("Failed to create checkpoints dir: {}", e)))?;
 
         let path = checkpoints_dir.join(format!("{}.json", safe_id));
-        let json = serde_json::to_string_pretty(self).map_err(|e| {
-            MsError::Config(format!("Failed to serialize checkpoint: {}", e))
-        })?;
+        let json = serde_json::to_string_pretty(self)
+            .map_err(|e| MsError::Config(format!("Failed to serialize checkpoint: {}", e)))?;
 
-        std::fs::write(&path, json).map_err(|e| {
-            MsError::Config(format!("Failed to write checkpoint: {}", e))
-        })?;
+        std::fs::write(&path, json)
+            .map_err(|e| MsError::Config(format!("Failed to write checkpoint: {}", e)))?;
 
         Ok(())
     }
@@ -790,18 +791,18 @@ impl Checkpoint {
     pub fn load(ms_root: &Path, operation_id: &str) -> Result<Option<Self>> {
         let safe_id = Self::sanitize_operation_id(operation_id)?;
 
-        let path = ms_root.join("checkpoints").join(format!("{}.json", safe_id));
+        let path = ms_root
+            .join("checkpoints")
+            .join(format!("{}.json", safe_id));
         if !path.exists() {
             return Ok(None);
         }
 
-        let json = std::fs::read_to_string(&path).map_err(|e| {
-            MsError::Config(format!("Failed to read checkpoint: {}", e))
-        })?;
+        let json = std::fs::read_to_string(&path)
+            .map_err(|e| MsError::Config(format!("Failed to read checkpoint: {}", e)))?;
 
-        let checkpoint: Self = serde_json::from_str(&json).map_err(|e| {
-            MsError::Config(format!("Failed to parse checkpoint: {}", e))
-        })?;
+        let checkpoint: Self = serde_json::from_str(&json)
+            .map_err(|e| MsError::Config(format!("Failed to parse checkpoint: {}", e)))?;
 
         Ok(Some(checkpoint))
     }
@@ -810,14 +811,15 @@ impl Checkpoint {
     pub fn remove(ms_root: &Path, operation_id: &str) -> Result<bool> {
         let safe_id = Self::sanitize_operation_id(operation_id)?;
 
-        let path = ms_root.join("checkpoints").join(format!("{}.json", safe_id));
+        let path = ms_root
+            .join("checkpoints")
+            .join(format!("{}.json", safe_id));
         if !path.exists() {
             return Ok(false);
         }
 
-        tombstone_file(ms_root, &path, "checkpoints").map_err(|e| {
-            MsError::Config(format!("Failed to tombstone checkpoint: {}", e))
-        })?;
+        tombstone_file(ms_root, &path, "checkpoints")
+            .map_err(|e| MsError::Config(format!("Failed to tombstone checkpoint: {}", e)))?;
 
         Ok(true)
     }
@@ -828,9 +830,8 @@ fn tombstone_file(ms_root: &Path, path: &Path, bucket: &str) -> Result<()> {
         return Ok(());
     }
     let tombstones = ms_root.join("tombstones").join(bucket);
-    std::fs::create_dir_all(&tombstones).map_err(|e| {
-        MsError::Config(format!("Failed to create tombstones dir: {}", e))
-    })?;
+    std::fs::create_dir_all(&tombstones)
+        .map_err(|e| MsError::Config(format!("Failed to create tombstones dir: {}", e)))?;
     let name = path
         .file_name()
         .ok_or_else(|| MsError::Config("Invalid tombstone file name".to_string()))?;
@@ -842,7 +843,11 @@ fn tombstone_file(ms_root: &Path, path: &Path, bucket: &str) -> Result<()> {
     );
     let dest = tombstones.join(format!("{}_{}", name.to_string_lossy(), stamp));
     std::fs::rename(path, &dest).map_err(|e| {
-        MsError::Config(format!("Failed to tombstone file {}: {}", path.display(), e))
+        MsError::Config(format!(
+            "Failed to tombstone file {}: {}",
+            path.display(),
+            e
+        ))
     })?;
     Ok(())
 }
@@ -925,11 +930,7 @@ mod tests {
 
         let result: std::result::Result<i32, &str> = with_retry(&config, || {
             attempts += 1;
-            if attempts < 3 {
-                Err("not yet")
-            } else {
-                Ok(42)
-            }
+            if attempts < 3 { Err("not yet") } else { Ok(42) }
         });
 
         assert_eq!(result.unwrap(), 42);
@@ -1076,7 +1077,10 @@ mod tests {
         );
 
         assert!(result.is_err());
-        assert_eq!(attempts, 1, "should stop immediately when condition is false");
+        assert_eq!(
+            attempts, 1,
+            "should stop immediately when condition is false"
+        );
     }
 
     #[test]
@@ -1117,11 +1121,13 @@ mod tests {
         assert_eq!(issue.severity, 2);
         assert!(!issue.auto_recoverable);
         assert!(issue.suggested_fix.is_some());
-        assert!(issue
-            .suggested_fix
-            .as_ref()
-            .unwrap()
-            .contains("ms doctor --fix"));
+        assert!(
+            issue
+                .suggested_fix
+                .as_ref()
+                .unwrap()
+                .contains("ms doctor --fix")
+        );
     }
 
     #[test]
@@ -1129,11 +1135,9 @@ mod tests {
         let mut report = RecoveryReport::default();
 
         // Add non-critical issue
-        report.issues.push(RecoveryIssue::new(
-            FailureMode::Cache,
-            3,
-            "Large cache",
-        ));
+        report
+            .issues
+            .push(RecoveryIssue::new(FailureMode::Cache, 3, "Large cache"));
         assert!(!report.has_critical_issues());
 
         // Add critical but auto-recoverable
@@ -1142,14 +1146,19 @@ mod tests {
             1,
             "Database corruption",
         ));
-        assert!(!report.has_critical_issues(), "auto-recoverable critical is not flagged");
+        assert!(
+            !report.has_critical_issues(),
+            "auto-recoverable critical is not flagged"
+        );
 
         // Add critical and NOT auto-recoverable
         report.issues.push(
-            RecoveryIssue::new(FailureMode::Config, 1, "Missing config")
-                .not_auto_recoverable(),
+            RecoveryIssue::new(FailureMode::Config, 1, "Missing config").not_auto_recoverable(),
         );
-        assert!(report.has_critical_issues(), "non-auto-recoverable critical should be flagged");
+        assert!(
+            report.has_critical_issues(),
+            "non-auto-recoverable critical should be flagged"
+        );
     }
 
     #[test]

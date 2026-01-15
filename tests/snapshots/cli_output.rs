@@ -72,7 +72,7 @@ fn sanitize_human(input: &str) -> String {
     let re_space = Regex::new(r"\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}").unwrap();
     let re_date = Regex::new(r"\d{4}-\d{2}-\d{2}").unwrap();
     let re_tmp = Regex::new(r"/tmp/\.tmp[a-zA-Z0-9]+").unwrap();
-    
+
     let mut out = re_iso.replace_all(input, "[TIMESTAMP]").to_string();
     out = re_space.replace_all(&out, "[TIMESTAMP]").to_string();
     out = re_date.replace_all(&out, "[DATE]").to_string();

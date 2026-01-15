@@ -281,9 +281,8 @@ pub enum Requirement {
 impl TestSpec {
     /// Parse a test spec from YAML
     pub fn from_yaml(content: &str) -> Result<Self> {
-        serde_yaml::from_str(content).map_err(|err| {
-            MsError::ValidationFailed(format!("invalid test YAML: {err}"))
-        })
+        serde_yaml::from_str(content)
+            .map_err(|err| MsError::ValidationFailed(format!("invalid test YAML: {err}")))
     }
 
     /// Load a test spec from a file

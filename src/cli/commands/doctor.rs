@@ -344,7 +344,10 @@ fn check_security(ctx: &AppContext, verbose: bool) -> Result<usize> {
     // 3. Check safety tier configuration
     print!("  [3/5] Safety tier config... ");
     if ctx.config.safety.require_verbatim_approval {
-        println!("{} verbatim approval required for dangerous commands", "✓".green());
+        println!(
+            "{} verbatim approval required for dangerous commands",
+            "✓".green()
+        );
     } else {
         println!("{} verbatim approval disabled", "!".yellow());
         println!("        Dangerous commands may execute without explicit approval");
@@ -370,7 +373,11 @@ fn check_security(ctx: &AppContext, verbose: bool) -> Result<usize> {
                             secrets_found += summary.total_count;
                             if verbose {
                                 println!();
-                                println!("        {} potential secret(s) in {}", summary.total_count, path.display());
+                                println!(
+                                    "        {} potential secret(s) in {}",
+                                    summary.total_count,
+                                    path.display()
+                                );
                             }
                         }
                     }
@@ -379,11 +386,19 @@ fn check_security(ctx: &AppContext, verbose: bool) -> Result<usize> {
         }
 
         if secrets_found > 0 {
-            println!("{} {} potential secret(s) found", "!".yellow(), secrets_found);
+            println!(
+                "{} {} potential secret(s) found",
+                "!".yellow(),
+                secrets_found
+            );
             println!("        Review evidence files for sensitive data");
             issues += 1;
         } else {
-            println!("{} {} files scanned, no secrets detected", "✓".green(), files_scanned);
+            println!(
+                "{} {} files scanned, no secrets detected",
+                "✓".green(),
+                files_scanned
+            );
         }
     } else {
         println!("{} no evidence directory", "-".dimmed());
@@ -393,7 +408,13 @@ fn check_security(ctx: &AppContext, verbose: bool) -> Result<usize> {
     print!("  [5/5] Environment files... ");
     let mut env_issues = Vec::new();
 
-    for env_file in &[".env", ".env.local", ".env.production", "credentials.json", "secrets.yaml"] {
+    for env_file in &[
+        ".env",
+        ".env.local",
+        ".env.production",
+        "credentials.json",
+        "secrets.yaml",
+    ] {
         let path = ctx.ms_root.join(env_file);
         if path.exists() {
             env_issues.push(env_file.to_string());
@@ -403,7 +424,11 @@ fn check_security(ctx: &AppContext, verbose: bool) -> Result<usize> {
     if env_issues.is_empty() {
         println!("{} no sensitive env files in ms root", "✓".green());
     } else {
-        println!("{} found sensitive files: {}", "!".yellow(), env_issues.join(", "));
+        println!(
+            "{} found sensitive files: {}",
+            "!".yellow(),
+            env_issues.join(", ")
+        );
         println!("        These files should not be in the ms root directory");
         issues += env_issues.len();
     }
@@ -574,16 +599,32 @@ fn print_recovery_report(report: &RecoveryReport, verbose: bool) {
         println!();
         println!("{}", "Recovery actions:".bold());
         if report.rolled_back > 0 {
-            println!("  {} Rolled back {} transactions", "✓".green(), report.rolled_back);
+            println!(
+                "  {} Rolled back {} transactions",
+                "✓".green(),
+                report.rolled_back
+            );
         }
         if report.completed > 0 {
-            println!("  {} Completed {} transactions", "✓".green(), report.completed);
+            println!(
+                "  {} Completed {} transactions",
+                "✓".green(),
+                report.completed
+            );
         }
         if report.orphaned_files > 0 {
-            println!("  {} Cleaned {} orphaned files", "✓".green(), report.orphaned_files);
+            println!(
+                "  {} Cleaned {} orphaned files",
+                "✓".green(),
+                report.orphaned_files
+            );
         }
         if report.cache_invalidated > 0 {
-            println!("  {} Invalidated {} cache entries", "✓".green(), report.cache_invalidated);
+            println!(
+                "  {} Invalidated {} cache entries",
+                "✓".green(),
+                report.cache_invalidated
+            );
         }
     }
 

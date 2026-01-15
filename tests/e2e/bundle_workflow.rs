@@ -125,20 +125,17 @@ More example code.
     // Step 4: Show bundle details
     // ==========================================
     fixture.log_step("Show bundle details");
-    let output = fixture.run_ms(&[
-        "--robot",
-        "bundle",
-        "show",
-        bundle_path.to_str().unwrap(),
-    ]);
+    let output = fixture.run_ms(&["--robot", "bundle", "show", bundle_path.to_str().unwrap()]);
     fixture.assert_success(&output, "bundle show");
 
     let json = output.json();
     println!("[BUNDLE] Show output: {:?}", json);
 
     // Verify bundle info is present
-    assert!(json.get("manifest").is_some() || json.get("info").is_some() || json.get("name").is_some(),
-        "Bundle show should return manifest/info");
+    assert!(
+        json.get("manifest").is_some() || json.get("info").is_some() || json.get("name").is_some(),
+        "Bundle show should return manifest/info"
+    );
     fixture.checkpoint("post_bundle_show");
 
     // ==========================================
@@ -219,12 +216,7 @@ This skill should NOT be in the bundle.
     fixture.assert_success(&output, "bundle create selective");
 
     // Show bundle and verify only include-skill is present
-    let output = fixture.run_ms(&[
-        "--robot",
-        "bundle",
-        "show",
-        bundle_path.to_str().unwrap(),
-    ]);
+    let output = fixture.run_ms(&["--robot", "bundle", "show", bundle_path.to_str().unwrap()]);
     fixture.assert_success(&output, "bundle show");
 
     let show_output = output.stdout.to_lowercase();
@@ -282,12 +274,7 @@ Testing version information.
     fixture.assert_success(&output, "bundle create versioned");
 
     // Show bundle and verify version
-    let output = fixture.run_ms(&[
-        "--robot",
-        "bundle",
-        "show",
-        bundle_path.to_str().unwrap(),
-    ]);
+    let output = fixture.run_ms(&["--robot", "bundle", "show", bundle_path.to_str().unwrap()]);
     fixture.assert_success(&output, "bundle show");
 
     // Verify version is in output
@@ -341,12 +328,7 @@ Original content.
 
     // Show bundle
     fixture.log_step("Show bundle");
-    let output = fixture.run_ms(&[
-        "--robot",
-        "bundle",
-        "show",
-        bundle_path.to_str().unwrap(),
-    ]);
+    let output = fixture.run_ms(&["--robot", "bundle", "show", bundle_path.to_str().unwrap()]);
     fixture.assert_success(&output, "bundle show");
     println!("[BUNDLE] Show output: {:?}", output.stdout);
 
@@ -403,12 +385,7 @@ Content for reinstall testing.
 
     // Show bundle details
     fixture.log_step("Show bundle details");
-    let output = fixture.run_ms(&[
-        "--robot",
-        "bundle",
-        "show",
-        bundle_path.to_str().unwrap(),
-    ]);
+    let output = fixture.run_ms(&["--robot", "bundle", "show", bundle_path.to_str().unwrap()]);
     fixture.assert_success(&output, "bundle show");
     println!("[BUNDLE] Show output: {:?}", output.stdout);
 

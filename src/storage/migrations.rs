@@ -29,10 +29,7 @@ pub fn run_migrations(conn: &Connection) -> Result<u32> {
         }
 
         conn.execute_batch(sql).map_err(|err| {
-            MsError::TransactionFailed(format!(
-                "migration {} failed: {err}",
-                target_version
-            ))
+            MsError::TransactionFailed(format!("migration {} failed: {err}", target_version))
         })?;
         conn.pragma_update(None, "user_version", &target_version)
             .map_err(|err| {
@@ -76,11 +73,7 @@ mod tests {
     #[test]
     fn migrations_are_not_empty() {
         for (idx, sql) in MIGRATIONS.iter().enumerate() {
-            assert!(
-                !sql.trim().is_empty(),
-                "Migration {} is empty",
-                idx + 1
-            );
+            assert!(!sql.trim().is_empty(), "Migration {} is empty", idx + 1);
         }
     }
 

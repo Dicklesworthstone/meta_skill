@@ -24,7 +24,13 @@ fn test_full_workflow() {
     let list = fixture.run_ms(&["--robot", "list"]);
     assert!(list.success, "list failed: {}", list.stderr);
     let list_json = parse_json(&list.stdout);
-    assert!(list_json["skills"].as_array().unwrap().iter().any(|s| s["id"] == "workflow-skill"));
+    assert!(
+        list_json["skills"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|s| s["id"] == "workflow-skill")
+    );
 
     let show = fixture.run_ms(&["--robot", "show", "workflow-skill"]);
     assert!(show.success, "show failed: {}", show.stderr);
@@ -35,7 +41,13 @@ fn test_full_workflow() {
     assert!(search.success, "search failed: {}", search.stderr);
     let search_json = parse_json(&search.stdout);
     assert_eq!(search_json["status"], "ok");
-    assert!(search_json["results"].as_array().unwrap().iter().any(|r| r["id"] == "workflow-skill"));
+    assert!(
+        search_json["results"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|r| r["id"] == "workflow-skill")
+    );
 
     fixture.open_db();
     fixture.verify_db_state(

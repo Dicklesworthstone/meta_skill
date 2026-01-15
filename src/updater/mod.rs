@@ -271,9 +271,7 @@ impl UpdateDownloader {
             if parts.len() >= 2 {
                 // Format: "hash  filename" or "hash filename"
                 let hash = parts[0].to_string();
-                let filename = parts[parts.len() - 1]
-                    .trim_start_matches('*')
-                    .to_string();
+                let filename = parts[parts.len() - 1].trim_start_matches('*').to_string();
                 checksums.insert(filename, hash);
             }
         }
@@ -448,9 +446,9 @@ impl GitHubClient {
             )));
         }
 
-        let raw_releases: Vec<GitHubRelease> = response.json().map_err(|e| {
-            MsError::ValidationFailed(format!("failed to parse releases: {}", e))
-        })?;
+        let raw_releases: Vec<GitHubRelease> = response
+            .json()
+            .map_err(|e| MsError::ValidationFailed(format!("failed to parse releases: {}", e)))?;
 
         Ok(raw_releases
             .into_iter()
@@ -742,9 +740,8 @@ mod tests {
     #[test]
     fn current_target_known_arch() {
         let target = current_target();
-        let arch_known = target.contains("x86_64")
-            || target.contains("aarch64")
-            || target.contains("unknown");
+        let arch_known =
+            target.contains("x86_64") || target.contains("aarch64") || target.contains("unknown");
         assert!(arch_known);
     }
 

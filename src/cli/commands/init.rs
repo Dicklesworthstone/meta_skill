@@ -104,7 +104,11 @@ fn init_human_global(config_path: &Path, args: &InitArgs) -> Result<()> {
     println!("{}", "OK".green());
 
     println!();
-    println!("{} Initialized at {}", "✓".green().bold(), config_path.display());
+    println!(
+        "{} Initialized at {}",
+        "✓".green().bold(),
+        config_path.display()
+    );
     println!();
     println!("Add skill paths with:");
     println!("  ms config add skill_paths.global ~/my-skills");

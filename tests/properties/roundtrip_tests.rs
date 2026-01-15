@@ -15,16 +15,13 @@ fn arb_block_type() -> impl Strategy<Value = BlockType> {
 }
 
 fn arb_skill_spec() -> impl Strategy<Value = SkillSpec> {
-    let block = (
-        r"[a-z][a-z0-9_\-]{2,16}",
-        arb_block_type(),
-        ".{0,120}",
-    )
-        .prop_map(|(id, block_type, content)| SkillBlock {
+    let block = (r"[a-z][a-z0-9_\-]{2,16}", arb_block_type(), ".{0,120}").prop_map(
+        |(id, block_type, content)| SkillBlock {
             id,
             block_type,
             content,
-        });
+        },
+    );
 
     let section = (
         r"[a-z][a-z0-9_\-]{2,16}",
@@ -41,18 +38,20 @@ fn arb_skill_spec() -> impl Strategy<Value = SkillSpec> {
         prop::collection::vec("[a-z]{2,12}", 0..4),
         prop::collection::vec(section, 0..3),
     )
-        .prop_map(|(id, name, version, description, tags, sections)| SkillSpec {
-            format_version: SkillSpec::FORMAT_VERSION.to_string(),
-            metadata: SkillMetadata {
-                id,
-                name,
-                version,
-                description,
-                tags,
-                ..Default::default()
+        .prop_map(
+            |(id, name, version, description, tags, sections)| SkillSpec {
+                format_version: SkillSpec::FORMAT_VERSION.to_string(),
+                metadata: SkillMetadata {
+                    id,
+                    name,
+                    version,
+                    description,
+                    tags,
+                    ..Default::default()
+                },
+                sections,
             },
-            sections,
-        })
+        )
 }
 
 fn arb_config() -> impl Strategy<Value = Config> {

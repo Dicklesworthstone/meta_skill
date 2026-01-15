@@ -85,7 +85,10 @@ impl E2EFixture {
         println!("[E2E] Root: {:?}", root);
         println!("[E2E] MS Root: {:?}", ms_root);
         println!("[E2E] Config: {:?}", config_path);
-        println!("[E2E] Skills Dirs: {:?}", skills_dirs.keys().collect::<Vec<_>>());
+        println!(
+            "[E2E] Skills Dirs: {:?}",
+            skills_dirs.keys().collect::<Vec<_>>()
+        );
         println!();
 
         Self {
@@ -219,9 +222,10 @@ impl E2EFixture {
 
     /// Create a skill in a specific layer.
     pub fn create_skill_in_layer(&self, name: &str, content: &str, layer: &str) -> Result<()> {
-        let skills_dir = self.skills_dirs.get(layer).ok_or_else(|| {
-            MsError::ValidationFailed(format!("Unknown layer: {}", layer))
-        })?;
+        let skills_dir = self
+            .skills_dirs
+            .get(layer)
+            .ok_or_else(|| MsError::ValidationFailed(format!("Unknown layer: {}", layer)))?;
 
         let skill_dir = skills_dir.join(name);
         std::fs::create_dir_all(&skill_dir)?;
@@ -254,9 +258,7 @@ impl E2EFixture {
         assert!(
             output.success,
             "[E2E] {} failed with exit code {}: {}",
-            operation,
-            output.exit_code,
-            output.stderr
+            operation, output.exit_code, output.stderr
         );
         println!("[ASSERT] {} - SUCCESS", operation);
     }

@@ -52,12 +52,12 @@ mod concurrent_tests;
 mod wal_safety_tests;
 
 pub use client::{BeadsClient, SyncStatus};
-pub use mock::{test_issue, BeadsErrorKind, BeadsOperations, ErrorInjection, MockBeadsClient};
+pub use mock::{BeadsErrorKind, BeadsOperations, ErrorInjection, MockBeadsClient, test_issue};
 pub use test_logger::{LogEntry, LogLevel, TestLogger, TestReport};
 pub use types::{
     CreateIssueRequest, Dependency, DependencyType, Issue, IssueStatus, IssueType, Priority,
     UpdateIssueRequest, WorkFilter,
 };
 pub use version::{
-    BeadsVersion, VersionCompatibility, MINIMUM_SUPPORTED_VERSION, RECOMMENDED_VERSION,
+    BeadsVersion, MINIMUM_SUPPORTED_VERSION, RECOMMENDED_VERSION, VersionCompatibility,
 };

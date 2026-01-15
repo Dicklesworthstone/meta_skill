@@ -3,7 +3,7 @@
 use clap::Args;
 
 use crate::app::AppContext;
-use crate::cli::output::{emit_json, HumanLayout};
+use crate::cli::output::{HumanLayout, emit_json};
 use crate::error::{MsError, Result};
 
 #[derive(Args, Debug)]

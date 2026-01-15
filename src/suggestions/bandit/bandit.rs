@@ -62,10 +62,7 @@ impl SignalBandit {
         let mut weights = HashMap::new();
 
         for signal in SignalType::all() {
-            let mut sample = self
-                .prior
-                .sample(&mut rng)
-                .max(0.0);
+            let mut sample = self.prior.sample(&mut rng).max(0.0);
             if let Some(arm) = self.arms.get(signal) {
                 let prior = BetaDistribution {
                     alpha: self.prior.alpha + arm.successes,

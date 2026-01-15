@@ -15,7 +15,9 @@ pub struct MigrationRegistry {
 
 impl MigrationRegistry {
     pub fn with_defaults() -> Self {
-        Self { migrations: Vec::new() }
+        Self {
+            migrations: Vec::new(),
+        }
     }
 
     pub fn find(&self, from: &str) -> Option<&SpecMigration> {
@@ -41,10 +43,7 @@ pub fn migrate_spec(mut spec: SkillSpec) -> Result<(SkillSpec, bool)> {
     while spec.format_version != target {
         let current = spec.format_version.clone();
         let migration = registry.find(&current).ok_or_else(|| {
-            MsError::NotFound(format!(
-                "no migration path from {} to {}",
-                current, target
-            ))
+            MsError::NotFound(format!("no migration path from {} to {}", current, target))
         })?;
 
         let mut updated = (migration.apply)(spec)?;

@@ -285,8 +285,11 @@ impl GeneralizationValidation {
         }
 
         // Use average distance to centroid as inverse proxy for consistency
-        let avg_distance: f32 =
-            instances.iter().map(|i| i.distance_to_centroid).sum::<f32>() / instances.len() as f32;
+        let avg_distance: f32 = instances
+            .iter()
+            .map(|i| i.distance_to_centroid)
+            .sum::<f32>()
+            / instances.len() as f32;
 
         // Convert distance to similarity-like score (closer = better)
         // Assuming distances are normalized, 1.0 - avg_distance gives consistency
@@ -313,10 +316,8 @@ impl GeneralizationValidation {
         all_instances: &[ClusteredInstance],
     ) -> Vec<CounterExample> {
         let mut counterexamples = Vec::new();
-        let cluster_ids: std::collections::HashSet<_> = cluster_instances
-            .iter()
-            .map(|i| &i.instance.id)
-            .collect();
+        let cluster_ids: std::collections::HashSet<_> =
+            cluster_instances.iter().map(|i| &i.instance.id).collect();
 
         for instance in all_instances {
             if cluster_ids.contains(&instance.instance.id) {
@@ -520,10 +521,7 @@ impl SpecificToGeneralTransformer {
     }
 
     /// Set the uncertainty queue sink
-    pub fn with_uncertainty_queue(
-        mut self,
-        queue: Box<dyn UncertaintyQueueSink>,
-    ) -> Self {
+    pub fn with_uncertainty_queue(mut self, queue: Box<dyn UncertaintyQueueSink>) -> Self {
         self.uncertainty_queue = queue;
         self
     }
@@ -564,10 +562,11 @@ impl SpecificToGeneralTransformer {
         let primary_cluster = clusters
             .into_iter()
             .max_by(|a, b| {
-                a.instances
-                    .len()
-                    .cmp(&b.instances.len())
-                    .then_with(|| a.coherence.partial_cmp(&b.coherence).unwrap_or(std::cmp::Ordering::Equal))
+                a.instances.len().cmp(&b.instances.len()).then_with(|| {
+                    a.coherence
+                        .partial_cmp(&b.coherence)
+                        .unwrap_or(std::cmp::Ordering::Equal)
+                })
             })
             .ok_or_else(|| MsError::MiningFailed("No valid clusters found".to_string()))?;
 
@@ -782,7 +781,10 @@ impl SpecificToGeneralTransformer {
     }
 
     /// Find similar instances in CASS
-    fn find_similar_instances(&self, pattern: &StructuralPattern) -> Result<Vec<ClusteredInstance>> {
+    fn find_similar_instances(
+        &self,
+        pattern: &StructuralPattern,
+    ) -> Result<Vec<ClusteredInstance>> {
         let query = format!(
             "{} {} {} {}",
             pattern.file_type,
@@ -839,10 +841,7 @@ impl SpecificToGeneralTransformer {
     }
 
     /// Cluster instances by context similarity
-    fn cluster_by_context(
-        &self,
-        instances: &[ClusteredInstance],
-    ) -> Result<Vec<InstanceCluster>> {
+    fn cluster_by_context(&self, instances: &[ClusteredInstance]) -> Result<Vec<InstanceCluster>> {
         if instances.is_empty() {
             return Ok(vec![]);
         }
@@ -866,7 +865,9 @@ impl SpecificToGeneralTransformer {
                     continue;
                 }
 
-                let similarity = self.embedder.similarity(&instance.embedding, &other.embedding);
+                let similarity = self
+                    .embedder
+                    .similarity(&instance.embedding, &other.embedding);
                 if similarity > self.config.cluster_threshold {
                     cluster_instances.push(other.clone());
                     assigned[j] = true;
@@ -880,7 +881,8 @@ impl SpecificToGeneralTransformer {
             let cluster_instances: Vec<ClusteredInstance> = cluster_instances
                 .into_iter()
                 .map(|mut ci| {
-                    ci.distance_to_centroid = 1.0 - self.embedder.similarity(&ci.embedding, &centroid);
+                    ci.distance_to_centroid =
+                        1.0 - self.embedder.similarity(&ci.embedding, &centroid);
                     ci
                 })
                 .collect();
@@ -1199,7 +1201,10 @@ mod tests {
         }
     }
 
-    fn make_clustered_instance(instance: SpecificInstance, embedder: &HashEmbedder) -> ClusteredInstance {
+    fn make_clustered_instance(
+        instance: SpecificInstance,
+        embedder: &HashEmbedder,
+    ) -> ClusteredInstance {
         let embedding = embedder.embed(&instance.content);
         ClusteredInstance {
             instance,
@@ -1234,8 +1239,14 @@ mod tests {
         let embedder = HashEmbedder::new(64);
 
         let instances: Vec<ClusteredInstance> = vec![
-            make_clustered_instance(make_test_instance("1", "error handling with Result"), &embedder),
-            make_clustered_instance(make_test_instance("2", "error handling with match"), &embedder),
+            make_clustered_instance(
+                make_test_instance("1", "error handling with Result"),
+                &embedder,
+            ),
+            make_clustered_instance(
+                make_test_instance("2", "error handling with match"),
+                &embedder,
+            ),
             make_clustered_instance(make_test_instance("3", "error handling pattern"), &embedder),
         ];
 
@@ -1288,8 +1299,10 @@ mod tests {
         let content = "async fn handle_error() -> Result<(), Error> { match result { Ok(v) => v, Err(e) => return Err(e) } }";
         let pattern = transformer.extract_code_pattern(content);
 
-        assert!(pattern.features.contains(&"async_await".to_string()) ||
-                pattern.features.contains(&"handles_errors".to_string()));
+        assert!(
+            pattern.features.contains(&"async_await".to_string())
+                || pattern.features.contains(&"handles_errors".to_string())
+        );
         assert!(pattern.features.contains(&"uses_match".to_string()));
         assert!(pattern.features.contains(&"returns_result".to_string()));
     }
@@ -1299,10 +1312,22 @@ mod tests {
         let cass = CassClient::new();
         let transformer = SpecificToGeneralTransformer::new(cass);
 
-        assert_eq!(transformer.classify_problem("fix the bug in parser"), "bug_fix");
-        assert_eq!(transformer.classify_problem("add new feature"), "feature_implementation");
-        assert_eq!(transformer.classify_problem("refactor the code"), "refactoring");
-        assert_eq!(transformer.classify_problem("optimize performance"), "optimization");
+        assert_eq!(
+            transformer.classify_problem("fix the bug in parser"),
+            "bug_fix"
+        );
+        assert_eq!(
+            transformer.classify_problem("add new feature"),
+            "feature_implementation"
+        );
+        assert_eq!(
+            transformer.classify_problem("refactor the code"),
+            "refactoring"
+        );
+        assert_eq!(
+            transformer.classify_problem("optimize performance"),
+            "optimization"
+        );
         assert_eq!(transformer.classify_problem("write tests"), "testing");
     }
 
@@ -1311,11 +1336,14 @@ mod tests {
         let cass = CassClient::new();
         let transformer = SpecificToGeneralTransformer::new(cass);
 
-        let solution = transformer.extract_solution("replace the old iterator with a new pattern using closures");
+        let solution = transformer
+            .extract_solution("replace the old iterator with a new pattern using closures");
         assert_eq!(solution.strategy, "replacement");
         assert!(solution.keywords.contains(&"replacement".to_string()));
-        assert!(solution.tools_used.contains(&"iterators".to_string()) ||
-                solution.tools_used.contains(&"closures".to_string()));
+        assert!(
+            solution.tools_used.contains(&"iterators".to_string())
+                || solution.tools_used.contains(&"closures".to_string())
+        );
     }
 
     #[test]
@@ -1325,14 +1353,27 @@ mod tests {
         let embedder = HashEmbedder::new(64);
 
         let instances = vec![
-            make_clustered_instance(make_test_instance("1", "error handling with Result type"), &embedder),
-            make_clustered_instance(make_test_instance("2", "error handling with Result match"), &embedder),
-            make_clustered_instance(make_test_instance("3", "error handling Result pattern"), &embedder),
+            make_clustered_instance(
+                make_test_instance("1", "error handling with Result type"),
+                &embedder,
+            ),
+            make_clustered_instance(
+                make_test_instance("2", "error handling with Result match"),
+                &embedder,
+            ),
+            make_clustered_instance(
+                make_test_instance("3", "error handling Result pattern"),
+                &embedder,
+            ),
         ];
 
         let description = transformer.abstract_description(&instances);
         // Common words should appear in description
-        assert!(description.contains("Pattern") || description.contains("error") || description.contains("result"));
+        assert!(
+            description.contains("Pattern")
+                || description.contains("error")
+                || description.contains("result")
+        );
     }
 
     #[test]
@@ -1342,13 +1383,26 @@ mod tests {
         let embedder = HashEmbedder::new(64);
 
         let instances = vec![
-            make_clustered_instance(make_test_instance("1", "fn handle() -> Result<T, Error> { }"), &embedder),
-            make_clustered_instance(make_test_instance("2", "let result: Result<_, _> = foo()?;"), &embedder),
-            make_clustered_instance(make_test_instance("3", "match result { Ok(v) => v, Err(e) => return Err(e) }"), &embedder),
+            make_clustered_instance(
+                make_test_instance("1", "fn handle() -> Result<T, Error> { }"),
+                &embedder,
+            ),
+            make_clustered_instance(
+                make_test_instance("2", "let result: Result<_, _> = foo()?;"),
+                &embedder,
+            ),
+            make_clustered_instance(
+                make_test_instance("3", "match result { Ok(v) => v, Err(e) => return Err(e) }"),
+                &embedder,
+            ),
         ];
 
         let invariants = transformer.find_invariants(&instances);
-        assert!(invariants.iter().any(|i| i.contains("error") || i.contains("Error")));
+        assert!(
+            invariants
+                .iter()
+                .any(|i| i.contains("error") || i.contains("Error"))
+        );
     }
 
     #[test]

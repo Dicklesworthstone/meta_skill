@@ -256,7 +256,10 @@ impl CmClient {
         // cm validate returns success field
         let result: serde_json::Value = serde_json::from_slice(&output)
             .map_err(|e| MsError::CmUnavailable(format!("Failed to parse validate result: {e}")))?;
-        Ok(result.get("valid").and_then(|v| v.as_bool()).unwrap_or(false))
+        Ok(result
+            .get("valid")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false))
     }
 
     fn run_command(&self, args: &[&str]) -> Result<Vec<u8>> {
@@ -271,9 +274,9 @@ impl CmClient {
             let command_str = command_string(&cmd);
             gate.enforce(&command_str, None)?;
         }
-        let output = cmd.output().map_err(|e| {
-            MsError::CmUnavailable(format!("Failed to execute cm: {e}"))
-        })?;
+        let output = cmd
+            .output()
+            .map_err(|e| MsError::CmUnavailable(format!("Failed to execute cm: {e}")))?;
         if !output.status.success() {
             let stderr = String::from_utf8_lossy(&output.stderr);
             return Err(MsError::CmUnavailable(format!(

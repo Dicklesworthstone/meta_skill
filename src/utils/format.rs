@@ -11,7 +11,10 @@ pub fn truncate_string(s: &str, max_len: usize) -> String {
     }
     if s.chars().count() > max_len {
         if max_len >= 3 {
-            let trimmed = out.chars().take(max_len.saturating_sub(3)).collect::<String>();
+            let trimmed = out
+                .chars()
+                .take(max_len.saturating_sub(3))
+                .collect::<String>();
             format!("{trimmed}...")
         } else {
             "...".to_string()
@@ -26,7 +29,7 @@ pub fn format_size(bytes: u64) -> String {
     const KB: u64 = 1024;
     const MB: u64 = KB * 1024;
     const GB: u64 = MB * 1024;
-    
+
     if bytes >= GB {
         format!("{:.1} GB", bytes as f64 / GB as f64)
     } else if bytes >= MB {
@@ -98,7 +101,7 @@ mod tests {
         let result = truncate_string(s, 4);
         // Should truncate by char count, not bytes
         assert!(result.ends_with("..."));
-        assert_eq!(result.chars().count(), 4);  // 1 char + "..."
+        assert_eq!(result.chars().count(), 4); // 1 char + "..."
     }
 
     #[test]

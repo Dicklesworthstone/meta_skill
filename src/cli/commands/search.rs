@@ -9,7 +9,7 @@ use colored::Colorize;
 use crate::app::AppContext;
 use crate::error::{MsError, Result};
 use crate::search::{
-    build_embedder, fuse_simple, RrfConfig, SearchFilters, SearchLayer, VectorIndex,
+    RrfConfig, SearchFilters, SearchLayer, VectorIndex, build_embedder, fuse_simple,
 };
 use crate::storage::sqlite::SkillRecord;
 
@@ -535,9 +535,18 @@ mod tests {
         }
 
         let parsed = TestCli::parse_from([
-            "test", "query", "--limit", "10", "--tags", "rust",
-            "--layer", "base", "--min-quality", "0.5",
-            "--include-deprecated", "--snippets"
+            "test",
+            "query",
+            "--limit",
+            "10",
+            "--tags",
+            "rust",
+            "--layer",
+            "base",
+            "--min-quality",
+            "0.5",
+            "--include-deprecated",
+            "--snippets",
         ]);
 
         assert_eq!(parsed.args.limit, 10);

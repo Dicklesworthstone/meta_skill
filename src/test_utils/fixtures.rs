@@ -15,7 +15,10 @@ impl UnitTestFixture {
 
         println!("[FIXTURE] Created temp directory: {:?}", data_path);
 
-        Self { temp_dir, data_path }
+        Self {
+            temp_dir,
+            data_path,
+        }
     }
 
     /// Create a test file with content.

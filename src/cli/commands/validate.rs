@@ -5,9 +5,9 @@ use serde::Serialize;
 
 use crate::app::AppContext;
 use crate::cli::commands::resolve_skill_markdown;
-use crate::cli::output::{emit_human, emit_json, HumanLayout};
+use crate::cli::output::{HumanLayout, emit_human, emit_json};
 use crate::core::spec_lens::parse_markdown;
-use crate::core::validation::{validate, validate_with_ubs, ValidationWarning};
+use crate::core::validation::{ValidationWarning, validate, validate_with_ubs};
 use crate::error::{MsError, Result};
 use crate::quality::ubs::{UbsClient, UbsFinding, UbsResult, UbsSeverity};
 use crate::security::SafetyGate;
@@ -147,11 +147,7 @@ fn build_report(
         clean: result.is_clean(),
         stdout: result.stdout.clone(),
         stderr: result.stderr.clone(),
-        items: result
-            .findings
-            .iter()
-            .map(map_finding)
-            .collect::<Vec<_>>(),
+        items: result.findings.iter().map(map_finding).collect::<Vec<_>>(),
     });
     let clean = warning_items.is_empty() && ubs_result.map(|r| r.is_clean()).unwrap_or(true);
 

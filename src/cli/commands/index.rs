@@ -10,10 +10,10 @@ use indicatif::{ProgressBar, ProgressStyle};
 use walkdir::WalkDir;
 
 use crate::app::AppContext;
-use crate::core::{spec_lens::parse_markdown, SkillLayer};
+use crate::core::{SkillLayer, spec_lens::parse_markdown};
 use crate::error::{MsError, Result};
-use crate::storage::tx::GlobalLock;
 use crate::storage::TxManager;
+use crate::storage::tx::GlobalLock;
 
 #[derive(Args, Debug)]
 pub struct IndexArgs {
@@ -184,23 +184,14 @@ fn index_human(ctx: &AppContext, roots: &[SkillRoot], args: &IndexArgs) -> Resul
     for skill in &skill_files {
         pb.set_message(format!(
             "{}",
-            skill
-                .path
-                .file_name()
-                .unwrap_or_default()
-                .to_string_lossy()
+            skill.path.file_name().unwrap_or_default().to_string_lossy()
         ));
 
         match index_skill_file(ctx, &tx_mgr, skill, args.force) {
             Ok(_) => indexed += 1,
             Err(e) => {
                 errors += 1;
-                pb.println(format!(
-                    "{} {} - {}",
-                    "✗".red(),
-                    skill.path.display(),
-                    e
-                ));
+                pb.println(format!("{} {} - {}", "✗".red(), skill.path.display(), e));
             }
         }
 
@@ -225,11 +216,7 @@ fn index_human(ctx: &AppContext, roots: &[SkillRoot], args: &IndexArgs) -> Resul
 
     if errors > 0 {
         println!();
-        println!(
-            "{} {} skills failed to index",
-            "!".yellow(),
-            errors
-        );
+        println!("{} {} skills failed to index", "!".yellow(), errors);
     }
 
     Ok(())

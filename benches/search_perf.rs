@@ -6,13 +6,13 @@
 //! - packing: < 50ms for constrained optimization
 //! - vector_search: < 50ms p99 for 1000 embeddings
 
-use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criterion, Throughput};
+use criterion::{BenchmarkId, Criterion, Throughput, black_box, criterion_group, criterion_main};
 
 use ms::core::disclosure::PackMode;
 use ms::core::packing::{ConstrainedPacker, PackConstraints};
 use ms::core::skill::{SkillSlice, SliceType};
 use ms::search::embeddings::{HashEmbedder, VectorIndex};
-use ms::search::hybrid::{fuse_results, RrfConfig};
+use ms::search::hybrid::{RrfConfig, fuse_results};
 
 // =============================================================================
 // Hash Embedding Benchmarks
@@ -28,11 +28,9 @@ fn hash_embedding_benchmarks(c: &mut Criterion) {
         let input: String = "word ".repeat(*size);
 
         group.throughput(Throughput::Bytes(input.len() as u64));
-        group.bench_with_input(
-            BenchmarkId::new("text_size", size),
-            &input,
-            |b, input| b.iter(|| embedder.embed(black_box(input))),
-        );
+        group.bench_with_input(BenchmarkId::new("text_size", size), &input, |b, input| {
+            b.iter(|| embedder.embed(black_box(input)))
+        });
     }
 
     group.finish();
@@ -72,12 +70,7 @@ fn rrf_fusion_benchmarks(c: &mut Criterion) {
             .collect();
 
         let semantic_results: Vec<(String, f32)> = (0..*size)
-            .map(|i| {
-                (
-                    format!("skill-semantic-{}", i),
-                    1.0 / (i as f32 + 1.0),
-                )
-            })
+            .map(|i| (format!("skill-semantic-{}", i), 1.0 / (i as f32 + 1.0)))
             .collect();
 
         group.throughput(Throughput::Elements(*size as u64 * 2)); // Both lists
@@ -111,10 +104,7 @@ fn rrf_fusion_benchmarks(c: &mut Criterion) {
         }
         // Then add unique skills
         for i in 0..(size - overlap) {
-            semantic_results.push((
-                format!("skill-unique-{}", i),
-                0.5 - (i as f32 * 0.005),
-            ));
+            semantic_results.push((format!("skill-unique-{}", i), 0.5 - (i as f32 * 0.005)));
         }
 
         overlap_group.bench_with_input(
@@ -178,11 +168,9 @@ fn vector_search_benchmarks(c: &mut Criterion) {
     let query_embedding = embedder.embed("rust patterns");
 
     for limit in [5, 10, 25, 50, 100].iter() {
-        limit_group.bench_with_input(
-            BenchmarkId::new("limit", limit),
-            limit,
-            |b, &limit| b.iter(|| index.search(black_box(&query_embedding), limit)),
-        );
+        limit_group.bench_with_input(BenchmarkId::new("limit", limit), limit, |b, &limit| {
+            b.iter(|| index.search(black_box(&query_embedding), limit))
+        });
     }
 
     limit_group.finish();
@@ -230,7 +218,11 @@ fn packing_benchmarks(c: &mut Criterion) {
             &(&slices, &constraints),
             |b, (slices, constraints)| {
                 b.iter(|| {
-                    packer.pack(black_box(slices), black_box(constraints), PackMode::Balanced)
+                    packer.pack(
+                        black_box(slices),
+                        black_box(constraints),
+                        PackMode::Balanced,
+                    )
                 })
             },
         );
@@ -250,7 +242,13 @@ fn packing_benchmarks(c: &mut Criterion) {
             BenchmarkId::new("budget", budget),
             &constraints,
             |b, constraints| {
-                b.iter(|| packer.pack(black_box(&slices), black_box(constraints), PackMode::Balanced))
+                b.iter(|| {
+                    packer.pack(
+                        black_box(&slices),
+                        black_box(constraints),
+                        PackMode::Balanced,
+                    )
+                })
             },
         );
     }

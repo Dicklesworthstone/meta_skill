@@ -21,16 +21,13 @@ fn arb_block_type() -> impl Strategy<Value = BlockType> {
 }
 
 fn arb_skill_block() -> impl Strategy<Value = SkillBlock> {
-    (
-        "[a-z][a-z0-9_-]{2,24}",
-        arb_block_type(),
-        ".{0,200}",
-    )
-        .prop_map(|(id, block_type, content)| SkillBlock {
+    ("[a-z][a-z0-9_-]{2,24}", arb_block_type(), ".{0,200}").prop_map(|(id, block_type, content)| {
+        SkillBlock {
             id,
             block_type,
             content,
-        })
+        }
+    })
 }
 
 fn arb_skill_section() -> impl Strategy<Value = SkillSection> {
@@ -133,20 +130,14 @@ fn arb_disclosure() -> impl Strategy<Value = DisclosureConfig> {
         Just("standard".to_string()),
         Just("full".to_string()),
     ];
-    (
-        level,
-        100u32..2000u32,
-        any::<bool>(),
-        0u64..10_000u64,
+    (level, 100u32..2000u32, any::<bool>(), 0u64..10_000u64).prop_map(
+        |(default_level, token_budget, auto_suggest, cooldown_seconds)| DisclosureConfig {
+            default_level,
+            token_budget,
+            auto_suggest,
+            cooldown_seconds,
+        },
     )
-        .prop_map(|(default_level, token_budget, auto_suggest, cooldown_seconds)| {
-            DisclosureConfig {
-                default_level,
-                token_budget,
-                auto_suggest,
-                cooldown_seconds,
-            }
-        })
 }
 
 fn arb_search() -> impl Strategy<Value = SearchConfig> {
@@ -185,30 +176,24 @@ fn arb_cass() -> impl Strategy<Value = CassConfig> {
 }
 
 fn arb_cache() -> impl Strategy<Value = CacheConfig> {
-    (
-        any::<bool>(),
-        1u32..500u32,
-        0u64..86_400u64,
-    )
-        .prop_map(|(enabled, max_size_mb, ttl_seconds)| CacheConfig {
+    (any::<bool>(), 1u32..500u32, 0u64..86_400u64).prop_map(
+        |(enabled, max_size_mb, ttl_seconds)| CacheConfig {
             enabled,
             max_size_mb,
             ttl_seconds,
-        })
+        },
+    )
 }
 
 fn arb_update() -> impl Strategy<Value = UpdateConfig> {
     let channel = prop_oneof![Just("stable".to_string()), Just("beta".to_string())];
-    (
-        any::<bool>(),
-        1u32..168u32,
-        channel,
-    )
-        .prop_map(|(auto_check, check_interval_hours, channel)| UpdateConfig {
+    (any::<bool>(), 1u32..168u32, channel).prop_map(
+        |(auto_check, check_interval_hours, channel)| UpdateConfig {
             auto_check,
             check_interval_hours,
             channel,
-        })
+        },
+    )
 }
 
 fn arb_robot() -> impl Strategy<Value = RobotConfig> {
@@ -225,22 +210,14 @@ fn arb_trust_boundary() -> impl Strategy<Value = TrustBoundaryConfig> {
         Just(TrustLevel::VerifyRequired),
         Just(TrustLevel::Untrusted),
     ];
-    (
-        level.clone(),
-        level.clone(),
-        level.clone(),
-        level,
+    (level.clone(), level.clone(), level.clone(), level).prop_map(
+        |(user_messages, assistant_messages, tool_outputs, file_contents)| TrustBoundaryConfig {
+            user_messages,
+            assistant_messages,
+            tool_outputs,
+            file_contents,
+        },
     )
-        .prop_map(
-            |(user_messages, assistant_messages, tool_outputs, file_contents)| {
-                TrustBoundaryConfig {
-                    user_messages,
-                    assistant_messages,
-                    tool_outputs,
-                    file_contents,
-                }
-            },
-        )
 }
 
 fn arb_acip() -> impl Strategy<Value = AcipConfig> {
@@ -251,13 +228,15 @@ fn arb_acip() -> impl Strategy<Value = AcipConfig> {
         any::<bool>(),
         arb_trust_boundary(),
     )
-        .prop_map(|(enabled, version, prompt_path, audit_mode, trust)| AcipConfig {
-            enabled,
-            version,
-            prompt_path: PathBuf::from(prompt_path),
-            audit_mode,
-            trust,
-        })
+        .prop_map(
+            |(enabled, version, prompt_path, audit_mode, trust)| AcipConfig {
+                enabled,
+                version,
+                prompt_path: PathBuf::from(prompt_path),
+                audit_mode,
+                trust,
+            },
+        )
 }
 
 fn arb_security() -> impl Strategy<Value = SecurityConfig> {
@@ -288,7 +267,18 @@ pub fn arb_config() -> impl Strategy<Value = Config> {
         arb_safety(),
     )
         .prop_map(
-            |(skill_paths, layers, disclosure, search, cass, cache, update, robot, security, safety)| {
+            |(
+                skill_paths,
+                layers,
+                disclosure,
+                search,
+                cass,
+                cache,
+                update,
+                robot,
+                security,
+                safety,
+            )| {
                 Config {
                     skill_paths,
                     layers,

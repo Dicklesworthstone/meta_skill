@@ -23,9 +23,8 @@ fn main() -> Result<()> {
     println!("[1/9] bd available");
 
     // Step 2: Create isolated test environment
-    let temp_dir = TempDir::new().map_err(|e| {
-        MsError::AssertionFailed(format!("failed to create temp dir: {e}"))
-    })?;
+    let temp_dir = TempDir::new()
+        .map_err(|e| MsError::AssertionFailed(format!("failed to create temp dir: {e}")))?;
     let beads_dir = temp_dir.path().join(".beads");
     std::fs::create_dir_all(&beads_dir)?;
     let db_path = beads_dir.join("beads.db");
@@ -106,7 +105,11 @@ fn main() -> Result<()> {
         ..Default::default()
     })?;
     let ready = client.ready()?;
-    println!("[6/9] open issues: {}, ready issues: {}", open.len(), ready.len());
+    println!(
+        "[6/9] open issues: {}, ready issues: {}",
+        open.len(),
+        ready.len()
+    );
 
     // Step 7: Error recovery (expected failure)
     if client.show("does-not-exist").is_ok() {

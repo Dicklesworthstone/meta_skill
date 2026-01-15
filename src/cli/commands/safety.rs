@@ -297,11 +297,7 @@ fn run_check(ctx: &AppContext, args: &CheckArgs) -> Result<()> {
                     "  {} Approval required. Set environment variable:",
                     "!".yellow()
                 );
-                println!(
-                    "    {}=\"{}\"",
-                    "MS_APPROVE_COMMAND".cyan(),
-                    args.command
-                );
+                println!("    {}=\"{}\"", "MS_APPROVE_COMMAND".cyan(), args.command);
             }
         }
     }

@@ -7,7 +7,7 @@ use std::process::Command;
 
 use crate::app::AppContext;
 use crate::cli::commands::resolve_skill_markdown;
-use crate::core::{SkillMetadata};
+use crate::core::SkillMetadata;
 use crate::core::spec_lens::{compile_markdown, parse_markdown};
 use crate::error::Result;
 use crate::security::SafetyGate;
@@ -46,9 +46,8 @@ pub fn run(ctx: &AppContext, args: &EditArgs) -> Result<()> {
     };
 
     if let Some(parent) = edit_path.parent() {
-        std::fs::create_dir_all(parent).map_err(|err| {
-            crate::error::MsError::Config(format!("create edit dir: {err}"))
-        })?;
+        std::fs::create_dir_all(parent)
+            .map_err(|err| crate::error::MsError::Config(format!("create edit dir: {err}")))?;
     }
     std::fs::write(&edit_path, yaml).map_err(|err| {
         crate::error::MsError::Config(format!("write {}: {err}", edit_path.display()))
@@ -123,9 +122,10 @@ fn run_editor(gate: &SafetyGate, editor: &str, path: &PathBuf) -> Result<()> {
     for arg in &args {
         command.arg(arg);
     }
-    let status = command.arg(path).status().map_err(|err| {
-        crate::error::MsError::Config(format!("launch editor: {err}"))
-    })?;
+    let status = command
+        .arg(path)
+        .status()
+        .map_err(|err| crate::error::MsError::Config(format!("launch editor: {err}")))?;
     if !status.success() {
         return Err(crate::error::MsError::Config(
             "editor exited with error".to_string(),
@@ -139,7 +139,9 @@ fn run_editor(gate: &SafetyGate, editor: &str, path: &PathBuf) -> Result<()> {
 fn parse_editor_string(editor: &str) -> Result<(String, Vec<String>)> {
     let editor = editor.trim();
     if editor.is_empty() {
-        return Err(crate::error::MsError::Config("empty editor string".to_string()));
+        return Err(crate::error::MsError::Config(
+            "empty editor string".to_string(),
+        ));
     }
 
     let mut parts = Vec::new();
@@ -173,12 +175,14 @@ fn parse_editor_string(editor: &str) -> Result<(String, Vec<String>)> {
 
     if in_quote {
         return Err(crate::error::MsError::Config(
-            "unclosed quote in editor string".to_string()
+            "unclosed quote in editor string".to_string(),
         ));
     }
 
     if parts.is_empty() {
-        return Err(crate::error::MsError::Config("empty editor string".to_string()));
+        return Err(crate::error::MsError::Config(
+            "empty editor string".to_string(),
+        ));
     }
 
     let cmd = parts.remove(0);
@@ -326,25 +330,20 @@ fn record_field_history(
 
     let history_path = skill_dir.join(".ms").join("field_history.jsonl");
     if let Some(parent) = history_path.parent() {
-        std::fs::create_dir_all(parent).map_err(|err| {
-            crate::error::MsError::Config(format!("create history dir: {err}"))
-        })?;
+        std::fs::create_dir_all(parent)
+            .map_err(|err| crate::error::MsError::Config(format!("create history dir: {err}")))?;
     }
     let mut file = std::fs::OpenOptions::new()
         .create(true)
         .append(true)
         .open(&history_path)
-        .map_err(|err| {
-            crate::error::MsError::Config(format!("open history log: {err}"))
-        })?;
+        .map_err(|err| crate::error::MsError::Config(format!("open history log: {err}")))?;
     for entry in entries {
-        let line = serde_json::to_string(&entry).map_err(|err| {
-            crate::error::MsError::Config(format!("serialize history: {err}"))
-        })?;
+        let line = serde_json::to_string(&entry)
+            .map_err(|err| crate::error::MsError::Config(format!("serialize history: {err}")))?;
         use std::io::Write;
-        writeln!(file, "{line}").map_err(|err| {
-            crate::error::MsError::Config(format!("write history: {err}"))
-        })?;
+        writeln!(file, "{line}")
+            .map_err(|err| crate::error::MsError::Config(format!("write history: {err}")))?;
     }
     Ok(())
 }

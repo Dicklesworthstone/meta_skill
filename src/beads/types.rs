@@ -26,7 +26,10 @@ pub enum IssueStatus {
 impl IssueStatus {
     /// Check if the status represents an active (not terminal) state.
     pub fn is_active(&self) -> bool {
-        matches!(self, Self::Open | Self::InProgress | Self::Blocked | Self::Pinned | Self::Hooked)
+        matches!(
+            self,
+            Self::Open | Self::InProgress | Self::Blocked | Self::Pinned | Self::Hooked
+        )
     }
 
     /// Check if the status represents a terminal state.
@@ -468,27 +471,60 @@ mod tests {
     #[test]
     fn test_issue_status_from_str() {
         assert_eq!("open".parse::<IssueStatus>().unwrap(), IssueStatus::Open);
-        assert_eq!("in_progress".parse::<IssueStatus>().unwrap(), IssueStatus::InProgress);
-        assert_eq!("in-progress".parse::<IssueStatus>().unwrap(), IssueStatus::InProgress);
-        assert_eq!("closed".parse::<IssueStatus>().unwrap(), IssueStatus::Closed);
+        assert_eq!(
+            "in_progress".parse::<IssueStatus>().unwrap(),
+            IssueStatus::InProgress
+        );
+        assert_eq!(
+            "in-progress".parse::<IssueStatus>().unwrap(),
+            IssueStatus::InProgress
+        );
+        assert_eq!(
+            "closed".parse::<IssueStatus>().unwrap(),
+            IssueStatus::Closed
+        );
     }
 
     #[test]
     fn test_issue_status_from_str_case_insensitive() {
         assert_eq!("OPEN".parse::<IssueStatus>().unwrap(), IssueStatus::Open);
-        assert_eq!("InProgress".parse::<IssueStatus>().unwrap(), IssueStatus::InProgress);
-        assert_eq!("BLOCKED".parse::<IssueStatus>().unwrap(), IssueStatus::Blocked);
+        assert_eq!(
+            "InProgress".parse::<IssueStatus>().unwrap(),
+            IssueStatus::InProgress
+        );
+        assert_eq!(
+            "BLOCKED".parse::<IssueStatus>().unwrap(),
+            IssueStatus::Blocked
+        );
     }
 
     #[test]
     fn test_issue_status_from_str_all_variants() {
         assert_eq!("open".parse::<IssueStatus>().unwrap(), IssueStatus::Open);
-        assert_eq!("blocked".parse::<IssueStatus>().unwrap(), IssueStatus::Blocked);
-        assert_eq!("deferred".parse::<IssueStatus>().unwrap(), IssueStatus::Deferred);
-        assert_eq!("closed".parse::<IssueStatus>().unwrap(), IssueStatus::Closed);
-        assert_eq!("tombstone".parse::<IssueStatus>().unwrap(), IssueStatus::Tombstone);
-        assert_eq!("pinned".parse::<IssueStatus>().unwrap(), IssueStatus::Pinned);
-        assert_eq!("hooked".parse::<IssueStatus>().unwrap(), IssueStatus::Hooked);
+        assert_eq!(
+            "blocked".parse::<IssueStatus>().unwrap(),
+            IssueStatus::Blocked
+        );
+        assert_eq!(
+            "deferred".parse::<IssueStatus>().unwrap(),
+            IssueStatus::Deferred
+        );
+        assert_eq!(
+            "closed".parse::<IssueStatus>().unwrap(),
+            IssueStatus::Closed
+        );
+        assert_eq!(
+            "tombstone".parse::<IssueStatus>().unwrap(),
+            IssueStatus::Tombstone
+        );
+        assert_eq!(
+            "pinned".parse::<IssueStatus>().unwrap(),
+            IssueStatus::Pinned
+        );
+        assert_eq!(
+            "hooked".parse::<IssueStatus>().unwrap(),
+            IssueStatus::Hooked
+        );
     }
 
     #[test]
@@ -501,9 +537,18 @@ mod tests {
     #[test]
     fn test_issue_status_from_str_inprogress_variants() {
         // All variants of in_progress should work
-        assert_eq!("in_progress".parse::<IssueStatus>().unwrap(), IssueStatus::InProgress);
-        assert_eq!("in-progress".parse::<IssueStatus>().unwrap(), IssueStatus::InProgress);
-        assert_eq!("inprogress".parse::<IssueStatus>().unwrap(), IssueStatus::InProgress);
+        assert_eq!(
+            "in_progress".parse::<IssueStatus>().unwrap(),
+            IssueStatus::InProgress
+        );
+        assert_eq!(
+            "in-progress".parse::<IssueStatus>().unwrap(),
+            IssueStatus::InProgress
+        );
+        assert_eq!(
+            "inprogress".parse::<IssueStatus>().unwrap(),
+            IssueStatus::InProgress
+        );
     }
 
     #[test]
@@ -574,14 +619,8 @@ mod tests {
 
     #[test]
     fn test_issue_type_serialization_snake_case() {
-        assert_eq!(
-            serde_json::to_string(&IssueType::Bug).unwrap(),
-            "\"bug\""
-        );
-        assert_eq!(
-            serde_json::to_string(&IssueType::Task).unwrap(),
-            "\"task\""
-        );
+        assert_eq!(serde_json::to_string(&IssueType::Bug).unwrap(), "\"bug\"");
+        assert_eq!(serde_json::to_string(&IssueType::Task).unwrap(), "\"task\"");
     }
 
     #[test]
@@ -616,7 +655,10 @@ mod tests {
         assert_eq!("convoy".parse::<IssueType>().unwrap(), IssueType::Convoy);
         assert_eq!("event".parse::<IssueType>().unwrap(), IssueType::Event);
         assert_eq!("slot".parse::<IssueType>().unwrap(), IssueType::Slot);
-        assert_eq!("question".parse::<IssueType>().unwrap(), IssueType::Question);
+        assert_eq!(
+            "question".parse::<IssueType>().unwrap(),
+            IssueType::Question
+        );
         assert_eq!("docs".parse::<IssueType>().unwrap(), IssueType::Docs);
     }
 
@@ -1008,8 +1050,7 @@ mod tests {
 
     #[test]
     fn test_update_issue_request_with_priority() {
-        let req = UpdateIssueRequest::new()
-            .with_priority(0);
+        let req = UpdateIssueRequest::new().with_priority(0);
 
         assert_eq!(req.priority, Some(0));
     }

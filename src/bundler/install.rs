@@ -1,7 +1,7 @@
 //! Bundle installation
 
-use std::fs::OpenOptions;
 use std::collections::HashMap;
+use std::fs::OpenOptions;
 use std::path::{Component, Path, PathBuf};
 
 use crate::bundler::blob::BlobStore;
@@ -19,8 +19,10 @@ pub struct InstallReport {
 }
 
 /// Options for bundle installation.
-pub struct InstallOptions<'a, V: SignatureVerifier = crate::bundler::manifest::NoopSignatureVerifier>
-{
+pub struct InstallOptions<
+    'a,
+    V: SignatureVerifier = crate::bundler::manifest::NoopSignatureVerifier,
+> {
     /// Skip signature verification entirely. When true, both unsigned bundles
     /// and signed bundles (without verifying signatures) are allowed.
     /// Default: false (signatures required and verified).
@@ -98,9 +100,9 @@ pub fn install_with_options<V: SignatureVerifier>(
 
     let mut installed = Vec::new();
     let mut skipped = Vec::new();
-    
+
     // Optimization: Pre-map blobs for O(1) lookup
-    let blob_map: HashMap<&String, &crate::bundler::package::BundleBlob> = 
+    let blob_map: HashMap<&String, &crate::bundler::package::BundleBlob> =
         package.blobs.iter().map(|b| (&b.hash, b)).collect();
 
     // Rollback tracking
@@ -114,13 +116,13 @@ pub fn install_with_options<V: SignatureVerifier>(
         let hash = skill.hash.as_ref().ok_or_else(|| {
             MsError::ValidationFailed(format!("missing blob hash for {}", skill.name))
         })?;
-        
+
         let blob = blob_map.get(hash).ok_or_else(|| {
             MsError::ValidationFailed(format!("bundle missing blob {} for {}", hash, skill.name))
         })?;
 
         let target = resolve_target_path(archive_root, &skill.path, &skill.name)?;
-        
+
         // Atomic-ish check: if directory exists, we fail.
         if target.exists() {
             // Rollback any previously installed skills in this transaction
@@ -140,7 +142,7 @@ pub fn install_with_options<V: SignatureVerifier>(
             rollback_install(&installed_paths);
             return Err(e);
         }
-        
+
         installed_paths.push(target);
         installed.push(skill.name.clone());
     }
@@ -155,9 +157,8 @@ pub fn install_with_options<V: SignatureVerifier>(
 }
 
 fn perform_install(target: &Path, bytes: &[u8]) -> Result<()> {
-    std::fs::create_dir_all(target).map_err(|err| {
-        MsError::Config(format!("create {}: {err}", target.display()))
-    })?;
+    std::fs::create_dir_all(target)
+        .map_err(|err| MsError::Config(format!("create {}: {err}", target.display())))?;
     unpack_blob(target, bytes)
 }
 
@@ -251,14 +252,13 @@ fn unpack_blob(target: &Path, bytes: &[u8]) -> Result<()> {
         let rel = Path::new(name);
         ensure_relative(rel)?;
         let path = target.join(rel);
-        
+
         // Ensure parent directories exist
         if let Some(parent) = path.parent() {
-            std::fs::create_dir_all(parent).map_err(|err| {
-                MsError::Config(format!("create {}: {err}", parent.display()))
-            })?;
+            std::fs::create_dir_all(parent)
+                .map_err(|err| MsError::Config(format!("create {}: {err}", parent.display())))?;
         }
-        
+
         // Use create_new(true) to prevent overwriting existing files and ensure atomicity
         use std::io::Write;
         let mut file = OpenOptions::new()
@@ -272,18 +272,17 @@ fn unpack_blob(target: &Path, bytes: &[u8]) -> Result<()> {
                     MsError::Config(format!("write {}: {err}", path.display()))
                 }
             })?;
-            
-        file.write_all(file_bytes).map_err(|err| {
-            MsError::Config(format!("write content {}: {err}", path.display()))
-        })?;
+
+        file.write_all(file_bytes)
+            .map_err(|err| MsError::Config(format!("write content {}: {err}", path.display())))?;
     }
     Ok(())
 }
 
 fn read_u64(input: &[u8], cursor: &mut usize) -> Result<u64> {
-    let end = cursor.checked_add(8).ok_or_else(|| {
-        MsError::ValidationFailed("bundle parse overflow".to_string())
-    })?;
+    let end = cursor
+        .checked_add(8)
+        .ok_or_else(|| MsError::ValidationFailed("bundle parse overflow".to_string()))?;
     if end > input.len() {
         return Err(MsError::ValidationFailed(
             "bundle parse truncated".to_string(),
@@ -296,9 +295,9 @@ fn read_u64(input: &[u8], cursor: &mut usize) -> Result<u64> {
 }
 
 fn read_slice<'a>(input: &'a [u8], cursor: &mut usize, len: usize) -> Result<&'a [u8]> {
-    let end = cursor.checked_add(len).ok_or_else(|| {
-        MsError::ValidationFailed("bundle parse overflow".to_string())
-    })?;
+    let end = cursor
+        .checked_add(len)
+        .ok_or_else(|| MsError::ValidationFailed("bundle parse overflow".to_string()))?;
     if end > input.len() {
         return Err(MsError::ValidationFailed(
             "bundle parse truncated".to_string(),
@@ -353,9 +352,7 @@ mod tests {
         let install_root = tempdir().unwrap();
         let report = install(&package, install_root.path(), &[]).unwrap();
         assert_eq!(report.installed, vec!["demo".to_string()]);
-        let installed_path = install_root
-            .path()
-            .join("skills/by-id/demo/SKILL.md");
+        let installed_path = install_root.path().join("skills/by-id/demo/SKILL.md");
         assert!(installed_path.exists());
     }
 
@@ -390,7 +387,12 @@ mod tests {
         // Empty path with malicious skill name should be rejected
         let result = resolve_target_path(root, Path::new(""), "../../../tmp/malicious");
         assert!(result.is_err());
-        assert!(result.unwrap_err().to_string().contains("invalid characters"));
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("invalid characters")
+        );
 
         // Valid skill name with empty path should work
         let result = resolve_target_path(root, Path::new(""), "valid-skill");
@@ -445,7 +447,8 @@ mod tests {
 
         // With allow_unsigned(), signed bundles should install without verification
         let install_root = tempdir().unwrap();
-        let options = InstallOptions::<crate::bundler::manifest::NoopSignatureVerifier>::allow_unsigned();
+        let options =
+            InstallOptions::<crate::bundler::manifest::NoopSignatureVerifier>::allow_unsigned();
         let report = install_with_options(&package, install_root.path(), &[], &options).unwrap();
 
         assert_eq!(report.installed, vec!["signed-demo".to_string()]);

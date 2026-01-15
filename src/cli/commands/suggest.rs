@@ -1,7 +1,7 @@
 use clap::Args;
 
 use crate::app::AppContext;
-use crate::cli::output::{emit_json, HumanLayout};
+use crate::cli::output::{HumanLayout, emit_json};
 use crate::context::{ContextCapture, ContextFingerprint};
 use crate::error::{MsError, Result};
 use crate::suggestions::SuggestionCooldownCache;
@@ -150,8 +150,7 @@ pub fn run(ctx: &AppContext, args: &SuggestArgs) -> Result<()> {
         } else {
             layout.kv("Weights", "disabled");
         }
-        layout
-            .bullet("Suggestion engine integration pending; cooldown cache ready.");
+        layout.bullet("Suggestion engine integration pending; cooldown cache ready.");
         crate::cli::output::emit_human(layout);
         Ok(())
     }

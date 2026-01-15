@@ -1,8 +1,8 @@
-mod fixture;
 mod cli_tests;
 mod db_state_tests;
+mod fixture;
 mod fixture_tests;
-mod security_tests;
-mod workflow_tests;
 mod migration_tests;
 mod more_cli_tests;
+mod security_tests;
+mod workflow_tests;

@@ -8,10 +8,10 @@ use semver::Version;
 use serde::Serialize;
 
 use crate::app::AppContext;
-use crate::bundler::github::{download_bundle, download_url, publish_bundle, GitHubConfig};
+use crate::bundler::github::{GitHubConfig, download_bundle, download_url, publish_bundle};
 use crate::bundler::install::InstallReport;
 use crate::bundler::local_safety::{
-    backup_file, detect_modifications, hash_bytes, ModificationStatus, SkillModificationReport,
+    ModificationStatus, SkillModificationReport, backup_file, detect_modifications, hash_bytes,
 };
 use crate::bundler::registry::{BundleRegistry, InstallSource, InstalledBundle, ParsedSource};
 use crate::bundler::{Bundle, BundleInfo, BundleManifest, BundlePackage, BundledSkill};
@@ -289,17 +289,13 @@ fn run_create(ctx: &AppContext, args: &BundleCreateArgs) -> Result<()> {
             .to_path_buf();
 
         // Read metadata if available, use defaults otherwise
-        let version = ctx
-            .git
-            .read_metadata(&skill_id)
-            .ok()
-            .and_then(|m| {
-                if m.version.trim().is_empty() {
-                    None
-                } else {
-                    Some(m.version)
-                }
-            });
+        let version = ctx.git.read_metadata(&skill_id).ok().and_then(|m| {
+            if m.version.trim().is_empty() {
+                None
+            } else {
+                Some(m.version)
+            }
+        });
 
         entries.push(BundledSkill {
             name: skill_id,
@@ -379,9 +375,8 @@ fn run_create(ctx: &AppContext, args: &BundleCreateArgs) -> Result<()> {
         )));
     }
     let bytes = package.to_bytes()?;
-    std::fs::write(&output, bytes).map_err(|err| {
-        MsError::Config(format!("write {}: {err}", output.display()))
-    })?;
+    std::fs::write(&output, bytes)
+        .map_err(|err| MsError::Config(format!("write {}: {err}", output.display())))?;
 
     let mut manifest_path = None;
     if args.write_manifest {
@@ -396,9 +391,8 @@ fn run_create(ctx: &AppContext, args: &BundleCreateArgs) -> Result<()> {
             )));
         }
         let toml = package.manifest.to_toml_string()?;
-        std::fs::write(&path, toml).map_err(|err| {
-            MsError::Config(format!("write {}: {err}", path.display()))
-        })?;
+        std::fs::write(&path, toml)
+            .map_err(|err| MsError::Config(format!("write {}: {err}", path.display())))?;
         manifest_path = Some(path);
     }
 
@@ -444,20 +438,13 @@ fn run_install(ctx: &AppContext, args: &BundleInstallArgs) -> Result<()> {
                     local_path.display()
                 )));
             }
-            std::fs::read(&local_path).map_err(|err| {
-                MsError::Config(format!("read {}: {err}", local_path.display()))
-            })?
+            std::fs::read(&local_path)
+                .map_err(|err| MsError::Config(format!("read {}: {err}", local_path.display())))?
         }
-        InstallSource::Url { url } => {
-            download_url(url, args.token.clone())?
-        }
+        InstallSource::Url { url } => download_url(url, args.token.clone())?,
         InstallSource::GitHub { repo, tag, asset } => {
-            let download = download_bundle(
-                repo,
-                tag.as_deref(),
-                asset.as_deref(),
-                args.token.clone(),
-            )?;
+            let download =
+                download_bundle(repo, tag.as_deref(), asset.as_deref(), args.token.clone())?;
             download.bytes
         }
     };
@@ -673,10 +660,12 @@ fn run_update(ctx: &AppContext, args: &BundleUpdateArgs) -> Result<()> {
 
     let registry = BundleRegistry::open(ctx.git.root())?;
     let mut targets: Vec<InstalledBundle> = if let Some(ref id) = args.bundle_id {
-        vec![registry
-            .get(id)
-            .cloned()
-            .ok_or_else(|| MsError::NotFound(format!("bundle '{}' is not installed", id)))?]
+        vec![
+            registry
+                .get(id)
+                .cloned()
+                .ok_or_else(|| MsError::NotFound(format!("bundle '{}' is not installed", id)))?,
+        ]
     } else {
         registry.list().cloned().collect()
     };
@@ -695,10 +684,7 @@ fn run_update(ctx: &AppContext, args: &BundleUpdateArgs) -> Result<()> {
     targets.sort_by(|a, b| a.id.cmp(&b.id));
 
     let mut updates = Vec::new();
-    let default_check = !args.check
-        && !args.dry_run
-        && !args.all
-        && args.bundle_id.is_none();
+    let default_check = !args.check && !args.dry_run && !args.all && args.bundle_id.is_none();
 
     for installed in targets {
         let item = match fetch_update_candidate(ctx, args, &installed) {
@@ -742,12 +728,8 @@ fn fetch_update_candidate(
 ) -> Result<UpdateCandidate> {
     let (bytes, source_override) = match &installed.source {
         InstallSource::GitHub { repo, tag, asset } => {
-            let result = download_bundle(
-                repo,
-                tag.as_deref(),
-                asset.as_deref(),
-                args.token.clone(),
-            )?;
+            let result =
+                download_bundle(repo, tag.as_deref(), asset.as_deref(), args.token.clone())?;
             (
                 result.bytes,
                 Some(InstallSource::GitHub {
@@ -1002,9 +984,8 @@ fn write_bundle_files(target: &Path, entries: &[(PathBuf, Vec<u8>)]) -> Result<(
         ensure_relative(rel)?;
         let path = target.join(rel);
         if let Some(parent) = path.parent() {
-            std::fs::create_dir_all(parent).map_err(|err| {
-                MsError::Config(format!("create {}: {err}", parent.display()))
-            })?;
+            std::fs::create_dir_all(parent)
+                .map_err(|err| MsError::Config(format!("create {}: {err}", parent.display())))?;
         }
         std::fs::write(&path, bytes)
             .map_err(|err| MsError::Config(format!("write {}: {err}", path.display())))?;
@@ -1147,9 +1128,10 @@ fn print_update_summary(updates: &[BundleUpdateItem]) {
 }
 
 fn run_publish(ctx: &AppContext, args: &BundlePublishArgs) -> Result<()> {
-    let repo = args.repo.clone().ok_or_else(|| {
-        MsError::ValidationFailed("bundle publish requires --repo".to_string())
-    })?;
+    let repo = args
+        .repo
+        .clone()
+        .ok_or_else(|| MsError::ValidationFailed("bundle publish requires --repo".to_string()))?;
     let config = GitHubConfig {
         repo,
         token: args.token.clone(),
@@ -1298,13 +1280,16 @@ fn run_list(ctx: &AppContext) -> Result<()> {
     let installed: Vec<_> = registry.list().collect();
 
     if ctx.robot_mode {
-        let bundles: Vec<_> = installed.iter().map(|b| BundleListEntry {
-            id: b.id.clone(),
-            version: b.version.clone(),
-            source: b.source.to_string(),
-            skills: b.skills.clone(),
-            installed_at: b.installed_at.to_rfc3339(),
-        }).collect();
+        let bundles: Vec<_> = installed
+            .iter()
+            .map(|b| BundleListEntry {
+                id: b.id.clone(),
+                version: b.version.clone(),
+                source: b.source.to_string(),
+                skills: b.skills.clone(),
+                installed_at: b.installed_at.to_rfc3339(),
+            })
+            .collect();
         return emit_json(&BundleListReportDetailed {
             count: bundles.len(),
             bundles,
@@ -1319,7 +1304,10 @@ fn run_list(ctx: &AppContext) -> Result<()> {
             println!("  {} v{}", bundle.id, bundle.version);
             println!("    Source: {}", bundle.source);
             println!("    Skills: {}", bundle.skills.join(", "));
-            println!("    Installed: {}", bundle.installed_at.format("%Y-%m-%d %H:%M"));
+            println!(
+                "    Installed: {}",
+                bundle.installed_at.format("%Y-%m-%d %H:%M")
+            );
             println!();
         }
     }
@@ -1329,9 +1317,8 @@ fn run_list(ctx: &AppContext) -> Result<()> {
 fn run_show(ctx: &AppContext, args: &BundleShowArgs) -> Result<()> {
     let local_path = expand_local_path(&args.source);
     let bytes = if local_path.exists() {
-        std::fs::read(&local_path).map_err(|err| {
-            MsError::Config(format!("read {}: {err}", local_path.display()))
-        })?
+        std::fs::read(&local_path)
+            .map_err(|err| MsError::Config(format!("read {}: {err}", local_path.display())))?
     } else if looks_like_path(&args.source) {
         return Err(MsError::ValidationFailed(format!(
             "bundle source not found: {}",
@@ -1444,9 +1431,8 @@ fn discover_skills_in_dir(dir: &std::path::Path) -> Result<Vec<String>> {
     }
 
     let mut skills = Vec::new();
-    let entries = std::fs::read_dir(dir).map_err(|err| {
-        MsError::Config(format!("read {}: {err}", dir.display()))
-    })?;
+    let entries = std::fs::read_dir(dir)
+        .map_err(|err| MsError::Config(format!("read {}: {err}", dir.display())))?;
 
     for entry in entries.flatten() {
         let path = entry.path();
@@ -1868,10 +1854,7 @@ mod tests {
         }
 
         let result = discover_skills_in_dir(temp.path()).unwrap();
-        assert_eq!(
-            result,
-            vec!["alpha-skill", "middle-skill", "zebra-skill"]
-        );
+        assert_eq!(result, vec!["alpha-skill", "middle-skill", "zebra-skill"]);
     }
 
     // ==================== Argument Parsing Tests ====================
@@ -1992,13 +1975,8 @@ mod tests {
             cmd: BundleCommand,
         }
 
-        let args = TestCli::parse_from([
-            "test",
-            "remove",
-            "my-bundle",
-            "--remove-skills",
-            "--force",
-        ]);
+        let args =
+            TestCli::parse_from(["test", "remove", "my-bundle", "--remove-skills", "--force"]);
 
         if let BundleCommand::Remove(remove) = args.cmd {
             assert_eq!(remove.bundle_id, "my-bundle");

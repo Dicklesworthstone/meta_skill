@@ -74,8 +74,9 @@ impl SyncState {
                 .map_err(|err| MsError::Config(format!("create sync state dir: {err}")))?;
         }
         let rendered = serde_json::to_string_pretty(self)?;
-        std::fs::write(&path, rendered)
-            .map_err(|err| MsError::Config(format!("write sync state {}: {err}", path.display())))?;
+        std::fs::write(&path, rendered).map_err(|err| {
+            MsError::Config(format!("write sync state {}: {err}", path.display()))
+        })?;
         Ok(())
     }
 }

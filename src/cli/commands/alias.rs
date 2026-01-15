@@ -167,17 +167,9 @@ fn remove_alias(ctx: &AppContext, alias: &str) -> Result<()> {
             })
         );
     } else if removed {
-        println!(
-            "{} Removed alias '{}'",
-            "✓".green().bold(),
-            alias.cyan()
-        );
+        println!("{} Removed alias '{}'", "✓".green().bold(), alias.cyan());
     } else {
-        println!(
-            "{} Alias '{}' not found",
-            "!".yellow(),
-            alias
-        );
+        println!("{} Alias '{}' not found", "!".yellow(), alias);
     }
 
     Ok(())
@@ -216,16 +208,9 @@ fn resolve_alias(ctx: &AppContext, alias: &str) -> Result<()> {
     } else {
         // Try as skill ID directly
         if ctx.db.get_skill(alias)?.is_some() {
-            println!(
-                "{} is a canonical skill ID (not an alias)",
-                alias.cyan()
-            );
+            println!("{} is a canonical skill ID (not an alias)", alias.cyan());
         } else {
-            println!(
-                "{} No skill or alias found for '{}'",
-                "!".yellow(),
-                alias
-            );
+            println!("{} No skill or alias found for '{}'", "!".yellow(), alias);
         }
     }
 

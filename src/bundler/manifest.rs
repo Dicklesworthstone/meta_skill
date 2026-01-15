@@ -234,7 +234,11 @@ impl Ed25519Signer {
     /// (e.g., `~/.ssh/id_ed25519`).
     pub fn from_openssh_file(path: &std::path::Path) -> Result<Self> {
         let contents = std::fs::read_to_string(path).map_err(|err| {
-            MsError::Config(format!("failed to read key file {}: {}", path.display(), err))
+            MsError::Config(format!(
+                "failed to read key file {}: {}",
+                path.display(),
+                err
+            ))
         })?;
         Self::from_openssh_str(&contents)
     }
@@ -489,9 +493,8 @@ fn validate_required(field: &str, value: &str) -> Result<()> {
 }
 
 fn validate_semver(field: &str, value: &str) -> Result<()> {
-    Version::parse(value).map_err(|err| {
-        MsError::ValidationFailed(format!("{field} must be valid semver: {err}"))
-    })?;
+    Version::parse(value)
+        .map_err(|err| MsError::ValidationFailed(format!("{field} must be valid semver: {err}")))?;
     Ok(())
 }
 
@@ -628,7 +631,11 @@ checksum = "sha256:abc123"
 
         // Should succeed
         let result = verifier.verify(payload, &bundle_sig);
-        assert!(result.is_ok(), "Expected valid signature to verify: {:?}", result);
+        assert!(
+            result.is_ok(),
+            "Expected valid signature to verify: {:?}",
+            result
+        );
     }
 
     #[test]
@@ -674,7 +681,12 @@ checksum = "sha256:abc123"
 
         let result = verifier.verify(payload, &bundle_sig);
         assert!(result.is_err());
-        assert!(result.unwrap_err().to_string().contains("verification failed"));
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("verification failed")
+        );
     }
 
     #[test]
@@ -696,7 +708,12 @@ checksum = "sha256:abc123"
         let tampered_payload = b"tampered payload";
         let result = verifier.verify(tampered_payload, &bundle_sig);
         assert!(result.is_err());
-        assert!(result.unwrap_err().to_string().contains("verification failed"));
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("verification failed")
+        );
     }
 
     #[test]
@@ -715,7 +732,12 @@ checksum = "sha256:abc123"
 
         let result = verifier.verify(payload, &bundle_sig);
         assert!(result.is_err());
-        assert!(result.unwrap_err().to_string().contains("invalid signature encoding"));
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("invalid signature encoding")
+        );
     }
 
     #[test]
@@ -723,10 +745,8 @@ checksum = "sha256:abc123"
         let (public_key1, _) = generate_test_keypair();
         let (public_key2, sign2) = generate_test_keypair();
 
-        let verifier = Ed25519Verifier::from_keys([
-            ("key1", public_key1),
-            ("key2", public_key2.clone()),
-        ]);
+        let verifier =
+            Ed25519Verifier::from_keys([("key1", public_key1), ("key2", public_key2.clone())]);
 
         // Verify that key2 works
         let payload = b"test";
@@ -786,7 +806,12 @@ checksum = "sha256:abc123"
 
         let result = manifest.verify_signatures(payload, &verifier);
         assert!(result.is_err());
-        assert!(result.unwrap_err().to_string().contains("unknown signing key"));
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("unknown signing key")
+        );
     }
 
     // --- Ed25519Signer tests ---
@@ -876,7 +901,11 @@ checksum = "sha256:abc123"
     fn ed25519_signer_parses_openssh_key() {
         let (pem, _public_key) = generate_test_openssh_key();
         let signer = Ed25519Signer::from_openssh_str(&pem);
-        assert!(signer.is_ok(), "Failed to parse OpenSSH key: {:?}", signer.err());
+        assert!(
+            signer.is_ok(),
+            "Failed to parse OpenSSH key: {:?}",
+            signer.err()
+        );
 
         let signer = signer.unwrap();
         assert!(signer.key_id().starts_with("ed25519:"));
@@ -911,14 +940,23 @@ checksum = "sha256:abc123"
         verifier.add_key(signer.key_id(), public_key);
 
         let result = verifier.verify(payload, &signature);
-        assert!(result.is_ok(), "Signature verification failed: {:?}", result.err());
+        assert!(
+            result.is_ok(),
+            "Signature verification failed: {:?}",
+            result.err()
+        );
     }
 
     #[test]
     fn ed25519_signer_rejects_invalid_pem() {
         let result = Ed25519Signer::from_openssh_str("not a valid key");
         assert!(result.is_err());
-        assert!(result.unwrap_err().to_string().contains("missing BEGIN marker"));
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("missing BEGIN marker")
+        );
     }
 
     #[test]

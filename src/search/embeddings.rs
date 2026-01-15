@@ -61,7 +61,7 @@ impl HashEmbedder {
     pub fn dims(&self) -> usize {
         self.dim
     }
-    
+
     /// Embed text into vector
     pub fn embed(&self, text: &str) -> Vec<f32> {
         if self.dim == 0 {
@@ -87,17 +87,17 @@ impl HashEmbedder {
         l2_normalize(&mut embedding);
         embedding
     }
-    
+
     /// Compute cosine similarity between two embeddings
     pub fn similarity(&self, a: &[f32], b: &[f32]) -> f32 {
         if a.len() != b.len() {
             return 0.0;
         }
-        
+
         let dot: f32 = a.iter().zip(b.iter()).map(|(x, y)| x * y).sum();
         let norm_a: f32 = a.iter().map(|x| x * x).sum::<f32>().sqrt();
         let norm_b: f32 = b.iter().map(|x| x * x).sum::<f32>().sqrt();
-        
+
         if norm_a == 0.0 || norm_b == 0.0 {
             0.0
         } else {
@@ -280,8 +280,14 @@ mod tests {
         // Use higher dimensions for more reliable similarity
         let embedder = HashEmbedder::new(128);
         let mut index = VectorIndex::new(128);
-        index.insert("git".to_string(), embedder.embed("git commit workflow repository version"));
-        index.insert("rust".to_string(), embedder.embed("rust error handling compile memory safety"));
+        index.insert(
+            "git".to_string(),
+            embedder.embed("git commit workflow repository version"),
+        );
+        index.insert(
+            "rust".to_string(),
+            embedder.embed("rust error handling compile memory safety"),
+        );
 
         let query = embedder.embed("git commit workflow");
         let results = index.search(&query, 1);
@@ -325,9 +331,7 @@ mod tests {
     }
 
     fn next_u32(seed: &mut u64) -> u32 {
-        *seed = seed
-            .wrapping_mul(6364136223846793005)
-            .wrapping_add(1);
+        *seed = seed.wrapping_mul(6364136223846793005).wrapping_add(1);
         (*seed >> 32) as u32
     }
 }

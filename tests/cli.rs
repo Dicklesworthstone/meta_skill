@@ -85,7 +85,13 @@ fn test_security_scan_quarantine_review_flow() {
         .env("MS_SECURITY_ACIP_PROMPT_PATH", &acip_path)
         .env("MS_SECURITY_ACIP_VERSION", "1.3")
         .env("MS_SECURITY_ACIP_ENABLED", "1")
-        .args(["--robot", "security", "quarantine", "reviews", &quarantine_id]);
+        .args([
+            "--robot",
+            "security",
+            "quarantine",
+            "reviews",
+            &quarantine_id,
+        ]);
     let output = reviews.output().unwrap();
     assert!(output.status.success());
     let json: Value = serde_json::from_slice(&output.stdout).unwrap();
@@ -124,10 +130,12 @@ fn test_security_scan_requires_session_id_when_persisting() {
     let output = scan.output().unwrap();
     assert!(!output.status.success());
     let json: Value = serde_json::from_slice(&output.stdout).unwrap();
-    assert!(json["message"]
-        .as_str()
-        .unwrap_or_default()
-        .contains("session_id required"));
+    assert!(
+        json["message"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("session_id required")
+    );
 }
 
 #[test]
@@ -157,10 +165,12 @@ fn test_security_scan_rejects_both_input_and_file() {
     let output = scan.output().unwrap();
     assert!(!output.status.success());
     let json: Value = serde_json::from_slice(&output.stdout).unwrap();
-    assert!(json["message"]
-        .as_str()
-        .unwrap_or_default()
-        .contains("not both"));
+    assert!(
+        json["message"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("not both")
+    );
 }
 
 #[test]
@@ -188,8 +198,10 @@ fn test_security_scan_rejects_invalid_source() {
     let output = scan.output().unwrap();
     assert!(!output.status.success());
     let json: Value = serde_json::from_slice(&output.stdout).unwrap();
-    assert!(json["message"]
-        .as_str()
-        .unwrap_or_default()
-        .contains("invalid source"));
+    assert!(
+        json["message"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("invalid source")
+    );
 }

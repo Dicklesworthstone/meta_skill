@@ -577,11 +577,7 @@ mod tests {
     #[test]
     fn test_missing_capability() {
         let mut graph = DependencyGraph::new();
-        graph.add_skill(
-            "a".to_string(),
-            vec!["missing-cap".to_string()],
-            vec![],
-        );
+        graph.add_skill("a".to_string(), vec!["missing-cap".to_string()], vec![]);
         graph.build_edges();
 
         let resolver = DependencyResolver::new(&graph);
@@ -637,7 +633,11 @@ mod tests {
 
         // Test Overview mode
         let plan = resolver
-            .resolve("root", DisclosureLevel::Complete, DependencyLoadMode::Overview)
+            .resolve(
+                "root",
+                DisclosureLevel::Complete,
+                DependencyLoadMode::Overview,
+            )
             .unwrap();
         assert_eq!(plan.ordered[0].disclosure, DisclosureLevel::Overview);
     }

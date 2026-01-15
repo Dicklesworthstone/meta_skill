@@ -20,11 +20,7 @@ impl<'a> DbStateChecker<'a> {
 
     pub fn skill_exists(&self, id: &str) -> bool {
         self.db
-            .query_row(
-                "SELECT 1 FROM skills WHERE id = ?",
-                [id],
-                |_| Ok(true),
-            )
+            .query_row("SELECT 1 FROM skills WHERE id = ?", [id], |_| Ok(true))
             .unwrap_or(false)
     }
 

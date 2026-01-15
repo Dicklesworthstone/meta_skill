@@ -200,10 +200,12 @@ impl SyncConfig {
         if !path.exists() {
             return Ok(Self::default());
         }
-        let contents = std::fs::read_to_string(path)
-            .map_err(|err| MsError::Config(format!("read sync config {}: {err}", path.display())))?;
-        let config: Self = toml::from_str(&contents)
-            .map_err(|err| MsError::Config(format!("parse sync config {}: {err}", path.display())))?;
+        let contents = std::fs::read_to_string(path).map_err(|err| {
+            MsError::Config(format!("read sync config {}: {err}", path.display()))
+        })?;
+        let config: Self = toml::from_str(&contents).map_err(|err| {
+            MsError::Config(format!("parse sync config {}: {err}", path.display()))
+        })?;
         Ok(config)
     }
 
@@ -219,8 +221,9 @@ impl SyncConfig {
         }
         let rendered = toml::to_string_pretty(self)
             .map_err(|err| MsError::Config(format!("render sync config: {err}")))?;
-        std::fs::write(path, rendered)
-            .map_err(|err| MsError::Config(format!("write sync config {}: {err}", path.display())))?;
+        std::fs::write(path, rendered).map_err(|err| {
+            MsError::Config(format!("write sync config {}: {err}", path.display()))
+        })?;
         Ok(())
     }
 

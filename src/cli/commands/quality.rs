@@ -4,7 +4,7 @@ use clap::Args;
 use serde::Serialize;
 
 use crate::app::AppContext;
-use crate::cli::output::{emit_json, HumanLayout};
+use crate::cli::output::{HumanLayout, emit_json};
 use crate::core::spec_lens::parse_markdown;
 use crate::error::{MsError, Result};
 use crate::quality::{QualityContext, QualityScorer};
@@ -65,14 +65,15 @@ pub fn run(ctx: &AppContext, args: &QualityArgs) -> Result<()> {
             .map_err(|err| MsError::InvalidSkill(format!("{}: {err}", skill_md.display())))?;
         let skill_id = spec.metadata.id.clone();
 
-        let (usage_count, evidence_count, modified_at) = if let Ok(Some(record)) = ctx.db.get_skill(&skill_id) {
-            let usage = ctx.db.count_skill_usage(&skill_id).ok();
-            let evidence = ctx.db.count_skill_evidence(&skill_id).ok();
-            let modified = parse_modified_at(&record.modified_at);
-            (usage, evidence, modified)
-        } else {
-            (None, None, None)
-        };
+        let (usage_count, evidence_count, modified_at) =
+            if let Ok(Some(record)) = ctx.db.get_skill(&skill_id) {
+                let usage = ctx.db.count_skill_usage(&skill_id).ok();
+                let evidence = ctx.db.count_skill_evidence(&skill_id).ok();
+                let modified = parse_modified_at(&record.modified_at);
+                (usage, evidence, modified)
+            } else {
+                (None, None, None)
+            };
 
         let context = QualityContext {
             usage_count,
@@ -99,7 +100,11 @@ pub fn run(ctx: &AppContext, args: &QualityArgs) -> Result<()> {
                 toolchain: score.breakdown.toolchain,
                 freshness: score.breakdown.freshness,
             },
-            issues: score.issues.iter().map(|issue| format!("{issue:?}")).collect(),
+            issues: score
+                .issues
+                .iter()
+                .map(|issue| format!("{issue:?}"))
+                .collect(),
             suggestions: score.suggestions.clone(),
         };
         outputs.push(output);

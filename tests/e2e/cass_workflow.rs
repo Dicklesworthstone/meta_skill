@@ -94,12 +94,12 @@ fn test_cass_integration_workflow() -> Result<()> {
 
     let extractions_dir = cass_dir.join("extractions");
     fs::create_dir_all(&extractions_dir).expect("Failed to create extractions dir");
-    create_mock_extraction(&extractions_dir.join("debugging-skill.json"), "rust-debugging");
-
-    println!(
-        "[CASS] Created mock extraction in {:?}",
-        extractions_dir
+    create_mock_extraction(
+        &extractions_dir.join("debugging-skill.json"),
+        "rust-debugging",
     );
+
+    println!("[CASS] Created mock extraction in {:?}", extractions_dir);
     fixture.checkpoint("post_extraction_setup");
 
     // Step 4: Test build command (CASS integration entry point)
@@ -130,7 +130,12 @@ fn test_cass_integration_workflow() -> Result<()> {
 
         println!(
             "[CASS] Build result (expected): {}",
-            output.stdout.lines().take(3).collect::<Vec<_>>().join(" | ")
+            output
+                .stdout
+                .lines()
+                .take(3)
+                .collect::<Vec<_>>()
+                .join(" | ")
         );
 
         if !is_expected {

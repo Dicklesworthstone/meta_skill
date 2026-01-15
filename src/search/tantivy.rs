@@ -8,8 +8,10 @@ use std::sync::RwLock;
 
 use tantivy::collector::TopDocs;
 use tantivy::query::QueryParser;
-use tantivy::schema::{Schema, STORED, STRING, Field, IndexRecordOption, TextFieldIndexing, TextOptions, Value};
-use tantivy::{Index, IndexReader, IndexWriter, TantivyDocument, ReloadPolicy};
+use tantivy::schema::{
+    Field, IndexRecordOption, STORED, STRING, Schema, TextFieldIndexing, TextOptions, Value,
+};
+use tantivy::{Index, IndexReader, IndexWriter, ReloadPolicy, TantivyDocument};
 
 use crate::error::{MsError, Result};
 use crate::storage::sqlite::SkillRecord;
@@ -129,9 +131,9 @@ impl Bm25Index {
         let id_term = tantivy::Term::from_field_text(self.fields.id, &skill.id);
 
         let writer = self.writer.write().map_err(|e| {
-            MsError::SearchIndex(tantivy::TantivyError::InternalError(
-                format!("Failed to acquire write lock: {e}"),
-            ))
+            MsError::SearchIndex(tantivy::TantivyError::InternalError(format!(
+                "Failed to acquire write lock: {e}"
+            )))
         })?;
 
         writer.delete_term(id_term);
@@ -158,9 +160,9 @@ impl Bm25Index {
     /// Commit pending changes and reload the reader
     pub fn commit(&self) -> Result<()> {
         let mut writer = self.writer.write().map_err(|e| {
-            MsError::SearchIndex(tantivy::TantivyError::InternalError(
-                format!("Failed to acquire write lock: {e}"),
-            ))
+            MsError::SearchIndex(tantivy::TantivyError::InternalError(format!(
+                "Failed to acquire write lock: {e}"
+            )))
         })?;
 
         writer.commit()?;
@@ -175,9 +177,9 @@ impl Bm25Index {
         let id_term = tantivy::Term::from_field_text(self.fields.id, skill_id);
 
         let writer = self.writer.write().map_err(|e| {
-            MsError::SearchIndex(tantivy::TantivyError::InternalError(
-                format!("Failed to acquire write lock: {e}"),
-            ))
+            MsError::SearchIndex(tantivy::TantivyError::InternalError(format!(
+                "Failed to acquire write lock: {e}"
+            )))
         })?;
 
         writer.delete_term(id_term);
@@ -187,9 +189,9 @@ impl Bm25Index {
     /// Clear the entire index
     pub fn clear(&self) -> Result<()> {
         let mut writer = self.writer.write().map_err(|e| {
-            MsError::SearchIndex(tantivy::TantivyError::InternalError(
-                format!("Failed to acquire write lock: {e}"),
-            ))
+            MsError::SearchIndex(tantivy::TantivyError::InternalError(format!(
+                "Failed to acquire write lock: {e}"
+            )))
         })?;
 
         writer.delete_all_documents()?;
@@ -216,9 +218,9 @@ impl Bm25Index {
             ],
         );
 
-        let parsed_query = query_parser.parse_query(query).map_err(|e| {
-            MsError::QueryParse(format!("Failed to parse query: {e}"))
-        })?;
+        let parsed_query = query_parser
+            .parse_query(query)
+            .map_err(|e| MsError::QueryParse(format!("Failed to parse query: {e}")))?;
 
         let top_docs = searcher.search(&parsed_query, &TopDocs::with_limit(limit))?;
 
@@ -256,7 +258,12 @@ impl Bm25Index {
     }
 
     /// Search with layer filter
-    pub fn search_with_layer(&self, query: &str, layer: &str, limit: usize) -> Result<Vec<Bm25Result>> {
+    pub fn search_with_layer(
+        &self,
+        query: &str,
+        layer: &str,
+        limit: usize,
+    ) -> Result<Vec<Bm25Result>> {
         let searcher = self.reader.searcher();
 
         // Build query with layer filter
@@ -278,9 +285,9 @@ impl Bm25Index {
         } else {
             format!("{query} AND layer:{normalized_layer}")
         };
-        let parsed_query = query_parser.parse_query(&filter_query).map_err(|e| {
-            MsError::QueryParse(format!("Failed to parse query: {e}"))
-        })?;
+        let parsed_query = query_parser
+            .parse_query(&filter_query)
+            .map_err(|e| MsError::QueryParse(format!("Failed to parse query: {e}")))?;
 
         let top_docs = searcher.search(&parsed_query, &TopDocs::with_limit(limit))?;
 
@@ -345,12 +352,11 @@ fn build_schema() -> Schema {
     let mut builder = Schema::builder();
 
     // Text field options with positions for phrase queries
-    let text_options = TextOptions::default()
-        .set_indexing_options(
-            TextFieldIndexing::default()
-                .set_tokenizer("default")
-                .set_index_option(IndexRecordOption::WithFreqsAndPositions),
-        );
+    let text_options = TextOptions::default().set_indexing_options(
+        TextFieldIndexing::default()
+            .set_tokenizer("default")
+            .set_index_option(IndexRecordOption::WithFreqsAndPositions),
+    );
 
     // Skill identification (stored for retrieval)
     builder.add_text_field("id", STRING | STORED);
@@ -374,31 +380,49 @@ fn build_schema() -> Schema {
 fn extract_fields(schema: &Schema) -> Result<BM25Fields> {
     Ok(BM25Fields {
         id: schema.get_field("id").map_err(|_| {
-            MsError::SearchIndex(tantivy::TantivyError::SchemaError("missing id field".into()))
+            MsError::SearchIndex(tantivy::TantivyError::SchemaError(
+                "missing id field".into(),
+            ))
         })?,
         name: schema.get_field("name").map_err(|_| {
-            MsError::SearchIndex(tantivy::TantivyError::SchemaError("missing name field".into()))
+            MsError::SearchIndex(tantivy::TantivyError::SchemaError(
+                "missing name field".into(),
+            ))
         })?,
         description: schema.get_field("description").map_err(|_| {
-            MsError::SearchIndex(tantivy::TantivyError::SchemaError("missing description field".into()))
+            MsError::SearchIndex(tantivy::TantivyError::SchemaError(
+                "missing description field".into(),
+            ))
         })?,
         body: schema.get_field("body").map_err(|_| {
-            MsError::SearchIndex(tantivy::TantivyError::SchemaError("missing body field".into()))
+            MsError::SearchIndex(tantivy::TantivyError::SchemaError(
+                "missing body field".into(),
+            ))
         })?,
         tags: schema.get_field("tags").map_err(|_| {
-            MsError::SearchIndex(tantivy::TantivyError::SchemaError("missing tags field".into()))
+            MsError::SearchIndex(tantivy::TantivyError::SchemaError(
+                "missing tags field".into(),
+            ))
         })?,
         aliases: schema.get_field("aliases").map_err(|_| {
-            MsError::SearchIndex(tantivy::TantivyError::SchemaError("missing aliases field".into()))
+            MsError::SearchIndex(tantivy::TantivyError::SchemaError(
+                "missing aliases field".into(),
+            ))
         })?,
         layer: schema.get_field("layer").map_err(|_| {
-            MsError::SearchIndex(tantivy::TantivyError::SchemaError("missing layer field".into()))
+            MsError::SearchIndex(tantivy::TantivyError::SchemaError(
+                "missing layer field".into(),
+            ))
         })?,
         quality_score: schema.get_field("quality_score").map_err(|_| {
-            MsError::SearchIndex(tantivy::TantivyError::SchemaError("missing quality_score field".into()))
+            MsError::SearchIndex(tantivy::TantivyError::SchemaError(
+                "missing quality_score field".into(),
+            ))
         })?,
         deprecated: schema.get_field("deprecated").map_err(|_| {
-            MsError::SearchIndex(tantivy::TantivyError::SchemaError("missing deprecated field".into()))
+            MsError::SearchIndex(tantivy::TantivyError::SchemaError(
+                "missing deprecated field".into(),
+            ))
         })?,
     })
 }
@@ -448,7 +472,8 @@ mod tests {
             git_commit: None,
             content_hash: "test-hash".to_string(),
             body: body.to_string(),
-            metadata_json: r#"{"tags": ["git", "workflow"], "aliases": ["commit-skill"]}"#.to_string(),
+            metadata_json: r#"{"tags": ["git", "workflow"], "aliases": ["commit-skill"]}"#
+                .to_string(),
             assets_json: "{}".to_string(),
             token_count: 100,
             quality_score: 0.85,
@@ -527,12 +552,7 @@ mod tests {
     fn test_delete_skill() {
         let index = Bm25Index::open_in_memory().unwrap();
 
-        let skill = make_test_skill(
-            "test-skill",
-            "Test Skill",
-            "A test skill",
-            "Test content",
-        );
+        let skill = make_test_skill("test-skill", "Test Skill", "A test skill", "Test content");
 
         index.index_skill(&skill).unwrap();
         index.commit().unwrap();

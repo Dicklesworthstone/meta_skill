@@ -107,7 +107,11 @@ fn run_list(ctx: &AppContext, args: &PruneArgs) -> Result<()> {
                 type_icon,
                 record.original_path.cyan(),
                 size.dimmed(),
-                record.tombstoned_at.format("%Y-%m-%d %H:%M").to_string().dimmed()
+                record
+                    .tombstoned_at
+                    .format("%Y-%m-%d %H:%M")
+                    .to_string()
+                    .dimmed()
             );
             println!("    ID: {}", record.id.dimmed());
             if let Some(reason) = &record.reason {
@@ -178,9 +182,16 @@ fn run_purge(ctx: &AppContext, args: &PurgeArgs) -> Result<()> {
         } else {
             println!("{}", "Approval Required".yellow().bold());
             println!();
-            println!("The following {} items will be permanently deleted:", to_purge.len());
+            println!(
+                "The following {} items will be permanently deleted:",
+                to_purge.len()
+            );
             for record in &to_purge {
-                println!("  - {} ({})", record.original_path, format_size(record.size_bytes));
+                println!(
+                    "  - {} ({})",
+                    record.original_path,
+                    format_size(record.size_bytes)
+                );
             }
             println!();
             println!(
@@ -211,12 +222,7 @@ fn run_purge(ctx: &AppContext, args: &PurgeArgs) -> Result<()> {
             }
             Err(e) => {
                 if !ctx.robot_mode {
-                    println!(
-                        "{} Failed to purge {}: {}",
-                        "✗".red(),
-                        record.id,
-                        e
-                    );
+                    println!("{} Failed to purge {}: {}", "✗".red(), record.id, e);
                 }
             }
         }
@@ -414,7 +420,8 @@ mod tests {
 
     #[test]
     fn parse_prune_list_with_flags() {
-        let cli = TestCli::try_parse_from(["test", "list", "--dry-run", "--older-than", "7"]).unwrap();
+        let cli =
+            TestCli::try_parse_from(["test", "list", "--dry-run", "--older-than", "7"]).unwrap();
         assert!(matches!(cli.prune.command, Some(PruneCommand::List)));
         assert!(cli.prune.dry_run);
         assert_eq!(cli.prune.older_than, Some(7));
@@ -453,7 +460,9 @@ mod tests {
 
     #[test]
     fn parse_prune_purge_all_with_older_than() {
-        let cli = TestCli::try_parse_from(["test", "purge", "all", "--older-than", "30", "--approve"]).unwrap();
+        let cli =
+            TestCli::try_parse_from(["test", "purge", "all", "--older-than", "30", "--approve"])
+                .unwrap();
         match cli.prune.command {
             Some(PruneCommand::Purge(args)) => {
                 assert_eq!(args.id, "all");

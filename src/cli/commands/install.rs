@@ -91,7 +91,10 @@ mod tests {
         ]);
         let TestCommand::Install(args) = parsed.cmd;
         assert_eq!(args.source, "owner/repo@v1.0.0");
-        assert_eq!(args.skills, vec!["skill-a".to_string(), "skill-b".to_string()]);
+        assert_eq!(
+            args.skills,
+            vec!["skill-a".to_string(), "skill-b".to_string()]
+        );
         assert_eq!(args.token.as_deref(), Some("tok"));
         assert_eq!(args.tag.as_deref(), Some("v1.0.0"));
         assert_eq!(args.asset_name.as_deref(), Some("bundle.msb"));

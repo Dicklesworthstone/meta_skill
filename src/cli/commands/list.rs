@@ -92,7 +92,11 @@ pub fn run(ctx: &AppContext, args: &ListArgs) -> Result<()> {
     }
 }
 
-fn list_human(_ctx: &AppContext, skills: &[crate::storage::sqlite::SkillRecord], args: &ListArgs) -> Result<()> {
+fn list_human(
+    _ctx: &AppContext,
+    skills: &[crate::storage::sqlite::SkillRecord],
+    args: &ListArgs,
+) -> Result<()> {
     if skills.is_empty() {
         println!("{}", "No skills found".dimmed());
         println!();
@@ -134,7 +138,11 @@ fn list_human(_ctx: &AppContext, skills: &[crate::storage::sqlite::SkillRecord],
         };
 
         // Format date - just date part
-        let updated = skill.modified_at.split('T').next().unwrap_or(&skill.modified_at);
+        let updated = skill
+            .modified_at
+            .split('T')
+            .next()
+            .unwrap_or(&skill.modified_at);
 
         println!(
             "{:40} {:12} {:8} {:20}{}",

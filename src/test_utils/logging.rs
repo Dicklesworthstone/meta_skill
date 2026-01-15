@@ -5,8 +5,8 @@ use std::sync::{Arc, Mutex, OnceLock};
 use std::time::Instant;
 
 use tracing::Level;
-use tracing_subscriber::prelude::*;
 use tracing_subscriber::EnvFilter;
+use tracing_subscriber::prelude::*;
 
 /// Global log storage for test assertions.
 static LOG_STORAGE: OnceLock<Arc<Mutex<LogStorage>>> = OnceLock::new();
@@ -242,7 +242,8 @@ where
                 if field.name() == "message" {
                     *self.message = value.to_string();
                 } else {
-                    self.fields.push((field.name().to_string(), value.to_string()));
+                    self.fields
+                        .push((field.name().to_string(), value.to_string()));
                 }
             }
 
@@ -283,14 +284,11 @@ pub fn init_test_logging(level: &str) -> TestLoggingGuard {
         s.clear();
     }
 
-    let filter = EnvFilter::try_from_default_env()
-        .unwrap_or_else(|_| EnvFilter::new(level));
+    let filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new(level));
 
     let test_layer = TestLogLayer::new(storage.clone());
 
-    let subscriber = tracing_subscriber::registry()
-        .with(filter)
-        .with(test_layer);
+    let subscriber = tracing_subscriber::registry().with(filter).with(test_layer);
 
     // Try to set as global subscriber (will fail if already set, which is OK)
     let _ = tracing::subscriber::set_global_default(subscriber);
@@ -348,9 +346,9 @@ impl Drop for TestLoggingGuard {
 macro_rules! assert_log_contains {
     ($level:expr, $message:expr) => {{
         let logs = $crate::test_utils::logging::get_logs();
-        let found = logs.iter().any(|e| {
-            e.level == $level && e.message.contains($message)
-        });
+        let found = logs
+            .iter()
+            .any(|e| e.level == $level && e.message.contains($message));
         assert!(
             found,
             "Expected log with level {} containing '{}'\nCaptured logs:\n{}",
@@ -487,8 +485,8 @@ mod tests {
 
     #[test]
     fn test_log_entry_to_json() {
-        let entry = LogEntry::new(Level::ERROR, "test::json", "Error occurred")
-            .with_field("code", "500");
+        let entry =
+            LogEntry::new(Level::ERROR, "test::json", "Error occurred").with_field("code", "500");
 
         let json = entry.to_json();
         assert!(json.contains("\"level\":\"ERROR\""));
@@ -515,7 +513,11 @@ mod tests {
         let mut storage = LogStorage::new(3);
 
         for i in 0..5 {
-            storage.push(LogEntry::new(Level::INFO, "test", &format!("Message {}", i)));
+            storage.push(LogEntry::new(
+                Level::INFO,
+                "test",
+                &format!("Message {}", i),
+            ));
         }
 
         assert_eq!(storage.entries().len(), 3);

@@ -31,10 +31,7 @@ pub enum PathPolicyViolation {
     /// Path contains traversal sequences (.. or similar)
     TraversalAttempt,
     /// Path escapes the allowed root directory
-    EscapesRoot {
-        path: PathBuf,
-        root: PathBuf,
-    },
+    EscapesRoot { path: PathBuf, root: PathBuf },
     /// Path contains a symlink that escapes the root
     SymlinkEscape {
         symlink: PathBuf,
@@ -42,15 +39,9 @@ pub enum PathPolicyViolation {
         root: PathBuf,
     },
     /// Path component contains invalid characters
-    InvalidComponent {
-        component: String,
-        reason: String,
-    },
+    InvalidComponent { component: String, reason: String },
     /// Path is not within the expected root
-    OutsideRoot {
-        path: PathBuf,
-        root: PathBuf,
-    },
+    OutsideRoot { path: PathBuf, root: PathBuf },
 }
 
 impl std::fmt::Display for PathPolicyViolation {
@@ -213,7 +204,10 @@ pub fn canonicalize_with_root(path: &Path, root: &Path) -> Result<PathBuf> {
 ///
 /// * `Ok(())` if no symlink escape detected
 /// * `Err(PathPolicyViolation::SymlinkEscape)` if escape detected
-pub fn deny_symlink_escape(path: &Path, root: &Path) -> std::result::Result<(), PathPolicyViolation> {
+pub fn deny_symlink_escape(
+    path: &Path,
+    root: &Path,
+) -> std::result::Result<(), PathPolicyViolation> {
     // Canonicalize root
     let canonical_root = match root.canonicalize() {
         Ok(r) => r,
@@ -357,8 +351,8 @@ pub fn normalize_path(path: &Path) -> PathBuf {
                 // Pop unless we're at root (can't go above root) or already empty
                 let last = normalized.components().last();
                 match last {
-                    None => {} // Empty, nothing to pop
-                    Some(Component::RootDir) => {} // At root, can't go higher
+                    None => {}                       // Empty, nothing to pop
+                    Some(Component::RootDir) => {}   // At root, can't go higher
                     Some(Component::Prefix(_)) => {} // At prefix (Windows), can't go higher
                     _ => {
                         normalized.pop();
@@ -439,8 +433,14 @@ mod tests {
     #[test]
     fn test_normalize_path() {
         // Absolute paths
-        assert_eq!(normalize_path(Path::new("/foo/bar")), PathBuf::from("/foo/bar"));
-        assert_eq!(normalize_path(Path::new("/foo/./bar")), PathBuf::from("/foo/bar"));
+        assert_eq!(
+            normalize_path(Path::new("/foo/bar")),
+            PathBuf::from("/foo/bar")
+        );
+        assert_eq!(
+            normalize_path(Path::new("/foo/./bar")),
+            PathBuf::from("/foo/bar")
+        );
         assert_eq!(
             normalize_path(Path::new("/foo/bar/../baz")),
             PathBuf::from("/foo/baz")
@@ -451,12 +451,18 @@ mod tests {
         );
         // Can't go above root
         assert_eq!(normalize_path(Path::new("/foo/..")), PathBuf::from("/"));
-        assert_eq!(normalize_path(Path::new("/foo/bar/../..")), PathBuf::from("/"));
+        assert_eq!(
+            normalize_path(Path::new("/foo/bar/../..")),
+            PathBuf::from("/")
+        );
 
         // Relative paths with .. should correctly normalize
         assert_eq!(normalize_path(Path::new("foo/..")), PathBuf::from(""));
         assert_eq!(normalize_path(Path::new("a/b/..")), PathBuf::from("a"));
-        assert_eq!(normalize_path(Path::new("foo/bar/../..")), PathBuf::from(""));
+        assert_eq!(
+            normalize_path(Path::new("foo/bar/../..")),
+            PathBuf::from("")
+        );
     }
 
     #[test]
@@ -480,10 +486,7 @@ mod tests {
         assert!(!is_under_root(Path::new("/data/skills/../other"), root));
 
         // Normalized path stays under root
-        assert!(is_under_root(
-            Path::new("/data/skills/foo/../bar"),
-            root
-        ));
+        assert!(is_under_root(Path::new("/data/skills/foo/../bar"), root));
     }
 
     #[test]

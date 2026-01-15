@@ -1,9 +1,8 @@
 //! Skill validation
 
-
+use super::skill::SkillSpec;
 use crate::error::{MsError, Result};
 use crate::quality::ubs::{UbsClient, UbsResult};
-use super::skill::SkillSpec;
 
 /// Validate a skill specification
 pub fn validate(spec: &SkillSpec) -> Result<Vec<ValidationWarning>> {
@@ -48,7 +47,10 @@ pub fn validate_with_ubs(spec: &SkillSpec, ubs: &UbsClient) -> Result<UbsResult>
 
     let temp_root = std::env::temp_dir().join(format!("ms-ubs-{}", uuid::Uuid::new_v4()));
     std::fs::create_dir_all(&temp_root).map_err(|err| {
-        MsError::Config(format!("create ubs temp dir {}: {err}", temp_root.display()))
+        MsError::Config(format!(
+            "create ubs temp dir {}: {err}",
+            temp_root.display()
+        ))
     })?;
 
     let mut paths = Vec::new();
@@ -110,7 +112,11 @@ fn parse_code_block(content: &str) -> (Option<String>, String) {
             }
         }
         let text = body.join("\n");
-        let language = if lang.is_empty() { None } else { Some(lang.to_string()) };
+        let language = if lang.is_empty() {
+            None
+        } else {
+            Some(lang.to_string())
+        };
         return (language, text);
     }
 

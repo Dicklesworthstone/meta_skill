@@ -173,7 +173,11 @@ pub struct AntiPatternEvidence {
 
 impl AntiPatternEvidence {
     /// Create new evidence from a source and incident
-    pub fn new(source: AntiPatternSource, session_id: SessionId, incident: FailureIncident) -> Self {
+    pub fn new(
+        source: AntiPatternSource,
+        session_id: SessionId,
+        incident: FailureIncident,
+    ) -> Self {
         Self {
             source,
             session_id,

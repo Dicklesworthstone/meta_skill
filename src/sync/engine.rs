@@ -4,7 +4,7 @@ use std::sync::Arc;
 use std::time::Instant;
 
 use chrono::{DateTime, Utc};
-use git2::{build::CheckoutBuilder, Repository};
+use git2::{Repository, build::CheckoutBuilder};
 use serde::Serialize;
 use sha2::{Digest, Sha256};
 
@@ -12,10 +12,10 @@ use crate::core::SkillSpec;
 use crate::error::{MsError, Result};
 use crate::storage::{Database, GitArchive, TxManager};
 
+use super::SyncConfig;
 use super::config::{ConflictStrategy, RemoteConfig, RemoteType};
 use super::machine::MachineIdentity;
 use super::state::{SkillSyncState, SkillSyncStatus, SyncState};
-use super::SyncConfig;
 
 #[derive(Debug, Clone, Default)]
 pub struct SyncOptions {
@@ -111,8 +111,17 @@ impl SyncEngine {
     }
 
     pub fn sync_remote(&mut self, remote_name: &str, options: &SyncOptions) -> Result<SyncReport> {
-        let Some(remote) = self.config.remotes.iter().find(|r| r.name == remote_name).cloned() else {
-            return Err(MsError::Config(format!("remote not found: {}", remote_name)));
+        let Some(remote) = self
+            .config
+            .remotes
+            .iter()
+            .find(|r| r.name == remote_name)
+            .cloned()
+        else {
+            return Err(MsError::Config(format!(
+                "remote not found: {}",
+                remote_name
+            )));
         };
 
         let start = Instant::now();
@@ -256,11 +265,19 @@ impl SyncEngine {
                 skill_id: id.clone(),
                 local_hash: local.map(|s| s.hash.clone()),
                 remote_hashes: remote_snap
-                    .map(|s| vec![(remote.name.clone(), s.hash.clone())].into_iter().collect())
+                    .map(|s| {
+                        vec![(remote.name.clone(), s.hash.clone())]
+                            .into_iter()
+                            .collect()
+                    })
                     .unwrap_or_default(),
                 local_modified: local.map(|s| s.modified),
                 remote_modified: remote_snap
-                    .map(|s| vec![(remote.name.clone(), s.modified)].into_iter().collect())
+                    .map(|s| {
+                        vec![(remote.name.clone(), s.modified)]
+                            .into_iter()
+                            .collect()
+                    })
                     .unwrap_or_default(),
                 status: final_status,
                 last_modified_by: None,
@@ -278,7 +295,9 @@ impl SyncEngine {
         _options: &SyncOptions,
         _report: &mut SyncReport,
     ) -> Result<()> {
-        Err(MsError::NotImplemented("Git remote sync not yet implemented".to_string()))
+        Err(MsError::NotImplemented(
+            "Git remote sync not yet implemented".to_string(),
+        ))
     }
 
     fn apply_conflict_strategy(
@@ -379,15 +398,8 @@ impl SyncEngine {
             let spec = archive.read_skill(&id)?;
             let hash = hash_skill_spec(&spec)?;
             let modified = skill_modified_time(archive, &id)?;
-            
-            map.insert(
-                id.clone(),
-                SkillSnapshot {
-                    id,
-                    hash,
-                    modified,
-                },
-            );
+
+            map.insert(id.clone(), SkillSnapshot { id, hash, modified });
         }
         Ok(map)
     }
@@ -442,7 +454,9 @@ fn sync_git_repo(repo: &Repository, remote_url: &str) -> Result<()> {
         .find_remote("origin")
         .or_else(|_| repo.remote_anonymous(remote_url))
         .map_err(MsError::Git)?;
-    remote.fetch(&["refs/heads/*:refs/remotes/origin/*"], None, None).map_err(MsError::Git)?;
+    remote
+        .fetch(&["refs/heads/*:refs/remotes/origin/*"], None, None)
+        .map_err(MsError::Git)?;
 
     let head = repo.head().map_err(MsError::Git)?;
     let branch = head.shorthand().unwrap_or("main");
@@ -454,7 +468,9 @@ fn sync_git_repo(repo: &Repository, remote_url: &str) -> Result<()> {
         return Ok(());
     };
 
-    let analysis = repo.merge_analysis(&[&repo.reference_to_annotated_commit(&remote_ref).map_err(MsError::Git)?])?;
+    let analysis = repo.merge_analysis(&[&repo
+        .reference_to_annotated_commit(&remote_ref)
+        .map_err(MsError::Git)?])?;
     if analysis.0.is_up_to_date() {
         return Ok(());
     }
@@ -467,10 +483,14 @@ fn sync_git_repo(repo: &Repository, remote_url: &str) -> Result<()> {
     let local_ref = format!("refs/heads/{}", branch);
     let mut reference = match repo.find_reference(&local_ref) {
         Ok(r) => r,
-        Err(_) => repo.reference(&local_ref, target, true, "init branch").map_err(MsError::Git)?,
+        Err(_) => repo
+            .reference(&local_ref, target, true, "init branch")
+            .map_err(MsError::Git)?,
     };
 
-    reference.set_target(target, "fast-forward").map_err(MsError::Git)?;
+    reference
+        .set_target(target, "fast-forward")
+        .map_err(MsError::Git)?;
     repo.set_head(&local_ref).map_err(MsError::Git)?;
     repo.checkout_head(Some(CheckoutBuilder::new().force()))
         .map_err(MsError::Git)?;

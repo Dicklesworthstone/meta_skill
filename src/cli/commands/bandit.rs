@@ -3,7 +3,7 @@ use std::path::PathBuf;
 use clap::{Args, Subcommand};
 
 use crate::app::AppContext;
-use crate::cli::output::{emit_json, HumanLayout};
+use crate::cli::output::{HumanLayout, emit_json};
 use crate::error::Result;
 use crate::suggestions::bandit::{SignalBandit, SuggestionContext};
 
@@ -44,10 +44,7 @@ pub fn run(ctx: &AppContext, args: &BanditArgs) -> Result<()> {
 }
 
 fn stats(ctx: &AppContext, args: &StatsArgs) -> Result<()> {
-    let path = args
-        .path
-        .clone()
-        .unwrap_or_else(default_bandit_path);
+    let path = args.path.clone().unwrap_or_else(default_bandit_path);
     let bandit = SignalBandit::load(&path)?;
     let weights = bandit.estimated_weights(&SuggestionContext::default());
 
@@ -92,11 +89,23 @@ fn stats(ctx: &AppContext, args: &StatsArgs) -> Result<()> {
             .kv("Total selections", &bandit.total_selections.to_string())
             .blank()
             .section("Config")
-            .kv("Exploration", &format!("{:.3}", bandit.config.exploration_factor))
-            .kv("Observation decay", &format!("{:.3}", bandit.config.observation_decay))
-            .kv("Min observations", &bandit.config.min_observations.to_string())
+            .kv(
+                "Exploration",
+                &format!("{:.3}", bandit.config.exploration_factor),
+            )
+            .kv(
+                "Observation decay",
+                &format!("{:.3}", bandit.config.observation_decay),
+            )
+            .kv(
+                "Min observations",
+                &bandit.config.min_observations.to_string(),
+            )
             .kv("Use context", &bandit.config.use_context.to_string())
-            .kv("Persist frequency", &bandit.config.persist_frequency.to_string())
+            .kv(
+                "Persist frequency",
+                &bandit.config.persist_frequency.to_string(),
+            )
             .kv(
                 "Persistence path",
                 &bandit
@@ -125,10 +134,7 @@ fn stats(ctx: &AppContext, args: &StatsArgs) -> Result<()> {
 }
 
 fn reset(ctx: &AppContext, args: &ResetArgs) -> Result<()> {
-    let path = args
-        .path
-        .clone()
-        .unwrap_or_else(default_bandit_path);
+    let path = args.path.clone().unwrap_or_else(default_bandit_path);
     let bandit = SignalBandit::new();
     bandit.save(&path)?;
 

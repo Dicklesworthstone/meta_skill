@@ -100,11 +100,7 @@ pub struct ClusterSummary {
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum UncertaintyReason {
     /// Not enough examples to generalize
-    InsufficientInstances {
-        have: u32,
-        need: u32,
-        variance: f32,
-    },
+    InsufficientInstances { have: u32, need: u32, variance: f32 },
 
     /// Examples show high variation
     HighVariance {
@@ -124,9 +120,7 @@ pub enum UncertaintyReason {
     },
 
     /// Preconditions unclear
-    UnclearPreconditions {
-        candidates: Vec<String>,
-    },
+    UnclearPreconditions { candidates: Vec<String> },
 
     /// Effect boundaries unknown
     UnknownBoundaries {
@@ -135,9 +129,7 @@ pub enum UncertaintyReason {
     },
 
     /// LLM critique flagged overgeneralization
-    OvergeneralizationFlagged {
-        critique_summary: String,
-    },
+    OvergeneralizationFlagged { critique_summary: String },
 
     /// Multiple conflicting patterns detected
     ConflictingPatterns {
@@ -187,9 +179,7 @@ pub enum UncertaintyStatus {
     },
 
     /// Expired - aged out
-    Expired {
-        expired_at: DateTime<Utc>,
-    },
+    Expired { expired_at: DateTime<Utc> },
 }
 
 /// How an uncertainty was resolved
@@ -321,16 +311,25 @@ pub trait QueryGenerator: Send + Sync {
     ) -> Vec<SuggestedQuery>;
 
     /// Generate positive example queries
-    fn generate_positive_queries(&self, pattern: &ExtractedPattern, count: usize)
-        -> Vec<SuggestedQuery>;
+    fn generate_positive_queries(
+        &self,
+        pattern: &ExtractedPattern,
+        count: usize,
+    ) -> Vec<SuggestedQuery>;
 
     /// Generate negative/counter-example queries
-    fn generate_negative_queries(&self, pattern: &ExtractedPattern, count: usize)
-        -> Vec<SuggestedQuery>;
+    fn generate_negative_queries(
+        &self,
+        pattern: &ExtractedPattern,
+        count: usize,
+    ) -> Vec<SuggestedQuery>;
 
     /// Generate boundary case queries
-    fn generate_boundary_queries(&self, pattern: &ExtractedPattern, count: usize)
-        -> Vec<SuggestedQuery>;
+    fn generate_boundary_queries(
+        &self,
+        pattern: &ExtractedPattern,
+        count: usize,
+    ) -> Vec<SuggestedQuery>;
 }
 
 /// Default query generator using pattern analysis
@@ -476,10 +475,7 @@ impl QueryGenerator for DefaultQueryGenerator {
             queries.push(SuggestedQuery {
                 id: Uuid::new_v4().to_string(),
                 query_type: QueryType::Negative,
-                query: format!(
-                    "Find sessions where {} approach was abandoned",
-                    description
-                ),
+                query: format!("Find sessions where {} approach was abandoned", description),
                 cass_query: Some(format!("topic:{} AND abandoned:true", tags_str)),
                 expected_evidence: "Cases where pattern didn't work".into(),
                 priority: 2,
@@ -514,7 +510,10 @@ impl QueryGenerator for DefaultQueryGenerator {
                 "Show sessions with unusual or edge case {} scenarios",
                 description
             ),
-            cass_query: Some(format!("topic:{} AND (edge_case:true OR unusual:true)", tags_str)),
+            cass_query: Some(format!(
+                "topic:{} AND (edge_case:true OR unusual:true)",
+                tags_str
+            )),
             expected_evidence: "Evidence for where pattern boundaries lie".into(),
             priority: 2,
             executed: false,
@@ -526,10 +525,7 @@ impl QueryGenerator for DefaultQueryGenerator {
             queries.push(SuggestedQuery {
                 id: Uuid::new_v4().to_string(),
                 query_type: QueryType::Boundary,
-                query: format!(
-                    "Find sessions where {} had partial success",
-                    description
-                ),
+                query: format!("Find sessions where {} had partial success", description),
                 cass_query: Some(format!("topic:{} AND outcome:partial", tags_str)),
                 expected_evidence: "Cases at the boundary of applicability".into(),
                 priority: 1,
@@ -803,7 +799,10 @@ impl UncertaintyQueue {
 
     /// Check if queue is empty
     pub fn is_empty(&self) -> bool {
-        self.items.read().unwrap_or_else(|e| e.into_inner()).is_empty()
+        self.items
+            .read()
+            .unwrap_or_else(|e| e.into_inner())
+            .is_empty()
     }
 
     /// Add new uncertainty to queue
@@ -881,9 +880,9 @@ impl UncertaintyQueue {
             stats.total_resolved += 1;
             let resolution_time = (item.updated_at - item.created_at).num_seconds() as f64;
             let total_resolved = stats.total_resolved as f64;
-            stats.average_resolution_time_secs = stats.average_resolution_time_secs
-                * (total_resolved - 1.0) / total_resolved
-                + resolution_time / total_resolved;
+            stats.average_resolution_time_secs =
+                stats.average_resolution_time_secs * (total_resolved - 1.0) / total_resolved
+                    + resolution_time / total_resolved;
         }
     }
 
@@ -919,9 +918,7 @@ impl UncertaintyQueue {
             ) {
                 let age = now.signed_duration_since(item.created_at);
                 if age.to_std().unwrap_or(Duration::ZERO) > expiry {
-                    item.status = UncertaintyStatus::Expired {
-                        expired_at: now,
-                    };
+                    item.status = UncertaintyStatus::Expired { expired_at: now };
                     item.updated_at = now;
                     expired.push(item.clone());
                 }
@@ -1162,12 +1159,7 @@ impl UncertaintyQueue {
                 // Convert distance_to_centroid to similarity (closer = more similar)
                 let similarity = 1.0 / (1.0 + inst.distance_to_centroid);
                 // Use content truncated as snippet
-                let snippet = inst
-                    .instance
-                    .content
-                    .chars()
-                    .take(100)
-                    .collect::<String>();
+                let snippet = inst.instance.content.chars().take(100).collect::<String>();
                 EvidenceRef {
                     session_id: inst.instance.source.session_id.clone(),
                     message_indices: vec![],
@@ -1185,13 +1177,14 @@ impl UncertaintyQueue {
             .collect();
 
         // Create description from first instance content
-        let description = cluster
-            .instances
-            .first()
-            .map(|i| {
-                let truncated: String = i.instance.content.chars().take(200).collect();
-                format!("Pattern from cluster {} instances: {}", cluster.instances.len(), truncated)
-            });
+        let description = cluster.instances.first().map(|i| {
+            let truncated: String = i.instance.content.chars().take(200).collect();
+            format!(
+                "Pattern from cluster {} instances: {}",
+                cluster.instances.len(),
+                truncated
+            )
+        });
 
         ExtractedPattern {
             id: format!("uncertain-{}", Uuid::new_v4()),
@@ -1368,8 +1361,7 @@ mod tests {
         assert!(queries.len() <= 5);
 
         // Check query types are diverse
-        let types: std::collections::HashSet<_> =
-            queries.iter().map(|q| q.query_type).collect();
+        let types: std::collections::HashSet<_> = queries.iter().map(|q| q.query_type).collect();
         assert!(types.len() >= 2);
     }
 

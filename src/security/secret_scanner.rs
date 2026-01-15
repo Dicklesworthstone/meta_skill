@@ -281,8 +281,7 @@ pub fn scan_secrets(content: &str) -> Vec<SecretMatch> {
 fn scan_high_entropy(content: &str) -> Vec<SecretMatch> {
     static HIGH_ENTROPY_RE: Lazy<Regex> = Lazy::new(|| {
         // Look for long alphanumeric strings that could be secrets
-        Regex::new(r"[A-Za-z0-9+/=_\-]{32,}")
-            .expect("invalid high entropy regex")
+        Regex::new(r"[A-Za-z0-9+/=_\-]{32,}").expect("invalid high entropy regex")
     });
 
     let mut matches = Vec::new();
@@ -359,7 +358,9 @@ fn is_likely_base64(s: &str) -> bool {
         return false;
     }
     // Check character set
-    clean.chars().all(|c| c.is_ascii_alphanumeric() || c == '+' || c == '/')
+    clean
+        .chars()
+        .all(|c| c.is_ascii_alphanumeric() || c == '+' || c == '/')
 }
 
 /// Check if a string looks like hex.
@@ -520,7 +521,11 @@ mod tests {
         let content = "My key is AKIAIOSFODNN7EXAMPLE";
         let matches = scan_secrets(content);
         assert!(!matches.is_empty());
-        assert!(matches.iter().any(|m| m.secret_type == SecretType::AwsAccessKey));
+        assert!(
+            matches
+                .iter()
+                .any(|m| m.secret_type == SecretType::AwsAccessKey)
+        );
     }
 
     #[test]
@@ -528,7 +533,11 @@ mod tests {
         let content = "token: ghp_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx";
         let matches = scan_secrets(content);
         assert!(!matches.is_empty());
-        assert!(matches.iter().any(|m| m.secret_type == SecretType::GitHubToken));
+        assert!(
+            matches
+                .iter()
+                .any(|m| m.secret_type == SecretType::GitHubToken)
+        );
     }
 
     #[test]
@@ -536,7 +545,11 @@ mod tests {
         let content = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.dozjgNryP4J3jVmNHl0w5N_XgL0n3I9PlFUP0THsR8U";
         let matches = scan_secrets(content);
         assert!(!matches.is_empty());
-        assert!(matches.iter().any(|m| m.secret_type == SecretType::JwtToken));
+        assert!(
+            matches
+                .iter()
+                .any(|m| m.secret_type == SecretType::JwtToken)
+        );
     }
 
     #[test]
@@ -544,7 +557,11 @@ mod tests {
         let content = "-----BEGIN RSA PRIVATE KEY-----\nMIIEow...";
         let matches = scan_secrets(content);
         assert!(!matches.is_empty());
-        assert!(matches.iter().any(|m| m.secret_type == SecretType::SshPrivateKey));
+        assert!(
+            matches
+                .iter()
+                .any(|m| m.secret_type == SecretType::SshPrivateKey)
+        );
     }
 
     #[test]
@@ -552,7 +569,11 @@ mod tests {
         let content = "DATABASE_URL=postgres://admin:supersecret@localhost:5432/mydb";
         let matches = scan_secrets(content);
         assert!(!matches.is_empty());
-        assert!(matches.iter().any(|m| m.secret_type == SecretType::DatabaseUrl));
+        assert!(
+            matches
+                .iter()
+                .any(|m| m.secret_type == SecretType::DatabaseUrl)
+        );
     }
 
     #[test]
@@ -613,12 +634,18 @@ mod tests {
         let content = format!("SLACK_TOKEN={}{sep}{nums}{sep}{nums}{sep}{suffix}", prefix);
         let matches = scan_secrets(&content);
         assert!(!matches.is_empty());
-        assert!(matches.iter().any(|m| m.secret_type == SecretType::SlackToken));
+        assert!(
+            matches
+                .iter()
+                .any(|m| m.secret_type == SecretType::SlackToken)
+        );
     }
 
     #[test]
     fn test_contains_secrets() {
-        assert!(contains_secrets("token: ghp_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"));
+        assert!(contains_secrets(
+            "token: ghp_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+        ));
         assert!(!contains_secrets("just some normal text"));
     }
 

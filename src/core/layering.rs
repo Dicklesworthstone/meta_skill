@@ -207,7 +207,9 @@ impl LayeredRegistry {
 
     /// Remove a skill candidate from a specific layer
     pub fn unregister(&mut self, id: &str, layer: SkillLayer) -> Option<SkillCandidate> {
-        self.skills.get_mut(id).and_then(|by_layer| by_layer.remove(&layer))
+        self.skills
+            .get_mut(id)
+            .and_then(|by_layer| by_layer.remove(&layer))
     }
 
     /// Get all candidate layers for a skill ID
@@ -248,7 +250,10 @@ impl LayeredRegistry {
         // Single candidate - no conflicts possible
         if sorted.len() == 1 {
             let (layer, candidate) = sorted[0];
-            return Ok(Some(ResolvedSkill::from_single(candidate.spec.clone(), *layer)));
+            return Ok(Some(ResolvedSkill::from_single(
+                candidate.spec.clone(),
+                *layer,
+            )));
         }
 
         // Multiple candidates - resolve conflicts
@@ -259,9 +264,7 @@ impl LayeredRegistry {
             ConflictStrategy::PreferLower => {
                 self.resolve_prefer_lower(&sorted, merge_strategy, candidate_layers)
             }
-            ConflictStrategy::Interactive => {
-                self.resolve_interactive(&sorted, candidate_layers)
-            }
+            ConflictStrategy::Interactive => self.resolve_interactive(&sorted, candidate_layers),
         }?;
 
         if let Some(ref mut resolved_skill) = resolved {
@@ -402,7 +405,9 @@ impl LayeredRegistry {
 
     /// Get candidate at a specific layer
     pub fn get_at_layer(&self, id: &str, layer: SkillLayer) -> Option<&SkillCandidate> {
-        self.skills.get(id).and_then(|by_layer| by_layer.get(&layer))
+        self.skills
+            .get(id)
+            .and_then(|by_layer| by_layer.get(&layer))
     }
 }
 
@@ -444,23 +449,20 @@ fn detect_section_conflicts(
     let mut conflicts = Vec::new();
 
     // Build section maps
-    let higher_sections: HashMap<&str, &SkillSection> = higher
-        .sections
-        .iter()
-        .map(|s| (s.id.as_str(), s))
-        .collect();
+    let higher_sections: HashMap<&str, &SkillSection> =
+        higher.sections.iter().map(|s| (s.id.as_str(), s)).collect();
 
-    let lower_sections: HashMap<&str, &SkillSection> = lower
-        .sections
-        .iter()
-        .map(|s| (s.id.as_str(), s))
-        .collect();
+    let lower_sections: HashMap<&str, &SkillSection> =
+        lower.sections.iter().map(|s| (s.id.as_str(), s)).collect();
 
     // Check for sections that exist in both
     for (id, higher_section) in &higher_sections {
         if let Some(lower_section) = lower_sections.get(id) {
             let diff = compute_section_diff(higher_section, lower_section);
-            if !diff.higher_only.is_empty() || !diff.lower_only.is_empty() || !diff.modified.is_empty() {
+            if !diff.higher_only.is_empty()
+                || !diff.lower_only.is_empty()
+                || !diff.modified.is_empty()
+            {
                 conflicts.push(ConflictDetail {
                     section_id: id.to_string(),
                     section_name: higher_section.title.clone(),
@@ -710,12 +712,20 @@ mod tests {
         let base_spec = make_skill_spec(
             "test-skill",
             "Base Skill",
-            vec![make_section("s1", "Section One", vec![("b1", "base content")])],
+            vec![make_section(
+                "s1",
+                "Section One",
+                vec![("b1", "base content")],
+            )],
         );
         let user_spec = make_skill_spec(
             "test-skill",
             "User Skill",
-            vec![make_section("s1", "Section One", vec![("b1", "user content")])],
+            vec![make_section(
+                "s1",
+                "Section One",
+                vec![("b1", "user content")],
+            )],
         );
 
         registry.register(SkillCandidate {
@@ -756,15 +766,16 @@ mod tests {
         });
 
         let layers = registry.candidate_layers("test");
-        assert_eq!(layers, vec![SkillLayer::Base, SkillLayer::Project, SkillLayer::User]);
+        assert_eq!(
+            layers,
+            vec![SkillLayer::Base, SkillLayer::Project, SkillLayer::User]
+        );
     }
 
     #[test]
     fn test_interactive_strategy_marks_unresolved() {
-        let mut registry = LayeredRegistry::with_strategies(
-            ConflictStrategy::Interactive,
-            MergeStrategy::Replace,
-        );
+        let mut registry =
+            LayeredRegistry::with_strategies(ConflictStrategy::Interactive, MergeStrategy::Replace);
 
         let base_spec = make_skill_spec(
             "test",
@@ -790,20 +801,27 @@ mod tests {
 
         let resolved = registry.effective("test").unwrap().unwrap();
         assert!(resolved.needs_resolution);
-        assert!(resolved.conflicts.iter().all(|c| matches!(c.resolution, ConflictResolution::Unresolved)));
+        assert!(
+            resolved
+                .conflicts
+                .iter()
+                .all(|c| matches!(c.resolution, ConflictResolution::Unresolved))
+        );
     }
 
     #[test]
     fn test_merge_non_overlapping_sections() {
-        let mut registry = LayeredRegistry::with_strategies(
-            ConflictStrategy::PreferHigher,
-            MergeStrategy::Auto,
-        );
+        let mut registry =
+            LayeredRegistry::with_strategies(ConflictStrategy::PreferHigher, MergeStrategy::Auto);
 
         let base_spec = make_skill_spec(
             "test",
             "Test",
-            vec![make_section("examples", "Examples", vec![("e1", "example")])],
+            vec![make_section(
+                "examples",
+                "Examples",
+                vec![("e1", "example")],
+            )],
         );
         let user_spec = make_skill_spec(
             "test",

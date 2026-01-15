@@ -574,7 +574,6 @@ fn truncate_examples(body: &str, max_tokens: usize) -> String {
     }
 }
 
-
 /// Estimate tokens for frontmatter
 fn estimate_tokens_frontmatter(meta: &SkillMetadata, minimal: bool) -> usize {
     // Rough estimate: id + name + version + description

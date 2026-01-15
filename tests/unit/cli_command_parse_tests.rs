@@ -1,7 +1,7 @@
 use clap::Parser;
 
-use ms::cli::{Cli, Commands};
 use ms::cli::commands;
+use ms::cli::{Cli, Commands};
 
 fn parse(args: &[&str]) -> Commands {
     let mut argv = vec!["ms"];
@@ -37,7 +37,14 @@ fn parse_config_set_value() {
 
 #[test]
 fn parse_diff_flags() {
-    match parse(&["diff", "skill-a", "skill-b", "--structure-only", "--format", "json"]) {
+    match parse(&[
+        "diff",
+        "skill-a",
+        "skill-b",
+        "--structure-only",
+        "--format",
+        "json",
+    ]) {
         Commands::Diff(args) => {
             assert_eq!(args.skill_a, "skill-a");
             assert_eq!(args.skill_b, "skill-b");
@@ -52,7 +59,10 @@ fn parse_diff_flags() {
 fn parse_fmt_flags() {
     match parse(&["fmt", "skill-a", "skill-b", "--check", "--diff"]) {
         Commands::Fmt(args) => {
-            assert_eq!(args.skills, vec!["skill-a".to_string(), "skill-b".to_string()]);
+            assert_eq!(
+                args.skills,
+                vec!["skill-a".to_string(), "skill-b".to_string()]
+            );
             assert!(args.check);
             assert!(args.diff);
         }
@@ -87,7 +97,11 @@ fn parse_alias_list_shortcut() {
 fn parse_alias_add() {
     match parse(&["alias", "add", "old", "--target", "new", "--kind", "legacy"]) {
         Commands::Alias(args) => match args.command {
-            Some(commands::alias::AliasCommand::Add { alias, target, kind }) => {
+            Some(commands::alias::AliasCommand::Add {
+                alias,
+                target,
+                kind,
+            }) => {
                 assert_eq!(alias, "old");
                 assert_eq!(target, "new");
                 assert_eq!(kind, "legacy");
@@ -132,7 +146,10 @@ fn parse_cm_rules_filters() {
 fn parse_migrate_with_check() {
     match parse(&["migrate", "skill-a", "skill-b", "--check"]) {
         Commands::Migrate(args) => {
-            assert_eq!(args.skills, vec!["skill-a".to_string(), "skill-b".to_string()]);
+            assert_eq!(
+                args.skills,
+                vec!["skill-a".to_string(), "skill-b".to_string()]
+            );
             assert!(args.check);
         }
         other => panic!("unexpected command: {:?}", other),
@@ -143,7 +160,10 @@ fn parse_migrate_with_check() {
 fn parse_pre_commit_flags() {
     match parse(&["pre-commit", "--repo", "/tmp/repo", "--only", "rust"]) {
         Commands::PreCommit(args) => {
-            assert_eq!(args.repo.as_deref(), Some(std::path::Path::new("/tmp/repo")));
+            assert_eq!(
+                args.repo.as_deref(),
+                Some(std::path::Path::new("/tmp/repo"))
+            );
             assert_eq!(args.only.as_deref(), Some("rust"));
         }
         other => panic!("unexpected command: {:?}", other),

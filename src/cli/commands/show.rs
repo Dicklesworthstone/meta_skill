@@ -58,7 +58,11 @@ fn show_human(
 
     // ID and version
     println!("{}: {}", "ID".dimmed(), skill.id);
-    println!("{}: {}", "Version".dimmed(), skill.version.as_deref().unwrap_or("-"));
+    println!(
+        "{}: {}",
+        "Version".dimmed(),
+        skill.version.as_deref().unwrap_or("-")
+    );
 
     // Author
     if let Some(ref author) = skill.author {
@@ -91,7 +95,10 @@ fn show_human(
         println!(
             "{} {}",
             "⚠ DEPRECATED:".red().bold(),
-            skill.deprecation_reason.as_deref().unwrap_or("No reason provided")
+            skill
+                .deprecation_reason
+                .as_deref()
+                .unwrap_or("No reason provided")
         );
     }
 
@@ -102,7 +109,11 @@ fn show_human(
     println!("{}: {}", "Tokens".dimmed(), skill.token_count);
     println!("{}: {:.2}", "Quality".dimmed(), skill.quality_score);
     println!("{}: {}", "Indexed".dimmed(), format_date(&skill.indexed_at));
-    println!("{}: {}", "Modified".dimmed(), format_date(&skill.modified_at));
+    println!(
+        "{}: {}",
+        "Modified".dimmed(),
+        format_date(&skill.modified_at)
+    );
 
     // Git info
     if skill.git_remote.is_some() || skill.git_commit.is_some() {
@@ -221,11 +232,7 @@ fn show_robot(
 
 fn format_date(datetime: &str) -> String {
     // Try to parse and format nicely
-    datetime
-        .split('T')
-        .next()
-        .unwrap_or(datetime)
-        .to_string()
+    datetime.split('T').next().unwrap_or(datetime).to_string()
 }
 
 fn normalize_layer(input: &str) -> String {

@@ -123,10 +123,7 @@ tokio::spawn(async move {
     assert!(skills.len() >= 2, "Should have at least 2 skills indexed");
 
     // Check both skills are present
-    let skill_ids: Vec<&str> = skills
-        .iter()
-        .filter_map(|s| s["id"].as_str())
-        .collect();
+    let skill_ids: Vec<&str> = skills.iter().filter_map(|s| s["id"].as_str()).collect();
     assert!(
         skill_ids.contains(&"rust-patterns"),
         "rust-patterns should be indexed"
@@ -212,7 +209,10 @@ Getting started with Python programming.
 
     let json = output.json();
     let results = json["results"].as_array().expect("results should be array");
-    assert!(results.is_empty(), "Should have no results for unrelated query");
+    assert!(
+        results.is_empty(),
+        "Should have no results for unrelated query"
+    );
 
     fixture.generate_report();
     Ok(())

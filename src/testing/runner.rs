@@ -7,10 +7,10 @@ use std::time::{Duration, Instant};
 
 use serde::{Deserialize, Serialize};
 
+use super::definition::{Requirement, SkipCondition, TestDefinition};
+use super::steps::StepExecutor;
 use crate::app::AppContext;
 use crate::error::{MsError, Result};
-use super::definition::{TestDefinition, SkipCondition, Requirement};
-use super::steps::StepExecutor;
 
 /// Options for controlling test execution.
 #[derive(Debug, Clone, Default)]
@@ -190,7 +190,8 @@ impl<'a> SkillTestRunner<'a> {
                 TestStatus::Skipped => skipped += 1,
             }
 
-            let test_failed = result.status == TestStatus::Failed || result.status == TestStatus::Timeout;
+            let test_failed =
+                result.status == TestStatus::Failed || result.status == TestStatus::Timeout;
             results.push(result);
 
             if self.options.fail_fast && test_failed {
@@ -251,9 +252,11 @@ impl<'a> SkillTestRunner<'a> {
 
     /// Discover tests for a skill.
     fn discover_tests(&self, skill_id: &str) -> Result<Vec<TestDefinition>> {
-        let skill_path = self.ctx.git.skill_path(skill_id).ok_or_else(|| {
-            MsError::SkillNotFound(format!("Skill not found: {skill_id}"))
-        })?;
+        let skill_path = self
+            .ctx
+            .git
+            .skill_path(skill_id)
+            .ok_or_else(|| MsError::SkillNotFound(format!("Skill not found: {skill_id}")))?;
 
         let tests_dir = skill_path.join("tests");
         if !tests_dir.exists() {
@@ -266,15 +269,20 @@ impl<'a> SkillTestRunner<'a> {
             let entry = entry?;
             let path = entry.path();
 
-            if path.extension().map_or(false, |ext| ext == "yaml" || ext == "yml") {
-                let content = std::fs::read_to_string(&path)
-                    .map_err(|e| MsError::Config(format!("Failed to read {}: {e}", path.display())))?;
+            if path
+                .extension()
+                .map_or(false, |ext| ext == "yaml" || ext == "yml")
+            {
+                let content = std::fs::read_to_string(&path).map_err(|e| {
+                    MsError::Config(format!("Failed to read {}: {e}", path.display()))
+                })?;
 
-                let test: TestDefinition = serde_yaml::from_str(&content)
-                    .map_err(|e| MsError::ValidationFailed(format!(
+                let test: TestDefinition = serde_yaml::from_str(&content).map_err(|e| {
+                    MsError::ValidationFailed(format!(
                         "Failed to parse test {}: {e}",
                         path.display()
-                    )))?;
+                    ))
+                })?;
 
                 tests.push(test);
             }
@@ -287,7 +295,10 @@ impl<'a> SkillTestRunner<'a> {
     fn should_run_test(&self, test: &TestDefinition) -> bool {
         // If include tags specified, test must have at least one
         if !self.options.include_tags.is_empty() {
-            let has_include = test.tags.iter().any(|t| self.options.include_tags.contains(t));
+            let has_include = test
+                .tags
+                .iter()
+                .any(|t| self.options.include_tags.contains(t));
             if !has_include {
                 return false;
             }
@@ -295,7 +306,10 @@ impl<'a> SkillTestRunner<'a> {
 
         // If exclude tags specified, test must not have any
         if !self.options.exclude_tags.is_empty() {
-            let has_exclude = test.tags.iter().any(|t| self.options.exclude_tags.contains(t));
+            let has_exclude = test
+                .tags
+                .iter()
+                .any(|t| self.options.exclude_tags.contains(t));
             if has_exclude {
                 return false;
             }
@@ -379,7 +393,9 @@ impl<'a> SkillTestRunner<'a> {
     /// Run a single test.
     fn run_test(&self, test: &TestDefinition) -> Result<TestResult> {
         let start = Instant::now();
-        let timeout = self.options.timeout_override
+        let timeout = self
+            .options
+            .timeout_override
             .or(test.timeout)
             .unwrap_or(Duration::from_secs(60));
 
