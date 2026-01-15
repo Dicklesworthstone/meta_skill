@@ -100,26 +100,10 @@ impl BuildTui {
         client: &CassClient,
         quality_scorer: &QualityScorer,
     ) -> Result<WizardOutput> {
-        // Setup terminal
-        enable_raw_mode()?;
-        let mut stdout = io::stdout();
-        execute!(stdout, EnterAlternateScreen, EnableMouseCapture)?;
-        let backend = CrosstermBackend::new(stdout);
-        let mut terminal = Terminal::new(backend)?;
+        let _guard = TerminalGuard::new()?;
+        let mut terminal = Terminal::new(CrosstermBackend::new(io::stdout()))?;
 
-        // Main loop
-        let result = self.main_loop(&mut terminal, client, quality_scorer);
-
-        // Restore terminal
-        disable_raw_mode()?;
-        execute!(
-            terminal.backend_mut(),
-            LeaveAlternateScreen,
-            DisableMouseCapture
-        )?;
-        terminal.show_cursor()?;
-
-        result
+        self.main_loop(&mut terminal, client, quality_scorer)
     }
 
     fn main_loop(
@@ -834,6 +818,29 @@ impl BuildTui {
             WizardState::MoveExtraction { moves, .. } => moves.len(),
             _ => 0,
         }
+    }
+}
+
+/// RAII Guard to ensure terminal state is restored even on panic.
+struct TerminalGuard;
+
+impl TerminalGuard {
+    fn new() -> Result<Self> {
+        enable_raw_mode()?;
+        let mut stdout = io::stdout();
+        execute!(stdout, EnterAlternateScreen, EnableMouseCapture)?;
+        Ok(Self)
+    }
+}
+
+impl Drop for TerminalGuard {
+    fn drop(&mut self) {
+        let _ = disable_raw_mode();
+        let _ = execute!(
+            io::stdout(),
+            LeaveAlternateScreen,
+            DisableMouseCapture
+        );
     }
 }
 
