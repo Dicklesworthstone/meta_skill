@@ -1248,7 +1248,11 @@ mod tests {
     #[test]
     fn test_cluster_coherence() {
         let cass = CassClient::new();
-        let transformer = SpecificToGeneralTransformer::new(cass);
+        let config = TransformerConfig {
+            embedding_dim: 64,
+            ..Default::default()
+        };
+        let transformer = SpecificToGeneralTransformer::with_config(cass, config);
 
         let embedder = HashEmbedder::new(64);
         let instances = vec![
@@ -1257,7 +1261,17 @@ mod tests {
         ];
 
         let coherence = transformer.compute_cluster_coherence(&instances);
-        assert!(coherence > 0.0);
+        println!("DEBUG: Coherence: {}", coherence);
+        if coherence <= 0.0 {
+            let e1 = &instances[0].embedding;
+            let e2 = &instances[1].embedding;
+            println!("DEBUG: E1 len: {}, E2 len: {}", e1.len(), e2.len());
+            println!("DEBUG: E1: {:?}", e1);
+            println!("DEBUG: E2: {:?}", e2);
+            let sim = transformer.embedder.similarity(e1, e2);
+            println!("DEBUG: Computed Similarity: {}", sim);
+        }
+        assert!(coherence > 0.0, "Coherence {} should be positive", coherence);
     }
 
     #[test]

@@ -1227,11 +1227,17 @@ fn patterns_are_similar(a: &ExtractedPattern, b: &ExtractedPattern) -> bool {
                 return false;
             }
             
-            // Normalize by removing whitespace for comparison to handle formatting differences
-            // while strictly checking content.
-            let norm_a: String = ca.split_whitespace().collect();
-            let norm_b: String = cb.split_whitespace().collect();
-            norm_a == norm_b
+            if la == "python" || la == "py" || la == "yaml" || la == "yml" {
+                // Indentation-sensitive comparison
+                let norm_a = normalize_indentation_sensitive(ca);
+                let norm_b = normalize_indentation_sensitive(cb);
+                norm_a == norm_b
+            } else {
+                // Whitespace-insensitive comparison (normalize to single space)
+                let norm_a: String = ca.split_whitespace().collect::<Vec<_>>().join(" ");
+                let norm_b: String = cb.split_whitespace().collect::<Vec<_>>().join(" ");
+                norm_a == norm_b
+            }
         }
         (
             PatternType::ErrorPattern {
@@ -1257,6 +1263,14 @@ fn patterns_are_similar(a: &ExtractedPattern, b: &ExtractedPattern) -> bool {
         }
         _ => false,
     }
+}
+
+fn normalize_indentation_sensitive(code: &str) -> String {
+    code.lines()
+        .map(|line| line.trim_end()) // Keep leading whitespace, trim trailing
+        .filter(|line| !line.is_empty()) // Remove empty lines
+        .collect::<Vec<_>>()
+        .join("\n")
 }
 
 fn code_passes_ubs(client: &UbsClient, language: &str, code: &str) -> bool {
