@@ -359,6 +359,40 @@ impl Default for BeadsClient {
     }
 }
 
+impl super::mock::BeadsOperations for BeadsClient {
+    fn is_available(&self) -> bool {
+        self.is_available()
+    }
+
+    fn list(&self, filter: &WorkFilter) -> Result<Vec<Issue>> {
+        self.list(filter)
+    }
+
+    fn ready(&self) -> Result<Vec<Issue>> {
+        self.ready()
+    }
+
+    fn show(&self, id: &str) -> Result<Issue> {
+        self.show(id)
+    }
+
+    fn create(&self, request: &CreateIssueRequest) -> Result<Issue> {
+        self.create(request)
+    }
+
+    fn update(&self, id: &str, request: &UpdateIssueRequest) -> Result<Issue> {
+        self.update(id, request)
+    }
+
+    fn update_status(&self, id: &str, status: IssueStatus) -> Result<Issue> {
+        self.update_status(id, status)
+    }
+
+    fn close(&self, id: &str, reason: Option<&str>) -> Result<Issue> {
+        self.close(id, reason)
+    }
+}
+
 /// Sync status for beads.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SyncStatus {

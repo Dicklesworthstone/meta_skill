@@ -26,11 +26,26 @@
 //!     client.update_status(&issue.id, IssueStatus::InProgress)?;
 //! }
 //! ```
+//!
+//! # Testing with MockBeadsClient
+//!
+//! For testing code that depends on beads operations, use `MockBeadsClient`:
+//!
+//! ```rust,ignore
+//! use meta_skill::beads::{MockBeadsClient, BeadsOperations, test_issue};
+//!
+//! let mock = MockBeadsClient::new()
+//!     .with_issues(vec![test_issue("test-1", "Test issue")]);
+//!
+//! // Test your code using mock.show(), mock.create(), etc.
+//! ```
 
 mod client;
+mod mock;
 mod types;
 
-pub use client::BeadsClient;
+pub use client::{BeadsClient, SyncStatus};
+pub use mock::{test_issue, BeadsErrorKind, BeadsOperations, ErrorInjection, MockBeadsClient};
 pub use types::{
     CreateIssueRequest, Dependency, DependencyType, Issue, IssueStatus, IssueType, Priority,
     UpdateIssueRequest, WorkFilter,
