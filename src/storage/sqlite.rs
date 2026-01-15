@@ -207,6 +207,20 @@ impl Database {
         Ok(())
     }
 
+    /// Update deprecation status and reason for a skill.
+    pub fn update_skill_deprecation(
+        &self,
+        skill_id: &str,
+        is_deprecated: bool,
+        reason: Option<&str>,
+    ) -> Result<()> {
+        self.conn.execute(
+            "UPDATE skills SET is_deprecated = ?, deprecation_reason = ? WHERE id = ?",
+            params![if is_deprecated { 1 } else { 0 }, reason, skill_id],
+        )?;
+        Ok(())
+    }
+
     /// Count usage events for a skill.
     pub fn count_skill_usage(&self, skill_id: &str) -> Result<u64> {
         let count: i64 = self.conn.query_row(
