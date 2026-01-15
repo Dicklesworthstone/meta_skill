@@ -166,3 +166,147 @@ fn bandit_path() -> std::path::PathBuf {
     let base = dirs::data_dir().unwrap_or_else(|| std::path::PathBuf::from("."));
     base.join("ms").join("bandit.json")
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use clap::Parser;
+
+    // =========================================================================
+    // Argument parsing tests
+    // =========================================================================
+
+    #[derive(Parser, Debug)]
+    #[command(name = "test")]
+    struct TestCli {
+        #[command(flatten)]
+        suggest: SuggestArgs,
+    }
+
+    #[test]
+    fn parse_suggest_defaults() {
+        let cli = TestCli::try_parse_from(["test"]).unwrap();
+        assert!(cli.suggest.cwd.is_none());
+        assert!(cli.suggest.budget.is_none());
+        assert!(!cli.suggest.ignore_cooldowns);
+        assert!(!cli.suggest.reset_cooldowns);
+        assert!(!cli.suggest.no_bandit);
+        assert!(cli.suggest.bandit_exploration.is_none());
+        assert!(!cli.suggest.reset_bandit);
+    }
+
+    #[test]
+    fn parse_suggest_with_cwd() {
+        let cli = TestCli::try_parse_from(["test", "--cwd", "/path/to/dir"]).unwrap();
+        assert_eq!(cli.suggest.cwd, Some("/path/to/dir".to_string()));
+    }
+
+    #[test]
+    fn parse_suggest_with_budget() {
+        let cli = TestCli::try_parse_from(["test", "--budget", "1000"]).unwrap();
+        assert_eq!(cli.suggest.budget, Some(1000));
+    }
+
+    #[test]
+    fn parse_suggest_ignore_cooldowns() {
+        let cli = TestCli::try_parse_from(["test", "--ignore-cooldowns"]).unwrap();
+        assert!(cli.suggest.ignore_cooldowns);
+    }
+
+    #[test]
+    fn parse_suggest_reset_cooldowns() {
+        let cli = TestCli::try_parse_from(["test", "--reset-cooldowns"]).unwrap();
+        assert!(cli.suggest.reset_cooldowns);
+    }
+
+    #[test]
+    fn parse_suggest_no_bandit() {
+        let cli = TestCli::try_parse_from(["test", "--no-bandit"]).unwrap();
+        assert!(cli.suggest.no_bandit);
+    }
+
+    #[test]
+    fn parse_suggest_bandit_exploration() {
+        let cli = TestCli::try_parse_from(["test", "--bandit-exploration", "0.5"]).unwrap();
+        assert_eq!(cli.suggest.bandit_exploration, Some(0.5));
+    }
+
+    #[test]
+    fn parse_suggest_bandit_exploration_zero() {
+        let cli = TestCli::try_parse_from(["test", "--bandit-exploration", "0.0"]).unwrap();
+        assert_eq!(cli.suggest.bandit_exploration, Some(0.0));
+    }
+
+    #[test]
+    fn parse_suggest_reset_bandit() {
+        let cli = TestCli::try_parse_from(["test", "--reset-bandit"]).unwrap();
+        assert!(cli.suggest.reset_bandit);
+    }
+
+    #[test]
+    fn parse_suggest_all_options() {
+        let cli = TestCli::try_parse_from([
+            "test",
+            "--cwd",
+            "/home/user/project",
+            "--budget",
+            "2000",
+            "--ignore-cooldowns",
+            "--reset-cooldowns",
+            "--no-bandit",
+            "--bandit-exploration",
+            "1.5",
+            "--reset-bandit",
+        ])
+        .unwrap();
+
+        assert_eq!(cli.suggest.cwd, Some("/home/user/project".to_string()));
+        assert_eq!(cli.suggest.budget, Some(2000));
+        assert!(cli.suggest.ignore_cooldowns);
+        assert!(cli.suggest.reset_cooldowns);
+        assert!(cli.suggest.no_bandit);
+        assert_eq!(cli.suggest.bandit_exploration, Some(1.5));
+        assert!(cli.suggest.reset_bandit);
+    }
+
+    // =========================================================================
+    // Error case tests
+    // =========================================================================
+
+    #[test]
+    fn parse_suggest_invalid_budget() {
+        let result = TestCli::try_parse_from(["test", "--budget", "not-a-number"]);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn parse_suggest_invalid_bandit_exploration() {
+        let result = TestCli::try_parse_from(["test", "--bandit-exploration", "abc"]);
+        assert!(result.is_err());
+    }
+
+    // =========================================================================
+    // Path function tests
+    // =========================================================================
+
+    #[test]
+    fn cooldown_path_ends_with_expected() {
+        let path = cooldown_path();
+        assert!(path.ends_with("ms/cooldowns.json"));
+    }
+
+    #[test]
+    fn bandit_path_ends_with_expected() {
+        let path = bandit_path();
+        assert!(path.ends_with("ms/bandit.json"));
+    }
+
+    #[test]
+    fn paths_are_in_same_directory() {
+        let cooldown = cooldown_path();
+        let bandit = bandit_path();
+
+        // Both should be in the same parent directory
+        assert_eq!(cooldown.parent(), bandit.parent());
+    }
+}
