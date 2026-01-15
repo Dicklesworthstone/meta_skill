@@ -198,4 +198,43 @@ mod tests {
         assert_eq!(issue_a.dependencies.len(), 1);
         assert_eq!(issue_a.dependencies[0].id, "skill-b");
     }
+
+    #[test]
+    fn test_skills_to_issues_labels_and_status() {
+        let skill = SkillRecord {
+            id: "skill-x".to_string(),
+            name: "Skill X".to_string(),
+            description: String::new(),
+            version: Some("0.2.0".to_string()),
+            author: Some("alice".to_string()),
+            source_path: String::new(),
+            source_layer: "project".to_string(),
+            git_remote: None,
+            git_commit: None,
+            content_hash: "hash".to_string(),
+            body: String::new(),
+            metadata_json: serde_json::json!({
+                "tags": ["alpha", "beta"],
+                "requires": [],
+                "provides": [],
+            })
+            .to_string(),
+            assets_json: "{}".to_string(),
+            token_count: 0,
+            quality_score: 0.95,
+            indexed_at: String::new(),
+            modified_at: String::new(),
+            is_deprecated: true,
+            deprecation_reason: None,
+        };
+
+        let issues = skills_to_issues(&[skill]).unwrap();
+        let issue = &issues[0];
+
+        assert_eq!(issue.status, IssueStatus::Closed);
+        assert_eq!(issue.priority, 0);
+        assert!(issue.labels.contains(&"alpha".to_string()));
+        assert!(issue.labels.contains(&"beta".to_string()));
+        assert!(issue.labels.contains(&"layer:project".to_string()));
+    }
 }
