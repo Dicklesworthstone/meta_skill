@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use rand::distributions::Distribution;
+use rand::distr::Distribution;
 use rand::rngs::ThreadRng;
 use rand_distr::Beta;
 use serde::{Deserialize, Serialize};
