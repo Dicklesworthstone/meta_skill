@@ -27,6 +27,8 @@ pub struct Config {
     #[serde(default)]
     pub robot: RobotConfig,
     #[serde(default)]
+    pub agent_mail: AgentMailConfig,
+    #[serde(default)]
     pub security: SecurityConfig,
     #[serde(default)]
     pub safety: SafetyConfig,
@@ -44,6 +46,7 @@ impl Default for Config {
             cache: CacheConfig::default(),
             update: UpdateConfig::default(),
             robot: RobotConfig::default(),
+            agent_mail: AgentMailConfig::default(),
             security: SecurityConfig::default(),
             safety: SafetyConfig::default(),
         }
@@ -127,6 +130,9 @@ impl Config {
         }
         if let Some(patch) = patch.robot {
             self.robot.merge(patch);
+        }
+        if let Some(patch) = patch.agent_mail {
+            self.agent_mail.merge(patch);
         }
         if let Some(patch) = patch.security {
             self.security.merge(patch);
@@ -243,6 +249,22 @@ impl Config {
         }
         if let Some(value) = env_bool("MS_ROBOT_INCLUDE_METADATA")? {
             self.robot.include_metadata = value;
+        }
+
+        if let Some(value) = env_bool("MS_AGENT_MAIL_ENABLED")? {
+            self.agent_mail.enabled = value;
+        }
+        if let Some(value) = env_string("MS_AGENT_MAIL_ENDPOINT") {
+            self.agent_mail.endpoint = value;
+        }
+        if let Some(value) = env_string("MS_AGENT_MAIL_PROJECT") {
+            self.agent_mail.project_key = value;
+        }
+        if let Some(value) = env_string("MS_AGENT_MAIL_AGENT") {
+            self.agent_mail.agent_name = value;
+        }
+        if let Some(value) = env_u64("MS_AGENT_MAIL_TIMEOUT_SECS")? {
+            self.agent_mail.timeout_secs = value;
         }
 
         if let Some(value) = env_bool("MS_SECURITY_ACIP_ENABLED")? {
@@ -615,6 +637,54 @@ impl RobotConfig {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AgentMailConfig {
+    #[serde(default)]
+    pub enabled: bool,
+    #[serde(default)]
+    pub endpoint: String,
+    #[serde(default)]
+    pub project_key: String,
+    #[serde(default)]
+    pub agent_name: String,
+    #[serde(default)]
+    pub timeout_secs: u64,
+}
+
+impl Default for AgentMailConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            endpoint: "http://localhost:3000/mcp".to_string(),
+            project_key: "default".to_string(),
+            agent_name: hostname::get()
+                .map(|h| h.to_string_lossy().to_string())
+                .unwrap_or_else(|_| "unknown-agent".to_string()),
+            timeout_secs: 10,
+        }
+    }
+}
+
+impl AgentMailConfig {
+    fn merge(&mut self, patch: AgentMailPatch) {
+        if let Some(value) = patch.enabled {
+            self.enabled = value;
+        }
+        if let Some(value) = patch.endpoint {
+            self.endpoint = value;
+        }
+        if let Some(value) = patch.project_key {
+            self.project_key = value;
+        }
+        if let Some(value) = patch.agent_name {
+            self.agent_name = value;
+        }
+        if let Some(value) = patch.timeout_secs {
+            self.timeout_secs = value;
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SecurityConfig {
     #[serde(default)]
     pub acip: AcipConfig,
@@ -687,6 +757,7 @@ struct ConfigPatch {
     pub cache: Option<CachePatch>,
     pub update: Option<UpdatePatch>,
     pub robot: Option<RobotPatch>,
+    pub agent_mail: Option<AgentMailPatch>,
     pub security: Option<SecurityPatch>,
     pub safety: Option<SafetyPatch>,
 }
@@ -755,6 +826,15 @@ struct UpdatePatch {
 struct RobotPatch {
     pub format: Option<String>,
     pub include_metadata: Option<bool>,
+}
+
+#[derive(Debug, Clone, Default, Deserialize)]
+struct AgentMailPatch {
+    pub enabled: Option<bool>,
+    pub endpoint: Option<String>,
+    pub project_key: Option<String>,
+    pub agent_name: Option<String>,
+    pub timeout_secs: Option<u64>,
 }
 
 #[derive(Debug, Clone, Default, Deserialize)]
