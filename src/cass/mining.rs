@@ -1225,9 +1225,17 @@ fn patterns_are_similar(a: &ExtractedPattern, b: &ExtractedPattern) -> bool {
                 ..
             },
         ) => {
-            // Similar if same language and code starts similarly
+            // Must be same language
+            if la != lb {
+                return false;
+            }
+            // Identical code is always similar, regardless of length
+            if ca == cb {
+                return true;
+            }
+            // For non-identical codes, require sufficient length for prefix comparison
             // Use chars() iterator for UTF-8 safety instead of byte slicing
-            if la != lb || ca.chars().count() <= 20 || cb.chars().count() <= 20 {
+            if ca.chars().count() <= 20 || cb.chars().count() <= 20 {
                 return false;
             }
             let prefix_a: String = ca.chars().take(20).collect();
@@ -1992,5 +2000,94 @@ And more text.
         let result = apply_taint_labels(patterns, &tainted);
         assert_eq!(result.len(), 1, "Clean pattern should be kept");
         assert_eq!(result[0].taint_label, None, "Clean pattern should have no taint label");
+    }
+
+    #[test]
+    fn test_patterns_are_similar_code_identical_short() {
+        // Bug fix: Identical short code blocks should be detected as similar
+        // Previously, code <= 20 chars was marked as not similar even when identical
+        let short_code = "fn foo() {}"; // 11 chars, well under 20
+
+        let p1 = ExtractedPattern {
+            id: "1".to_string(),
+            pattern_type: PatternType::CodePattern {
+                language: "rust".to_string(),
+                code: short_code.to_string(),
+                purpose: "test".to_string(),
+                frequency: 1,
+            },
+            evidence: vec![],
+            confidence: 0.8,
+            frequency: 1,
+            tags: vec![],
+            description: None,
+            taint_label: None,
+        };
+
+        let p2 = ExtractedPattern {
+            id: "2".to_string(),
+            pattern_type: PatternType::CodePattern {
+                language: "rust".to_string(),
+                code: short_code.to_string(), // Identical code
+                purpose: "different purpose".to_string(),
+                frequency: 1,
+            },
+            evidence: vec![],
+            confidence: 0.8,
+            frequency: 1,
+            tags: vec![],
+            description: None,
+            taint_label: None,
+        };
+
+        // Identical code should be similar, even when short
+        assert!(
+            patterns_are_similar(&p1, &p2),
+            "Identical short code blocks should be detected as similar"
+        );
+
+        // Different short code should not be similar
+        let p3 = ExtractedPattern {
+            id: "3".to_string(),
+            pattern_type: PatternType::CodePattern {
+                language: "rust".to_string(),
+                code: "fn bar() {}".to_string(), // Different code, also short
+                purpose: "test".to_string(),
+                frequency: 1,
+            },
+            evidence: vec![],
+            confidence: 0.8,
+            frequency: 1,
+            tags: vec![],
+            description: None,
+            taint_label: None,
+        };
+
+        assert!(
+            !patterns_are_similar(&p1, &p3),
+            "Different short code blocks should not be similar"
+        );
+
+        // Different language should not be similar even with identical code
+        let p4 = ExtractedPattern {
+            id: "4".to_string(),
+            pattern_type: PatternType::CodePattern {
+                language: "go".to_string(), // Different language
+                code: short_code.to_string(),
+                purpose: "test".to_string(),
+                frequency: 1,
+            },
+            evidence: vec![],
+            confidence: 0.8,
+            frequency: 1,
+            tags: vec![],
+            description: None,
+            taint_label: None,
+        };
+
+        assert!(
+            !patterns_are_similar(&p1, &p4),
+            "Same code but different language should not be similar"
+        );
     }
 }

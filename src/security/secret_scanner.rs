@@ -236,12 +236,19 @@ pub fn scan_secrets(content: &str) -> Vec<SecretMatch> {
     let mut matches = Vec::new();
 
     for pattern in SECRET_PATTERNS.iter() {
-        for cap in pattern.regex.find_iter(content) {
+        for cap in pattern.regex.captures_iter(content) {
+            let primary = cap
+                .get(1)
+                .filter(|m| !m.as_str().is_empty())
+                .or_else(|| cap.get(0));
+            let Some(matched) = primary else {
+                continue;
+            };
             matches.push(SecretMatch {
                 secret_type: pattern.secret_type,
-                start: cap.start(),
-                end: cap.end(),
-                matched_text: cap.as_str().to_string(),
+                start: matched.start(),
+                end: matched.end(),
+                matched_text: matched.as_str().to_string(),
                 confidence: pattern.confidence,
             });
         }
@@ -341,9 +348,14 @@ fn calculate_entropy(s: &str) -> f64 {
 
 /// Check if a string looks like base64.
 fn is_likely_base64(s: &str) -> bool {
-    // Base64 characteristics: length divisible by 4, ends with 0-2 '='
+    // Base64 must have length divisible by 4
+    if s.len() % 4 != 0 {
+        return false;
+    }
+    // Padding can only be 0, 1, or 2 '=' characters at the end
     let clean = s.trim_end_matches('=');
-    if s.len() % 4 != 0 && (s.len() - clean.len()) > 2 {
+    let padding_count = s.len() - clean.len();
+    if padding_count > 2 {
         return false;
     }
     // Check character set
@@ -390,6 +402,12 @@ pub fn redact_secrets(content: &str) -> String {
     let mut last_end = 0;
 
     for m in matches {
+        // Skip if this match starts inside a previously redacted region
+        if m.start < last_end {
+            // Extend the redacted region if this match goes further
+            last_end = last_end.max(m.end);
+            continue;
+        }
         // Add content before this match
         if m.start > last_end {
             result.push_str(&content[last_end..m.start]);
@@ -426,6 +444,12 @@ pub fn redact_secrets_typed(content: &str) -> String {
     let mut last_end = 0;
 
     for m in matches {
+        // Skip if this match starts inside a previously redacted region
+        if m.start < last_end {
+            // Extend the redacted region if this match goes further
+            last_end = last_end.max(m.end);
+            continue;
+        }
         if m.start > last_end {
             result.push_str(&content[last_end..m.start]);
         }
@@ -541,6 +565,14 @@ mod tests {
     }
 
     #[test]
+    fn test_redact_preserves_prefix_characters() {
+        let content = "key: AKIAIOSFODNN7EXAMPLE";
+        let redacted = redact_secrets(content);
+        assert!(redacted.starts_with("key: "));
+        assert!(redacted.contains("[REDACTED]"));
+    }
+
+    #[test]
     fn test_redact_secrets_typed() {
         let content = "api_key = 'sk_live_12345678901234567890'";
         let redacted = redact_secrets_typed(content);
@@ -588,5 +620,57 @@ mod tests {
     fn test_contains_secrets() {
         assert!(contains_secrets("token: ghp_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"));
         assert!(!contains_secrets("just some normal text"));
+    }
+
+    #[test]
+    fn test_is_likely_base64_rejects_excess_padding() {
+        // Valid base64 with 0, 1, or 2 padding chars should pass
+        assert!(is_likely_base64("YWJjZA==")); // 2 padding
+        assert!(is_likely_base64("YWJjZGU=")); // 1 padding
+        assert!(is_likely_base64("YWJjZGVm")); // 0 padding
+
+        // Invalid: more than 2 padding chars should be rejected
+        assert!(!is_likely_base64("test====")); // 4 padding chars
+        assert!(!is_likely_base64("abc=====")); // 5 padding chars
+
+        // Invalid: length not divisible by 4
+        assert!(!is_likely_base64("abc"));
+        assert!(!is_likely_base64("abcde"));
+    }
+
+    #[test]
+    fn test_overlapping_matches_produce_single_redaction() {
+        // Create content where multiple patterns might match overlapping regions
+        // For example, a generic secret pattern and an API key pattern might both match
+        // Use sk_test_ prefix (not sk_live_) to avoid GitHub push protection triggers
+        let content = "api_key = 'sk_test_ABCDEFghijklmnop123456789012345678901234'";
+        let redacted = redact_secrets(content);
+
+        // Count how many [REDACTED] markers appear
+        let redaction_count = redacted.matches("[REDACTED]").count();
+
+        // There should be exactly one redaction, not multiple overlapping ones
+        assert_eq!(
+            redaction_count, 1,
+            "Expected exactly 1 [REDACTED] marker, got {}: {}",
+            redaction_count, redacted
+        );
+    }
+
+    #[test]
+    fn test_overlapping_matches_typed_produce_single_redaction() {
+        // Same test for the typed variant
+        // Use sk_test_ prefix (not sk_live_) to avoid GitHub push protection triggers
+        let content = "api_key = 'sk_test_ABCDEFghijklmnop123456789012345678901234'";
+        let redacted = redact_secrets_typed(content);
+
+        // Count how many [REDACTED: markers appear
+        let redaction_count = redacted.matches("[REDACTED:").count();
+
+        assert_eq!(
+            redaction_count, 1,
+            "Expected exactly 1 [REDACTED:...] marker, got {}: {}",
+            redaction_count, redacted
+        );
     }
 }

@@ -260,11 +260,18 @@ fn has_tests_passed(messages: &[SessionMessage]) -> bool {
                 }
             }
 
-            // cargo test success
+            // cargo test success - require success indicator, not just "cargo test"
             if content_lower.contains("cargo test")
-                || content_lower.contains("running")
-                    && content_lower.contains("test")
-                    && content_lower.contains("ok")
+                && !content_lower.contains("failed")
+                && (content_lower.contains("ok") || content_lower.contains("passed"))
+            {
+                return true;
+            }
+            // cargo test output pattern (e.g., "running 5 tests" ... "test foo ... ok")
+            if content_lower.contains("running")
+                && content_lower.contains("test")
+                && content_lower.contains("ok")
+                && !content_lower.contains("failed")
             {
                 return true;
             }
@@ -662,5 +669,55 @@ mod tests {
         let summary = quality.summary();
         assert!(summary.contains("good"));
         assert!(summary.contains("65%"));
+    }
+
+    #[test]
+    fn test_cargo_test_requires_success_indicator() {
+        // "cargo test" alone should NOT indicate tests passed
+        let messages = vec![make_message_with_tool_result(
+            "assistant",
+            "Running cargo test",
+            "cargo test",
+        )];
+        assert!(
+            !has_tests_passed(&messages),
+            "cargo test alone should not indicate success"
+        );
+
+        // "cargo test" with "failed" should NOT indicate tests passed
+        let messages = vec![make_message_with_tool_result(
+            "assistant",
+            "Running tests",
+            "cargo test\ntest foo ... FAILED",
+        )];
+        assert!(
+            !has_tests_passed(&messages),
+            "cargo test with failure should not indicate success"
+        );
+    }
+
+    #[test]
+    fn test_cargo_test_with_success_indicator() {
+        // "cargo test" with "ok" should indicate tests passed
+        let messages = vec![make_message_with_tool_result(
+            "assistant",
+            "Running tests",
+            "cargo test\ntest result: ok. 5 passed",
+        )];
+        assert!(
+            has_tests_passed(&messages),
+            "cargo test with ok should indicate success"
+        );
+
+        // Standard cargo test output pattern should work
+        let messages = vec![make_message_with_tool_result(
+            "assistant",
+            "Running tests",
+            "running 3 tests\ntest foo ... ok\ntest bar ... ok",
+        )];
+        assert!(
+            has_tests_passed(&messages),
+            "running tests with ok should indicate success"
+        );
     }
 }
