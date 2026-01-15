@@ -196,3 +196,135 @@ fn find_upwards(start: &Path, name: &str) -> Result<Option<PathBuf>> {
     }
     Ok(None)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tempfile::TempDir;
+
+    // =========================================================================
+    // approval_hint tests
+    // =========================================================================
+
+    #[test]
+    fn approval_hint_format() {
+        let hint = approval_hint("rm -rf /");
+        assert!(hint.contains("MS_APPROVE_COMMAND"));
+        assert!(hint.contains("rm -rf /"));
+    }
+
+    #[test]
+    fn approval_hint_with_special_chars() {
+        let hint = approval_hint("echo 'hello world' | grep 'hello'");
+        assert!(hint.contains("echo 'hello world' | grep 'hello'"));
+    }
+
+    // =========================================================================
+    // approval_matches tests
+    // =========================================================================
+    // Note: approval_matches tests require env var manipulation which is unsafe
+    // in newer Rust. The approval logic is tested via E2E tests in the safety
+    // workflow tests instead.
+
+    // =========================================================================
+    // find_upwards tests
+    // =========================================================================
+
+    #[test]
+    fn find_upwards_finds_existing_dir() {
+        let temp = TempDir::new().unwrap();
+        let target = temp.path().join("target_dir");
+        std::fs::create_dir(&target).unwrap();
+
+        let result = find_upwards(temp.path(), "target_dir").unwrap();
+        assert_eq!(result, Some(target));
+    }
+
+    #[test]
+    fn find_upwards_finds_in_parent() {
+        let temp = TempDir::new().unwrap();
+        let target = temp.path().join(".ms");
+        std::fs::create_dir(&target).unwrap();
+
+        let nested = temp.path().join("a").join("b").join("c");
+        std::fs::create_dir_all(&nested).unwrap();
+
+        let result = find_upwards(&nested, ".ms").unwrap();
+        assert_eq!(result, Some(target));
+    }
+
+    #[test]
+    fn find_upwards_not_found() {
+        let temp = TempDir::new().unwrap();
+        let result = find_upwards(temp.path(), "nonexistent").unwrap();
+        assert_eq!(result, None);
+    }
+
+    #[test]
+    fn find_upwards_stops_at_root() {
+        // Start from temp, look for something that definitely doesn't exist
+        let temp = TempDir::new().unwrap();
+        let result = find_upwards(temp.path(), "definitely_not_a_real_directory_name_xyz123").unwrap();
+        assert_eq!(result, None);
+    }
+
+    // =========================================================================
+    // SafetyStatus tests
+    // =========================================================================
+
+    #[test]
+    fn safety_status_default_fields() {
+        let status = SafetyStatus {
+            dcg_version: Some("1.0.0".to_string()),
+            dcg_bin: PathBuf::from("/usr/bin/dcg"),
+            packs: vec!["default".to_string()],
+        };
+
+        assert_eq!(status.dcg_version, Some("1.0.0".to_string()));
+        assert_eq!(status.dcg_bin, PathBuf::from("/usr/bin/dcg"));
+        assert_eq!(status.packs.len(), 1);
+    }
+
+    #[test]
+    fn safety_status_no_dcg() {
+        let status = SafetyStatus {
+            dcg_version: None,
+            dcg_bin: PathBuf::from("/nonexistent/dcg"),
+            packs: vec![],
+        };
+
+        assert!(status.dcg_version.is_none());
+        assert!(status.packs.is_empty());
+    }
+
+    // =========================================================================
+    // CommandSafetyEvent tests
+    // =========================================================================
+
+    #[test]
+    fn command_safety_event_serialization() {
+        use crate::core::safety::{DcgDecision, SafetyTier};
+
+        let event = CommandSafetyEvent {
+            session_id: Some("test-session".to_string()),
+            command: "rm -rf /".to_string(),
+            dcg_version: Some("1.0.0".to_string()),
+            dcg_pack: Some("default".to_string()),
+            decision: DcgDecision {
+                allowed: false,
+                tier: SafetyTier::Critical,
+                reason: "destructive command".to_string(),
+                remediation: Some("Use a safer alternative".to_string()),
+                rule_id: Some("R001".to_string()),
+                pack: Some("default".to_string()),
+                approved: false,
+            },
+            created_at: "2024-01-01T00:00:00Z".to_string(),
+        };
+
+        let json = serde_json::to_string(&event).unwrap();
+        assert!(json.contains("rm -rf /"));
+        assert!(json.contains("destructive command"));
+        assert!(json.contains("test-session"));
+    }
+}

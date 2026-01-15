@@ -180,3 +180,183 @@ struct MatchInfo {
 struct Suggestion {
     pub text: String,
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // =========================================================================
+    // SafetyTier tests
+    // =========================================================================
+
+    #[test]
+    fn safety_tier_ordering() {
+        // Verify tiers are ordered: Safe < Caution < Danger < Critical
+        assert!(SafetyTier::Safe < SafetyTier::Caution);
+        assert!(SafetyTier::Caution < SafetyTier::Danger);
+        assert!(SafetyTier::Danger < SafetyTier::Critical);
+    }
+
+    #[test]
+    fn safety_tier_equality() {
+        assert_eq!(SafetyTier::Safe, SafetyTier::Safe);
+        assert_ne!(SafetyTier::Safe, SafetyTier::Danger);
+    }
+
+    #[test]
+    fn safety_tier_serialization() {
+        let tier = SafetyTier::Critical;
+        let json = serde_json::to_string(&tier).unwrap();
+        assert_eq!(json, "\"critical\"");
+
+        let tier = SafetyTier::Caution;
+        let json = serde_json::to_string(&tier).unwrap();
+        assert_eq!(json, "\"caution\"");
+    }
+
+    #[test]
+    fn safety_tier_deserialization() {
+        let tier: SafetyTier = serde_json::from_str("\"safe\"").unwrap();
+        assert_eq!(tier, SafetyTier::Safe);
+
+        let tier: SafetyTier = serde_json::from_str("\"danger\"").unwrap();
+        assert_eq!(tier, SafetyTier::Danger);
+    }
+
+    // =========================================================================
+    // DcgDecision tests
+    // =========================================================================
+
+    #[test]
+    fn dcg_decision_allowed() {
+        let decision = DcgDecision::allowed("safe command".to_string());
+        assert!(decision.allowed);
+        assert_eq!(decision.tier, SafetyTier::Safe);
+        assert_eq!(decision.reason, "safe command");
+        assert!(decision.remediation.is_none());
+        assert!(!decision.approved);
+    }
+
+    #[test]
+    fn dcg_decision_unavailable() {
+        let decision = DcgDecision::unavailable("dcg not found".to_string());
+        assert!(!decision.allowed);
+        assert_eq!(decision.tier, SafetyTier::Critical);
+        assert_eq!(decision.reason, "dcg not found");
+        assert!(decision.remediation.is_some());
+        assert!(decision
+            .remediation
+            .unwrap()
+            .contains("Install or configure DCG"));
+    }
+
+    #[test]
+    fn dcg_decision_serialization() {
+        let decision = DcgDecision {
+            allowed: false,
+            tier: SafetyTier::Danger,
+            reason: "destructive operation".to_string(),
+            remediation: Some("use a safer alternative".to_string()),
+            rule_id: Some("RULE-001".to_string()),
+            pack: Some("default".to_string()),
+            approved: false,
+        };
+
+        let json = serde_json::to_string(&decision).unwrap();
+        assert!(json.contains("\"allowed\":false"));
+        assert!(json.contains("\"tier\":\"danger\""));
+        assert!(json.contains("\"reason\":\"destructive operation\""));
+        assert!(json.contains("\"remediation\":\"use a safer alternative\""));
+        assert!(json.contains("\"rule_id\":\"RULE-001\""));
+    }
+
+    #[test]
+    fn dcg_decision_serialization_skips_none() {
+        let decision = DcgDecision::allowed("ok".to_string());
+        let json = serde_json::to_string(&decision).unwrap();
+
+        // Should not contain these optional fields when None
+        assert!(!json.contains("remediation"));
+        assert!(!json.contains("rule_id"));
+        assert!(!json.contains("pack"));
+    }
+
+    // =========================================================================
+    // map_severity tests
+    // =========================================================================
+
+    #[test]
+    fn map_severity_critical() {
+        assert_eq!(map_severity(Some("critical")), SafetyTier::Critical);
+    }
+
+    #[test]
+    fn map_severity_high() {
+        assert_eq!(map_severity(Some("high")), SafetyTier::Danger);
+    }
+
+    #[test]
+    fn map_severity_medium() {
+        assert_eq!(map_severity(Some("medium")), SafetyTier::Caution);
+    }
+
+    #[test]
+    fn map_severity_low() {
+        assert_eq!(map_severity(Some("low")), SafetyTier::Caution);
+    }
+
+    #[test]
+    fn map_severity_unknown() {
+        assert_eq!(map_severity(Some("unknown")), SafetyTier::Danger);
+    }
+
+    #[test]
+    fn map_severity_none_defaults_to_danger() {
+        // When no severity is provided, defaults to "high" which maps to Danger
+        assert_eq!(map_severity(None), SafetyTier::Danger);
+    }
+
+    // =========================================================================
+    // DcgGuard tests
+    // =========================================================================
+
+    #[test]
+    fn dcg_guard_new() {
+        let guard = DcgGuard::new(
+            PathBuf::from("/usr/bin/dcg"),
+            vec!["default".to_string(), "extra".to_string()],
+            "json".to_string(),
+        );
+
+        assert_eq!(guard.dcg_bin, PathBuf::from("/usr/bin/dcg"));
+        assert_eq!(guard.packs.len(), 2);
+        assert_eq!(guard.explain_format, "json");
+    }
+
+    #[test]
+    fn dcg_guard_empty_command_allowed() {
+        let guard = DcgGuard::new(
+            PathBuf::from("/nonexistent"),
+            vec![],
+            "json".to_string(),
+        );
+
+        // Empty commands are always allowed
+        let decision = guard.evaluate_command("").unwrap();
+        assert!(decision.allowed);
+        assert_eq!(decision.reason, "empty command");
+    }
+
+    #[test]
+    fn dcg_guard_whitespace_only_allowed() {
+        let guard = DcgGuard::new(
+            PathBuf::from("/nonexistent"),
+            vec![],
+            "json".to_string(),
+        );
+
+        let decision = guard.evaluate_command("   \t  \n  ").unwrap();
+        assert!(decision.allowed);
+        assert_eq!(decision.reason, "empty command");
+    }
+}

@@ -333,3 +333,302 @@ fn truncate_command(cmd: &str, max_len: usize) -> String {
         format!("{}...", truncated)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use clap::Parser;
+
+    // =========================================================================
+    // truncate_command tests
+    // =========================================================================
+
+    #[test]
+    fn truncate_command_short_string_unchanged() {
+        let cmd = "ls -la";
+        assert_eq!(truncate_command(cmd, 10), "ls -la");
+    }
+
+    #[test]
+    fn truncate_command_exact_length_unchanged() {
+        let cmd = "exactly10!";
+        assert_eq!(cmd.chars().count(), 10);
+        assert_eq!(truncate_command(cmd, 10), "exactly10!");
+    }
+
+    #[test]
+    fn truncate_command_long_string_truncated() {
+        let cmd = "this is a very long command that should be truncated";
+        let result = truncate_command(cmd, 20);
+        assert_eq!(result, "this is a very lo...");
+        assert_eq!(result.chars().count(), 20);
+    }
+
+    #[test]
+    fn truncate_command_multibyte_utf8() {
+        // "日本語" = 3 chars, 9 bytes
+        let cmd = "日本語テスト";
+        assert_eq!(cmd.chars().count(), 6);
+
+        // Truncate to 5 chars: should get "日本..." (2 chars + "...")
+        let result = truncate_command(cmd, 5);
+        assert_eq!(result, "日本...");
+        assert_eq!(result.chars().count(), 5);
+    }
+
+    #[test]
+    fn truncate_command_empty_string() {
+        assert_eq!(truncate_command("", 10), "");
+    }
+
+    #[test]
+    fn truncate_command_max_len_zero() {
+        // Edge case: max_len 0 means truncate to "..." but saturating_sub prevents underflow
+        let result = truncate_command("hello", 0);
+        assert_eq!(result, "...");
+    }
+
+    #[test]
+    fn truncate_command_max_len_three() {
+        // With max_len 3, we get 0 chars + "..." = "..."
+        let result = truncate_command("hello", 3);
+        assert_eq!(result, "...");
+    }
+
+    #[test]
+    fn truncate_command_max_len_four() {
+        // With max_len 4, we get 1 char + "..." = "h..."
+        let result = truncate_command("hello", 4);
+        assert_eq!(result, "h...");
+    }
+
+    #[test]
+    fn truncate_command_emoji() {
+        // Emoji are single chars but multi-byte
+        let cmd = "🚀🎉🔥💯";
+        assert_eq!(cmd.chars().count(), 4);
+
+        let result = truncate_command(cmd, 3);
+        // max_len 3 means 0 chars + "..." but we have emoji
+        assert_eq!(result, "...");
+    }
+
+    #[test]
+    fn truncate_command_mixed_content() {
+        // "rm -rf /日本語/🚀" = 13 chars
+        let cmd = "rm -rf /日本語/🚀";
+        assert_eq!(cmd.chars().count(), 13);
+
+        // Truncate to 10 chars: should get 7 chars + "..."
+        let result = truncate_command(cmd, 10);
+        assert!(result.ends_with("..."));
+        assert_eq!(result.chars().count(), 10);
+    }
+
+    // =========================================================================
+    // format_tier tests
+    // =========================================================================
+
+    #[test]
+    fn format_tier_safe() {
+        let result = format_tier(&SafetyTier::Safe);
+        // ColoredString implements Display, check the underlying string
+        assert!(result.to_string().contains("SAFE"));
+    }
+
+    #[test]
+    fn format_tier_caution() {
+        let result = format_tier(&SafetyTier::Caution);
+        assert!(result.to_string().contains("CAUTION"));
+    }
+
+    #[test]
+    fn format_tier_danger() {
+        let result = format_tier(&SafetyTier::Danger);
+        assert!(result.to_string().contains("DANGER"));
+    }
+
+    #[test]
+    fn format_tier_critical() {
+        let result = format_tier(&SafetyTier::Critical);
+        assert!(result.to_string().contains("CRITICAL"));
+    }
+
+    // =========================================================================
+    // Argument parsing tests
+    // =========================================================================
+
+    // CLI wrapper for testing
+    #[derive(Parser, Debug)]
+    #[command(name = "test")]
+    struct TestCli {
+        #[command(flatten)]
+        safety: SafetyArgs,
+    }
+
+    #[test]
+    fn parse_status_command() {
+        let cli = TestCli::try_parse_from(["test", "status"]).unwrap();
+        assert!(matches!(cli.safety.command, SafetyCommand::Status));
+    }
+
+    #[test]
+    fn parse_log_command_defaults() {
+        let cli = TestCli::try_parse_from(["test", "log"]).unwrap();
+        match cli.safety.command {
+            SafetyCommand::Log(args) => {
+                assert_eq!(args.limit, 20);
+                assert!(args.session.is_none());
+                assert!(!args.blocked_only);
+            }
+            _ => panic!("Expected Log command"),
+        }
+    }
+
+    #[test]
+    fn parse_log_command_with_limit() {
+        let cli = TestCli::try_parse_from(["test", "log", "--limit", "50"]).unwrap();
+        match cli.safety.command {
+            SafetyCommand::Log(args) => {
+                assert_eq!(args.limit, 50);
+            }
+            _ => panic!("Expected Log command"),
+        }
+    }
+
+    #[test]
+    fn parse_log_command_with_session() {
+        let cli = TestCli::try_parse_from(["test", "log", "--session", "abc123"]).unwrap();
+        match cli.safety.command {
+            SafetyCommand::Log(args) => {
+                assert_eq!(args.session, Some("abc123".to_string()));
+            }
+            _ => panic!("Expected Log command"),
+        }
+    }
+
+    #[test]
+    fn parse_log_command_blocked_only() {
+        let cli = TestCli::try_parse_from(["test", "log", "--blocked-only"]).unwrap();
+        match cli.safety.command {
+            SafetyCommand::Log(args) => {
+                assert!(args.blocked_only);
+            }
+            _ => panic!("Expected Log command"),
+        }
+    }
+
+    #[test]
+    fn parse_log_command_all_options() {
+        let cli = TestCli::try_parse_from([
+            "test",
+            "log",
+            "--limit",
+            "100",
+            "--session",
+            "session-xyz",
+            "--blocked-only",
+        ])
+        .unwrap();
+        match cli.safety.command {
+            SafetyCommand::Log(args) => {
+                assert_eq!(args.limit, 100);
+                assert_eq!(args.session, Some("session-xyz".to_string()));
+                assert!(args.blocked_only);
+            }
+            _ => panic!("Expected Log command"),
+        }
+    }
+
+    #[test]
+    fn parse_check_command() {
+        let cli = TestCli::try_parse_from(["test", "check", "ls -la"]).unwrap();
+        match cli.safety.command {
+            SafetyCommand::Check(args) => {
+                assert_eq!(args.command, "ls -la");
+                assert!(args.session_id.is_none());
+                assert!(!args.dry_run);
+            }
+            _ => panic!("Expected Check command"),
+        }
+    }
+
+    #[test]
+    fn parse_check_command_with_session() {
+        let cli =
+            TestCli::try_parse_from(["test", "check", "rm -rf /tmp", "--session-id", "sess-001"])
+                .unwrap();
+        match cli.safety.command {
+            SafetyCommand::Check(args) => {
+                assert_eq!(args.command, "rm -rf /tmp");
+                assert_eq!(args.session_id, Some("sess-001".to_string()));
+            }
+            _ => panic!("Expected Check command"),
+        }
+    }
+
+    #[test]
+    fn parse_check_command_dry_run() {
+        let cli = TestCli::try_parse_from(["test", "check", "echo hello", "--dry-run"]).unwrap();
+        match cli.safety.command {
+            SafetyCommand::Check(args) => {
+                assert!(args.dry_run);
+            }
+            _ => panic!("Expected Check command"),
+        }
+    }
+
+    #[test]
+    fn parse_check_command_all_options() {
+        let cli = TestCli::try_parse_from([
+            "test",
+            "check",
+            "chmod 777 /",
+            "--session-id",
+            "danger-test",
+            "--dry-run",
+        ])
+        .unwrap();
+        match cli.safety.command {
+            SafetyCommand::Check(args) => {
+                assert_eq!(args.command, "chmod 777 /");
+                assert_eq!(args.session_id, Some("danger-test".to_string()));
+                assert!(args.dry_run);
+            }
+            _ => panic!("Expected Check command"),
+        }
+    }
+
+    #[test]
+    fn parse_short_limit_flag() {
+        let cli = TestCli::try_parse_from(["test", "log", "-l", "5"]).unwrap();
+        match cli.safety.command {
+            SafetyCommand::Log(args) => {
+                assert_eq!(args.limit, 5);
+            }
+            _ => panic!("Expected Log command"),
+        }
+    }
+
+    // =========================================================================
+    // Error case tests
+    // =========================================================================
+
+    #[test]
+    fn parse_check_command_missing_argument() {
+        let result = TestCli::try_parse_from(["test", "check"]);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn parse_invalid_subcommand() {
+        let result = TestCli::try_parse_from(["test", "invalid"]);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn parse_log_invalid_limit() {
+        let result = TestCli::try_parse_from(["test", "log", "--limit", "not-a-number"]);
+        assert!(result.is_err());
+    }
+}
