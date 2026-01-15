@@ -44,7 +44,7 @@ ms is not just a tool for extracting skills from AI sessions. It's a **complete 
 | **Graph Analysis** | Dependency insights via bv: cycles, bottlenecks, PageRank, execution plans |
 | **Provenance** | Evidence tracking linking skills back to source sessions |
 | **Multi-Machine Sync** | Git-based synchronization with conflict resolution strategies |
-| **Bundle Distribution** | Portable skill packages with checksums and signature verification |
+| **Bundle Distribution** | Portable skill packages with checksums and safe updates |
 | **Effectiveness Loop** | Feedback, outcomes, experiments, and quality scoring as first-class data |
 | **AI Agent Integration** | MCP server exposing skills as native tools for Claude, Codex, and others |
 | **Anti-Pattern Mining** | Automatic detection of failure patterns from session history |
@@ -294,6 +294,18 @@ ms suggest                           # Context-aware recommendations
 ms suggest --cwd /path/to/project    # Explicit context
 ```
 
+### Templates and Authoring
+
+```bash
+ms template list                     # Discover curated templates
+ms template show debugging           # Preview template markdown
+ms template apply debugging \
+  --id debug-rust-builds \
+  --name "Debug Rust Builds" \
+  --description "Diagnose Rust build failures and compiler errors." \
+  --tag rust,build                   # Create a skill from a template
+```
+
 ### Graph Analysis
 
 Analyze skill dependencies via bv (beads_viewer):
@@ -415,6 +427,9 @@ ms mcp serve --port 8080             # HTTP transport
 ```bash
 ms doctor                            # Health checks
 ms doctor --fix                      # Auto-repair issues
+ms backup create                     # Snapshot ms state
+ms backup list                       # List backups
+ms backup restore --latest --approve # Restore latest snapshot
 ms fmt                               # Normalize skill formatting
 ms diff skill-a skill-b              # Semantic diff
 ms migrate                           # Upgrade skill spec versions
@@ -435,6 +450,7 @@ ms update --check                    # Check for CLI updates
 ├── ms.db           # SQLite database (queries, metadata, search)
 ├── archive/        # Git repository (audit trail, history)
 ├── index/          # Tantivy search index
+├── backups/        # Backup snapshots
 ├── sync/           # Sync state and remote caches
 └── config.toml     # Local configuration
 ```
@@ -587,7 +603,9 @@ ms load skill --level overview --robot
 | `ms safety` | DCG command safety gates |
 | `ms evidence` | Provenance tracking |
 | `ms antipatterns` | Failure pattern detection |
+| `ms template` | Curated authoring templates |
 | `ms bundle` | Portable skill packages |
+| `ms backup` | Snapshot and restore ms state |
 | `ms sync` | Multi-machine synchronization |
 | `ms mcp` | MCP server for AI agents |
 ````

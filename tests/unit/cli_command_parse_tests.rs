@@ -214,6 +214,38 @@ fn parse_security_scan_args() {
 }
 
 #[test]
+fn parse_template_apply_args() {
+    match parse(&[
+        "template",
+        "apply",
+        "debugging",
+        "--id",
+        "debug-skill",
+        "--name",
+        "Debug Skill",
+        "--description",
+        "Diagnose failures",
+        "--tag",
+        "rust,build",
+        "--layer",
+        "project",
+    ]) {
+        Commands::Template(args) => match args.command {
+            commands::template::TemplateCommand::Apply(apply) => {
+                assert_eq!(apply.template, "debugging");
+                assert_eq!(apply.id, "debug-skill");
+                assert_eq!(apply.name, "Debug Skill");
+                assert_eq!(apply.description, "Diagnose failures");
+                assert_eq!(apply.tags, vec!["rust".to_string(), "build".to_string()]);
+                assert_eq!(apply.layer, "project");
+            }
+            other => panic!("unexpected template command: {:?}", other),
+        },
+        other => panic!("unexpected command: {:?}", other),
+    }
+}
+
+#[test]
 fn parse_test_args() {
     match parse(&[
         "test",
@@ -265,6 +297,81 @@ fn parse_validate_args() {
             assert_eq!(args.skill, "skill-a");
             assert!(args.ubs);
         }
+        other => panic!("unexpected command: {:?}", other),
+    }
+}
+
+#[test]
+fn parse_remote_add_git_flags() {
+    match parse(&[
+        "remote",
+        "add",
+        "origin",
+        "https://example.com/skills.git",
+        "--remote-type",
+        "git",
+        "--branch",
+        "main",
+        "--auth",
+        "token",
+        "--token-env",
+        "GIT_TOKEN",
+        "--direction",
+        "push-only",
+    ]) {
+        Commands::Remote(args) => match args.command {
+            commands::remote::RemoteCommand::Add(add) => {
+                assert_eq!(add.name, "origin");
+                assert_eq!(add.url, "https://example.com/skills.git");
+                assert_eq!(add.remote_type, "git");
+                assert_eq!(add.branch.as_deref(), Some("main"));
+                assert_eq!(add.auth.as_deref(), Some("token"));
+                assert_eq!(add.token_env.as_deref(), Some("GIT_TOKEN"));
+                assert_eq!(add.direction.as_deref(), Some("push-only"));
+            }
+            other => panic!("unexpected remote command: {:?}", other),
+        },
+        other => panic!("unexpected command: {:?}", other),
+    }
+}
+
+#[test]
+fn parse_backup_create_args() {
+    match parse(&["backup", "create", "--id", "snap-1"]) {
+        Commands::Backup(args) => match args.command {
+            commands::backup::BackupCommand::Create(create) => {
+                assert_eq!(create.id.as_deref(), Some("snap-1"));
+            }
+            other => panic!("unexpected backup command: {:?}", other),
+        },
+        other => panic!("unexpected command: {:?}", other),
+    }
+}
+
+#[test]
+fn parse_backup_list_args() {
+    match parse(&["backup", "list", "--limit", "5"]) {
+        Commands::Backup(args) => match args.command {
+            commands::backup::BackupCommand::List(list) => {
+                assert_eq!(list.limit, 5);
+            }
+            other => panic!("unexpected backup command: {:?}", other),
+        },
+        other => panic!("unexpected command: {:?}", other),
+    }
+}
+
+#[test]
+fn parse_backup_restore_args() {
+    match parse(&["backup", "restore", "snap-1", "--approve"]) {
+        Commands::Backup(args) => match args.command {
+            commands::backup::BackupCommand::Restore(restore) => {
+                assert_eq!(restore.id.as_deref(), Some("snap-1"));
+                assert!(restore.approve);
+                assert!(!restore.latest);
+            }
+            other => panic!("unexpected backup command: {:?}", other),
+        },
         other => panic!("unexpected command: {:?}", other),
     }
 }

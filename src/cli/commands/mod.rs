@@ -16,6 +16,7 @@ use crate::error::Result;
 pub mod alias;
 pub mod antipatterns;
 pub mod bandit;
+pub mod backup;
 pub mod build;
 pub mod bundle;
 pub mod cm;
@@ -50,6 +51,7 @@ pub mod shell;
 pub mod show;
 pub mod suggest;
 pub mod sync;
+pub mod template;
 pub mod test;
 pub mod update;
 pub mod validate;
@@ -85,6 +87,7 @@ pub fn run(ctx: &AppContext, command: &Commands) -> Result<()> {
         Commands::Cm(args) => cm::run(ctx, args),
         Commands::Update(args) => update::run(ctx, args),
         Commands::Bandit(args) => bandit::run(ctx, args),
+        Commands::Backup(args) => backup::run(ctx, args),
         Commands::Doctor(args) => doctor::run(ctx, args),
         Commands::PreCommit(args) => pre_commit::run(ctx, args),
         Commands::Prune(args) => prune::run(ctx, args),
@@ -97,6 +100,7 @@ pub fn run(ctx: &AppContext, command: &Commands) -> Result<()> {
         Commands::Quality(args) => quality::run(ctx, args),
         Commands::Evidence(args) => evidence::run(ctx, args),
         Commands::Mcp(args) => mcp::run(ctx, args),
+        Commands::Template(args) => template::run(ctx, args),
     }
 }
 

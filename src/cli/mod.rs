@@ -122,6 +122,9 @@ pub enum Commands {
     /// Suggestion bandit controls
     Bandit(commands::bandit::BanditArgs),
 
+    /// Backup and restore ms state
+    Backup(commands::backup::BackupArgs),
+
     /// Health checks and repairs
     Doctor(commands::doctor::DoctorArgs),
 
@@ -154,6 +157,9 @@ pub enum Commands {
 
     /// View and manage skill provenance evidence
     Evidence(commands::evidence::EvidenceArgs),
+
+    /// Use curated skill templates
+    Template(commands::template::TemplateArgs),
 
     /// Run as MCP (Model Context Protocol) server
     Mcp(commands::mcp::McpArgs),

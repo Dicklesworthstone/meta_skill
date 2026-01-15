@@ -393,6 +393,48 @@ impl BeadsClient {
         Ok(())
     }
 
+    /// Run `bd doctor` to verify daemon health.
+    pub fn doctor(&self) -> Result<bool> {
+        // We use output() directly instead of run_command because doctor might fail (exit non-zero)
+        // and we want to capture that as a boolean, not an Err.
+        let mut cmd = Command::new(&self.bd_bin);
+        cmd.arg("doctor");
+        if let Some(ref dir) = self.work_dir {
+            cmd.current_dir(dir);
+        }
+        cmd.envs(&self.env);
+
+        match cmd.output() {
+            Ok(output) => Ok(output.status.success()),
+            Err(_) => Ok(false),
+        }
+    }
+
+    /// Perform mandatory pre-flight checks before write operations.
+    ///
+    /// Checks:
+    /// 1. Daemon health (bd doctor)
+    /// 2. Sync status (bd sync --status)
+    ///
+    /// Returns Ok(()) if safe to proceed, Err if checks fail.
+    pub fn preflight_check(&self) -> Result<()> {
+        if !self.doctor()? {
+            return Err(MsError::BeadsUnavailable(
+                "bd doctor failed - daemon may be unhealthy".to_string(),
+            ));
+        }
+
+        match self.sync_status()? {
+            SyncStatus::Clean => Ok(()),
+            SyncStatus::Dirty => Err(MsError::TransactionFailed(
+                "beads has uncommitted changes (run 'bd sync' first)".to_string(),
+            )),
+            SyncStatus::Unknown => Err(MsError::BeadsUnavailable(
+                "could not determine beads sync status".to_string(),
+            )),
+        }
+    }
+
     /// Check sync status without syncing.
     pub fn sync_status(&self) -> Result<SyncStatus> {
         let output = self.run_command(&["sync", "--status"])?;
