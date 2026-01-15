@@ -124,6 +124,18 @@ pub struct ExperimentRecord {
     pub started_at: String,
 }
 
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct ExperimentEventRecord {
+    pub id: String,
+    pub experiment_id: String,
+    pub variant_id: String,
+    pub event_type: String,
+    pub metrics_json: Option<String>,
+    pub context_json: Option<String>,
+    pub session_id: Option<String>,
+    pub created_at: String,
+}
+
 impl Database {
     /// Open database at the given path
     pub fn open(path: impl AsRef<Path>) -> Result<Self> {
@@ -1190,6 +1202,28 @@ impl Database {
         })
     }
 
+    pub fn get_skill_experiment(&self, id: &str) -> Result<Option<ExperimentRecord>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT id, skill_id, scope, scope_id, variants_json, allocation_json, status, started_at
+             FROM skill_experiments
+             WHERE id = ?",
+        )?;
+        let mut rows = stmt.query(params![id])?;
+        if let Some(row) = rows.next()? {
+            return Ok(Some(ExperimentRecord {
+                id: row.get(0)?,
+                skill_id: row.get(1)?,
+                scope: row.get(2)?,
+                scope_id: row.get(3)?,
+                variants_json: row.get(4)?,
+                allocation_json: row.get(5)?,
+                status: row.get(6)?,
+                started_at: row.get(7)?,
+            }));
+        }
+        Ok(None)
+    }
+
     pub fn list_skill_experiments(
         &self,
         skill_id: Option<&str>,
@@ -1224,6 +1258,85 @@ impl Database {
                 allocation_json: row.get(5)?,
                 status: row.get(6)?,
                 started_at: row.get(7)?,
+            });
+        }
+        Ok(records)
+    }
+
+    pub fn update_skill_experiment_status(&self, id: &str, status: &str) -> Result<()> {
+        let updated = self.conn.execute(
+            "UPDATE skill_experiments SET status = ? WHERE id = ?",
+            params![status, id],
+        )?;
+        if updated == 0 {
+            return Err(MsError::NotFound(format!(
+                "experiment not found: {id}"
+            )));
+        }
+        Ok(())
+    }
+
+    pub fn record_skill_experiment_event(
+        &self,
+        experiment_id: &str,
+        variant_id: &str,
+        event_type: &str,
+        metrics_json: Option<&str>,
+        context_json: Option<&str>,
+        session_id: Option<&str>,
+    ) -> Result<ExperimentEventRecord> {
+        let id = Uuid::new_v4().to_string();
+        let created_at = chrono::Utc::now().to_rfc3339();
+        self.conn.execute(
+            "INSERT INTO skill_experiment_events (
+                id, experiment_id, variant_id, event_type, metrics_json, context_json, session_id, created_at
+             ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            params![
+                id,
+                experiment_id,
+                variant_id,
+                event_type,
+                metrics_json,
+                context_json,
+                session_id,
+                created_at
+            ],
+        )?;
+
+        Ok(ExperimentEventRecord {
+            id,
+            experiment_id: experiment_id.to_string(),
+            variant_id: variant_id.to_string(),
+            event_type: event_type.to_string(),
+            metrics_json: metrics_json.map(|s| s.to_string()),
+            context_json: context_json.map(|s| s.to_string()),
+            session_id: session_id.map(|s| s.to_string()),
+            created_at,
+        })
+    }
+
+    pub fn list_skill_experiment_events(
+        &self,
+        experiment_id: &str,
+    ) -> Result<Vec<ExperimentEventRecord>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT id, experiment_id, variant_id, event_type, metrics_json, context_json, session_id, created_at
+             FROM skill_experiment_events
+             WHERE experiment_id = ?
+             ORDER BY created_at ASC",
+        )?;
+        let mut rows = stmt.query(params![experiment_id])?;
+        let mut records = Vec::new();
+        while let Some(row) = rows.next()? {
+            records.push(ExperimentEventRecord {
+                id: row.get(0)?,
+                experiment_id: row.get(1)?,
+                variant_id: row.get(2)?,
+                event_type: row.get(3)?,
+                metrics_json: row.get(4)?,
+                context_json: row.get(5)?,
+                session_id: row.get(6)?,
+                created_at: row.get(7)?,
             });
         }
         Ok(records)
@@ -1415,6 +1528,7 @@ mod tests {
             "cm_rule_links",
             "cm_sync_state",
             "skill_experiments",
+            "skill_experiment_events",
             "skill_reservations",
             "skill_dependencies",
             "skill_capabilities",
