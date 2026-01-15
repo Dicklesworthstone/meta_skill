@@ -154,7 +154,17 @@ impl SignalBandit {
             return Ok(Self::new());
         }
         let contents = std::fs::read_to_string(path).map_err(MsError::Io)?;
-        let bandit: Self = serde_json::from_str(&contents)?;
+        let mut bandit: Self = serde_json::from_str(&contents)?;
+
+        // Schema evolution: ensure all signal types have an arm
+        let default_config = BanditConfig::default();
+        for signal in SignalType::all() {
+            bandit
+                .arms
+                .entry(*signal)
+                .or_insert_with(|| BanditArm::new(*signal, default_config.observation_decay));
+        }
+
         Ok(bandit)
     }
 }

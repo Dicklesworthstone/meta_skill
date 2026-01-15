@@ -52,7 +52,23 @@ impl MachineIdentity {
             let contents = std::fs::read_to_string(&path).map_err(|err| {
                 MsError::Config(format!("read machine identity {}: {err}", path.display()))
             })?;
-            let identity: Self = serde_json::from_str(&contents)?;
+            let mut identity: Self = serde_json::from_str(&contents)?;
+            let mut changed = false;
+            if let Some(name) = name_override {
+                if identity.machine_name != name {
+                    identity.machine_name = name;
+                    changed = true;
+                }
+            }
+            if let Some(desc) = description {
+                if identity.metadata.description.as_deref() != Some(desc.as_str()) {
+                    identity.metadata.description = Some(desc);
+                    changed = true;
+                }
+            }
+            if changed {
+                identity.save()?;
+            }
             Ok(identity)
         } else {
             let name = name_override.unwrap_or_else(Self::default_machine_name);
