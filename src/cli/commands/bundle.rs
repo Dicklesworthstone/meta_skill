@@ -335,12 +335,18 @@ fn run_create(ctx: &AppContext, args: &BundleCreateArgs) -> Result<()> {
 
     // Sign the bundle if requested
     if args.sign {
-        let key_path = args.sign_key.clone().unwrap_or_else(|| {
-            dirs::home_dir()
-                .unwrap_or_else(|| PathBuf::from("."))
-                .join(".ssh")
-                .join("id_ed25519")
-        });
+        let key_path = match args.sign_key.clone() {
+            Some(path) => path,
+            None => {
+                let home = dirs::home_dir().ok_or_else(|| {
+                    MsError::Config(
+                        "cannot find home directory for default SSH key; use --sign-key to specify"
+                            .to_string(),
+                    )
+                })?;
+                home.join(".ssh").join("id_ed25519")
+            }
+        };
 
         let signer = crate::bundler::Ed25519Signer::from_openssh_file(&key_path)?;
 

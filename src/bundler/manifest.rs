@@ -241,15 +241,24 @@ impl Ed25519Signer {
 
     /// Load a signer from an OpenSSH private key string.
     pub fn from_openssh_str(pem: &str) -> Result<Self> {
-        let (seed, public_key) = parse_openssh_ed25519_key(pem)?;
+        let (seed, public_key_from_file) = parse_openssh_ed25519_key(pem)?;
 
         let keypair =
             ring::signature::Ed25519KeyPair::from_seed_unchecked(&seed).map_err(|_| {
                 MsError::ValidationFailed("invalid Ed25519 seed in SSH key".to_string())
             })?;
 
+        // Verify the public key from the file matches the one derived from the seed.
+        // This catches corrupted key files where the public key doesn't match the private key.
+        let derived_public_key = keypair.public_key().as_ref();
+        if derived_public_key != public_key_from_file {
+            return Err(MsError::ValidationFailed(
+                "SSH key public key doesn't match private key (corrupted key file?)".to_string(),
+            ));
+        }
+
         // Generate key_id from public key (hex-encoded first 8 bytes)
-        let key_id = format!("ed25519:{}", hex::encode(&public_key[..8]));
+        let key_id = format!("ed25519:{}", hex::encode(&public_key_from_file[..8]));
 
         Ok(Self { keypair, key_id })
     }
@@ -921,5 +930,83 @@ checksum = "sha256:abc123"
         let result = Ed25519Signer::from_openssh_str(encrypted_marker);
         assert!(result.is_err());
         // The exact error depends on how far parsing gets, but it should fail
+    }
+
+    #[test]
+    fn ed25519_signer_rejects_mismatched_public_key() {
+        // Generate a valid key and then corrupt the public key in the file
+        use ring::rand::SystemRandom;
+        use ring::signature::{Ed25519KeyPair, KeyPair};
+
+        let rng = SystemRandom::new();
+        let pkcs8_bytes = Ed25519KeyPair::generate_pkcs8(&rng).unwrap();
+        let keypair = Ed25519KeyPair::from_pkcs8(pkcs8_bytes.as_ref()).unwrap();
+        let real_public_key = keypair.public_key().as_ref().to_vec();
+
+        // Use a different (wrong) public key
+        let mut wrong_public_key = real_public_key.clone();
+        wrong_public_key[0] ^= 0xFF; // Corrupt first byte
+
+        let seed = &pkcs8_bytes.as_ref()[16..48];
+
+        // Build OpenSSH format key with mismatched public key
+        let mut ssh_data = Vec::new();
+        ssh_data.extend_from_slice(b"openssh-key-v1\0");
+        ssh_data.extend_from_slice(&4u32.to_be_bytes());
+        ssh_data.extend_from_slice(b"none");
+        ssh_data.extend_from_slice(&4u32.to_be_bytes());
+        ssh_data.extend_from_slice(b"none");
+        ssh_data.extend_from_slice(&0u32.to_be_bytes());
+        ssh_data.extend_from_slice(&1u32.to_be_bytes());
+
+        // Public key blob (using WRONG public key)
+        let mut pub_blob = Vec::new();
+        pub_blob.extend_from_slice(&11u32.to_be_bytes());
+        pub_blob.extend_from_slice(b"ssh-ed25519");
+        pub_blob.extend_from_slice(&32u32.to_be_bytes());
+        pub_blob.extend_from_slice(&wrong_public_key);
+        ssh_data.extend_from_slice(&(pub_blob.len() as u32).to_be_bytes());
+        ssh_data.extend_from_slice(&pub_blob);
+
+        // Private section (also using WRONG public key to be consistent in the file)
+        let check = 0x12345678u32;
+        let mut priv_section = Vec::new();
+        priv_section.extend_from_slice(&check.to_be_bytes());
+        priv_section.extend_from_slice(&check.to_be_bytes());
+        priv_section.extend_from_slice(&11u32.to_be_bytes());
+        priv_section.extend_from_slice(b"ssh-ed25519");
+        priv_section.extend_from_slice(&32u32.to_be_bytes());
+        priv_section.extend_from_slice(&wrong_public_key); // Wrong public key
+        priv_section.extend_from_slice(&64u32.to_be_bytes());
+        priv_section.extend_from_slice(seed);
+        priv_section.extend_from_slice(&real_public_key); // Real public key in private section
+        priv_section.extend_from_slice(&0u32.to_be_bytes());
+
+        let pad_needed = (8 - (priv_section.len() % 8)) % 8;
+        for i in 1..=pad_needed {
+            priv_section.push(i as u8);
+        }
+
+        ssh_data.extend_from_slice(&(priv_section.len() as u32).to_be_bytes());
+        ssh_data.extend_from_slice(&priv_section);
+
+        use base64::Engine;
+        let b64 = base64::engine::general_purpose::STANDARD.encode(&ssh_data);
+        let mut pem = String::from("-----BEGIN OPENSSH PRIVATE KEY-----\n");
+        for chunk in b64.as_bytes().chunks(70) {
+            pem.push_str(std::str::from_utf8(chunk).unwrap());
+            pem.push('\n');
+        }
+        pem.push_str("-----END OPENSSH PRIVATE KEY-----\n");
+
+        let result = Ed25519Signer::from_openssh_str(&pem);
+        assert!(result.is_err());
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("public key doesn't match"),
+            "Expected public key mismatch error"
+        );
     }
 }
