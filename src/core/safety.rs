@@ -93,6 +93,13 @@ impl DcgGuard {
             return Ok(DcgDecision::allowed("empty command".to_string()));
         }
 
+        // Fail closed for excessively large commands to prevent OS limit errors or DoS
+        if command.len() > 128 * 1024 {
+            return Ok(DcgDecision::unavailable(
+                "command too long for safety analysis".to_string(),
+            ));
+        }
+
         let mut cmd = Command::new(&self.dcg_bin);
         cmd.arg("explain")
             .arg("--format")
@@ -348,5 +355,17 @@ mod tests {
         let decision = guard.evaluate_command("   \t  \n  ").unwrap();
         assert!(decision.allowed);
         assert_eq!(decision.reason, "empty command");
+    }
+
+    #[test]
+    fn dcg_guard_huge_command_rejected() {
+        let guard = DcgGuard::new(PathBuf::from("/nonexistent"), vec![], "json".to_string());
+        
+        let huge = "a".repeat(128 * 1024 + 1);
+        let decision = guard.evaluate_command(&huge).unwrap();
+        
+        assert!(!decision.allowed);
+        assert_eq!(decision.tier, SafetyTier::Critical);
+        assert!(decision.reason.contains("command too long"));
     }
 }

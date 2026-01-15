@@ -267,42 +267,73 @@ impl GlobalLock {
     ///
     /// # Safety
     ///
-    /// **WARNING**: This is dangerous and should only be used as a last resort!
-    ///
-    /// Removing the lock file while another process holds an flock on it can
-    /// lead to split-brain scenarios: the original holder still has a valid
-    /// flock on the (now deleted) inode, and a new process can create a new
-    /// file and get a lock on a different inode.
-    ///
-    /// Only use this when you are CERTAIN the holder process is dead and the
-    /// lock is truly stale. Prefer letting the OS release the lock naturally
-    /// when the holder process terminates.
+    /// This method safely handles stale locks by acquiring the lock first, then
+    /// archiving the stale content and truncating the file. It does NOT delete
+    /// the lock file, which prevents split-brain race conditions where waiting
+    /// processes might acquire a lock on a deleted inode while new processes
+    /// create a fresh file.
     pub fn break_lock(ms_root: &Path) -> Result<bool> {
         let lock_path = ms_root.join(Self::LOCK_FILENAME);
         if !lock_path.exists() {
             return Ok(false);
         }
 
-        // Safety check: verify the lock isn't currently held
-        if Self::is_locked(ms_root)? {
-            warn!(
-                "Refusing to break lock - it is currently held by another process. \
-                 Wait for the holder to release it or terminate the holder process."
-            );
-            return Ok(false);
-        }
+        // Try to acquire the lock to ensure we are the exclusive owner.
+        // If this succeeds, it means no other process currently holds the lock.
+        // Note: Waiters blocked on `lock()` already have an open FD to this inode.
+        // By keeping the file and just truncating it, we ensure they serialize correctly
+        // instead of ending up with a lock on a deleted file.
+        match Self::try_acquire(ms_root)? {
+            Some(mut lock) => {
+                // We successfully acquired the lock.
+                // 1. Read stale content for audit
+                let mut content = String::new();
+                use std::io::{Read, Seek, SeekFrom};
+                lock.lock_file
+                    .seek(SeekFrom::Start(0))
+                    .map_err(|e| MsError::TransactionFailed(format!("seek lock file: {e}")))?;
+                lock.lock_file
+                    .read_to_string(&mut content)
+                    .map_err(|e| MsError::TransactionFailed(format!("read lock file: {e}")))?;
 
-        // Get holder info for logging (may be stale but useful for audit)
-        if let Some(holder) = Self::status(ms_root)? {
-            warn!(
-                "Breaking stale lock (holder PID {} since {} appears dead)",
-                holder.pid, holder.acquired_at
-            );
-        }
+                // 2. Tombstone the content if not empty
+                if !content.is_empty() {
+                    let tombstones = ms_root.join("tombstones").join("locks");
+                    fs::create_dir_all(&tombstones)?;
+                    let now = chrono::Utc::now();
+                    let stamp = format!(
+                        "{}{:09}",
+                        now.format("%Y%m%dT%H%M%S"),
+                        now.timestamp_subsec_nanos()
+                    );
+                    let dest = tombstones.join(format!("ms.lock_{}.json", stamp));
+                    fs::write(&dest, &content)?;
+                    
+                    // Parse holder for logging
+                    if let Ok(holder) = serde_json::from_str::<LockHolder>(&content) {
+                        warn!(
+                            "Breaking stale lock (holder PID {} since {} appears dead)",
+                            holder.pid, holder.acquired_at
+                        );
+                    }
+                }
 
-        tombstone_file(ms_root, &lock_path, "locks")?;
-        info!("Stale lock file removed");
-        Ok(true)
+                // 3. Truncate the file to clear it
+                lock.lock_file
+                    .set_len(0)
+                    .map_err(|e| MsError::TransactionFailed(format!("truncate lock file: {e}")))?;
+                
+                info!("Stale lock file cleared (truncated)");
+                Ok(true)
+            }
+            None => {
+                warn!(
+                    "Refusing to break lock - it is currently held by another process. \
+                     Wait for the holder to release it or terminate the holder process."
+                );
+                Ok(false)
+            }
+        }
     }
 
     /// Write lock holder info through the given file handle.
@@ -1077,11 +1108,12 @@ mod tests {
         )
         .unwrap();
 
-        // break_lock should remove it (no flock is held)
+        // break_lock should clear it (no flock is held)
         let result = GlobalLock::break_lock(&ms_root).unwrap();
-        assert!(result, "break_lock should remove stale lock");
+        assert!(result, "break_lock should clear stale lock");
 
-        // Lock file should be gone
-        assert!(!lock_path.exists());
+        // Lock file should still exist but be empty (truncated)
+        assert!(lock_path.exists());
+        assert_eq!(fs::metadata(&lock_path).unwrap().len(), 0);
     }
 }
