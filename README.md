@@ -344,6 +344,87 @@ ms experiment list
 ms experiment list --skill rust-error-handling
 ```
 
+### `ms remote`
+
+Manage multi-machine sync remotes. Git remotes are cloned into `.ms/sync/remotes/<name>` and
+only fast-forward updates are allowed (non-fast-forward updates fail).
+
+```bash
+ms remote add origin /path/to/archive --type filesystem
+ms remote add origin https://github.com/user/skills.git --type git --branch main --auth token --token-env GIT_TOKEN
+ms remote add origin git@github.com:user/skills.git --type git --auth ssh --ssh-key ~/.ssh/id_rsa
+# Optional: token username (defaults to x-access-token)
+ms remote add origin https://github.com/user/skills.git --type git --auth token --token-env GIT_TOKEN --username git
+# Optional: SSH passphrase env var (if key is encrypted)
+ms remote add origin git@github.com:user/skills.git --type git --auth ssh --ssh-key ~/.ssh/id_rsa --ssh-passphrase-env SSH_KEY_PASSPHRASE
+ms remote list
+ms remote disable origin
+```
+
+### `ms sync`
+
+Synchronize skills across remotes.
+
+```bash
+ms sync
+ms sync origin --dry-run
+ms sync --status
+```
+
+Robot mode status schema (example):
+
+```json
+{
+  "status": "ok",
+  "machine": {
+    "id": "workstation-a1b2c3",
+    "name": "workstation",
+    "last_syncs": {
+      "origin": "2026-01-15T06:52:00Z"
+    }
+  },
+  "remotes": [
+    {
+      "name": "origin",
+      "type": "git",
+      "url": "https://github.com/user/skills.git",
+      "branch": "main",
+      "auth": {
+        "kind": "token",
+        "token_env": "GIT_TOKEN",
+        "username": "x-access-token"
+      },
+      "enabled": true,
+      "direction": "bidirectional",
+      "auto_sync": false,
+      "exclude_patterns": [],
+      "include_patterns": []
+    }
+  ],
+  "last_full_sync": {
+    "origin": "2026-01-15T06:52:00Z"
+  },
+  "status_counts": {
+    "Synced": 42,
+    "Conflict": 1
+  }
+}
+```
+
+### `ms machine`
+
+```bash
+ms machine info
+ms machine rename "dev-laptop"
+```
+
+### `ms conflicts`
+
+```bash
+ms conflicts list
+ms conflicts resolve rust-error-handling --strategy prefer-local --apply
+```
+
 ### `ms shell`
 
 Print shell hook snippets for bash/zsh/fish to call `ms suggest` with rate limiting.
