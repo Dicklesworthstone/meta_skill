@@ -594,3 +594,171 @@ fn print_recovery_report(report: &RecoveryReport, verbose: bool) {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use clap::Parser;
+
+    // =========================================================================
+    // Argument parsing tests
+    // =========================================================================
+
+    #[derive(Parser, Debug)]
+    #[command(name = "test")]
+    struct TestCli {
+        #[command(flatten)]
+        doctor: DoctorArgs,
+    }
+
+    #[test]
+    fn parse_doctor_defaults() {
+        let cli = TestCli::try_parse_from(["test"]).unwrap();
+        assert!(cli.doctor.check.is_none());
+        assert!(!cli.doctor.fix);
+        assert!(!cli.doctor.check_lock);
+        assert!(!cli.doctor.break_lock);
+        assert!(!cli.doctor.comprehensive);
+    }
+
+    #[test]
+    fn parse_doctor_check_safety() {
+        let cli = TestCli::try_parse_from(["test", "--check", "safety"]).unwrap();
+        assert_eq!(cli.doctor.check, Some("safety".to_string()));
+    }
+
+    #[test]
+    fn parse_doctor_check_security() {
+        let cli = TestCli::try_parse_from(["test", "--check", "security"]).unwrap();
+        assert_eq!(cli.doctor.check, Some("security".to_string()));
+    }
+
+    #[test]
+    fn parse_doctor_check_recovery() {
+        let cli = TestCli::try_parse_from(["test", "--check", "recovery"]).unwrap();
+        assert_eq!(cli.doctor.check, Some("recovery".to_string()));
+    }
+
+    #[test]
+    fn parse_doctor_fix() {
+        let cli = TestCli::try_parse_from(["test", "--fix"]).unwrap();
+        assert!(cli.doctor.fix);
+    }
+
+    #[test]
+    fn parse_doctor_check_lock() {
+        let cli = TestCli::try_parse_from(["test", "--check-lock"]).unwrap();
+        assert!(cli.doctor.check_lock);
+    }
+
+    #[test]
+    fn parse_doctor_break_lock() {
+        let cli = TestCli::try_parse_from(["test", "--break-lock"]).unwrap();
+        assert!(cli.doctor.break_lock);
+    }
+
+    #[test]
+    fn parse_doctor_comprehensive() {
+        let cli = TestCli::try_parse_from(["test", "--comprehensive"]).unwrap();
+        assert!(cli.doctor.comprehensive);
+    }
+
+    #[test]
+    fn parse_doctor_all_options() {
+        let cli = TestCli::try_parse_from([
+            "test",
+            "--check",
+            "safety",
+            "--fix",
+            "--check-lock",
+            "--break-lock",
+            "--comprehensive",
+        ])
+        .unwrap();
+
+        assert_eq!(cli.doctor.check, Some("safety".to_string()));
+        assert!(cli.doctor.fix);
+        assert!(cli.doctor.check_lock);
+        assert!(cli.doctor.break_lock);
+        assert!(cli.doctor.comprehensive);
+    }
+
+    // =========================================================================
+    // RecoveryReport tests
+    // =========================================================================
+
+    #[test]
+    fn recovery_report_empty() {
+        let report = RecoveryReport::default();
+        assert!(report.issues.is_empty());
+        assert!(!report.has_critical_issues());
+        assert!(!report.had_work());
+    }
+
+    #[test]
+    fn recovery_report_with_issues() {
+        use crate::core::recovery::{FailureMode, RecoveryIssue};
+
+        let mut report = RecoveryReport::default();
+        report.issues.push(RecoveryIssue {
+            description: "Test issue".to_string(),
+            severity: 2,
+            mode: FailureMode::Database,
+            auto_recoverable: true,
+            suggested_fix: Some("Fix this".to_string()),
+        });
+
+        assert_eq!(report.issues.len(), 1);
+        assert!(!report.has_critical_issues()); // severity 2 is not critical
+    }
+
+    #[test]
+    fn recovery_report_with_critical_issue() {
+        use crate::core::recovery::{FailureMode, RecoveryIssue};
+
+        let mut report = RecoveryReport::default();
+        report.issues.push(RecoveryIssue {
+            description: "Critical issue".to_string(),
+            severity: 1, // Critical severity
+            mode: FailureMode::Transaction,
+            auto_recoverable: false,
+            suggested_fix: None,
+        });
+
+        assert!(report.has_critical_issues());
+    }
+
+    #[test]
+    fn recovery_report_had_work() {
+        let mut report = RecoveryReport::default();
+        report.rolled_back = 1;
+        assert!(report.had_work());
+
+        let mut report = RecoveryReport::default();
+        report.completed = 1;
+        assert!(report.had_work());
+
+        let mut report = RecoveryReport::default();
+        report.orphaned_files = 1;
+        assert!(report.had_work());
+
+        let mut report = RecoveryReport::default();
+        report.cache_invalidated = 1;
+        assert!(report.had_work());
+    }
+
+    // =========================================================================
+    // Available checks tests
+    // =========================================================================
+
+    #[test]
+    fn available_checks_are_documented() {
+        // This test documents the available check types
+        let available_checks = ["safety", "security", "recovery"];
+
+        for check in &available_checks {
+            let cli = TestCli::try_parse_from(["test", "--check", check]).unwrap();
+            assert_eq!(cli.doctor.check, Some(check.to_string()));
+        }
+    }
+}
