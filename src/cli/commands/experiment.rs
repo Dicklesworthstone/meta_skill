@@ -77,9 +77,19 @@ pub fn run(ctx: &AppContext, args: &ExperimentArgs) -> Result<()> {
 }
 
 fn run_create(ctx: &AppContext, args: &ExperimentCreateArgs) -> Result<()> {
+    if args.scope != "skill" && args.scope != "slice" {
+        return Err(MsError::ValidationFailed(
+            "scope must be one of: skill, slice".to_string(),
+        ));
+    }
     if args.scope == "slice" && args.scope_id.is_none() {
         return Err(MsError::ValidationFailed(
             "--scope-id is required when scope is slice".to_string(),
+        ));
+    }
+    if args.scope == "skill" && args.scope_id.is_some() {
+        return Err(MsError::ValidationFailed(
+            "--scope-id is only valid when scope is slice".to_string(),
         ));
     }
 
@@ -177,6 +187,7 @@ fn build_variants_payload(variants: &[String]) -> Result<(String, String)> {
         ));
     }
 
+    let mut seen = std::collections::HashSet::new();
     let weight = 1.0 / (variants.len() as f64);
     let mut items = Vec::new();
     let mut weights = serde_json::Map::new();
@@ -189,6 +200,12 @@ fn build_variants_payload(variants: &[String]) -> Result<(String, String)> {
             return Err(MsError::ValidationFailed(
                 "variant id cannot be empty".to_string(),
             ));
+        }
+        if !seen.insert(id.to_string()) {
+            return Err(MsError::ValidationFailed(format!(
+                "duplicate variant id: {}",
+                id
+            )));
         }
         items.push(serde_json::json!({
             "id": id,
