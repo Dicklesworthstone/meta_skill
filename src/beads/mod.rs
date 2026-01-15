@@ -42,10 +42,17 @@
 
 mod client;
 mod mock;
+pub mod test_logger;
 mod types;
+
+#[cfg(test)]
+mod concurrent_tests;
+#[cfg(test)]
+mod wal_safety_tests;
 
 pub use client::{BeadsClient, SyncStatus};
 pub use mock::{test_issue, BeadsErrorKind, BeadsOperations, ErrorInjection, MockBeadsClient};
+pub use test_logger::{LogEntry, LogLevel, TestLogger, TestReport};
 pub use types::{
     CreateIssueRequest, Dependency, DependencyType, Issue, IssueStatus, IssueType, Priority,
     UpdateIssueRequest, WorkFilter,
