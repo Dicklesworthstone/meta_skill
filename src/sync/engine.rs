@@ -468,7 +468,8 @@ fn clone_remote(remote: &RemoteConfig, path: &Path, auth: &ResolvedAuth) -> Resu
 fn sync_git_repo(
     repo: &Repository,
     remote_url: &str,
-    auth: Option<&RemoteAuth>,
+    branch_override: Option<&str>,
+    auth: &ResolvedAuth,
 ) -> Result<()> {
     let callbacks = build_callbacks(auth)?;
     let mut remote = repo
@@ -526,7 +527,7 @@ fn sync_git_repo(
 fn fetch_git_repo(
     repo: &Repository,
     remote_url: &str,
-    auth: Option<&RemoteAuth>,
+    auth: &ResolvedAuth,
 ) -> Result<()> {
     let callbacks = build_callbacks(auth)?;
     let mut remote = repo
