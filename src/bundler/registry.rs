@@ -243,11 +243,27 @@ impl BundleRegistry {
             .map_err(|e| MsError::Config(format!("sync temp registry file: {}", e)))?;
         drop(file);
 
-        std::fs::rename(&temp_path, &self.path).map_err(|e| {
-            // Clean up temp file on rename failure
-            let _ = std::fs::remove_file(&temp_path);
-            MsError::Config(format!("rename registry file: {}", e))
-        })?;
+        match std::fs::rename(&temp_path, &self.path) {
+            Ok(()) => {}
+            Err(err) if err.kind() == std::io::ErrorKind::AlreadyExists => {
+                // Windows does not allow renaming over an existing file.
+                std::fs::remove_file(&self.path).map_err(|e| {
+                    MsError::Config(format!("remove existing registry file: {}", e))
+                })?;
+                if let Err(err) = std::fs::rename(&temp_path, &self.path) {
+                    let _ = std::fs::remove_file(&temp_path);
+                    return Err(MsError::Config(format!("rename registry file: {}", err)));
+                }
+            }
+            Err(err) => {
+                // Clean up temp file on rename failure
+                let _ = std::fs::remove_file(&temp_path);
+                return Err(MsError::Config(format!(
+                    "rename registry file: {}",
+                    err
+                )));
+            }
+        }
 
         Ok(())
     }

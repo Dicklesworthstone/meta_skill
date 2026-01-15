@@ -145,7 +145,17 @@ impl SignalBandit {
         let json = serde_json::to_string_pretty(self)?;
         let temp_path = path.with_extension("tmp");
         std::fs::write(&temp_path, json).map_err(MsError::Io)?;
-        std::fs::rename(&temp_path, path).map_err(MsError::Io)?;
+        match std::fs::rename(&temp_path, path) {
+            Ok(()) => {}
+            Err(err) if err.kind() == std::io::ErrorKind::AlreadyExists => {
+                std::fs::remove_file(path).map_err(MsError::Io)?;
+                if let Err(err) = std::fs::rename(&temp_path, path) {
+                    let _ = std::fs::remove_file(&temp_path);
+                    return Err(MsError::Io(err));
+                }
+            }
+            Err(err) => return Err(MsError::Io(err)),
+        }
         Ok(())
     }
 

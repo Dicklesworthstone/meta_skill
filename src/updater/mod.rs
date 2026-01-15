@@ -292,6 +292,29 @@ impl UpdateDownloader {
 // Creating a temp directory can fail, so callers must use UpdateDownloader::new()
 // which properly returns a Result for error handling.
 
+#[cfg(unix)]
+fn atomic_replace_unix(new_binary: &Path, current_binary: &Path) -> Result<()> {
+    use std::io::ErrorKind;
+
+    match std::fs::rename(new_binary, current_binary) {
+        Ok(()) => Ok(()),
+        Err(err) if err.kind() == ErrorKind::CrossesDevices => {
+            // Cross-filesystem rename isn't atomic; copy into the target dir then rename.
+            let temp_path = current_binary.with_extension("new");
+            if temp_path.exists() {
+                std::fs::remove_file(&temp_path)?;
+            }
+            std::fs::copy(new_binary, &temp_path)?;
+            if let Err(err) = std::fs::rename(&temp_path, current_binary) {
+                let _ = std::fs::remove_file(&temp_path);
+                return Err(err.into());
+            }
+            Ok(())
+        }
+        Err(err) => Err(err.into()),
+    }
+}
+
 /// Installer for atomic binary replacement.
 pub struct UpdateInstaller {
     current_binary: PathBuf,
@@ -343,7 +366,7 @@ impl UpdateInstaller {
         // Perform atomic swap
         #[cfg(unix)]
         {
-            std::fs::rename(new_binary, &self.current_binary)?;
+            atomic_replace_unix(new_binary, &self.current_binary)?;
         }
 
         #[cfg(windows)]
