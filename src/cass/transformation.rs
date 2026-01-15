@@ -410,37 +410,6 @@ pub trait UncertaintyQueueSink: Send + Sync {
     ) -> Result<String>;
 }
 
-/// Item to be queued for uncertainty review
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct UncertaintyItem {
-    /// Unique identifier
-    pub id: String,
-    /// The original instance that couldn't be generalized
-    pub instance: SpecificInstance,
-    /// Validation that showed low confidence
-    pub validation: GeneralizationValidation,
-    /// Best cluster found
-    pub best_cluster: Option<InstanceCluster>,
-    /// Critique if available
-    pub critique: Option<RefinementCritique>,
-    /// Reason for uncertainty
-    pub reason: UncertaintyReason,
-    /// Timestamp
-    pub created_at: String,
-}
-
-/// Why an item was queued for uncertainty
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum UncertaintyReason {
-    /// Confidence below threshold
-    LowConfidence { confidence: f32, threshold: f32 },
-    /// Not enough similar instances found
-    InsufficientInstances { found: usize, required: usize },
-    /// LLM critique flagged overgeneralization
-    OvergeneralizationDetected { summary: String },
-}
-
 /// Null implementation of uncertainty queue for testing
 pub struct NullUncertaintyQueue;
 
@@ -1462,16 +1431,5 @@ mod tests {
         let reason = CounterExampleReason::OutcomeMismatch;
         let json = serde_json::to_string(&reason).unwrap();
         assert_eq!(json, "\"outcome_mismatch\"");
-    }
-
-    #[test]
-    fn test_uncertainty_reason_serialization() {
-        let reason = UncertaintyReason::LowConfidence {
-            confidence: 0.5,
-            threshold: 0.7,
-        };
-        let json = serde_json::to_string(&reason).unwrap();
-        assert!(json.contains("low_confidence"));
-        assert!(json.contains("0.5"));
     }
 }

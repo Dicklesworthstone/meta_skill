@@ -457,51 +457,6 @@ pub struct EvidenceCoverage {
 }
 
 // =============================================================================
-// UNCERTAINTY QUEUE (LEARNING)
-// =============================================================================
-
-/// Queue item for low-confidence generalizations
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct UncertaintyItem {
-    /// Unique item ID
-    pub id: String,
-    /// The pattern candidate being evaluated
-    pub pattern_candidate: ExtractedPattern,
-    /// Why this is uncertain
-    pub reason: String,
-    /// Confidence score (0.0 - 1.0)
-    pub confidence: f32,
-    /// Suggested CASS queries to find more evidence
-    pub suggested_queries: Vec<String>,
-    /// Number of auto-mining attempts
-    pub auto_mine_attempts: u32,
-    /// Current status
-    pub status: UncertaintyStatus,
-}
-
-/// Status of an uncertainty item
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "lowercase")]
-pub enum UncertaintyStatus {
-    Pending,
-    Resolved,
-    Discarded,
-}
-
-/// An extracted pattern from CASS sessions
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ExtractedPattern {
-    /// Pattern type (rule, command, example, etc.)
-    pub pattern_type: String,
-    /// The generalized pattern text
-    pub text: String,
-    /// Source sessions
-    pub source_sessions: Vec<String>,
-    /// Confidence score
-    pub confidence: f32,
-}
-
-// =============================================================================
 // SKILL PACK (RUNTIME CACHE)
 // =============================================================================
 

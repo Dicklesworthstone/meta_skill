@@ -5,7 +5,7 @@ use std::hash::{Hash, Hasher};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-use crate::error::{MsError, Result};
+use crate::error::Result;
 
 #[derive(Debug, thiserror::Error)]
 pub enum CaptureError {
@@ -78,7 +78,7 @@ impl ContextCapture {
 
     fn get_git_diff(repo_root: &Path) -> Option<String> {
         let output = Command::new("git")
-            .args(["diff", "HEAD"])
+            .args(["diff", "--name-only", "HEAD"])
             .current_dir(repo_root)
             .output()
             .ok()?;
@@ -146,19 +146,8 @@ impl ContextCapture {
             .unwrap_or_else(|| PathBuf::from("."))
             .join("ms")
             .join("command_history");
-        if !history_path.exists() {
-            return Ok(Vec::new());
-        }
-        let content = std::fs::read_to_string(&history_path).map_err(|err| {
-            MsError::Config(format!("read history {}: {err}", history_path.display()))
-        })?;
-        let commands = content
-            .lines()
-            .rev()
-            .take(20)
-            .map(|line| line.to_string())
-            .collect();
-        Ok(commands)
+        
+        crate::utils::fs::read_tail(history_path, 20).map_err(|e| e.into())
     }
 
     pub fn compute_diff_hash(&self) -> u64 {

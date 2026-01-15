@@ -2,6 +2,8 @@
 //!
 //! Helper functions for file operations.
 
+use std::fs::File;
+use std::io::{Read, Seek, SeekFrom};
 use std::path::Path;
 
 use crate::error::Result;
@@ -25,10 +27,96 @@ pub fn read_optional(path: impl AsRef<Path>) -> Result<Option<String>> {
     }
 }
 
+/// Read the last `count` lines from a file efficiently.
+pub fn read_tail(path: impl AsRef<Path>, count: usize) -> Result<Vec<String>> {
+    let path = path.as_ref();
+    if !path.exists() {
+        return Ok(Vec::new());
+    }
+
+    let mut file = File::open(path)?;
+    let len = file.metadata()?.len();
+    if len == 0 {
+        return Ok(Vec::new());
+    }
+
+    // Heuristic: Read last 8KB (enough for ~100 typical command lines)
+    let chunk_size = 8 * 1024;
+    let seek_pos = if len > chunk_size {
+        len - chunk_size
+    } else {
+        0
+    };
+
+    file.seek(SeekFrom::Start(seek_pos))?;
+    let mut buffer = Vec::new();
+    file.read_to_end(&mut buffer)?;
+
+    let content = String::from_utf8_lossy(&buffer);
+    let mut lines: Vec<String> = content.lines().map(String::from).collect();
+
+    // If we sought into the middle of a line, discard the first partial line
+    // unless we read the whole file.
+    if seek_pos > 0 && !lines.is_empty() {
+        lines.remove(0);
+    }
+
+    let start = lines.len().saturating_sub(count);
+    Ok(lines[start..].to_vec())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use tempfile::TempDir;
+
+    // =========================================================================
+    // read_tail tests
+    // =========================================================================
+
+    #[test]
+    fn read_tail_short_file() {
+        let temp = TempDir::new().unwrap();
+        let file = temp.path().join("short.txt");
+        std::fs::write(&file, "line1\nline2\nline3").unwrap();
+
+        let lines = read_tail(&file, 2).unwrap();
+        assert_eq!(lines, vec!["line2", "line3"]);
+    }
+
+    #[test]
+    fn read_tail_exact() {
+        let temp = TempDir::new().unwrap();
+        let file = temp.path().join("exact.txt");
+        std::fs::write(&file, "line1\nline2").unwrap();
+
+        let lines = read_tail(&file, 2).unwrap();
+        assert_eq!(lines, vec!["line1", "line2"]);
+    }
+
+    #[test]
+    fn read_tail_more_than_exists() {
+        let temp = TempDir::new().unwrap();
+        let file = temp.path().join("small.txt");
+        std::fs::write(&file, "line1").unwrap();
+
+        let lines = read_tail(&file, 5).unwrap();
+        assert_eq!(lines, vec!["line1"]);
+    }
+
+    #[test]
+    fn read_tail_long_file() {
+        let temp = TempDir::new().unwrap();
+        let file = temp.path().join("long.txt");
+        // Create 1000 lines
+        let content: String = (0..1000).map(|i| format!("line{i}\n")).collect();
+        std::fs::write(&file, content).unwrap();
+
+        let lines = read_tail(&file, 5).unwrap();
+        assert_eq!(lines.len(), 5);
+        assert_eq!(lines[0], "line995");
+        assert_eq!(lines[4], "line999");
+    }
 
     // =========================================================================
     // ensure_dir tests
