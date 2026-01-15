@@ -414,6 +414,21 @@ ms antipatterns show <id>            # Details with linked skills
 ms antipatterns link <pattern-id> <skill-id>      # Manual linking
 ```
 
+### Cross-Project Learning
+
+```bash
+ms cross-project summary                      # Sessions by project
+ms cross-project summary --query "error"      # Filter sessions with CASS query
+ms cross-project summary --top 10             # Top N projects
+
+ms cross-project patterns                     # Aggregate patterns across projects
+ms cross-project patterns --min-occurrences 3 --min-projects 2
+ms cross-project patterns --query "rust"      # Pattern mining scoped by query
+
+ms cross-project gaps                         # Patterns with weak/no skill matches
+ms cross-project gaps --min-score 1.0         # Treat low-scoring matches as gaps
+```
+
 ### Bundles and Distribution
 
 ```bash
@@ -474,6 +489,8 @@ ms prune list                        # List prunable data
 ms prune analyze                     # Analyze pruning candidates
 ms prune proposals                   # Propose merge/deprecate actions
 ms prune proposals --emit-beads      # Emit beads issues for proposals
+ms prune review                      # Interactive proposal review
+ms prune apply merge:a,b --approve   # Apply a proposal (merge/deprecate/split)
 ms prune purge all --older-than 30 --approve
 ms validate rust-error-handling      # Schema validation
 ms validate rust-error-handling --ubs  # With static analysis
