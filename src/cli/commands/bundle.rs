@@ -56,8 +56,8 @@ pub struct BundleCreateArgs {
     pub id: Option<String>,
 
     /// Bundle version
-    #[arg(long, default_value = "0.1.0")]
-    pub version: String,
+    #[arg(long = "bundle-version", default_value = "0.1.0")]
+    pub bundle_version: String,
 
     /// Output path for bundle file (.msb or .tar.gz)
     #[arg(long)]
@@ -281,7 +281,7 @@ fn run_create(ctx: &AppContext, args: &BundleCreateArgs) -> Result<()> {
         bundle: BundleInfo {
             id: bundle_id.clone(),
             name: args.name.clone(),
-            version: args.version.clone(),
+            version: args.bundle_version.clone(),
             description: None,
             authors: Vec::new(),
             license: None,
@@ -1309,7 +1309,7 @@ mod tests {
         let args = TestCli::parse_from(["test", "create", "my-bundle", "--skills", "skill1"]);
         if let BundleCommand::Create(create) = args.cmd {
             assert_eq!(create.name, "my-bundle");
-            assert_eq!(create.version, "0.1.0"); // default
+            assert_eq!(create.bundle_version, "0.1.0"); // default
             assert_eq!(create.skills, vec!["skill1"]);
             assert!(!create.sign);
             assert!(!create.write_manifest);
@@ -1343,7 +1343,7 @@ mod tests {
 
         if let BundleCommand::Create(create) = args.cmd {
             assert_eq!(create.name, "my-bundle");
-            assert_eq!(create.version, "1.0.0");
+            assert_eq!(create.bundle_version, "1.0.0");
             assert_eq!(create.id, Some("custom-id".to_string()));
             assert!(create.write_manifest);
         } else {
