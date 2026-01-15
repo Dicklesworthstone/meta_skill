@@ -308,17 +308,17 @@ impl TestFixture {
             .expect("Failed to spawn ms command");
 
         // Wait with timeout
-        let result = loop {
+        let result: Result<std::process::ExitStatus, String> = loop {
             match child.try_wait() {
                 Ok(Some(status)) => break Ok(status),
                 Ok(None) => {
                     if start.elapsed() > timeout {
                         let _ = child.kill();
-                        break Err("Command timed out");
+                        break Err("Command timed out".to_string());
                     }
                     std::thread::sleep(Duration::from_millis(50));
                 }
-                Err(e) => break Err(Box::leak(format!("Error waiting: {}", e).into_boxed_str())),
+                Err(e) => break Err(format!("Error waiting: {}", e)),
             }
         };
 
@@ -336,7 +336,7 @@ impl TestFixture {
                 }
                 (status.success(), status.code().unwrap_or(-1), stdout_str, stderr_str)
             }
-            Err(msg) => (false, -1, String::new(), msg.to_string()),
+            Err(msg) => (false, -1, String::new(), msg),
         };
 
         println!("[CMD] Exit code: {}", exit_code);
