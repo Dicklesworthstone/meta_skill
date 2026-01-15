@@ -448,23 +448,20 @@ fn detect_section_conflicts(
 ) -> Vec<ConflictDetail> {
     let mut conflicts = Vec::new();
 
-    // Build section maps
-    let higher_sections: HashMap<&str, &SkillSection> =
-        higher.sections.iter().map(|s| (s.id.as_str(), s)).collect();
-
+    // Build section map for lower spec
     let lower_sections: HashMap<&str, &SkillSection> =
         lower.sections.iter().map(|s| (s.id.as_str(), s)).collect();
 
-    // Check for sections that exist in both
-    for (id, higher_section) in &higher_sections {
-        if let Some(lower_section) = lower_sections.get(id) {
+    // Check for sections that exist in both, iterating in order
+    for higher_section in &higher.sections {
+        if let Some(lower_section) = lower_sections.get(higher_section.id.as_str()) {
             let diff = compute_section_diff(higher_section, lower_section);
             if !diff.higher_only.is_empty()
                 || !diff.lower_only.is_empty()
                 || !diff.modified.is_empty()
             {
                 conflicts.push(ConflictDetail {
-                    section_id: id.to_string(),
+                    section_id: higher_section.id.clone(),
                     section_name: higher_section.title.clone(),
                     higher_layer,
                     lower_layer,
@@ -480,13 +477,13 @@ fn detect_section_conflicts(
 
 /// Compute diff between two sections
 fn compute_section_diff(higher: &SkillSection, lower: &SkillSection) -> SectionDiff {
-    let higher_blocks: HashMap<&str, &str> = higher
+    let higher_blocks_map: HashMap<&str, &str> = higher
         .blocks
         .iter()
         .map(|b| (b.id.as_str(), b.content.as_str()))
         .collect();
 
-    let lower_blocks: HashMap<&str, &str> = lower
+    let lower_blocks_map: HashMap<&str, &str> = lower
         .blocks
         .iter()
         .map(|b| (b.id.as_str(), b.content.as_str()))
@@ -496,23 +493,23 @@ fn compute_section_diff(higher: &SkillSection, lower: &SkillSection) -> SectionD
     let mut lower_only = Vec::new();
     let mut modified = Vec::new();
 
-    // Find blocks only in higher
-    for (id, content) in &higher_blocks {
-        if !lower_blocks.contains_key(id) {
-            higher_only.push(id.to_string());
-        } else if lower_blocks.get(id) != Some(content) {
+    // Find blocks only in higher or modified (iterating in order)
+    for block in &higher.blocks {
+        if !lower_blocks_map.contains_key(block.id.as_str()) {
+            higher_only.push(block.id.clone());
+        } else if lower_blocks_map.get(block.id.as_str()) != Some(&block.content.as_str()) {
             modified.push(BlockDiff {
-                block_id: id.to_string(),
-                higher_content: content.to_string(),
-                lower_content: lower_blocks.get(id).unwrap().to_string(),
+                block_id: block.id.clone(),
+                higher_content: block.content.clone(),
+                lower_content: lower_blocks_map.get(block.id.as_str()).unwrap().to_string(),
             });
         }
     }
 
-    // Find blocks only in lower
-    for id in lower_blocks.keys() {
-        if !higher_blocks.contains_key(id) {
-            lower_only.push(id.to_string());
+    // Find blocks only in lower (iterating in order)
+    for block in &lower.blocks {
+        if !higher_blocks_map.contains_key(block.id.as_str()) {
+            lower_only.push(block.id.clone());
         }
     }
 
@@ -902,5 +899,39 @@ mod tests {
         assert_eq!(resolved.spec.sections.len(), 2);
         // Name should be from base layer
         assert_eq!(resolved.spec.metadata.name, "Base Skill");
+    }
+
+    #[test]
+    fn test_conflict_determinism() {
+        // Create specs with multiple sections in a specific order
+        let sections = vec![
+            make_section("s1", "First", vec![("b1", "A")]),
+            make_section("s2", "Second", vec![("b2", "B")]),
+            make_section("s3", "Third", vec![("b3", "C")]),
+        ];
+        let higher = make_skill_spec("test", "Test", sections);
+
+        // Create lower spec with conflicting content in all sections
+        let lower_sections = vec![
+            make_section("s1", "First", vec![("b1", "X")]),
+            make_section("s2", "Second", vec![("b2", "Y")]),
+            make_section("s3", "Third", vec![("b3", "Z")]),
+        ];
+        let lower = make_skill_spec("test", "Test", lower_sections);
+
+        // Detect conflicts
+        let conflicts = detect_section_conflicts(
+            &higher,
+            SkillLayer::User,
+            &lower,
+            SkillLayer::Base,
+            MergeStrategy::Auto,
+        );
+
+        // Verify order matches 'higher' spec order (s1, s2, s3)
+        assert_eq!(conflicts.len(), 3);
+        assert_eq!(conflicts[0].section_id, "s1");
+        assert_eq!(conflicts[1].section_id, "s2");
+        assert_eq!(conflicts[2].section_id, "s3");
     }
 }

@@ -585,6 +585,7 @@ fn try_improve(
         selected_ids.remove(&removed_id);
         selected.remove(remove_idx);
 
+        group_counts = temp_group_counts;
         selected.push(candidate.clone());
         selected_ids.insert(candidate.id.clone());
         add_group_count(&mut group_counts, candidate);
