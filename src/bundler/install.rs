@@ -357,4 +357,109 @@ mod tests {
             PathBuf::from("/archive/skills/by-id/valid-skill")
         );
     }
+
+    #[test]
+    fn allow_unsigned_skips_verification_for_signed_bundles() {
+        use crate::bundler::manifest::BundleSignature;
+
+        let dir = tempdir().unwrap();
+        let skill_dir = dir.path().join("skills/by-id/signed-demo");
+        std::fs::create_dir_all(&skill_dir).unwrap();
+        std::fs::write(skill_dir.join("SKILL.md"), "signed content").unwrap();
+
+        // Create a manifest with a fake signature
+        let manifest = BundleManifest {
+            bundle: BundleInfo {
+                id: "signed-bundle".to_string(),
+                name: "Signed Bundle".to_string(),
+                version: "1.0.0".to_string(),
+                description: None,
+                authors: vec![],
+                license: None,
+                repository: None,
+                keywords: vec![],
+                ms_version: None,
+            },
+            skills: vec![BundledSkill {
+                name: "signed-demo".to_string(),
+                path: PathBuf::from("skills/by-id/signed-demo"),
+                version: Some("1.0.0".to_string()),
+                hash: None,
+                optional: false,
+            }],
+            dependencies: vec![],
+            checksum: None,
+            // Bundle has signatures - would normally require verification
+            signatures: vec![BundleSignature {
+                key_id: "test-key".to_string(),
+                signer: "ed25519".to_string(),
+                signature: "fake-signature-for-test".to_string(),
+            }],
+        };
+
+        let bundle = Bundle::new(manifest, dir.path());
+        let package = bundle.package().unwrap();
+
+        // With allow_unsigned(), signed bundles should install without verification
+        let install_root = tempdir().unwrap();
+        let options = InstallOptions::<crate::bundler::manifest::NoopSignatureVerifier>::allow_unsigned();
+        let report = install_with_options(&package, install_root.path(), &[], &options).unwrap();
+
+        assert_eq!(report.installed, vec!["signed-demo".to_string()]);
+        assert!(!report.signature_verified); // Signature was NOT verified
+        let installed_path = install_root
+            .path()
+            .join("skills/by-id/signed-demo/SKILL.md");
+        assert!(installed_path.exists());
+    }
+
+    #[test]
+    fn signed_bundle_without_verifier_fails_by_default() {
+        use crate::bundler::manifest::BundleSignature;
+
+        let dir = tempdir().unwrap();
+        let skill_dir = dir.path().join("skills/by-id/signed-demo2");
+        std::fs::create_dir_all(&skill_dir).unwrap();
+        std::fs::write(skill_dir.join("SKILL.md"), "signed content").unwrap();
+
+        let manifest = BundleManifest {
+            bundle: BundleInfo {
+                id: "signed-bundle2".to_string(),
+                name: "Signed Bundle 2".to_string(),
+                version: "1.0.0".to_string(),
+                description: None,
+                authors: vec![],
+                license: None,
+                repository: None,
+                keywords: vec![],
+                ms_version: None,
+            },
+            skills: vec![BundledSkill {
+                name: "signed-demo2".to_string(),
+                path: PathBuf::from("skills/by-id/signed-demo2"),
+                version: Some("1.0.0".to_string()),
+                hash: None,
+                optional: false,
+            }],
+            dependencies: vec![],
+            checksum: None,
+            signatures: vec![BundleSignature {
+                key_id: "test-key".to_string(),
+                signer: "ed25519".to_string(),
+                signature: "fake-signature".to_string(),
+            }],
+        };
+
+        let bundle = Bundle::new(manifest, dir.path());
+        let package = bundle.package().unwrap();
+
+        // Default options (allow_unsigned=false, no verifier) should fail for signed bundle
+        let install_root = tempdir().unwrap();
+        let options = InstallOptions::<crate::bundler::manifest::NoopSignatureVerifier>::default();
+        let result = install_with_options(&package, install_root.path(), &[], &options);
+
+        assert!(result.is_err());
+        let err = result.unwrap_err().to_string();
+        assert!(err.contains("no signature verifier configured"));
+    }
 }
