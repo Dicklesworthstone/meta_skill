@@ -343,7 +343,7 @@ fn parse_tags_from_metadata(metadata_json: &str) -> Vec<String> {
         if let Some(tags) = meta.get("tags").and_then(|t| t.as_array()) {
             return tags
                 .iter()
-                .filter_map(|v| v.as_str().map(String::from))
+                .filter_map(|v| v.as_str().map(|tag| tag.to_lowercase()))
                 .collect();
         }
     }
