@@ -457,11 +457,7 @@ fn export_dot(records: &[crate::storage::sqlite::EvidenceRecord]) -> Result<Stri
     // Session nodes (green)
     dot.push_str("\n  // Sessions\n");
     for session in &sessions {
-        let short_id = if session.len() > 12 {
-            &session[..12]
-        } else {
-            session
-        };
+        let short_id = truncate_string(session, 12);
         dot.push_str(&format!(
             "  \"session:{}\" [label=\"{}\" color=green style=filled fillcolor=lightgreen];\n",
             session, short_id

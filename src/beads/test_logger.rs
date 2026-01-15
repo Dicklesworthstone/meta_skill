@@ -9,6 +9,7 @@ use std::time::{Duration, Instant};
 use serde::{Deserialize, Serialize};
 
 use crate::MsError;
+use crate::utils::format::truncate_string;
 
 /// Structured test logger for beads operations.
 #[derive(Debug)]
@@ -115,11 +116,7 @@ impl TestLogger {
 
         match result {
             Ok(output) => {
-                let preview = if output.len() > 200 {
-                    format!("{}...", &output[..200])
-                } else {
-                    output.clone()
-                };
+                let preview = truncate_string(output, 200);
 
                 self.log(
                     LogLevel::Success,

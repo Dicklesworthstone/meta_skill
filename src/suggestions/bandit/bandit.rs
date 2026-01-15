@@ -167,12 +167,12 @@ impl SignalBandit {
         let mut bandit: Self = serde_json::from_str(&contents)?;
 
         // Schema evolution: ensure all signal types have an arm
-        let default_config = BanditConfig::default();
+        let decay = bandit.config.observation_decay;
         for signal in SignalType::all() {
             bandit
                 .arms
                 .entry(*signal)
-                .or_insert_with(|| BanditArm::new(*signal, default_config.observation_decay));
+                .or_insert_with(|| BanditArm::new(*signal, decay));
         }
 
         Ok(bandit)
