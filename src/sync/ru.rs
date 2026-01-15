@@ -10,6 +10,28 @@ use serde::{Deserialize, Serialize};
 
 use crate::error::{MsError, Result};
 
+#[derive(Debug, Deserialize)]
+struct RuSyncOutput {
+    #[serde(default)]
+    repos: Vec<RuSyncRepo>,
+}
+
+#[derive(Debug, Deserialize)]
+struct RuSyncRepo {
+    #[serde(default)]
+    name: Option<String>,
+    #[serde(default)]
+    repo: Option<String>,
+    #[serde(default)]
+    path: Option<String>,
+    #[serde(default)]
+    action: Option<String>,
+    #[serde(default)]
+    status: Option<String>,
+    #[serde(default)]
+    message: Option<String>,
+}
+
 /// Exit codes from ru (see AGENTS.md)
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RuExitCode {
@@ -201,21 +223,8 @@ impl RuClient {
         let stdout = String::from_utf8_lossy(&output.stdout);
         let stderr = String::from_utf8_lossy(&output.stderr);
 
-        // Parse JSON output
-        let mut result: RuSyncResult = serde_json::from_str(&stdout).unwrap_or_else(|_| {
-            // Fallback for non-JSON output
-            RuSyncResult {
-                exit_code,
-                cloned: Vec::new(),
-                pulled: Vec::new(),
-                conflicts: Vec::new(),
-                errors: vec![RuError {
-                    repo: "unknown".to_string(),
-                    error: stdout.to_string(),
-                }],
-                skipped: Vec::new(),
-            }
-        });
+        let mut result = parse_sync_output(&stdout, exit_code);
+
         // Ensure exit code matches actual process status
         result.exit_code = exit_code;
 
@@ -308,6 +317,79 @@ impl RuClient {
     }
 }
 
+fn parse_sync_output(stdout: &str, exit_code: i32) -> RuSyncResult {
+    let parsed = serde_json::from_str::<RuSyncOutput>(stdout);
+    if let Ok(output) = parsed {
+        let mut result = RuSyncResult {
+            exit_code,
+            cloned: Vec::new(),
+            pulled: Vec::new(),
+            conflicts: Vec::new(),
+            errors: Vec::new(),
+            skipped: Vec::new(),
+        };
+
+        for repo in output.repos {
+            let name = repo
+                .repo
+                .or(repo.name)
+                .or(repo.path.as_ref().and_then(|p| {
+                    std::path::Path::new(p)
+                        .file_name()
+                        .map(|s| s.to_string_lossy().to_string())
+                }))
+                .unwrap_or_else(|| "unknown".to_string());
+            let status = repo.status.unwrap_or_else(|| repo.action.unwrap_or_default());
+            let message = repo.message.unwrap_or_default();
+
+            match status.as_str() {
+                "cloned" | "clone" => result.cloned.push(name),
+                "updated" | "pull" => result.pulled.push(name),
+                "current" | "skip" => result.skipped.push(name),
+                "conflict" => result.conflicts.push(RuConflict {
+                    repo: name,
+                    reason: if message.is_empty() {
+                        "conflict".to_string()
+                    } else {
+                        message
+                    },
+                    resolution_hint: None,
+                }),
+                "failed" | "fail" => result.errors.push(RuError {
+                    repo: name,
+                    error: if message.is_empty() {
+                        "failed".to_string()
+                    } else {
+                        message
+                    },
+                }),
+                _ => result.skipped.push(name),
+            }
+        }
+
+        if result.errors.is_empty() && result.conflicts.is_empty() && stdout.trim().is_empty() {
+            result.errors.push(RuError {
+                repo: "unknown".to_string(),
+                error: "ru returned empty output".to_string(),
+            });
+        }
+
+        return result;
+    }
+
+    RuSyncResult {
+        exit_code,
+        cloned: Vec::new(),
+        pulled: Vec::new(),
+        conflicts: Vec::new(),
+        errors: vec![RuError {
+            repo: "unknown".to_string(),
+            error: stdout.to_string(),
+        }],
+        skipped: Vec::new(),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -353,5 +435,29 @@ mod tests {
     fn ru_client_with_explicit_path() {
         let client = RuClient::with_path(PathBuf::from("/usr/local/bin/ru"));
         assert_eq!(client.ru_path(), "/usr/local/bin/ru");
+    }
+
+    #[test]
+    fn parse_sync_output_maps_repo_statuses() {
+        let sample = r#"
+        {
+          "version": "1.2.0",
+          "repos": [
+            {"name":"alpha","path":"/data/projects/alpha","action":"pull","status":"updated","message":""},
+            {"name":"beta","path":"/data/projects/beta","action":"clone","status":"cloned","message":""},
+            {"name":"gamma","path":"/data/projects/gamma","action":"skip","status":"current","message":"Already up to date"},
+            {"name":"delta","path":"/data/projects/delta","action":"pull","status":"conflict","message":"merge conflict"},
+            {"name":"epsilon","path":"/data/projects/epsilon","action":"pull","status":"failed","message":"auth failed"}
+          ]
+        }
+        "#;
+        let result = parse_sync_output(sample, 2);
+        assert_eq!(result.cloned, vec!["beta".to_string()]);
+        assert_eq!(result.pulled, vec!["alpha".to_string()]);
+        assert_eq!(result.skipped, vec!["gamma".to_string()]);
+        assert_eq!(result.conflicts.len(), 1);
+        assert_eq!(result.conflicts[0].repo, "delta");
+        assert_eq!(result.errors.len(), 1);
+        assert_eq!(result.errors[0].repo, "epsilon");
     }
 }

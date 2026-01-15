@@ -102,6 +102,7 @@ fn resolve(ctx: &AppContext, args: &ConflictsResolveArgs) -> Result<()> {
             ctx.git.clone(),
             ctx.db.clone(),
             ctx.ms_root.clone(),
+            ctx.config.ru.clone(),
         );
         let options = SyncOptions {
             force: true,

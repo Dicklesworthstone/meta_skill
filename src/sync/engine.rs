@@ -9,12 +9,14 @@ use serde::Serialize;
 use sha2::{Digest, Sha256};
 
 use crate::core::SkillSpec;
+use crate::config::RuConfig;
 use crate::error::{MsError, Result};
 use crate::storage::{Database, GitArchive, TxManager};
 
 use super::SyncConfig;
 use super::config::{ConflictStrategy, RemoteAuth, RemoteConfig, RemoteType, validate_remote_name};
 use super::machine::MachineIdentity;
+use super::ru::{RuClient, RuExitCode, RuSyncOptions};
 use super::state::{SkillSyncState, SkillSyncStatus, SyncState};
 
 #[derive(Debug, Clone, Default)]
@@ -28,6 +30,7 @@ pub struct SyncOptions {
 #[derive(Debug, Clone, Default, Serialize)]
 pub struct SyncReport {
     pub remote: String,
+    pub cloned: Vec<String>,
     pub pushed: Vec<String>,
     pub pulled: Vec<String>,
     pub resolved: Vec<String>,
@@ -41,9 +44,10 @@ pub struct SyncReport {
 impl SyncReport {
     pub fn summary_line(&self) -> String {
         format!(
-            "{}: ↓{} ↑{} ⚠{} ↯{}",
+            "{}: ↓{} +{} ↑{} ⚠{} ↯{}",
             self.remote,
             self.pulled.len(),
+            self.cloned.len(),
             self.pushed.len(),
             self.conflicts.len(),
             self.forked.len()
@@ -66,6 +70,7 @@ pub struct SyncEngine {
     git: Arc<GitArchive>,
     db: Arc<Database>,
     ms_root: PathBuf,
+    ru_config: RuConfig,
 }
 
 impl SyncEngine {
@@ -76,6 +81,7 @@ impl SyncEngine {
         git: Arc<GitArchive>,
         db: Arc<Database>,
         ms_root: PathBuf,
+        ru_config: RuConfig,
     ) -> Self {
         Self {
             config,
@@ -84,6 +90,7 @@ impl SyncEngine {
             git,
             db,
             ms_root,
+            ru_config,
         }
     }
 
@@ -140,9 +147,7 @@ impl SyncEngine {
                 self.sync_with_archive(&remote, options, &mut report, &remote_git)?;
             }
             RemoteType::Ru => {
-                return Err(MsError::NotImplemented(
-                    "RU (Repo Updater) sync is not yet implemented".to_string(),
-                ));
+                self.sync_ru(&remote, options, &mut report)?;
             }
         }
 
@@ -168,6 +173,59 @@ impl SyncEngine {
         let remote_root = resolve_archive_root(Path::new(&remote.url))?;
         let remote_git = GitArchive::open(&remote_root)?;
         self.sync_with_archive(remote, options, report, &remote_git)
+    }
+
+    fn sync_ru(
+        &mut self,
+        _remote: &RemoteConfig,
+        options: &SyncOptions,
+        report: &mut SyncReport,
+    ) -> Result<()> {
+        if options.push_only {
+            return Err(MsError::Config(
+                "ru sync does not support push-only mode".to_string(),
+            ));
+        }
+        if !self.ru_config.enabled {
+            return Err(MsError::Config(
+                "ru integration is disabled; set [ru].enabled=true".to_string(),
+            ));
+        }
+
+        let mut client = if let Some(path) = &self.ru_config.ru_path {
+            RuClient::with_path(PathBuf::from(path))
+        } else {
+            RuClient::new()
+        };
+
+        let mut ru_options = RuSyncOptions::default();
+        ru_options.dry_run = options.dry_run;
+        if self.ru_config.parallel > 0 {
+            ru_options.parallel = Some(self.ru_config.parallel);
+        }
+
+        let result = client.sync(&ru_options)?;
+        report.cloned.extend(result.cloned.clone());
+        report.pulled.extend(result.pulled.clone());
+        report.conflicts
+            .extend(result.conflicts.iter().map(|c| c.repo.clone()));
+        report.errors.extend(
+            result
+                .errors
+                .iter()
+                .map(|e| format!("{}: {}", e.repo, e.error)),
+        );
+        report.skipped.extend(result.skipped.clone());
+
+        match RuExitCode::from_code(result.exit_code) {
+            RuExitCode::Ok | RuExitCode::Partial | RuExitCode::Conflicts => Ok(()),
+            RuExitCode::Interrupted => Err(MsError::Config(
+                "ru sync interrupted; re-run with --resume".to_string(),
+            )),
+            RuExitCode::SystemError | RuExitCode::BadArgs => Err(MsError::Config(
+                "ru sync failed; check ru output for details".to_string(),
+            )),
+        }
     }
 
     fn sync_with_archive(

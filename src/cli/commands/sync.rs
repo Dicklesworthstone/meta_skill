@@ -52,6 +52,7 @@ pub fn run(ctx: &AppContext, args: &SyncArgs) -> Result<()> {
         ctx.git.clone(),
         ctx.db.clone(),
         ctx.ms_root.clone(),
+        ctx.config.ru.clone(),
     );
 
     let options = SyncOptions {
@@ -79,6 +80,7 @@ pub fn run(ctx: &AppContext, args: &SyncArgs) -> Result<()> {
         for report in &reports {
             layout
                 .section(&report.remote)
+                .kv("Cloned", &report.cloned.len().to_string())
                 .kv("Pulled", &report.pulled.len().to_string())
                 .kv("Pushed", &report.pushed.len().to_string())
                 .kv("Resolved", &report.resolved.len().to_string())

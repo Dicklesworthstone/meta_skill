@@ -34,7 +34,7 @@ pub struct RemoteAddArgs {
     pub name: String,
     pub url: String,
 
-    /// Remote type (filesystem|git)
+    /// Remote type (filesystem|git|ru)
     #[arg(long, default_value = "filesystem")]
     pub remote_type: String,
 
