@@ -340,8 +340,8 @@ fn test_sync_persistence() {
         }
     }
 
-    // Verify data is persisted (can query from fresh client)
-    let fresh_client = BeadsClient::new().with_work_dir(env.temp_dir.path());
+    // Verify data is persisted (can query from fresh client with same env)
+    let fresh_client = env.client();
     let filter = WorkFilter::default();
     match fresh_client.list(&filter) {
         Ok(issues) => {

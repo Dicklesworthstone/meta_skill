@@ -44,6 +44,7 @@ mod client;
 mod mock;
 pub mod test_logger;
 mod types;
+mod version;
 
 #[cfg(test)]
 mod concurrent_tests;
@@ -56,4 +57,7 @@ pub use test_logger::{LogEntry, LogLevel, TestLogger, TestReport};
 pub use types::{
     CreateIssueRequest, Dependency, DependencyType, Issue, IssueStatus, IssueType, Priority,
     UpdateIssueRequest, WorkFilter,
+};
+pub use version::{
+    BeadsVersion, VersionCompatibility, MINIMUM_SUPPORTED_VERSION, RECOMMENDED_VERSION,
 };
