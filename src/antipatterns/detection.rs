@@ -849,4 +849,14 @@ mod tests {
         let result = extract_annotation("This is an anti-pattern   ", "anti-pattern");
         assert_eq!(result, None);
     }
+
+    #[test]
+    fn test_extract_annotation_unicode_expansion() {
+        // 'İ' (U+0130) lowercases to 'i\u{307}' (2 chars) in Rust
+        let prefix = "İ"; 
+        let content = format!("{} anti-pattern example", prefix);
+        // If the logic relies on char count matching, it will likely fail to extract correctly.
+        let result = extract_annotation(&content, "anti-pattern");
+        assert_eq!(result, Some("example".to_string()));
+    }
 }

@@ -143,6 +143,7 @@ fn test_packing_performance_target() {
             tags: vec![format!("tag-{}", i % 3)],
             requires: Vec::new(),
             condition: None,
+            section_title: None,
             content: format!("Content for slice {} with some text.", i),
         })
         .collect();

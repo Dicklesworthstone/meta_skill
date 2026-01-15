@@ -290,8 +290,26 @@ ms search "async" --search-type semantic  # Semantic only
 ```bash
 ms load rust-error-handling --level overview  # Progressive disclosure
 ms load rust-error-handling --pack 2000       # Token-constrained packing
+ms load rust-error-handling --pack 800 --contract debug   # Contracted packing (debug/refactor/learn/quickref/codegen)
 ms suggest                           # Context-aware recommendations
 ms suggest --cwd /path/to/project    # Explicit context
+```
+
+### Pack Contracts
+
+Pack contracts let you persist custom packing rules (required groups, weights, max-per-group)
+and reuse them across sessions.
+
+```bash
+ms contract list                             # Show built-in + custom contracts
+ms contract create debug-lite \
+  --description "Slim debug pack" \
+  --required pitfalls,rules \
+  --group-weight pitfalls:2.0 \
+  --group-weight rules:1.2
+
+ms load rust-error-handling --pack 800 --contract debug   # Built-in preset
+# (Custom contracts are persisted for future use and can be listed via ms contract list.)
 ```
 
 ### Templates and Authoring
@@ -353,8 +371,27 @@ ms outcome rust-error-handling --failure
 # Experiments
 ms experiment create rust-error-handling --variant control --variant concise
 ms experiment list
+ms experiment status <experiment-id> --metric task_success
+ms experiment assign <experiment-id> --context ./context.json
+ms experiment load <experiment-id> --context ./context.json --pack 800 --contract debug
+ms experiment record <experiment-id> control --metric task_success=true
+ms experiment conclude <experiment-id> --winner control
+ms load rust-error-handling --experiment-id <experiment-id> --variant-id control
+```
+
+Metrics and outcomes:
+- Use `--metric key=value` pairs on `ms experiment record`. Values can be booleans, numbers, or strings.
+- Success is inferred from the metric key you select (default: `task_success`), where:
+  - `true` / `success` / numeric > 0.5 => success
+  - `false` / `failure` / numeric <= 0.5 => failure
+- `ms experiment status` aggregates assignment and outcome counts per variant and reports a simple two-proportion z-test p-value.
+
+Robot payloads:
+- `ms experiment load --robot` returns the usual `ms load` JSON plus an `experiment` block:
+  - `experiment.id`, `experiment.metric`, `experiment.variant`, and the assignment `event`.
 
 # Bandit state
+```bash
 ms bandit stats                      # Current arm weights
 ms bandit reset                      # Reset learning
 ```
@@ -434,6 +471,9 @@ ms fmt                               # Normalize skill formatting
 ms diff skill-a skill-b              # Semantic diff
 ms migrate                           # Upgrade skill spec versions
 ms prune list                        # List prunable data
+ms prune analyze                     # Analyze pruning candidates
+ms prune proposals                   # Propose merge/deprecate actions
+ms prune proposals --emit-beads      # Emit beads issues for proposals
 ms prune purge all --older-than 30 --approve
 ms validate rust-error-handling      # Schema validation
 ms validate rust-error-handling --ubs  # With static analysis

@@ -3,8 +3,8 @@ use std::path::PathBuf;
 use proptest::prelude::*;
 
 use crate::config::{
-    CacheConfig, CassConfig, Config, DisclosureConfig, LayersConfig, RobotConfig, SafetyConfig,
-    SearchConfig, SecurityConfig, SkillPathsConfig, UpdateConfig,
+    AgentMailConfig, CacheConfig, CassConfig, Config, DisclosureConfig, LayersConfig, RobotConfig,
+    SafetyConfig, SearchConfig, SecurityConfig, SkillPathsConfig, UpdateConfig,
 };
 use crate::core::skill::{BlockType, SkillBlock, SkillMetadata, SkillSection, SkillSpec};
 use crate::security::{AcipConfig, TrustBoundaryConfig, TrustLevel};
@@ -204,6 +204,25 @@ fn arb_robot() -> impl Strategy<Value = RobotConfig> {
     })
 }
 
+fn arb_agent_mail() -> impl Strategy<Value = AgentMailConfig> {
+    (
+        any::<bool>(),
+        "[a-z0-9.:/-]{1,40}",
+        "[a-z0-9_-]{1,20}",
+        "[a-z0-9_-]{1,20}",
+        1u64..60u64,
+    )
+        .prop_map(
+            |(enabled, endpoint, project_key, agent_name, timeout_secs)| AgentMailConfig {
+                enabled,
+                endpoint,
+                project_key,
+                agent_name,
+                timeout_secs,
+            },
+        )
+}
+
 fn arb_trust_boundary() -> impl Strategy<Value = TrustBoundaryConfig> {
     let level = prop_oneof![
         Just(TrustLevel::Trusted),
@@ -263,6 +282,7 @@ pub fn arb_config() -> impl Strategy<Value = Config> {
         arb_cache(),
         arb_update(),
         arb_robot(),
+        arb_agent_mail(),
         arb_security(),
         arb_safety(),
     )
@@ -276,6 +296,7 @@ pub fn arb_config() -> impl Strategy<Value = Config> {
                 cache,
                 update,
                 robot,
+                agent_mail,
                 security,
                 safety,
             )| {
@@ -289,6 +310,7 @@ pub fn arb_config() -> impl Strategy<Value = Config> {
                     cache,
                     update,
                     robot,
+                    agent_mail,
                     security,
                     safety,
                 }

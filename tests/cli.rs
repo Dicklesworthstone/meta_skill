@@ -1,4 +1,6 @@
 use assert_cmd::Command;
+use chrono::Utc;
+use ms::storage::sqlite::{Database, SkillRecord};
 use predicates::prelude::*;
 use serde_json::Value;
 use tempfile::tempdir;
@@ -204,4 +206,80 @@ fn test_security_scan_rejects_invalid_source() {
             .unwrap_or_default()
             .contains("invalid source")
     );
+}
+
+#[test]
+fn test_experiment_load_robot_payload() {
+    let dir = tempdir().unwrap();
+    let ms_root = dir.path();
+    let db = Database::open(ms_root.join("ms.db")).unwrap();
+    let now = Utc::now().to_rfc3339();
+    let body = r#"---
+id: test-skill
+name: Test Skill
+description: A test skill
+version: 0.1.0
+tags: [test]
+requires: []
+provides: []
+---
+
+# Test Skill
+A test skill.
+
+## Overview
+Some content.
+"#;
+
+    let record = SkillRecord {
+        id: "test-skill".to_string(),
+        name: "Test Skill".to_string(),
+        description: "A test skill".to_string(),
+        version: Some("0.1.0".to_string()),
+        author: None,
+        source_path: "skills/test-skill.md".to_string(),
+        source_layer: "project".to_string(),
+        git_remote: None,
+        git_commit: None,
+        content_hash: "hash".to_string(),
+        body: body.to_string(),
+        metadata_json: "{}".to_string(),
+        assets_json: "{}".to_string(),
+        token_count: 0,
+        quality_score: 0.0,
+        indexed_at: now.clone(),
+        modified_at: now,
+        is_deprecated: false,
+        deprecation_reason: None,
+    };
+    db.upsert_skill(&record).unwrap();
+    drop(db);
+
+    let mut create = Command::cargo_bin("ms").unwrap();
+    create
+        .env("MS_ROOT", ms_root)
+        .args([
+            "--robot",
+            "experiment",
+            "create",
+            "test-skill",
+            "--variant",
+            "control",
+            "--variant",
+            "concise",
+        ]);
+    let output = create.output().unwrap();
+    assert!(output.status.success());
+    let json: Value = serde_json::from_slice(&output.stdout).unwrap();
+    let experiment_id = json["experiment"]["id"].as_str().unwrap().to_string();
+
+    let mut load = Command::cargo_bin("ms").unwrap();
+    load.env("MS_ROOT", ms_root)
+        .args(["--robot", "experiment", "load", &experiment_id]);
+    let output = load.output().unwrap();
+    assert!(output.status.success());
+    let json: Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(json["experiment"]["id"], experiment_id);
+    assert!(json["experiment"]["variant"]["id"].as_str().is_some());
+    assert_eq!(json["data"]["skill_id"], "test-skill");
 }
