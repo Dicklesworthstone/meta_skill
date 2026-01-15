@@ -148,9 +148,17 @@ pub(crate) fn collect_files_for_bundle(
                 MsError::Config(format!("read dir entry {}: {err}", dir.display()))
             })?;
             let path = entry.path();
-            if path.is_dir() {
+            let file_type = entry.file_type().map_err(|err| {
+                MsError::Config(format!("get file type {}: {err}", path.display()))
+            })?;
+
+            if file_type.is_symlink() {
+                continue;
+            }
+
+            if file_type.is_dir() {
                 queue.push_back(path);
-            } else if path.is_file() {
+            } else if file_type.is_file() {
                 let rel = path.strip_prefix(root).unwrap_or(&path).to_path_buf();
                 out.push((rel, path));
             }

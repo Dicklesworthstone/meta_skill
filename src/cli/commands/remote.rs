@@ -5,7 +5,7 @@ use clap::{Args, Subcommand};
 use crate::app::AppContext;
 use crate::cli::output::{HumanLayout, emit_human, emit_json};
 use crate::error::{MsError, Result};
-use crate::sync::{RemoteAuth, RemoteConfig, RemoteType, SyncConfig, SyncDirection};
+use crate::sync::{RemoteAuth, RemoteConfig, RemoteType, SyncConfig, SyncDirection, validate_remote_name};
 
 #[derive(Args, Debug)]
 pub struct RemoteArgs {
@@ -158,6 +158,7 @@ pub fn run(ctx: &AppContext, args: &RemoteArgs) -> Result<()> {
 }
 
 fn add(ctx: &AppContext, args: &RemoteAddArgs) -> Result<()> {
+    validate_remote_name(&args.name)?;
     let mut config = SyncConfig::load()?;
     let remote_type = RemoteType::from_str(&args.remote_type)?;
     validate_remote_flags(
@@ -263,6 +264,7 @@ fn list(ctx: &AppContext, _args: &RemoteListArgs) -> Result<()> {
 }
 
 fn remove(ctx: &AppContext, args: &RemoteRemoveArgs) -> Result<()> {
+    validate_remote_name(&args.name)?;
     let mut config = SyncConfig::load()?;
     if !config.remove_remote(&args.name) {
         return Err(MsError::Config(format!("unknown remote: {}", args.name)));
@@ -283,6 +285,7 @@ fn remove(ctx: &AppContext, args: &RemoteRemoveArgs) -> Result<()> {
 }
 
 fn toggle(ctx: &AppContext, args: &RemoteToggleArgs, enabled: bool) -> Result<()> {
+    validate_remote_name(&args.name)?;
     let mut config = SyncConfig::load()?;
     let Some(remote) = config.remotes.iter_mut().find(|r| r.name == args.name) else {
         return Err(MsError::Config(format!("unknown remote: {}", args.name)));
@@ -308,6 +311,7 @@ fn toggle(ctx: &AppContext, args: &RemoteToggleArgs, enabled: bool) -> Result<()
 }
 
 fn set_url(ctx: &AppContext, args: &RemoteSetUrlArgs) -> Result<()> {
+    validate_remote_name(&args.name)?;
     let mut config = SyncConfig::load()?;
     let Some(remote) = config.remotes.iter_mut().find(|r| r.name == args.name) else {
         return Err(MsError::Config(format!("unknown remote: {}", args.name)));

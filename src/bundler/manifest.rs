@@ -158,6 +158,7 @@ impl BundleManifest {
 
 pub trait SignatureVerifier {
     fn verify(&self, payload: &[u8], signature: &BundleSignature) -> Result<()>;
+    fn is_trusted(&self, key_id: &str) -> bool;
 }
 
 pub struct NoopSignatureVerifier;
@@ -168,6 +169,10 @@ impl SignatureVerifier for NoopSignatureVerifier {
             "signature verification not configured for signer {}",
             signature.signer
         )))
+    }
+
+    fn is_trusted(&self, _key_id: &str) -> bool {
+        false
     }
 }
 
@@ -468,6 +473,10 @@ impl SignatureVerifier for Ed25519Verifier {
             ))
         })
     }
+
+    fn is_trusted(&self, key_id: &str) -> bool {
+        self.trusted_keys.contains_key(key_id)
+    }
 }
 
 impl BundleManifest {
@@ -476,9 +485,21 @@ impl BundleManifest {
         payload: &[u8],
         verifier: &impl SignatureVerifier,
     ) -> Result<()> {
+        let mut trusted_valid_signatures = 0;
+
         for sig in &self.signatures {
-            verifier.verify(payload, sig)?;
+            if verifier.is_trusted(&sig.key_id) {
+                verifier.verify(payload, sig)?;
+                trusted_valid_signatures += 1;
+            }
         }
+
+        if trusted_valid_signatures == 0 {
+            return Err(MsError::ValidationFailed(
+                "no trusted signatures found on bundle".to_string(),
+            ));
+        }
+
         Ok(())
     }
 }
@@ -780,21 +801,21 @@ checksum = "sha256:abc123"
     }
 
     #[test]
-    fn manifest_verify_signatures_fails_if_any_invalid() {
+    fn manifest_verify_signatures_skips_untrusted() {
         let (public_key, sign) = generate_test_keypair();
         let payload = b"manifest content";
         let valid_sig = sign(payload);
 
         let mut manifest = BundleManifest::from_toml_str(SAMPLE_TOML).unwrap();
 
-        // First signature is valid
+        // First signature is valid and trusted
         manifest.signatures.push(BundleSignature {
             signer: "Publisher".to_string(),
             key_id: "publisher-key".to_string(),
             signature: hex::encode(&valid_sig),
         });
 
-        // Second signature has unknown key
+        // Second signature has unknown key (should be skipped)
         manifest.signatures.push(BundleSignature {
             signer: "Unknown".to_string(),
             key_id: "unknown-key".to_string(),
@@ -805,12 +826,34 @@ checksum = "sha256:abc123"
         verifier.add_key("publisher-key", public_key);
 
         let result = manifest.verify_signatures(payload, &verifier);
+        assert!(result.is_ok(), "Should verify trusted signature and skip unknown one");
+    }
+
+    #[test]
+    fn manifest_verify_signatures_fails_if_no_trusted_signatures() {
+        let (public_key, sign) = generate_test_keypair();
+        let payload = b"manifest content";
+        let valid_sig = sign(payload);
+
+        let mut manifest = BundleManifest::from_toml_str(SAMPLE_TOML).unwrap();
+
+        // Only add a signature for an unknown key
+        manifest.signatures.push(BundleSignature {
+            signer: "Unknown".to_string(),
+            key_id: "unknown-key".to_string(),
+            signature: hex::encode(&valid_sig),
+        });
+
+        let mut verifier = Ed25519Verifier::new();
+        verifier.add_key("other-key", public_key);
+
+        let result = manifest.verify_signatures(payload, &verifier);
         assert!(result.is_err());
         assert!(
             result
                 .unwrap_err()
                 .to_string()
-                .contains("unknown signing key")
+                .contains("no trusted signatures found")
         );
     }
 

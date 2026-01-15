@@ -219,6 +219,13 @@ fn ensure_relative(path: &Path) -> Result<()> {
             path.display()
         )));
     }
+    // Block paths that are just "." or empty to prevent writing to the target directory root
+    if path.as_os_str().is_empty() || path.as_os_str() == "." {
+        return Err(MsError::ValidationFailed(format!(
+            "bundle path cannot be empty or '.': {}",
+            path.display()
+        )));
+    }
     for comp in path.components() {
         match comp {
             Component::ParentDir | Component::RootDir | Component::Prefix(_) => {

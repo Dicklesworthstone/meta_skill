@@ -184,6 +184,19 @@ impl RemoteConfig {
     }
 }
 
+pub fn validate_remote_name(name: &str) -> Result<()> {
+    let trimmed = name.trim();
+    if trimmed.is_empty() {
+        return Err(MsError::Config("remote name must be non-empty".to_string()));
+    }
+    if trimmed.contains("..") || trimmed.contains('/') || trimmed.contains('\\') {
+        return Err(MsError::Config(
+            "remote name must not contain path separators or '..'".to_string(),
+        ));
+    }
+    Ok(())
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SyncConfig {
     #[serde(default)]
@@ -305,5 +318,20 @@ mod tests {
         assert_eq!(parsed.remotes.len(), 1);
         assert_eq!(parsed.remotes[0].name, "origin");
         assert_eq!(parsed.remotes[0].direction, SyncDirection::PullOnly);
+    }
+
+    #[test]
+    fn validate_remote_name_accepts_simple() {
+        assert!(validate_remote_name("origin").is_ok());
+        assert!(validate_remote_name("backup-1").is_ok());
+    }
+
+    #[test]
+    fn validate_remote_name_rejects_empty_or_paths() {
+        assert!(validate_remote_name("").is_err());
+        assert!(validate_remote_name("  ").is_err());
+        assert!(validate_remote_name("../origin").is_err());
+        assert!(validate_remote_name("org/remote").is_err());
+        assert!(validate_remote_name(r"org\remote").is_err());
     }
 }
