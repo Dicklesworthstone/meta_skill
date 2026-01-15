@@ -130,6 +130,15 @@ impl UpdateChecker {
         Ok(latest)
     }
 
+    /// Get a specific release by version (ignores channel filtering).
+    pub fn get_version(&self, target: &Version) -> Result<Option<ReleaseInfo>> {
+        let client = GitHubClient::new(self.token.clone());
+        let (owner, repo) = parse_repo(&self.repo)?;
+
+        let releases = client.list_releases(&owner, &repo)?;
+        Ok(releases.into_iter().find(|r| &r.version == target))
+    }
+
     /// Get the current version being checked against.
     pub fn current_version(&self) -> &Version {
         &self.current_version
