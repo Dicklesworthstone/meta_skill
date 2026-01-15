@@ -65,6 +65,9 @@ pub enum Commands {
     /// List all indexed skills
     List(commands::list::ListArgs),
 
+    /// Check Agent Mail inbox
+    Inbox(commands::inbox::InboxArgs),
+
     /// Edit a skill (structured round-trip)
     Edit(commands::edit::EditArgs),
 
@@ -110,6 +113,9 @@ pub enum Commands {
     /// Manage sync conflicts
     Conflicts(commands::conflicts::ConflictsArgs),
 
+    /// Manage pack contracts
+    Contract(commands::contract::ContractArgs),
+
     /// Migrate skills to latest spec format
     Migrate(commands::migrate::MigrateArgs),
 
@@ -151,6 +157,9 @@ pub enum Commands {
 
     /// Run skill tests
     Test(commands::test::TestArgs),
+
+    /// Simulate a skill in a sandbox
+    Simulate(commands::simulate::SimulateArgs),
 
     /// Compute skill quality scores
     Quality(commands::quality::QualityArgs),
