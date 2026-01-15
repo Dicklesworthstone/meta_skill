@@ -6,7 +6,6 @@ pub mod layering;
 pub mod overlay;
 pub mod packing;
 pub mod recovery;
-pub mod registry;
 pub mod requirements;
 pub mod safety;
 pub mod skill;
