@@ -31,6 +31,16 @@ impl SkillSlicer {
             generated_at: Utc::now(),
         }
     }
+
+    pub fn estimate_total_tokens(spec: &SkillSpec) -> usize {
+        let mut total = 0;
+        for section in &spec.sections {
+            for block in &section.blocks {
+                total += estimate_tokens(&block.content);
+            }
+        }
+        total
+    }
 }
 
 fn slice_section(

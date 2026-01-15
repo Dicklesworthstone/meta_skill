@@ -15,7 +15,7 @@ use serde::{Deserialize, Serialize};
 use tracing::{debug, info, warn};
 use uuid::Uuid;
 
-use crate::core::{spec_lens::compile_markdown, SkillLayer, SkillSpec};
+use crate::core::{spec_lens::compile_markdown, SkillLayer, SkillSpec, SkillSlicer};
 use crate::error::{MsError, Result};
 
 use super::git::GitArchive;
@@ -522,8 +522,10 @@ impl TxManager {
         let skill: SkillSpec = serde_json::from_str(&tx.payload_json)
             .map_err(|e| MsError::TransactionFailed(format!("deserialize skill: {e}")))?;
 
+        let token_count = SkillSlicer::estimate_total_tokens(&skill) as i64;
+
         // Upsert skill with pending marker
-        self.db.upsert_skill_pending(&skill, layer)?;
+        self.db.upsert_skill_pending(&skill, layer, token_count)?;
 
         // Update phase
         let mut tx = tx.clone();

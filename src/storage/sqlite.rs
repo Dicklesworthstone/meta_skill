@@ -747,13 +747,14 @@ impl Database {
         &self,
         skill: &crate::core::SkillSpec,
         layer: crate::core::SkillLayer,
+        token_count: i64,
     ) -> Result<()> {
         self.conn.execute(
             "INSERT INTO skills
              (id, name, description, version, author, source_path, source_layer,
               content_hash, body, metadata_json, assets_json, token_count, quality_score,
               indexed_at, modified_at)
-             VALUES (?, ?, ?, ?, ?, 'pending', ?, 'pending', '', ?, '{}', 0, 0.0,
+             VALUES (?, ?, ?, ?, ?, 'pending', ?, 'pending', '', ?, '{}', ?, 0.0,
                      datetime('now'), datetime('now'))
              ON CONFLICT(id) DO UPDATE SET
                 name=excluded.name,
@@ -762,6 +763,7 @@ impl Database {
                 author=excluded.author,
                 source_layer=excluded.source_layer,
                 metadata_json=excluded.metadata_json,
+                token_count=excluded.token_count,
                 modified_at=excluded.modified_at",
             params![
                 skill.metadata.id,
@@ -771,6 +773,7 @@ impl Database {
                 skill.metadata.author,
                 layer.as_str(),
                 serde_json::to_string(&skill.metadata).unwrap_or_default(),
+                token_count,
             ],
         )?;
         Ok(())
