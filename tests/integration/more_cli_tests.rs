@@ -1,5 +1,4 @@
 use super::fixture::{TestFixture, TestSkill};
-use std::env;
 
 #[test]
 fn test_list_filters() {
