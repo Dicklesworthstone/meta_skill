@@ -380,12 +380,16 @@ impl SyncEngine {
             let spec = archive.read_skill(&id)?;
             let hash = hash_skill_spec(&spec)?;
             let modified = skill_modified_time(archive, &id)?;
+            let path = archive.skill_path(&id)
+                .ok_or_else(|| MsError::ValidationFailed(format!("invalid skill id: {}", id)))?;
+
             map.insert(
                 id.clone(),
                 SkillSnapshot {
                     id,
                     hash,
                     modified,
+                    path,
                 },
             );
         }

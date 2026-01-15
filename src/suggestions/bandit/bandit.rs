@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 use std::path::Path;
 
-use rand::thread_rng;
+use rand::rng;
 use serde::{Deserialize, Serialize};
 
 use crate::error::{MsError, Result};
@@ -58,7 +58,7 @@ impl SignalBandit {
     }
 
     pub fn select_weights(&mut self, context: &SuggestionContext) -> SignalWeights {
-        let mut rng = thread_rng();
+        let mut rng = rng();
         let mut weights = HashMap::new();
 
         for signal in SignalType::all() {

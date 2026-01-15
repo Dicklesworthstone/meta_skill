@@ -2,8 +2,6 @@
 
 use serde::{Deserialize, Serialize};
 
-const SKILL_SPEC_FORMAT_VERSION: &str = "1.0";
-
 fn default_format_version() -> String {
     SkillSpec::FORMAT_VERSION.to_string()
 }
