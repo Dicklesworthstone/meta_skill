@@ -83,8 +83,15 @@ impl SkillOverlay {
                     changes.push(format!("Added tag: {}", tag));
                 }
                 OverlayModification::SetMetadata { key, value } => {
-                    // For now, just track the change - metadata modifications
-                    // would need more sophisticated handling
+                    let key_str = key.as_str();
+                    match key_str {
+                        "author" => spec.metadata.author = Some(value.clone()),
+                        "license" => spec.metadata.license = Some(value.clone()),
+                        "version" => spec.metadata.version = value.clone(),
+                        "name" => spec.metadata.name = value.clone(),
+                        "description" => spec.metadata.description = value.clone(),
+                        _ => {} // Unknown key
+                    }
                     changes.push(format!("Set metadata {}: {}", key, value));
                 }
             }
@@ -231,5 +238,41 @@ mod tests {
         };
         // Different ID means not equal, even with same other fields
         assert_ne!(overlay1, overlay3);
+    }
+
+    #[test]
+    fn test_overlay_set_metadata() {
+        let mut spec = SkillSpec::new("test", "Original Name");
+        spec.metadata.author = Some("Original Author".into());
+
+        let overlay = SkillOverlay {
+            id: "meta-update".into(),
+            skill_id: "test".into(),
+            priority: 1,
+            conditions: vec![OverlayCondition::Always],
+            modifications: vec![
+                OverlayModification::SetMetadata {
+                    key: "name".into(),
+                    value: "New Name".into(),
+                },
+                OverlayModification::SetMetadata {
+                    key: "author".into(),
+                    value: "New Author".into(),
+                },
+                OverlayModification::SetMetadata {
+                    key: "unknown".into(),
+                    value: "ignored".into(),
+                },
+            ],
+        };
+
+        let context = OverlayContext::default();
+        let result = overlay.apply_to(&mut spec, &context);
+
+        assert!(result.applied);
+        assert_eq!(spec.metadata.name, "New Name");
+        assert_eq!(spec.metadata.author.as_deref(), Some("New Author"));
+        // Check that unknown key was logged but didn't crash
+        assert!(result.changes.iter().any(|c| c.contains("Set metadata unknown")));
     }
 }
