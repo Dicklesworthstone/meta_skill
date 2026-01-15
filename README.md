@@ -357,6 +357,8 @@ ms remote add origin git@github.com:user/skills.git --type git --auth ssh --ssh-
 ms remote add origin https://github.com/user/skills.git --type git --auth token --token-env GIT_TOKEN --username git
 # Optional: SSH passphrase env var (if key is encrypted)
 ms remote add origin git@github.com:user/skills.git --type git --auth ssh --ssh-key ~/.ssh/id_rsa --ssh-passphrase-env SSH_KEY_PASSPHRASE
+ms remote set-url origin https://github.com/user/skills.git --branch main --auth token --token-env GIT_TOKEN
+ms remote set-url origin https://github.com/user/skills.git --clear-auth --clear-branch
 ms remote list
 ms remote disable origin
 ```
