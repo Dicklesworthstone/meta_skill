@@ -3,8 +3,11 @@
 //! These types mirror the Go types from beads' `internal/types/types.go`.
 //! We implement only the essential subset needed for common CRUD operations.
 
+use std::collections::HashMap;
+
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
+use serde_json::Value as JsonValue;
 
 /// Issue status in the beads workflow.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -197,6 +200,10 @@ pub struct Issue {
     /// Issues that depend on this issue (dependents)
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub dependents: Vec<Dependency>,
+
+    /// Unknown fields captured for forward compatibility
+    #[serde(default, skip_serializing_if = "HashMap::is_empty", flatten)]
+    pub extra: HashMap<String, JsonValue>,
 }
 
 impl Issue {
@@ -762,6 +769,25 @@ mod tests {
         assert!(issue.assignee.is_none());
         assert!(issue.dependencies.is_empty());
         assert!(issue.dependents.is_empty());
+        assert!(issue.extra.is_empty());
+    }
+
+    #[test]
+    fn test_issue_unknown_fields_captured() {
+        let json = r#"{
+            "id": "test-123",
+            "title": "Test",
+            "status": "open",
+            "issue_type": "task",
+            "priority": 2,
+            "unknown_future_field": "some value",
+            "another_new_field": { "nested": true }
+        }"#;
+
+        let issue: Issue = serde_json::from_str(json).unwrap();
+        assert_eq!(issue.id, "test-123");
+        assert!(issue.extra.contains_key("unknown_future_field"));
+        assert!(issue.extra.contains_key("another_new_field"));
     }
 
     #[test]
@@ -783,6 +809,7 @@ mod tests {
             closed_at: None,
             dependencies: vec![],
             dependents: vec![],
+            extra: HashMap::new(),
         };
         assert!(ready_issue.is_ready());
     }
@@ -811,6 +838,7 @@ mod tests {
                 dependency_type: None,
             }],
             dependents: vec![],
+            extra: HashMap::new(),
         };
         assert!(!blocked_issue.is_ready());
     }
@@ -834,6 +862,7 @@ mod tests {
             closed_at: None,
             dependencies: vec![],
             dependents: vec![],
+            extra: HashMap::new(),
         };
         assert!(!in_progress_issue.is_ready());
     }

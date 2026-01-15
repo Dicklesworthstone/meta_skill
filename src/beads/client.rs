@@ -3,14 +3,17 @@
 //! Provides programmatic access to beads using the `--json` flag
 //! for structured output, following the same patterns as CassClient and UbsClient.
 
+use std::collections::HashMap;
 use std::path::PathBuf;
 use std::process::Command;
-use std::collections::HashMap;
 
 use crate::error::{MsError, Result};
 use crate::security::SafetyGate;
 
 use super::types::{CreateIssueRequest, Issue, IssueStatus, UpdateIssueRequest, WorkFilter};
+use super::version::{
+    BeadsVersion, VersionCompatibility, MINIMUM_SUPPORTED_VERSION, RECOMMENDED_VERSION,
+};
 
 /// Client for interacting with the beads (bd) issue tracker.
 #[derive(Debug, Clone)]
@@ -105,6 +108,47 @@ impl BeadsClient {
         } else {
             None
         }
+    }
+
+    /// Get the parsed bd version.
+    pub fn version_semver(&self) -> Result<BeadsVersion> {
+        if let Ok(output) = self.run_command(&["version", "--json"]) {
+            if let Ok(info) = serde_json::from_slice::<serde_json::Value>(&output) {
+                if let Some(version_str) = info.get("version").and_then(|v| v.as_str()) {
+                    return BeadsVersion::parse(version_str);
+                }
+            }
+        }
+
+        let raw = self.version().ok_or_else(|| {
+            MsError::BeadsUnavailable("bd version not available".to_string())
+        })?;
+        BeadsVersion::parse(&raw)
+    }
+
+    /// Check if bd version is compatible with this client.
+    pub fn check_compatibility(&self) -> Result<VersionCompatibility> {
+        let version = self.version_semver()?;
+
+        if version < *MINIMUM_SUPPORTED_VERSION {
+            return Ok(VersionCompatibility::Unsupported {
+                error: format!(
+                    "bd {} is older than minimum supported {}. Please upgrade.",
+                    version, *MINIMUM_SUPPORTED_VERSION
+                ),
+            });
+        }
+
+        if version < *RECOMMENDED_VERSION {
+            return Ok(VersionCompatibility::Partial {
+                warning: format!(
+                    "bd {} is older than recommended {}. Some features may not work.",
+                    version, *RECOMMENDED_VERSION
+                ),
+            });
+        }
+
+        Ok(VersionCompatibility::Full)
     }
 
     /// List all issues matching the filter.
@@ -597,7 +641,6 @@ mod tests {
 /// These tests require a real `bd` binary and use isolated test environments.
 /// Run with: `cargo test --package meta_skill beads::client::integration_tests`
 #[cfg(test)]
-#[allow(unsafe_code)]
 mod integration_tests {
     use std::process::Command;
 
@@ -1083,5 +1126,32 @@ mod integration_tests {
         assert!(!version_str.is_empty(), "Version should not be empty");
 
         log.success("VERSION", "Version check works", None);
+    }
+
+    #[test]
+    fn test_version_compatibility_check() {
+        let mut log = TestLogger::new("test_version_compatibility");
+
+        let client = BeadsClient::new();
+        if !client.is_available() {
+            log.warn("SKIP", "bd not available", None);
+            return;
+        }
+
+        let compat = client
+            .check_compatibility()
+            .expect("Should be able to check compatibility");
+
+        match compat {
+            VersionCompatibility::Full => {
+                log.info("COMPAT", "Full compatibility", None);
+            }
+            VersionCompatibility::Partial { warning } => {
+                log.warn("COMPAT", &warning, None);
+            }
+            VersionCompatibility::Unsupported { error } => {
+                panic!("Unsupported version: {}", error);
+            }
+        }
     }
 }

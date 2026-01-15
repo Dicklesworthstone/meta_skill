@@ -23,6 +23,7 @@ use crate::beads::{BeadsClient, CreateIssueRequest, TestLogger, WorkFilter};
 struct ConcurrentTestEnv {
     temp_dir: TempDir,
     db_path: PathBuf,
+    #[allow(dead_code)]
     log: TestLogger,
     initialized: bool,
 }

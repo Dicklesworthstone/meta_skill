@@ -326,6 +326,7 @@ impl BeadsOperations for MockBeadsClient {
             closed_at: None,
             dependencies: vec![],
             dependents: vec![],
+            extra: HashMap::new(),
         };
 
         let mut store = self.issues.borrow_mut();
@@ -423,6 +424,7 @@ pub fn test_issue(id: &str, title: &str) -> Issue {
         closed_at: None,
         dependencies: vec![],
         dependents: vec![],
+        extra: HashMap::new(),
     }
 }
 
