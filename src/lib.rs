@@ -12,6 +12,7 @@ pub mod core;
 pub mod dedup;
 pub mod error;
 pub mod graph;
+pub mod import;
 pub mod lint;
 pub mod meta_skills;
 pub mod quality;
