@@ -483,7 +483,7 @@ mod tests {
     #[test]
     fn test_tokenize_c_language() {
         let tokens = tokenize("C programming");
-        // Currently fails: "C" is dropped because len < 2
+        // "C" is preserved because we allow single-char tokens (len >= 1)
         assert!(tokens.contains(&"c".to_string()), "Should contain 'c'");
         assert!(tokens.contains(&"programming".to_string()));
     }
