@@ -45,6 +45,7 @@ pub mod mcp;
 pub mod meta;
 pub mod migrate;
 pub mod outcome;
+pub mod personalize;
 pub mod pre_commit;
 pub mod prune;
 pub mod quality;
@@ -84,6 +85,7 @@ pub fn run(ctx: &AppContext, command: &Commands) -> Result<()> {
         Commands::Requirements(args) => requirements::run(ctx, args),
         Commands::Feedback(args) => feedback::run(ctx, args),
         Commands::Outcome(args) => outcome::run(ctx, args),
+        Commands::Personalize(args) => personalize::run(ctx, args),
         Commands::Experiment(args) => experiment::run(ctx, args),
         Commands::Build(args) => build::run(ctx, args),
         Commands::Bundle(args) => bundle::run(ctx, args),

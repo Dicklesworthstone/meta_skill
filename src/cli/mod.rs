@@ -92,6 +92,9 @@ pub enum Commands {
     /// Record implicit success/failure outcomes
     Outcome(commands::outcome::OutcomeArgs),
 
+    /// Personalize skills to user coding style
+    Personalize(commands::personalize::PersonalizeArgs),
+
     /// Manage skill experiments
     Experiment(commands::experiment::ExperimentArgs),
 
