@@ -76,5 +76,11 @@ __pycache__/
 .ms_cache/
 .ms_state/
 
+# Meta-skill local workspace (runtime state, indexes, proposals)
+.ms/
+
 # Local user modifications (segregated from upstream)
 local_skills/
+
+# Linter output
+clippy_output.json
