@@ -65,7 +65,7 @@ pub struct CollectorFingerprint(pub u64);
 
 /// Full working context snapshot
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct CollectedContext {
+pub struct WorkingContext {
     pub cwd: PathBuf,
     pub detected_projects: Vec<DetectedProject>,
     pub recent_files: Vec<RecentFile>,
@@ -76,7 +76,7 @@ pub struct CollectedContext {
     pub fingerprint: CollectorFingerprint,
 }
 
-impl CollectedContext {
+impl WorkingContext {
     pub fn fingerprint(&self) -> CollectorFingerprint {
         let mut hasher = std::collections::hash_map::DefaultHasher::new();
 
@@ -116,7 +116,7 @@ impl CollectedContext {
 pub struct ContextCollector {
     config: ContextCollectorConfig,
     project_detector: Box<dyn ProjectDetector>,
-    cache: Mutex<LruCache<PathBuf, CollectedContext>>,
+    cache: Mutex<LruCache<PathBuf, WorkingContext>>,
 }
 
 impl ContextCollector {
@@ -129,7 +129,7 @@ impl ContextCollector {
     }
 
     /// Collect full working context for the given directory
-    pub fn collect(&self, cwd: &Path) -> Result<CollectedContext> {
+    pub fn collect(&self, cwd: &Path) -> Result<WorkingContext> {
         // Check cache first
         if let Ok(mut cache) = self.cache.lock() {
             if let Some(ctx) = cache.get(cwd) {
@@ -147,7 +147,7 @@ impl ContextCollector {
         let git_context = self.collect_git_context(cwd);
         let env_signals = self.collect_env_signals();
 
-        let mut ctx = CollectedContext {
+        let mut ctx = WorkingContext {
             cwd: cwd.to_path_buf(),
             detected_projects,
             recent_files,
@@ -320,7 +320,7 @@ mod tests {
 
     #[test]
     fn test_fingerprint_stability() {
-        let ctx1 = CollectedContext {
+        let ctx1 = WorkingContext {
             cwd: PathBuf::from("/tmp/test"),
             detected_projects: vec![],
             recent_files: vec![],

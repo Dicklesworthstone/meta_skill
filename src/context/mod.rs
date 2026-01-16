@@ -8,8 +8,8 @@ pub mod scoring;
 
 pub use capture::{CaptureError, ContextCapture};
 pub use collector::{
-    CollectedContext, CollectorFingerprint, ContextCollector, ContextCollectorConfig, GitContext,
-    RecentFile,
+    CollectorFingerprint, ContextCollector, ContextCollectorConfig, GitContext, RecentFile,
+    WorkingContext,
 };
 pub use detector::{DefaultDetector, DetectedProject, ProjectDetector, ProjectMarker, ProjectType};
 pub use fingerprint::{ChangeSignificance, ContextFingerprint};
