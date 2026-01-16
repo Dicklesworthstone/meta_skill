@@ -661,27 +661,183 @@ impl Personalizer {
 
     /// Personalize a skill record by adapting its content to user style
     ///
-    /// This is a placeholder implementation that will be expanded with:
-    /// - Example code adaptation
-    /// - Terminology adjustment
-    /// - Pattern preference application
+    /// Applies the following adaptations:
+    /// - Convert variable/function naming to preferred case style in code blocks
+    /// - Adjust terminology based on tech preferences
+    /// - Apply pattern preferences where applicable
     pub fn personalize(&self, skill: &SkillRecord) -> PersonalizedSkill {
+        let mut adaptations = Vec::new();
+        let mut content = skill.body.clone();
+
+        // Adapt code examples in code blocks
+        let (adapted_code, code_adaptations) = self.adapt_code_examples(&content);
+        if !code_adaptations.is_empty() {
+            content = adapted_code;
+            adaptations.extend(code_adaptations);
+        }
+
+        // Apply terminology adjustments
+        let (adapted_terms, term_adaptations) = self.adapt_terminology(&content);
+        if !term_adaptations.is_empty() {
+            content = adapted_terms;
+            adaptations.extend(term_adaptations);
+        }
+
         PersonalizedSkill {
             original_id: skill.id.clone(),
             original_name: skill.name.clone(),
-            adapted_content: skill.body.clone(), // TODO: Apply actual adaptations
-            adaptations_applied: Vec::new(),
+            adapted_content: content,
+            adaptations_applied: adaptations,
         }
     }
 
     /// Check if personalization is available based on the current style profile.
     ///
     /// Returns true if the style profile has patterns or tech preferences that
-    /// could be applied. Future versions will also analyze skill content.
+    /// could be applied, or if naming conventions differ from defaults.
     pub fn should_personalize(&self, _skill: &SkillRecord) -> bool {
-        // Currently only checks if we have style preferences to apply.
-        // TODO: Also analyze skill content to determine if it would benefit
-        !self.style.patterns.is_empty() || !self.style.tech_preferences.is_empty()
+        // Check if we have any non-default style preferences
+        let has_naming_prefs = self.style.naming.variable_case != CaseStyle::SnakeCase
+            || self.style.naming.use_abbreviations
+            || !self.style.naming.abbreviations.is_empty();
+        let has_patterns = !self.style.patterns.is_empty();
+        let has_tech_prefs = !self.style.tech_preferences.is_empty();
+
+        has_naming_prefs || has_patterns || has_tech_prefs
+    }
+
+    /// Adapt code examples in the content to match user's naming conventions
+    fn adapt_code_examples(&self, content: &str) -> (String, Vec<String>) {
+        let mut adaptations = Vec::new();
+        let mut result = String::new();
+        let mut in_code_block = false;
+        let mut code_block_lang = String::new();
+
+        for line in content.lines() {
+            if line.starts_with("```") {
+                if in_code_block {
+                    // End of code block
+                    result.push_str(line);
+                    result.push('\n');
+                    in_code_block = false;
+                    code_block_lang.clear();
+                } else {
+                    // Start of code block
+                    code_block_lang = line.trim_start_matches("```").trim().to_string();
+                    result.push_str(line);
+                    result.push('\n');
+                    in_code_block = true;
+                }
+            } else if in_code_block {
+                // Apply naming convention transformations within code blocks
+                let adapted_line = self.adapt_identifiers(line, &code_block_lang);
+                if adapted_line != line && adaptations.is_empty() {
+                    adaptations.push(format!(
+                        "converted identifiers to {:?}",
+                        self.style.naming.variable_case
+                    ));
+                }
+                result.push_str(&adapted_line);
+                result.push('\n');
+            } else {
+                result.push_str(line);
+                result.push('\n');
+            }
+        }
+
+        // Remove trailing newline if original didn't have one
+        if !content.ends_with('\n') && result.ends_with('\n') {
+            result.pop();
+        }
+
+        (result, adaptations)
+    }
+
+    /// Adapt identifiers in a line of code to match user's naming conventions
+    fn adapt_identifiers(&self, line: &str, lang: &str) -> String {
+        // Only convert if user prefers camelCase (most code defaults to snake_case)
+        if self.style.naming.variable_case != CaseStyle::CamelCase {
+            return line.to_string();
+        }
+
+        // Skip comment lines
+        let trimmed = line.trim();
+        if trimmed.starts_with("//") || trimmed.starts_with('#') || trimmed.starts_with("--") {
+            return line.to_string();
+        }
+
+        // Skip if language typically uses snake_case (Rust, Python, etc.)
+        let snake_case_langs = ["rust", "python", "ruby", "go"];
+        if snake_case_langs.iter().any(|l| lang.eq_ignore_ascii_case(l)) {
+            return line.to_string();
+        }
+
+        // Convert snake_case identifiers to camelCase in JS/TS code
+        self.snake_to_camel(line)
+    }
+
+    /// Convert snake_case identifiers to camelCase
+    fn snake_to_camel(&self, text: &str) -> String {
+        let mut result = String::new();
+        let mut chars = text.chars().peekable();
+        let mut in_string = false;
+        let mut string_char = ' ';
+
+        while let Some(c) = chars.next() {
+            // Track string boundaries
+            if (c == '"' || c == '\'') && !in_string {
+                in_string = true;
+                string_char = c;
+                result.push(c);
+                continue;
+            } else if c == string_char && in_string {
+                in_string = false;
+                result.push(c);
+                continue;
+            }
+
+            // Don't convert inside strings
+            if in_string {
+                result.push(c);
+                continue;
+            }
+
+            // Convert underscore followed by letter to uppercase letter
+            if c == '_' {
+                if let Some(&next) = chars.peek() {
+                    if next.is_ascii_lowercase() {
+                        chars.next();
+                        result.push(next.to_ascii_uppercase());
+                        continue;
+                    }
+                }
+            }
+
+            result.push(c);
+        }
+
+        result
+    }
+
+    /// Apply terminology adjustments based on tech preferences
+    fn adapt_terminology(&self, content: &str) -> (String, Vec<String>) {
+        let mut adaptations = Vec::new();
+        let mut result = content.to_string();
+
+        // Apply abbreviation substitutions
+        for (abbrev, full) in &self.style.naming.abbreviations {
+            if self.style.naming.use_abbreviations {
+                // Convert full form to abbreviation
+                if result.contains(full) {
+                    result = result.replace(full, abbrev);
+                    if adaptations.is_empty() {
+                        adaptations.push("applied preferred abbreviations".to_string());
+                    }
+                }
+            }
+        }
+
+        (result, adaptations)
     }
 }
 
@@ -856,5 +1012,135 @@ mod tests {
         let profile = StyleProfile::default();
         let personalizer = Personalizer::new(profile);
         assert!(personalizer.style().patterns.is_empty());
+    }
+
+    #[test]
+    fn test_personalizer_snake_to_camel() {
+        let profile = StyleProfile {
+            naming: NamingConvention {
+                variable_case: CaseStyle::CamelCase,
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let personalizer = Personalizer::new(profile);
+
+        // Test basic conversion
+        let result = personalizer.snake_to_camel("let user_name = get_user_id();");
+        assert_eq!(result, "let userName = getUserId();");
+
+        // Test preserving strings
+        let result = personalizer.snake_to_camel("let s = \"hello_world\";");
+        assert_eq!(result, "let s = \"hello_world\";");
+    }
+
+    #[test]
+    fn test_personalizer_adapt_code_examples() {
+        let profile = StyleProfile {
+            naming: NamingConvention {
+                variable_case: CaseStyle::CamelCase,
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let personalizer = Personalizer::new(profile);
+
+        let content = r#"Here is an example:
+
+```javascript
+let user_name = "test";
+function get_user_id() {
+    return user_name;
+}
+```
+
+This shows the pattern."#;
+
+        let (adapted, adaptations) = personalizer.adapt_code_examples(content);
+        assert!(adapted.contains("userName"));
+        assert!(adapted.contains("getUserId"));
+        assert!(!adaptations.is_empty());
+    }
+
+    #[test]
+    fn test_personalizer_no_adapt_for_snake_case_langs() {
+        let profile = StyleProfile {
+            naming: NamingConvention {
+                variable_case: CaseStyle::CamelCase,
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let personalizer = Personalizer::new(profile);
+
+        // Rust code should NOT be converted (snake_case is idiomatic)
+        let content = r#"```rust
+let user_name = "test";
+```"#;
+
+        let (adapted, _) = personalizer.adapt_code_examples(content);
+        assert!(adapted.contains("user_name")); // Should remain unchanged
+    }
+
+    #[test]
+    fn test_personalizer_should_personalize() {
+        // Default profile should not trigger personalization
+        let default_profile = StyleProfile::default();
+        let personalizer = Personalizer::new(default_profile);
+        let skill = SkillRecord {
+            id: "test".to_string(),
+            name: "Test Skill".to_string(),
+            description: "A test".to_string(),
+            version: None,
+            author: None,
+            source_path: "/test".to_string(),
+            source_layer: "local".to_string(),
+            git_remote: None,
+            git_commit: None,
+            content_hash: "abc123".to_string(),
+            body: "content".to_string(),
+            metadata_json: "{}".to_string(),
+            assets_json: "[]".to_string(),
+            token_count: 100,
+            quality_score: 0.8,
+            indexed_at: "2025-01-01T00:00:00Z".to_string(),
+            modified_at: "2025-01-01T00:00:00Z".to_string(),
+            is_deprecated: false,
+            deprecation_reason: None,
+        };
+        assert!(!personalizer.should_personalize(&skill));
+
+        // Profile with camelCase preference should trigger
+        let camel_profile = StyleProfile {
+            naming: NamingConvention {
+                variable_case: CaseStyle::CamelCase,
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let personalizer = Personalizer::new(camel_profile);
+        assert!(personalizer.should_personalize(&skill));
+    }
+
+    #[test]
+    fn test_personalizer_abbreviations() {
+        let profile = StyleProfile {
+            naming: NamingConvention {
+                use_abbreviations: true,
+                abbreviations: vec![
+                    ("msg".to_string(), "message".to_string()),
+                    ("cfg".to_string(), "configuration".to_string()),
+                ],
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let personalizer = Personalizer::new(profile);
+
+        let content = "The message contains the configuration settings.";
+        let (adapted, adaptations) = personalizer.adapt_terminology(content);
+        assert!(adapted.contains("msg"));
+        assert!(adapted.contains("cfg"));
+        assert!(!adaptations.is_empty());
     }
 }
