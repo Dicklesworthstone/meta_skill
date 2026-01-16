@@ -98,6 +98,17 @@ impl ParsedSource {
             });
         }
 
+        // Check if file exists locally (even without path prefix)
+        if Path::new(input).exists() {
+            let expanded = Self::expand_path(input);
+            return Ok(Self {
+                source: InstallSource::File {
+                    path: expanded.display().to_string(),
+                },
+                asset_name: None,
+            });
+        }
+
         // GitHub shorthand (owner/repo or owner/repo@tag)
         if input.contains('/') {
             return Self::parse_github(input);
