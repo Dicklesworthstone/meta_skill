@@ -12,7 +12,10 @@ use serde_json::Value;
 
 use crate::app::AppContext;
 use crate::cli::output::emit_json;
+use crate::core::spec_lens::parse_markdown;
 use crate::error::{MsError, Result};
+use crate::lint::rules::all_rules;
+use crate::lint::{ValidationConfig, ValidationEngine};
 
 /// MCP server protocol version
 const PROTOCOL_VERSION: &str = "2024-11-05";
@@ -303,6 +306,33 @@ fn define_tools() -> Vec<Tool> {
                 }
             }),
         },
+        Tool {
+            name: "lint".to_string(),
+            description: "Lint a skill file for validation issues, security problems, and quality warnings".to_string(),
+            input_schema: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "path": {
+                        "type": "string",
+                        "description": "Path to SKILL.md file to lint"
+                    },
+                    "skill": {
+                        "type": "string",
+                        "description": "Skill ID to lint (alternative to path, reads from archive)"
+                    },
+                    "strict": {
+                        "type": "boolean",
+                        "description": "Treat warnings as errors",
+                        "default": false
+                    },
+                    "rules": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "Only run specific rules (by rule ID)"
+                    }
+                }
+            }),
+        },
     ]
 }
 
@@ -508,6 +538,7 @@ fn handle_tools_call(
         "list" => handle_tool_list(ctx, &arguments),
         "show" => handle_tool_show(ctx, &arguments),
         "doctor" => handle_tool_doctor(ctx, &arguments),
+        "lint" => handle_tool_lint(ctx, &arguments),
         _ => Err(MsError::ValidationFailed(format!("Unknown tool: {name}"))),
     };
 
@@ -743,6 +774,83 @@ fn handle_tool_doctor(ctx: &AppContext, args: &Value) -> Result<ToolResult> {
     Ok(ToolResult::text(serde_json::to_string_pretty(&output)?))
 }
 
+fn handle_tool_lint(ctx: &AppContext, args: &Value) -> Result<ToolResult> {
+    // Get skill content - either from path or skill ID
+    let (content, source) = if let Some(path) = args.get("path").and_then(|v| v.as_str()) {
+        let content = std::fs::read_to_string(path)
+            .map_err(|e| MsError::Config(format!("Failed to read {path}: {e}")))?;
+        (content, path.to_string())
+    } else if let Some(skill_id) = args.get("skill").and_then(|v| v.as_str()) {
+        // Read from git archive
+        let spec = ctx.git.read_skill(skill_id)?;
+        let content = crate::core::spec_lens::compile_markdown(&spec);
+        (content, format!("skill:{skill_id}"))
+    } else {
+        return Err(MsError::ValidationFailed(
+            "Either 'path' or 'skill' parameter is required".to_string(),
+        ));
+    };
+
+    // Parse the skill
+    let spec = parse_markdown(&content)
+        .map_err(|e| MsError::InvalidSkill(format!("{source}: {e}")))?;
+
+    // Build validation config
+    let mut config = ValidationConfig::new();
+    if args.get("strict").and_then(serde_json::Value::as_bool).unwrap_or(false) {
+        config = config.strict();
+    }
+
+    // Build engine with rules
+    let mut engine = ValidationEngine::new(config);
+
+    // Filter rules if specified
+    let rules_filter: Option<std::collections::HashSet<&str>> = args
+        .get("rules")
+        .and_then(|v| v.as_array())
+        .map(|arr| arr.iter().filter_map(|v| v.as_str()).collect());
+
+    for rule in all_rules() {
+        if let Some(ref filter) = rules_filter {
+            if !filter.contains(rule.id()) {
+                continue;
+            }
+        }
+        engine.register(rule);
+    }
+
+    // Run validation
+    let result = engine.validate(&spec);
+
+    // Build output
+    let output = serde_json::json!({
+        "source": source,
+        "skill_id": spec.metadata.id,
+        "passed": result.passed,
+        "error_count": result.error_count(),
+        "warning_count": result.warning_count(),
+        "info_count": result.infos().count(),
+        "diagnostics": result.diagnostics.iter().map(|d| {
+            serde_json::json!({
+                "rule_id": d.rule_id,
+                "severity": format!("{}", d.severity),
+                "category": format!("{}", d.category),
+                "message": d.message,
+                "span": d.span.as_ref().map(|s| serde_json::json!({
+                    "start_line": s.start_line,
+                    "start_col": s.start_col,
+                    "end_line": s.end_line,
+                    "end_col": s.end_col,
+                })),
+                "suggestion": d.suggestion,
+                "fix_available": d.fix_available,
+            })
+        }).collect::<Vec<_>>()
+    });
+
+    Ok(ToolResult::text(serde_json::to_string_pretty(&output)?))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -810,5 +918,24 @@ mod tests {
         let response = result.unwrap();
         assert!(response.result.is_some());
         assert!(response.error.is_none());
+    }
+
+    #[test]
+    fn test_define_tools_includes_lint() {
+        let tools = define_tools();
+        assert!(tools.iter().any(|t| t.name == "lint"));
+    }
+
+    #[test]
+    fn test_lint_tool_schema() {
+        let tools = define_tools();
+        let lint_tool = tools.iter().find(|t| t.name == "lint").unwrap();
+
+        // Check that lint tool has expected properties in schema
+        let props = lint_tool.input_schema.get("properties").unwrap();
+        assert!(props.get("path").is_some());
+        assert!(props.get("skill").is_some());
+        assert!(props.get("strict").is_some());
+        assert!(props.get("rules").is_some());
     }
 }

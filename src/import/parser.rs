@@ -173,7 +173,7 @@ impl ContentParser {
                 current_block.push('\n');
                 block_start = line_start;
                 block_start_line = current_line;
-            } else if line.trim() == "---" && current_block.contains("---") {
+            } else if line.trim() == "---" && current_block.trim().starts_with("---") {
                 // YAML frontmatter end
                 current_block.push_str(line);
                 current_block.push('\n');
@@ -182,6 +182,18 @@ impl ContentParser {
                     blocks.push((
                         text,
                         SourceSpan::new(block_start, current_pos + line_len, block_start_line, current_line),
+                    ));
+                }
+                current_block = String::new();
+                block_start = current_pos + line_len + 1;
+                block_start_line = current_line + 1;
+            } else if line.trim() == "---" {
+                // Horizontal rule - separate blocks
+                let text = current_block.trim().to_string();
+                if !text.is_empty() {
+                    blocks.push((
+                        text,
+                        SourceSpan::new(block_start, line_start, block_start_line, current_line - 1),
                     ));
                 }
                 current_block = String::new();
