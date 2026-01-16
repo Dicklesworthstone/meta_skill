@@ -53,7 +53,7 @@ pub enum CycleDetectionResult {
 }
 
 /// Detect if there's a cycle in the inheritance chain starting from a skill
-pub fn detect_inheritance_cycle<R: SkillRepository>(
+pub fn detect_inheritance_cycle<R: SkillRepository + ?Sized>(
     skill_id: &str,
     repository: &R,
 ) -> Result<CycleDetectionResult> {
@@ -85,7 +85,7 @@ pub fn detect_inheritance_cycle<R: SkillRepository>(
 }
 
 /// Resolve a skill's inheritance, applying parent sections
-pub fn resolve_extends<R: SkillRepository>(
+pub fn resolve_extends<R: SkillRepository + ?Sized>(
     skill: &SkillSpec,
     repository: &R,
 ) -> Result<ResolvedSkillSpec> {
@@ -296,7 +296,7 @@ fn merge_blocks(
 }
 
 /// Get the full inheritance chain for a skill (root to leaf)
-pub fn get_inheritance_chain<R: SkillRepository>(
+pub fn get_inheritance_chain<R: SkillRepository + ?Sized>(
     skill_id: &str,
     repository: &R,
 ) -> Result<Vec<String>> {

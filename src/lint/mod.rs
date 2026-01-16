@@ -47,9 +47,13 @@ pub mod config;
 pub mod diagnostic;
 pub mod engine;
 pub mod rule;
+pub mod rules;
 
 // Re-export main types for convenience
 pub use config::{ValidationConfig, ValidationContext};
 pub use diagnostic::{Diagnostic, RuleCategory, Severity, SourceSpan};
 pub use engine::{FixResult, RuleInfo, ValidationEngine, ValidationResult};
 pub use rule::{BoxedRule, ValidationRule};
+
+// Re-export rule collection functions
+pub use rules::{all_rules, reference_rules, structural_rules};
