@@ -3,7 +3,7 @@
 use std::cmp::Ordering;
 use std::fmt;
 
-use once_cell::sync::Lazy;
+use std::sync::LazyLock;
 
 use crate::error::{MsError, Result};
 
@@ -74,10 +74,10 @@ impl PartialOrd for BeadsVersion {
 }
 
 /// Minimum bd version this client supports.
-pub static MINIMUM_SUPPORTED_VERSION: Lazy<BeadsVersion> = Lazy::new(|| BeadsVersion::new(0, 9, 0));
+pub static MINIMUM_SUPPORTED_VERSION: LazyLock<BeadsVersion> = LazyLock::new(|| BeadsVersion::new(0, 9, 0));
 
 /// Recommended bd version for full feature support.
-pub static RECOMMENDED_VERSION: Lazy<BeadsVersion> = Lazy::new(|| BeadsVersion::new(1, 0, 0));
+pub static RECOMMENDED_VERSION: LazyLock<BeadsVersion> = LazyLock::new(|| BeadsVersion::new(1, 0, 0));
 
 #[derive(Debug, Clone)]
 pub enum VersionCompatibility {

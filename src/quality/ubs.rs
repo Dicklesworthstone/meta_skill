@@ -3,7 +3,7 @@
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-use once_cell::sync::Lazy;
+use std::sync::LazyLock;
 use regex::Regex;
 
 use crate::error::{MsError, Result};
@@ -157,7 +157,7 @@ fn command_string(cmd: &Command) -> String {
 }
 
 /// Static regex for parsing UBS findings (compiled once).
-static ISSUE_RE: Lazy<Regex> = Lazy::new(|| {
+static ISSUE_RE: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r"^(?P<file>[^:]+):(?P<line>\d+):(?P<col>\d+)\s*-\s*(?P<msg>.+)$")
         .expect("invalid UBS issue regex")
 });

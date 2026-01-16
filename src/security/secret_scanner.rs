@@ -18,7 +18,7 @@
 //! assert!(!redacted.contains("AKIAIOSFODNN7EXAMPLE"));
 //! ```
 
-use once_cell::sync::Lazy;
+use std::sync::LazyLock;
 use regex::Regex;
 
 /// Types of secrets that can be detected.
@@ -127,7 +127,7 @@ struct SecretPattern {
 }
 
 /// Static patterns for detecting secrets.
-static SECRET_PATTERNS: Lazy<Vec<SecretPattern>> = Lazy::new(|| {
+static SECRET_PATTERNS: LazyLock<Vec<SecretPattern>> = LazyLock::new(|| {
     vec![
         // AWS Access Key ID (starts with AKIA, ABIA, ACCA, ASIA)
         SecretPattern {
@@ -275,7 +275,7 @@ pub fn scan_secrets(content: &str) -> Vec<SecretMatch> {
 
 /// Scan for high-entropy strings that might be secrets.
 fn scan_high_entropy(content: &str) -> Vec<SecretMatch> {
-    static HIGH_ENTROPY_RE: Lazy<Regex> = Lazy::new(|| {
+    static HIGH_ENTROPY_RE: LazyLock<Regex> = LazyLock::new(|| {
         // Look for long alphanumeric strings that could be secrets
         Regex::new(r"[A-Za-z0-9+/=_\-]{32,}").expect("invalid high entropy regex")
     });

@@ -2,7 +2,7 @@
 
 use std::path::{Path, PathBuf};
 
-use once_cell::sync::Lazy;
+use std::sync::LazyLock;
 use regex::Regex;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
@@ -11,7 +11,7 @@ use crate::error::{MsError, Result};
 
 const ACIP_AUDIT_TAG: &str = "ACIP_AUDIT_MODE=ENABLED";
 
-static DISALLOWED_PATTERNS: Lazy<Vec<Regex>> = Lazy::new(|| {
+static DISALLOWED_PATTERNS: LazyLock<Vec<Regex>> = LazyLock::new(|| {
     vec![
         Regex::new("(?i)ignore\\s+(all|any|previous)\\s+instructions")
             .expect("ACIP: invalid regex for 'ignore instructions'"),
@@ -25,7 +25,7 @@ static DISALLOWED_PATTERNS: Lazy<Vec<Regex>> = Lazy::new(|| {
     ]
 });
 
-static SENSITIVE_PATTERNS: Lazy<Vec<Regex>> = Lazy::new(|| {
+static SENSITIVE_PATTERNS: LazyLock<Vec<Regex>> = LazyLock::new(|| {
     vec![
         Regex::new("(?i)api[-_\\s]+key").expect("ACIP: invalid regex for 'api key'"),
         Regex::new("(?i)access[-_\\s]+token").expect("ACIP: invalid regex for 'access token'"),
@@ -219,7 +219,7 @@ fn load_prompt(path: &Path) -> Result<String> {
 }
 
 fn detect_version(prompt: &str) -> Option<String> {
-    static VERSION_RE: Lazy<Regex> = Lazy::new(|| {
+    static VERSION_RE: LazyLock<Regex> = LazyLock::new(|| {
         Regex::new(r"ACIP\s+v?([0-9]+(?:\.[0-9]+)*)")
             .expect("ACIP: invalid regex for version detection")
     });
