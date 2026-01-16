@@ -208,11 +208,13 @@ pub(crate) fn load_skill(ctx: &AppContext, args: &LoadArgs) -> Result<LoadResult
     let mut spec = spec;
     spec.metadata = metadata;
 
-    // Build empty assets for now (TODO: load from assets_json)
-    let assets = SkillAssets::default();
+    // Load assets from database
+    let assets: SkillAssets = serde_json::from_str(&skill.assets_json)
+        .unwrap_or_default();
 
     // Apply disclosure
     let disclosed = disclose(&spec, &assets, &disclosure_plan);
+    let slices_included = disclosed.slices_included;
 
     // Handle dependencies if enabled
     let dependencies_loaded = if !matches!(args.deps, DepsMode::Off) {
@@ -226,10 +228,7 @@ pub(crate) fn load_skill(ctx: &AppContext, args: &LoadArgs) -> Result<LoadResult
         name: skill.name.clone(),
         disclosed,
         dependencies_loaded,
-        slices_included: match &disclosure_plan {
-            DisclosurePlan::Pack(_) => Some(0), // TODO: get actual slice count from packer
-            DisclosurePlan::Level(_) => None,
-        },
+        slices_included,
     };
 
     record_usage(
@@ -1481,6 +1480,7 @@ mod tests {
                 scripts: vec![],
                 references: vec![],
                 token_estimate: 100,
+                slices_included: None,
             },
             dependencies_loaded: vec!["dep1".to_string()],
             slices_included: None,

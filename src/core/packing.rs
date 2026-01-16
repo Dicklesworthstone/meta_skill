@@ -520,7 +520,7 @@ fn try_improve(
         return false;
     }
 
-    let mut ranked = rank_by_density(
+    let ranked = rank_by_density(
         &candidates,
         &group_counts,
         &constraints.recent_slice_ids,

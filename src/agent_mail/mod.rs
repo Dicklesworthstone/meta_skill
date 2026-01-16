@@ -134,6 +134,10 @@ struct McpClient {
 
 impl McpClient {
     fn new(endpoint: &str, timeout_secs: u64) -> Result<Self> {
+        if endpoint.starts_with("http://") {
+            tracing::warn!("Agent mail endpoint uses unencrypted HTTP. Credentials will be sent in plain text.");
+        }
+
         let timeout = Duration::from_secs(timeout_secs.max(1));
         let client = reqwest::blocking::Client::builder()
             .timeout(timeout)
@@ -259,7 +263,9 @@ fn unwrap_tool_result(value: Value) -> Result<Value> {
         return Err(MsError::Config(message.to_string()));
     }
     let Some(content) = value.get("content").and_then(|c| c.as_array()) else {
-        return Ok(value);
+        return Err(MsError::Config(
+            "agent mail response missing content array".to_string(),
+        ));
     };
     for item in content {
         let Some(text) = item.get("text").and_then(|t| t.as_str()) else {
@@ -269,5 +275,10 @@ fn unwrap_tool_result(value: Value) -> Result<Value> {
             return Ok(parsed);
         }
     }
-    Ok(value)
+    
+    // If we reach here, we found content but no valid JSON in text fields.
+    // This is unexpected for our tools which should return JSON.
+    Err(MsError::Config(
+        "agent mail response contained no valid JSON payload".to_string(),
+    ))
 }

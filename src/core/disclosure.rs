@@ -199,6 +199,9 @@ pub struct DisclosedContent {
     pub token_estimate: usize,
     /// The disclosure level used
     pub level: DisclosureLevel,
+    /// Number of slices included (only for Pack mode)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub slices_included: Option<usize>,
 }
 
 /// Minimal frontmatter for disclosure
@@ -307,6 +310,7 @@ pub fn disclose_level(
                 references: vec![],
                 token_estimate: estimate_tokens_frontmatter(&spec.metadata, true),
                 level,
+                slices_included: None,
             }
         }
         DisclosureLevel::Overview => {
@@ -321,6 +325,7 @@ pub fn disclose_level(
                 references: vec![],
                 token_estimate,
                 level,
+                slices_included: None,
             }
         }
         DisclosureLevel::Standard => {
@@ -336,6 +341,7 @@ pub fn disclose_level(
                 references: vec![],
                 token_estimate,
                 level,
+                slices_included: None,
             }
         }
         DisclosureLevel::Full => {
@@ -350,6 +356,7 @@ pub fn disclose_level(
                 references: vec![],
                 token_estimate,
                 level,
+                slices_included: None,
             }
         }
         DisclosureLevel::Complete => {
@@ -365,6 +372,7 @@ pub fn disclose_level(
                 references: assets.references.clone(),
                 token_estimate,
                 level,
+                slices_included: None,
             }
         }
         DisclosureLevel::Auto => {
@@ -394,6 +402,7 @@ fn disclose_packed(
             references: vec![],
             token_estimate: frontmatter_tokens,
             level: DisclosureLevel::Minimal,
+            slices_included: Some(0),
         };
     }
 
@@ -414,6 +423,7 @@ fn disclose_packed(
                 references: vec![],
                 token_estimate: frontmatter_tokens,
                 level: DisclosureLevel::Minimal,
+                slices_included: Some(0),
             };
         }
     };
@@ -440,6 +450,7 @@ fn disclose_packed(
         DisclosureLevel::Full
     };
 
+    let slice_count = packed.slices.len();
     DisclosedContent {
         frontmatter,
         body,
@@ -447,6 +458,7 @@ fn disclose_packed(
         references: vec![],
         token_estimate: frontmatter_tokens + body_tokens,
         level,
+        slices_included: Some(slice_count),
     }
 }
 

@@ -609,9 +609,9 @@ fn parse_repo(input: &str) -> Result<(String, String)> {
 }
 
 fn compute_sha256(path: &Path) -> Result<String> {
-    let bytes = std::fs::read(path)?;
+    let mut file = std::fs::File::open(path)?;
     let mut hasher = Sha256::new();
-    hasher.update(&bytes);
+    std::io::copy(&mut file, &mut hasher)?;
     let hash = hasher.finalize();
     Ok(hex::encode(hash))
 }
