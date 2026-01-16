@@ -219,10 +219,7 @@ impl McpClient {
         }
 
         response.result.ok_or_else(|| {
-            MsError::Config(format!(
-                "agent mail empty response for {}",
-                method
-            ))
+            MsError::Config(format!("agent mail empty response for {method}"))
         })
     }
 
@@ -251,7 +248,7 @@ impl McpClient {
 fn unwrap_tool_result(value: Value) -> Result<Value> {
     if value
         .get("isError")
-        .and_then(|flag| flag.as_bool())
+        .and_then(Value::as_bool)
         .unwrap_or(false)
     {
         let message = value
