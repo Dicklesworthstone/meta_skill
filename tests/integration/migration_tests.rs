@@ -19,7 +19,7 @@ fn migrate_sets_missing_format_version() {
     if let Some(obj) = json.as_object_mut() {
         obj.insert(
             "format_version".to_string(),
-            serde_json::Value::String("".to_string()),
+            serde_json::Value::String(String::new()),
         );
     }
     fs::write(&spec_path, serde_json::to_string_pretty(&json).unwrap()).unwrap();

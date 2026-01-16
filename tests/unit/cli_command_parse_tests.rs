@@ -18,7 +18,7 @@ fn parse_config_list() {
             assert!(args.value.is_none());
             assert!(!args.unset);
         }
-        other => panic!("unexpected command: {:?}", other),
+        other => panic!("unexpected command: {other:?}"),
     }
 }
 
@@ -31,7 +31,7 @@ fn parse_config_set_value() {
             assert!(!args.list);
             assert!(!args.unset);
         }
-        other => panic!("unexpected command: {:?}", other),
+        other => panic!("unexpected command: {other:?}"),
     }
 }
 
@@ -51,7 +51,7 @@ fn parse_diff_flags() {
             assert!(args.structure_only);
             assert_eq!(args.format, "json");
         }
-        other => panic!("unexpected command: {:?}", other),
+        other => panic!("unexpected command: {other:?}"),
     }
 }
 
@@ -66,7 +66,7 @@ fn parse_fmt_flags() {
             assert!(args.check);
             assert!(args.diff);
         }
-        other => panic!("unexpected command: {:?}", other),
+        other => panic!("unexpected command: {other:?}"),
     }
 }
 
@@ -78,7 +78,7 @@ fn parse_edit_flags() {
             assert_eq!(args.editor.as_deref(), Some("vim"));
             assert!(args.meta);
         }
-        other => panic!("unexpected command: {:?}", other),
+        other => panic!("unexpected command: {other:?}"),
     }
 }
 
@@ -89,7 +89,7 @@ fn parse_alias_list_shortcut() {
             assert!(args.list);
             assert!(args.command.is_none());
         }
-        other => panic!("unexpected command: {:?}", other),
+        other => panic!("unexpected command: {other:?}"),
     }
 }
 
@@ -106,9 +106,9 @@ fn parse_alias_add() {
                 assert_eq!(target, "new");
                 assert_eq!(kind, "legacy");
             }
-            other => panic!("unexpected alias command: {:?}", other),
+            other => panic!("unexpected alias command: {other:?}"),
         },
-        other => panic!("unexpected command: {:?}", other),
+        other => panic!("unexpected command: {other:?}"),
     }
 }
 
@@ -122,9 +122,9 @@ fn parse_bandit_stats_path() {
                     Some(std::path::Path::new("/tmp/bandit.json"))
                 );
             }
-            other => panic!("unexpected bandit command: {:?}", other),
+            other => panic!("unexpected bandit command: {other:?}"),
         },
-        other => panic!("unexpected command: {:?}", other),
+        other => panic!("unexpected command: {other:?}"),
     }
 }
 
@@ -136,9 +136,9 @@ fn parse_cm_rules_filters() {
                 assert_eq!(category.as_deref(), Some("debug"));
                 assert_eq!(limit, 5);
             }
-            other => panic!("unexpected cm command: {:?}", other),
+            other => panic!("unexpected cm command: {other:?}"),
         },
-        other => panic!("unexpected command: {:?}", other),
+        other => panic!("unexpected command: {other:?}"),
     }
 }
 
@@ -152,7 +152,7 @@ fn parse_migrate_with_check() {
             );
             assert!(args.check);
         }
-        other => panic!("unexpected command: {:?}", other),
+        other => panic!("unexpected command: {other:?}"),
     }
 }
 
@@ -166,7 +166,7 @@ fn parse_pre_commit_flags() {
             );
             assert_eq!(args.only.as_deref(), Some("rust"));
         }
-        other => panic!("unexpected command: {:?}", other),
+        other => panic!("unexpected command: {other:?}"),
     }
 }
 
@@ -178,7 +178,7 @@ fn parse_quality_args() {
             assert!(!args.all);
             assert!(args.update);
         }
-        other => panic!("unexpected command: {:?}", other),
+        other => panic!("unexpected command: {other:?}"),
     }
 }
 
@@ -207,9 +207,9 @@ fn parse_security_scan_args() {
                 assert_eq!(scan.session_id.as_deref(), Some("sess-1"));
                 assert_eq!(scan.message_index, 2);
             }
-            other => panic!("unexpected security command: {:?}", other),
+            other => panic!("unexpected security command: {other:?}"),
         },
-        other => panic!("unexpected command: {:?}", other),
+        other => panic!("unexpected command: {other:?}"),
     }
 }
 
@@ -239,9 +239,9 @@ fn parse_template_apply_args() {
                 assert_eq!(apply.tags, vec!["rust".to_string(), "build".to_string()]);
                 assert_eq!(apply.layer, "project");
             }
-            other => panic!("unexpected template command: {:?}", other),
+            other => panic!("unexpected template command: {other:?}"),
         },
-        other => panic!("unexpected command: {:?}", other),
+        other => panic!("unexpected command: {other:?}"),
     }
 }
 
@@ -265,7 +265,7 @@ fn parse_test_args() {
             assert_eq!(args.timeout.as_deref(), Some("2m"));
             assert!(args.fail_fast);
         }
-        other => panic!("unexpected command: {:?}", other),
+        other => panic!("unexpected command: {other:?}"),
     }
 }
 
@@ -286,7 +286,7 @@ fn parse_update_args() {
             assert_eq!(args.channel.as_deref(), Some("beta"));
             assert_eq!(args.target_version.as_deref(), Some("0.2.0"));
         }
-        other => panic!("unexpected command: {:?}", other),
+        other => panic!("unexpected command: {other:?}"),
     }
 }
 
@@ -297,7 +297,7 @@ fn parse_validate_args() {
             assert_eq!(args.skill, "skill-a");
             assert!(args.ubs);
         }
-        other => panic!("unexpected command: {:?}", other),
+        other => panic!("unexpected command: {other:?}"),
     }
 }
 
@@ -329,9 +329,9 @@ fn parse_remote_add_git_flags() {
                 assert_eq!(add.token_env.as_deref(), Some("GIT_TOKEN"));
                 assert_eq!(add.direction.as_deref(), Some("push-only"));
             }
-            other => panic!("unexpected remote command: {:?}", other),
+            other => panic!("unexpected remote command: {other:?}"),
         },
-        other => panic!("unexpected command: {:?}", other),
+        other => panic!("unexpected command: {other:?}"),
     }
 }
 
@@ -342,9 +342,9 @@ fn parse_backup_create_args() {
             commands::backup::BackupCommand::Create(create) => {
                 assert_eq!(create.id.as_deref(), Some("snap-1"));
             }
-            other => panic!("unexpected backup command: {:?}", other),
+            other => panic!("unexpected backup command: {other:?}"),
         },
-        other => panic!("unexpected command: {:?}", other),
+        other => panic!("unexpected command: {other:?}"),
     }
 }
 
@@ -355,9 +355,9 @@ fn parse_backup_list_args() {
             commands::backup::BackupCommand::List(list) => {
                 assert_eq!(list.limit, 5);
             }
-            other => panic!("unexpected backup command: {:?}", other),
+            other => panic!("unexpected backup command: {other:?}"),
         },
-        other => panic!("unexpected command: {:?}", other),
+        other => panic!("unexpected command: {other:?}"),
     }
 }
 
@@ -370,8 +370,8 @@ fn parse_backup_restore_args() {
                 assert!(restore.approve);
                 assert!(!restore.latest);
             }
-            other => panic!("unexpected backup command: {:?}", other),
+            other => panic!("unexpected backup command: {other:?}"),
         },
-        other => panic!("unexpected command: {:?}", other),
+        other => panic!("unexpected command: {other:?}"),
     }
 }

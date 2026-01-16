@@ -1141,14 +1141,12 @@ impl Database {
         limit: usize,
         offset: usize,
     ) -> Result<Vec<SkillFeedbackRecord>> {
-        let mut sql = "SELECT id, skill_id, feedback_type, rating, comment, created_at 
+        let mut sql = "SELECT id, skill_id, feedback_type, rating, comment, created_at
                        FROM skill_feedback"
             .to_string();
-        let mut args = Vec::new();
 
-        if let Some(sid) = skill_id {
+        if skill_id.is_some() {
             sql.push_str(" WHERE skill_id = ?");
-            args.push(sid.to_string()); // Ownership work-around
         }
 
         sql.push_str(" ORDER BY created_at DESC LIMIT ? OFFSET ?");

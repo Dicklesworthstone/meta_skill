@@ -1,6 +1,6 @@
 //! E2E test binary for beads integration
 //!
-//! Run with: cargo run --bin test_beads_e2e
+//! Run with: cargo run --bin `test_beads_e2e`
 
 use std::process::Command;
 use std::time::Instant;
@@ -135,9 +135,9 @@ fn main() -> Result<()> {
     }
     let avg_ms = start.elapsed().as_millis() / 5;
     if avg_ms >= 500 {
-        println!("[WARN] list performance slower than expected: {}ms", avg_ms);
+        println!("[WARN] list performance slower than expected: {avg_ms}ms");
     }
-    println!("[9/9] average list time: {}ms", avg_ms);
+    println!("[9/9] average list time: {avg_ms}ms");
 
     println!("=== All E2E Tests Passed ===");
     Ok(())

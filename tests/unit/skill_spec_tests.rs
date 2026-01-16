@@ -26,7 +26,7 @@ fn parse_markdown_table() -> Result<(), String> {
         TestCase {
             name: "no_header",
             input: "tests/fixtures/skills/no_header.md",
-            expected: ("".to_string(), 1usize),
+            expected: (String::new(), 1usize),
             should_panic: false,
         },
     ];

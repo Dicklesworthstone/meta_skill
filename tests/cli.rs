@@ -97,7 +97,7 @@ fn test_security_scan_quarantine_review_flow() {
     let output = reviews.output().unwrap();
     assert!(output.status.success());
     let json: Value = serde_json::from_slice(&output.stdout).unwrap();
-    assert!(json.as_array().unwrap().len() >= 1);
+    assert!(!json.as_array().unwrap().is_empty());
 }
 
 #[test]
@@ -214,7 +214,7 @@ fn test_experiment_load_robot_payload() {
     let ms_root = dir.path();
     let db = Database::open(ms_root.join("ms.db")).unwrap();
     let now = Utc::now().to_rfc3339();
-    let body = r#"---
+    let body = r"---
 id: test-skill
 name: Test Skill
 description: A test skill
@@ -229,7 +229,7 @@ A test skill.
 
 ## Overview
 Some content.
-"#;
+";
 
     let record = SkillRecord {
         id: "test-skill".to_string(),

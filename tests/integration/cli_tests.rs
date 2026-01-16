@@ -369,7 +369,7 @@ fn test_build_safety_warning_flags() {
 
     // Should produce structured output even with safety flags
     // Output may be multiple JSON objects separated by newlines
-    let has_json = output.stdout.contains("{") && output.stdout.contains("}");
+    let has_json = output.stdout.contains('{') && output.stdout.contains('}');
 
     assert!(
         has_json,

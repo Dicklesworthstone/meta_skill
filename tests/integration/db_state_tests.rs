@@ -8,7 +8,7 @@ pub struct DbStateChecker<'a> {
 }
 
 impl<'a> DbStateChecker<'a> {
-    pub fn new(db: &'a Connection) -> Self {
+    pub const fn new(db: &'a Connection) -> Self {
         Self { db }
     }
 

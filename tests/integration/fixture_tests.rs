@@ -1,4 +1,4 @@
-//! Tests for the TestFixture enhancements
+//! Tests for the `TestFixture` enhancements
 
 use std::time::Duration;
 

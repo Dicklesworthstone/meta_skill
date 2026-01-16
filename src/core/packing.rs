@@ -429,7 +429,16 @@ fn rank_by_density<'a>(
 
 fn score_slice(slice: &SkillSlice, mode: PackMode) -> f32 {
     match mode {
-        PackMode::Balanced => slice.utility_score,
+        // Balanced: uniform small boosts to encourage even type distribution
+        PackMode::Balanced => match slice.slice_type {
+            SliceType::Rule => slice.utility_score + 0.08,
+            SliceType::Command => slice.utility_score + 0.08,
+            SliceType::Example => slice.utility_score + 0.08,
+            SliceType::Pitfall => slice.utility_score + 0.08,
+            SliceType::Overview => slice.utility_score + 0.05,
+            _ => slice.utility_score,
+        },
+        // UtilityFirst: pure utility score, no type bonuses
         PackMode::UtilityFirst => slice.utility_score,
         PackMode::CoverageFirst => match slice.slice_type {
             SliceType::Rule => slice.utility_score + 0.2,

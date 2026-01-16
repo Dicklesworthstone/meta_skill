@@ -63,7 +63,7 @@ fn test_full_workflow() {
 
 #[test]
 fn test_error_recovery_flow() {
-    let mut fixture = TestFixture::new("test_error_recovery_flow");
+    let fixture = TestFixture::new("test_error_recovery_flow");
 
     let init = fixture.run_ms(&["--robot", "init"]);
     assert!(init.success, "init failed: {}", init.stderr);

@@ -116,7 +116,7 @@ macro_rules! assert_command_success {
 pub struct TestFixture {
     /// Root temp directory
     pub temp_dir: TempDir,
-    /// Project root (temp_dir path)
+    /// Project root (`temp_dir` path)
     pub root: PathBuf,
     /// ms root directory (./.ms)
     pub ms_root: PathBuf,
@@ -148,12 +148,12 @@ impl TestFixture {
         std::fs::create_dir_all(&skills_dir).expect("Failed to create skills dir");
 
         println!("\n{}", "=".repeat(70));
-        println!("[FIXTURE] Test: {}", test_name);
-        println!("[FIXTURE] Root: {:?}", root);
-        println!("[FIXTURE] MS Root: {:?}", ms_root);
-        println!("[FIXTURE] Config: {:?}", config_path);
-        println!("[FIXTURE] Skills: {:?}", skills_dir);
-        println!("[FIXTURE] Index: {:?}", index_path);
+        println!("[FIXTURE] Test: {test_name}");
+        println!("[FIXTURE] Root: {root:?}");
+        println!("[FIXTURE] MS Root: {ms_root:?}");
+        println!("[FIXTURE] Config: {config_path:?}");
+        println!("[FIXTURE] Skills: {skills_dir:?}");
+        println!("[FIXTURE] Index: {index_path:?}");
         println!("{}", "=".repeat(70));
 
         Self {
@@ -202,7 +202,7 @@ impl TestFixture {
         std::fs::write(cass_dir.join("extraction.json"), extraction)
             .expect("Failed to write mock extraction");
 
-        println!("[FIXTURE] Mock CASS configured at: {:?}", cass_dir);
+        println!("[FIXTURE] Mock CASS configured at: {cass_dir:?}");
 
         fixture
     }
@@ -318,7 +318,7 @@ impl TestFixture {
                     }
                     std::thread::sleep(Duration::from_millis(50));
                 }
-                Err(e) => break Err(format!("Error waiting: {}", e)),
+                Err(e) => break Err(format!("Error waiting: {e}")),
             }
         };
 
@@ -344,23 +344,22 @@ impl TestFixture {
             Err(msg) => (false, -1, String::new(), msg),
         };
 
-        println!("[CMD] Exit code: {}", exit_code);
-        println!("[CMD] Timing: {:?}", elapsed);
+        println!("[CMD] Exit code: {exit_code}");
+        println!("[CMD] Timing: {elapsed:?}");
 
         // Warn about slow operations (threshold: 5 seconds)
         const SLOW_THRESHOLD: Duration = Duration::from_secs(5);
         if elapsed > SLOW_THRESHOLD {
             println!(
-                "[SLOW] ⚠ Command took {:?} (threshold: {:?})",
-                elapsed, SLOW_THRESHOLD
+                "[SLOW] ⚠ Command took {elapsed:?} (threshold: {SLOW_THRESHOLD:?})"
             );
         }
 
         if !stdout.is_empty() {
-            println!("[STDOUT]\n{}", stdout);
+            println!("[STDOUT]\n{stdout}");
         }
         if !stderr.is_empty() {
-            println!("[STDERR]\n{}", stderr);
+            println!("[STDERR]\n{stderr}");
         }
 
         CommandOutput {
@@ -399,22 +398,21 @@ impl TestFixture {
         let stderr = String::from_utf8_lossy(&output.stderr).to_string();
 
         println!("[CMD] Exit code: {}", output.status.code().unwrap_or(-1));
-        println!("[CMD] Timing: {:?}", elapsed);
+        println!("[CMD] Timing: {elapsed:?}");
 
         // Warn about slow operations (threshold: 5 seconds)
         const SLOW_THRESHOLD: Duration = Duration::from_secs(5);
         if elapsed > SLOW_THRESHOLD {
             println!(
-                "[SLOW] ⚠ Command took {:?} (threshold: {:?})",
-                elapsed, SLOW_THRESHOLD
+                "[SLOW] ⚠ Command took {elapsed:?} (threshold: {SLOW_THRESHOLD:?})"
             );
         }
 
         if !stdout.is_empty() {
-            println!("[STDOUT]\n{}", stdout);
+            println!("[STDOUT]\n{stdout}");
         }
         if !stderr.is_empty() {
-            println!("[STDERR]\n{}", stderr);
+            println!("[STDERR]\n{stderr}");
         }
 
         CommandOutput {
@@ -462,16 +460,15 @@ impl TestFixture {
     pub fn verify_db_state(&self, check: impl FnOnce(&Connection) -> bool, description: &str) {
         if let Some(ref db) = self.db {
             let db_state = self.dump_db_state(db);
-            println!("[DB STATE] {}", db_state);
+            println!("[DB STATE] {db_state}");
 
             let result = check(db);
-            assert!(result, "Database state check failed: {}", description);
+            assert!(result, "Database state check failed: {description}");
 
-            println!("[DB CHECK] {} - PASSED", description);
+            println!("[DB CHECK] {description} - PASSED");
         } else {
             println!(
-                "[DB CHECK] Skipped (no database connection): {}",
-                description
+                "[DB CHECK] Skipped (no database connection): {description}"
             );
         }
     }
@@ -480,7 +477,7 @@ impl TestFixture {
         let db_path = self.ms_root.join("ms.db");
         if db_path.exists() {
             self.db = Some(Connection::open(&db_path).expect("Failed to open db"));
-            println!("[FIXTURE] Database opened: {:?}", db_path);
+            println!("[FIXTURE] Database opened: {db_path:?}");
         }
     }
 
@@ -491,12 +488,12 @@ impl TestFixture {
         if let Ok(count) =
             db.query_row::<i64, _, _>("SELECT COUNT(*) FROM skills", [], |r| r.get(0))
         {
-            state.push_str(&format!("skills={} ", count));
+            state.push_str(&format!("skills={count} "));
         }
         if let Ok(count) =
             db.query_row::<i64, _, _>("SELECT COUNT(*) FROM skills_fts", [], |r| r.get(0))
         {
-            state.push_str(&format!("fts={} ", count));
+            state.push_str(&format!("fts={count} "));
         }
 
         state
@@ -519,24 +516,24 @@ impl TestFixture {
         let connector = if is_last { "└── " } else { "├── " };
 
         if prefix.is_empty() {
-            output.push_str(&format!("{}\n", name));
+            output.push_str(&format!("{name}\n"));
         } else {
-            output.push_str(&format!("{}{}{}\n", prefix, connector, name));
+            output.push_str(&format!("{prefix}{connector}{name}\n"));
         }
 
         if path.is_dir() {
             let mut entries: Vec<_> = std::fs::read_dir(path)
                 .ok()
-                .map(|rd| rd.filter_map(|e| e.ok()).collect())
+                .map(|rd| rd.filter_map(std::result::Result::ok).collect())
                 .unwrap_or_default();
-            entries.sort_by(|a, b| a.file_name().cmp(&b.file_name()));
+            entries.sort_by_key(std::fs::DirEntry::file_name);
 
             let new_prefix = if prefix.is_empty() {
                 String::new()
             } else if is_last {
-                format!("{}    ", prefix)
+                format!("{prefix}    ")
             } else {
-                format!("{}│   ", prefix)
+                format!("{prefix}│   ")
             };
 
             for (i, entry) in entries.iter().enumerate() {
@@ -551,7 +548,7 @@ impl TestFixture {
         let index_path = &self.index_path;
         let mut state = String::new();
 
-        state.push_str(&format!("Index path: {:?}\n", index_path));
+        state.push_str(&format!("Index path: {index_path:?}\n"));
 
         if !index_path.exists() {
             state.push_str("  Index directory does not exist\n");
@@ -561,26 +558,25 @@ impl TestFixture {
         // Count files in index directory
         let file_count = std::fs::read_dir(index_path)
             .ok()
-            .map(|rd| rd.filter_map(|e| e.ok()).count())
-            .unwrap_or(0);
+            .map_or(0, |rd| rd.filter_map(std::result::Result::ok).count());
 
-        state.push_str(&format!("  Files: {}\n", file_count));
+        state.push_str(&format!("  Files: {file_count}\n"));
 
         // Get total size
         let total_size: u64 = walkdir::WalkDir::new(index_path)
             .into_iter()
-            .filter_map(|e| e.ok())
+            .filter_map(std::result::Result::ok)
             .filter_map(|e| e.metadata().ok())
-            .filter(|m| m.is_file())
+            .filter(std::fs::Metadata::is_file)
             .map(|m| m.len())
             .sum();
 
-        state.push_str(&format!("  Total size: {} bytes\n", total_size));
+        state.push_str(&format!("  Total size: {total_size} bytes\n"));
 
         // List index files
         state.push_str("  Contents:\n");
         if let Ok(entries) = std::fs::read_dir(index_path) {
-            for entry in entries.filter_map(|e| e.ok()) {
+            for entry in entries.filter_map(std::result::Result::ok) {
                 let size = entry.metadata().map(|m| m.len()).unwrap_or(0);
                 state.push_str(&format!(
                     "    {} ({} bytes)\n",
@@ -609,7 +605,7 @@ impl Drop for TestFixture {
         let elapsed = self.start_time.elapsed();
         println!("\n{}", "=".repeat(70));
         println!("[FIXTURE] Test complete: {}", self.test_name);
-        println!("[FIXTURE] Total time: {:?}", elapsed);
+        println!("[FIXTURE] Total time: {elapsed:?}");
         println!("[FIXTURE] Cleaning up: {:?}", self.temp_dir.path());
         println!("{}\n", "=".repeat(70));
     }
@@ -626,8 +622,7 @@ pub struct TestSkill {
 impl TestSkill {
     pub fn new(name: &str, description: &str) -> Self {
         let content = format!(
-            "# {}\n\n{}\n\n## Overview\n\n{}\n",
-            name, description, description
+            "# {name}\n\n{description}\n\n## Overview\n\n{description}\n"
         );
 
         Self {
@@ -696,12 +691,11 @@ impl TestBundle {
     pub fn new(name: &str, description: &str) -> Self {
         let manifest = format!(
             r#"{{
-  "name": "{}",
+  "name": "{name}",
   "version": "1.0.0",
-  "description": "{}",
+  "description": "{description}",
   "skills": []
-}}"#,
-            name, description
+}}"#
         );
 
         Self {
@@ -713,7 +707,7 @@ impl TestBundle {
 
     /// Create a bundle with skills
     pub fn with_skills(name: &str, description: &str, skills: Vec<(&str, &str)>) -> Self {
-        let skill_names: Vec<_> = skills.iter().map(|(n, _)| format!(r#""{}""#, n)).collect();
+        let skill_names: Vec<_> = skills.iter().map(|(n, _)| format!(r#""{n}""#)).collect();
         let manifest = format!(
             r#"{{
   "name": "{}",
@@ -791,7 +785,7 @@ pub mod sample_skills {
     pub fn rust_error_handling() -> TestSkill {
         TestSkill::with_content(
             "rust-error-handling",
-            r#"# Rust Error Handling
+            r"# Rust Error Handling
 
 Use Result<T, E> for recoverable errors and panic! for unrecoverable ones.
 
@@ -813,7 +807,7 @@ fn read_file(path: &str) -> Result<String, std::io::Error> {
     std::fs::read_to_string(path)
 }
 ```
-"#,
+",
         )
     }
 
@@ -821,7 +815,7 @@ fn read_file(path: &str) -> Result<String, std::io::Error> {
     pub fn git_workflow() -> TestSkill {
         TestSkill::with_content(
             "git-workflow",
-            r#"# Git Workflow
+            r"# Git Workflow
 
 Standard Git workflow patterns for feature development.
 
@@ -835,7 +829,7 @@ Use feature branches with meaningful commit messages.
 - Write descriptive commit messages
 - Squash commits before merging
 - Use conventional commit format
-"#,
+",
         )
     }
 
@@ -843,7 +837,7 @@ Use feature branches with meaningful commit messages.
     pub fn testing_best_practices() -> TestSkill {
         TestSkill::with_content(
             "testing-best-practices",
-            r#"# Testing Best Practices
+            r"# Testing Best Practices
 
 Guidelines for writing effective tests.
 
@@ -857,7 +851,7 @@ Good tests are fast, isolated, and readable.
 - Use descriptive test names
 - Arrange-Act-Assert pattern
 - Mock external dependencies
-"#,
+",
         )
     }
 

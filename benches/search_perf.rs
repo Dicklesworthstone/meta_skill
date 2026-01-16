@@ -1,10 +1,10 @@
 //! Criterion benchmarks for performance-critical paths.
 //!
 //! Performance targets (from meta_skill-ftb spec):
-//! - hash_embedding: < 1μs per embedding
-//! - rrf_fusion: < 10ms for combining rankings
+//! - `hash_embedding`: < 1μs per embedding
+//! - `rrf_fusion`: < 10ms for combining rankings
 //! - packing: < 50ms for constrained optimization
-//! - vector_search: < 50ms p99 for 1000 embeddings
+//! - `vector_search`: < 50ms p99 for 1000 embeddings
 
 use std::hint::black_box;
 use criterion::{BenchmarkId, Criterion, Throughput, criterion_group, criterion_main};
@@ -28,12 +28,12 @@ fn hash_embedding_benchmarks(c: &mut Criterion) {
     let embedder = HashEmbedder::new(384);
 
     // Benchmark different input sizes
-    for size in [10, 100, 500, 1000].iter() {
+    for size in &[10, 100, 500, 1000] {
         let input: String = "word ".repeat(*size);
 
         group.throughput(Throughput::Bytes(input.len() as u64));
         group.bench_with_input(BenchmarkId::new("text_size", size), &input, |b, input| {
-            b.iter(|| embedder.embed(black_box(input)))
+            b.iter(|| embedder.embed(black_box(input)));
         });
     }
 
@@ -42,7 +42,7 @@ fn hash_embedding_benchmarks(c: &mut Criterion) {
     // Batch embedding benchmark
     let mut batch_group = c.benchmark_group("hash_embedding_batch");
     let inputs: Vec<String> = (0..100)
-        .map(|i| format!("sample text {} with various keywords rust async error", i))
+        .map(|i| format!("sample text {i} with various keywords rust async error"))
         .collect();
 
     batch_group.throughput(Throughput::Elements(100));
@@ -52,7 +52,7 @@ fn hash_embedding_benchmarks(c: &mut Criterion) {
                 .iter()
                 .map(|s| embedder.embed(black_box(s)))
                 .collect::<Vec<_>>()
-        })
+        });
     });
 
     batch_group.finish();
@@ -68,13 +68,13 @@ fn rrf_fusion_benchmarks(c: &mut Criterion) {
     let config = RrfConfig::default();
 
     // Benchmark different ranking sizes
-    for size in [10, 50, 100, 500].iter() {
+    for size in &[10, 50, 100, 500] {
         let bm25_results: Vec<(String, f32)> = (0..*size)
-            .map(|i| (format!("skill-bm25-{}", i), 1.0 / (i as f32 + 1.0)))
+            .map(|i| (format!("skill-bm25-{i}"), 1.0 / (i as f32 + 1.0)))
             .collect();
 
         let semantic_results: Vec<(String, f32)> = (0..*size)
-            .map(|i| (format!("skill-semantic-{}", i), 1.0 / (i as f32 + 1.0)))
+            .map(|i| (format!("skill-semantic-{i}"), 1.0 / (i as f32 + 1.0)))
             .collect();
 
         group.throughput(Throughput::Elements(*size as u64 * 2)); // Both lists
@@ -82,7 +82,7 @@ fn rrf_fusion_benchmarks(c: &mut Criterion) {
             BenchmarkId::new("ranking_size", size),
             &(&bm25_results, &semantic_results),
             |b, (bm25, semantic)| {
-                b.iter(|| fuse_results(black_box(bm25), black_box(semantic), &config))
+                b.iter(|| fuse_results(black_box(bm25), black_box(semantic), &config));
             },
         );
     }
@@ -92,30 +92,30 @@ fn rrf_fusion_benchmarks(c: &mut Criterion) {
     // Benchmark with overlapping results (common case)
     let mut overlap_group = c.benchmark_group("rrf_fusion_overlap");
 
-    for overlap_pct in [25, 50, 75].iter() {
+    for overlap_pct in &[25, 50, 75] {
         let size = 100;
         let overlap = size * overlap_pct / 100;
 
         // Create overlapping results
         let bm25_results: Vec<(String, f32)> = (0..size)
-            .map(|i| (format!("skill-{}", i), 1.0 / (i as f32 + 1.0)))
+            .map(|i| (format!("skill-{i}"), 1.0 / (i as f32 + 1.0)))
             .collect();
 
         let mut semantic_results: Vec<(String, f32)> = Vec::new();
         // First add overlapping skills
         for i in 0..overlap {
-            semantic_results.push((format!("skill-{}", i), 0.9 - (i as f32 * 0.01)));
+            semantic_results.push((format!("skill-{i}"), (i as f32).mul_add(-0.01, 0.9)));
         }
         // Then add unique skills
         for i in 0..(size - overlap) {
-            semantic_results.push((format!("skill-unique-{}", i), 0.5 - (i as f32 * 0.005)));
+            semantic_results.push((format!("skill-unique-{i}"), (i as f32).mul_add(-0.005, 0.5)));
         }
 
         overlap_group.bench_with_input(
             BenchmarkId::new("overlap_pct", overlap_pct),
             &(&bm25_results, &semantic_results),
             |b, (bm25, semantic)| {
-                b.iter(|| fuse_results(black_box(bm25), black_box(semantic), &config))
+                b.iter(|| fuse_results(black_box(bm25), black_box(semantic), &config));
             },
         );
     }
@@ -133,7 +133,7 @@ fn vector_search_benchmarks(c: &mut Criterion) {
     let embedder = HashEmbedder::new(384);
 
     // Benchmark different index sizes
-    for index_size in [100, 500, 1000, 2000].iter() {
+    for index_size in &[100, 500, 1000, 2000] {
         let mut index = VectorIndex::new(384);
 
         // Populate index
@@ -144,7 +144,7 @@ fn vector_search_benchmarks(c: &mut Criterion) {
                 i % 10
             );
             let embedding = embedder.embed(&text);
-            index.insert(format!("skill-{}", i), embedding);
+            index.insert(format!("skill-{i}"), embedding);
         }
 
         let query_embedding = embedder.embed("rust error handling patterns");
@@ -164,16 +164,16 @@ fn vector_search_benchmarks(c: &mut Criterion) {
 
     let mut index = VectorIndex::new(384);
     for i in 0..1000 {
-        let text = format!("skill {} rust async patterns", i);
+        let text = format!("skill {i} rust async patterns");
         let embedding = embedder.embed(&text);
-        index.insert(format!("skill-{}", i), embedding);
+        index.insert(format!("skill-{i}"), embedding);
     }
 
     let query_embedding = embedder.embed("rust patterns");
 
-    for limit in [5, 10, 25, 50, 100].iter() {
+    for limit in &[5, 10, 25, 50, 100] {
         limit_group.bench_with_input(BenchmarkId::new("limit", limit), limit, |b, &limit| {
-            b.iter(|| index.search(black_box(&query_embedding), limit))
+            b.iter(|| index.search(black_box(&query_embedding), limit));
         });
     }
 
@@ -191,7 +191,7 @@ fn packing_benchmarks(c: &mut Criterion) {
     fn create_test_slices(count: usize) -> Vec<SkillSlice> {
         (0..count)
             .map(|i| SkillSlice {
-                id: format!("slice-{}", i),
+                id: format!("slice-{i}"),
                 slice_type: match i % 4 {
                     0 => SliceType::Rule,
                     1 => SliceType::Example,
@@ -205,7 +205,7 @@ fn packing_benchmarks(c: &mut Criterion) {
                 requires: Vec::new(),
                 condition: None,
                 section_title: Some(format!("Section {}", i % 3)),
-                content: format!("Content for slice {} with some text.", i),
+                content: format!("Content for slice {i} with some text."),
             })
             .collect()
     }
@@ -213,7 +213,7 @@ fn packing_benchmarks(c: &mut Criterion) {
     let packer = ConstrainedPacker;
 
     // Benchmark different slice counts
-    for slice_count in [10, 50, 100, 200].iter() {
+    for slice_count in &[10, 50, 100, 200] {
         let slices = create_test_slices(*slice_count);
         let constraints = PackConstraints::new(5000, 10);
 
@@ -228,7 +228,7 @@ fn packing_benchmarks(c: &mut Criterion) {
                         black_box(constraints),
                         PackMode::Balanced,
                     )
-                })
+                });
             },
         );
     }
@@ -240,7 +240,7 @@ fn packing_benchmarks(c: &mut Criterion) {
 
     let slices = create_test_slices(100);
 
-    for budget in [1000, 5000, 10000, 20000].iter() {
+    for budget in &[1000, 5000, 10000, 20000] {
         let constraints = PackConstraints::new(*budget, 10);
 
         budget_group.bench_with_input(
@@ -253,7 +253,7 @@ fn packing_benchmarks(c: &mut Criterion) {
                         black_box(constraints),
                         PackMode::Balanced,
                     )
-                })
+                });
             },
         );
     }
@@ -275,12 +275,12 @@ fn similarity_benchmarks(c: &mut Criterion) {
     let embedding_b = embedder.embed("rust async await error patterns");
 
     group.bench_function("cosine_similarity", |b| {
-        b.iter(|| embedder.similarity(black_box(&embedding_a), black_box(&embedding_b)))
+        b.iter(|| embedder.similarity(black_box(&embedding_a), black_box(&embedding_b)));
     });
 
     // Batch similarity computation
     let embeddings: Vec<Vec<f32>> = (0..100)
-        .map(|i| embedder.embed(&format!("sample text {} keywords", i)))
+        .map(|i| embedder.embed(&format!("sample text {i} keywords")))
         .collect();
 
     let query = embedder.embed("sample text keywords");
@@ -292,7 +292,7 @@ fn similarity_benchmarks(c: &mut Criterion) {
                 .iter()
                 .map(|emb| embedder.similarity(black_box(&query), black_box(emb)))
                 .collect::<Vec<_>>()
-        })
+        });
     });
 
     group.finish();
@@ -310,7 +310,7 @@ fn suggest_benchmarks(c: &mut Criterion) {
         let mut bandit = SignalBandit::new();
         let context = SuggestionContext::default();
 
-        b.iter(|| bandit.select_weights(black_box(&context)))
+        b.iter(|| bandit.select_weights(black_box(&context)));
     });
 
     // Benchmark with full context
@@ -323,7 +323,7 @@ fn suggest_benchmarks(c: &mut Criterion) {
             activity_pattern: Some("coding".to_string()),
         };
 
-        b.iter(|| bandit.select_weights(black_box(&context)))
+        b.iter(|| bandit.select_weights(black_box(&context)));
     });
 
     // Benchmark estimated weights (deterministic, no sampling)
@@ -331,7 +331,7 @@ fn suggest_benchmarks(c: &mut Criterion) {
         let bandit = SignalBandit::new();
         let context = SuggestionContext::default();
 
-        b.iter(|| bandit.estimated_weights(black_box(&context)))
+        b.iter(|| bandit.estimated_weights(black_box(&context)));
     });
 
     // Benchmark update operation
@@ -344,8 +344,8 @@ fn suggest_benchmarks(c: &mut Criterion) {
                 black_box(SignalType::Bm25),
                 black_box(Reward::Success),
                 black_box(&context),
-            )
-        })
+            );
+        });
     });
 
     group.finish();
@@ -353,7 +353,7 @@ fn suggest_benchmarks(c: &mut Criterion) {
     // Benchmark bandit with history (many observations)
     let mut history_group = c.benchmark_group("suggest_bandit_trained");
 
-    for observations in [10, 100, 500, 1000].iter() {
+    for observations in &[10, 100, 500, 1000] {
         let mut bandit = SignalBandit::new();
         let context = SuggestionContext {
             tech_stack: Some("python".to_string()),
@@ -387,7 +387,7 @@ fn suggest_benchmarks(c: &mut Criterion) {
             &(&bandit, &context),
             |b, (bandit, context)| {
                 let mut bandit = (*bandit).clone();
-                b.iter(|| bandit.select_weights(black_box(context)))
+                b.iter(|| bandit.select_weights(black_box(context)));
             },
         );
     }

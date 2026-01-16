@@ -14,7 +14,7 @@ fn test_list_filters() {
             .with_layer("base"), // Assuming base layer for this test
     ];
 
-    let mut fixture = TestFixture::with_indexed_skills("test_list_filters", &skills);
+    let fixture = TestFixture::with_indexed_skills("test_list_filters", &skills);
 
     // Filter by tag
     let output = fixture.run_ms(&["list", "--tags", "rust"]);
