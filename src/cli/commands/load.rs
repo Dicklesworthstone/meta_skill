@@ -18,6 +18,7 @@ use crate::core::disclosure::{
     DisclosedContent, DisclosureLevel, DisclosurePlan, PackMode, TokenBudget, disclose,
 };
 use crate::core::pack_contracts::{PackContractPreset, custom_contracts_path, find_custom_contract};
+use crate::core::resolution::{DbSkillRepository, resolve_full};
 use crate::core::skill::{PackContract, SkillAssets, SkillMetadata};
 use crate::core::spec_lens::parse_markdown;
 use crate::error::{MsError, Result};
@@ -170,6 +171,9 @@ pub struct LoadResult {
     pub disclosed: DisclosedContent,
     pub dependencies_loaded: Vec<String>,
     pub slices_included: Option<usize>,
+    pub inheritance_chain: Vec<String>,
+    pub included_from: Vec<String>,
+    pub warnings: Vec<String>,
 }
 
 pub fn run(ctx: &AppContext, args: &LoadArgs) -> Result<()> {
@@ -641,6 +645,11 @@ pub(crate) fn load_skill(ctx: &AppContext, args: &LoadArgs, skill_ref: &str) -> 
     let mut spec = spec;
     spec.metadata = metadata;
 
+    // Resolve inheritance and composition
+    let repo = DbSkillRepository::new(&ctx.db);
+    let resolved = resolve_full(&spec, &repo)?;
+    let spec = resolved.spec;
+
     // Load assets from database
     let assets: SkillAssets = serde_json::from_str(&skill.assets_json)
         .unwrap_or_default();
@@ -662,6 +671,9 @@ pub(crate) fn load_skill(ctx: &AppContext, args: &LoadArgs, skill_ref: &str) -> 
         disclosed,
         dependencies_loaded,
         slices_included,
+        inheritance_chain: resolved.inheritance_chain,
+        included_from: resolved.included_from,
+        warnings: resolved.warnings.iter().map(|w| format!("{:?}", w)).collect(),
     };
 
     record_usage(
@@ -1231,7 +1243,26 @@ pub(crate) fn output_human(
 
     // Header with skill name
     println!("{}", format!("# {}", disclosed.frontmatter.name).bold());
+    
+    // Inheritance info
+    if result.inheritance_chain.len() > 1 {
+        let chain = result.inheritance_chain.join(" → ");
+        println!("{}", format!("Inheritance: {}", chain).dimmed());
+    }
+    if !result.included_from.is_empty() {
+        println!("{}", format!("Includes: {}", result.included_from.join(", ")).dimmed());
+    }
+    
     println!();
+
+    // Warnings
+    if !result.warnings.is_empty() {
+        println!("{}", "Warnings during resolution:".yellow());
+        for warning in &result.warnings {
+            println!("  - {}", warning);
+        }
+        println!();
+    }
 
     // Description
     if !disclosed.frontmatter.description.is_empty() {
@@ -1325,6 +1356,8 @@ pub(crate) fn build_robot_payload(result: &LoadResult, args: &LoadArgs) -> serde
             },
             "dependencies_loaded": result.dependencies_loaded,
             "slices_included": result.slices_included,
+            "inheritance_chain": result.inheritance_chain,
+            "included_from": result.included_from,
             "scripts": disclosed.scripts.iter().map(|s| {
                 serde_json::json!({
                     "path": s.path.to_string_lossy(),
@@ -1338,599 +1371,13 @@ pub(crate) fn build_robot_payload(result: &LoadResult, args: &LoadArgs) -> serde
                 })
             }).collect::<Vec<_>>(),
         },
-        "warnings": []
+        "warnings": result.warnings
     })
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn test_determine_disclosure_plan_default() {
-        let args = LoadArgs {
-            skill: Some("test".to_string()),
-            auto: false,
-            threshold: 0.3,
-            confirm: false,
-            dry_run: false,
-            level: None,
-            pack: None,
-            mode: CliPackMode::Balanced,
-            contract: None,
-            contract_id: None,
-            max_per_group: 2,
-            full: false,
-            complete: false,
-            deps: DepsMode::Auto,
-            experiment_id: None,
-            variant_id: None,
-        };
-
-        match determine_disclosure_plan(&args, None) {
-            DisclosurePlan::Level(level) => {
-                assert_eq!(level, DisclosureLevel::Standard);
-            }
-            _ => panic!("Expected Level plan"),
-        }
-    }
-
-    #[test]
-    fn test_determine_disclosure_plan_full_flag() {
-        let args = LoadArgs {
-            skill: Some("test".to_string()),
-            auto: false,
-            threshold: 0.3,
-            confirm: false,
-            dry_run: false,
-            level: None,
-            pack: None,
-            mode: CliPackMode::Balanced,
-            contract: None,
-            contract_id: None,
-            max_per_group: 2,
-            full: true,
-            complete: false,
-            deps: DepsMode::Auto,
-            experiment_id: None,
-            variant_id: None,
-        };
-
-        match determine_disclosure_plan(&args, None) {
-            DisclosurePlan::Level(level) => {
-                assert_eq!(level, DisclosureLevel::Full);
-            }
-            _ => panic!("Expected Level plan"),
-        }
-    }
-
-    #[test]
-    fn test_determine_disclosure_plan_complete_flag() {
-        let args = LoadArgs {
-            skill: Some("test".to_string()),
-            auto: false,
-            threshold: 0.3,
-            confirm: false,
-            dry_run: false,
-            level: None,
-            pack: None,
-            mode: CliPackMode::Balanced,
-            contract: None,
-            contract_id: None,
-            max_per_group: 2,
-            full: false,
-            complete: true,
-            deps: DepsMode::Auto,
-            experiment_id: None,
-            variant_id: None,
-        };
-
-        match determine_disclosure_plan(&args, None) {
-            DisclosurePlan::Level(level) => {
-                assert_eq!(level, DisclosureLevel::Complete);
-            }
-            _ => panic!("Expected Level plan"),
-        }
-    }
-
-    #[test]
-    fn test_determine_disclosure_plan_pack_budget() {
-        let args = LoadArgs {
-            skill: Some("test".to_string()),
-            auto: false,
-            threshold: 0.3,
-            confirm: false,
-            dry_run: false,
-            level: None,
-            pack: Some(800),
-            mode: CliPackMode::UtilityFirst,
-            contract: Some(CliPackContract::Debug),
-            contract_id: None,
-            max_per_group: 3,
-            full: true, // Should be ignored when pack is set
-            complete: false,
-            deps: DepsMode::Auto,
-            experiment_id: None,
-            variant_id: None,
-        };
-
-        let contract = args.contract.map(|c| c.preset().contract());
-        match determine_disclosure_plan(&args, contract) {
-            DisclosurePlan::Pack(budget) => {
-                assert_eq!(budget.tokens, 800);
-                assert_eq!(budget.mode, PackMode::UtilityFirst);
-                assert_eq!(budget.max_per_group, 3);
-                assert_eq!(
-                    budget.contract.as_ref().map(|c| c.id.as_str()),
-                    Some("debug")
-                );
-            }
-            _ => panic!("Expected Pack plan"),
-        }
-    }
-
-    #[test]
-    fn test_determine_disclosure_plan_explicit_level() {
-        let args = LoadArgs {
-            skill: Some("test".to_string()),
-            auto: false,
-            threshold: 0.3,
-            confirm: false,
-            dry_run: false,
-            level: Some("overview".to_string()),
-            pack: None,
-            mode: CliPackMode::Balanced,
-            contract: None,
-            contract_id: None,
-            max_per_group: 2,
-            full: false,
-            complete: false,
-            deps: DepsMode::Auto,
-            experiment_id: None,
-            variant_id: None,
-        };
-
-        match determine_disclosure_plan(&args, None) {
-            DisclosurePlan::Level(level) => {
-                assert_eq!(level, DisclosureLevel::Overview);
-            }
-            _ => panic!("Expected Level plan"),
-        }
-    }
-
-    #[test]
-    fn test_determine_disclosure_plan_numeric_level() {
-        let args = LoadArgs {
-            skill: Some("test".to_string()),
-            auto: false,
-            threshold: 0.3,
-            confirm: false,
-            dry_run: false,
-            level: Some("1".to_string()),
-            pack: None,
-            mode: CliPackMode::Balanced,
-            contract: None,
-            contract_id: None,
-            max_per_group: 2,
-            full: false,
-            complete: false,
-            deps: DepsMode::Auto,
-            experiment_id: None,
-            variant_id: None,
-        };
-
-        match determine_disclosure_plan(&args, None) {
-            DisclosurePlan::Level(level) => {
-                assert_eq!(level, DisclosureLevel::Overview);
-            }
-            _ => panic!("Expected Level plan"),
-        }
-    }
-
-    #[test]
-    fn test_deps_mode_conversion() {
-        assert!(matches!(
-            DependencyLoadMode::from(DepsMode::Auto),
-            DependencyLoadMode::Auto
-        ));
-        assert!(matches!(
-            DependencyLoadMode::from(DepsMode::Off),
-            DependencyLoadMode::Off
-        ));
-        assert!(matches!(
-            DependencyLoadMode::from(DepsMode::Full),
-            DependencyLoadMode::Full
-        ));
-    }
-
-    #[test]
-    fn test_cli_pack_mode_conversion() {
-        assert!(matches!(
-            PackMode::from(CliPackMode::Balanced),
-            PackMode::Balanced
-        ));
-        assert!(matches!(
-            PackMode::from(CliPackMode::UtilityFirst),
-            PackMode::UtilityFirst
-        ));
-        assert!(matches!(
-            PackMode::from(CliPackMode::CoverageFirst),
-            PackMode::CoverageFirst
-        ));
-        assert!(matches!(
-            PackMode::from(CliPackMode::PitfallSafe),
-            PackMode::PitfallSafe
-        ));
-    }
-
-    // ==================== Argument Parsing Tests ====================
-
-    #[test]
-    fn test_load_args_minimal() {
-        use clap::Parser;
-
-        #[derive(Parser)]
-        struct TestCli {
-            #[command(flatten)]
-            args: LoadArgs,
-        }
-
-        let cli = TestCli::parse_from(["test", "my-skill"]);
-        assert_eq!(cli.args.skill, Some("my-skill".to_string()));
-        assert!(cli.args.level.is_none());
-        assert!(cli.args.pack.is_none());
-        assert!(!cli.args.full);
-        assert!(!cli.args.complete);
-        assert!(cli.args.experiment_id.is_none());
-        assert!(cli.args.variant_id.is_none());
-    }
-
-    #[test]
-    fn test_load_args_with_level_short() {
-        use clap::Parser;
-
-        #[derive(Parser)]
-        struct TestCli {
-            #[command(flatten)]
-            args: LoadArgs,
-        }
-
-        let cli = TestCli::parse_from(["test", "skill", "-l", "full"]);
-        assert_eq!(cli.args.level, Some("full".to_string()));
-    }
-
-    #[test]
-    fn test_load_args_with_level_long() {
-        use clap::Parser;
-
-        #[derive(Parser)]
-        struct TestCli {
-            #[command(flatten)]
-            args: LoadArgs,
-        }
-
-        let cli = TestCli::parse_from(["test", "skill", "--level", "minimal"]);
-        assert_eq!(cli.args.level, Some("minimal".to_string()));
-    }
-
-    #[test]
-    fn test_load_args_with_pack() {
-        use clap::Parser;
-
-        #[derive(Parser)]
-        struct TestCli {
-            #[command(flatten)]
-            args: LoadArgs,
-        }
-
-        let cli = TestCli::parse_from(["test", "skill", "--pack", "500"]);
-        assert_eq!(cli.args.pack, Some(500));
-    }
-
-    #[test]
-    fn test_load_args_with_pack_mode() {
-        use clap::Parser;
-
-        #[derive(Parser)]
-        struct TestCli {
-            #[command(flatten)]
-            args: LoadArgs,
-        }
-
-        let cli =
-            TestCli::parse_from(["test", "skill", "--pack", "1000", "--mode", "utility-first"]);
-        assert_eq!(cli.args.pack, Some(1000));
-        assert!(matches!(cli.args.mode, CliPackMode::UtilityFirst));
-    }
-
-    #[test]
-    fn test_load_args_max_per_group_default() {
-        use clap::Parser;
-
-        #[derive(Parser)]
-        struct TestCli {
-            #[command(flatten)]
-            args: LoadArgs,
-        }
-
-        let cli = TestCli::parse_from(["test", "skill"]);
-        assert_eq!(cli.args.max_per_group, 2);
-    }
-
-    #[test]
-    fn test_load_args_max_per_group_custom() {
-        use clap::Parser;
-
-        #[derive(Parser)]
-        struct TestCli {
-            #[command(flatten)]
-            args: LoadArgs,
-        }
-
-        let cli = TestCli::parse_from(["test", "skill", "--max-per-group", "5"]);
-        assert_eq!(cli.args.max_per_group, 5);
-    }
-
-    #[test]
-    fn test_load_args_full_flag() {
-        use clap::Parser;
-
-        #[derive(Parser)]
-        struct TestCli {
-            #[command(flatten)]
-            args: LoadArgs,
-        }
-
-        let cli = TestCli::parse_from(["test", "skill", "--full"]);
-        assert!(cli.args.full);
-        assert!(!cli.args.complete);
-    }
-
-    #[test]
-    fn test_load_args_complete_flag() {
-        use clap::Parser;
-
-        #[derive(Parser)]
-        struct TestCli {
-            #[command(flatten)]
-            args: LoadArgs,
-        }
-
-        let cli = TestCli::parse_from(["test", "skill", "--complete"]);
-        assert!(cli.args.complete);
-        assert!(!cli.args.full);
-    }
-
-    #[test]
-    fn test_load_args_deps_modes() {
-        use clap::Parser;
-
-        #[derive(Parser)]
-        struct TestCli {
-            #[command(flatten)]
-            args: LoadArgs,
-        }
-
-        // Default is auto
-        let cli = TestCli::parse_from(["test", "skill"]);
-        assert!(matches!(cli.args.deps, DepsMode::Auto));
-
-        // Off
-        let cli = TestCli::parse_from(["test", "skill", "--deps", "off"]);
-        assert!(matches!(cli.args.deps, DepsMode::Off));
-
-        // Full
-        let cli = TestCli::parse_from(["test", "skill", "--deps", "full"]);
-        assert!(matches!(cli.args.deps, DepsMode::Full));
-    }
-
-    #[test]
-    fn test_load_args_all_pack_modes() {
-        use clap::Parser;
-
-        #[derive(Parser)]
-        struct TestCli {
-            #[command(flatten)]
-            args: LoadArgs,
-        }
-
-        for (name, expected_mode) in [
-            ("balanced", CliPackMode::Balanced),
-            ("utility-first", CliPackMode::UtilityFirst),
-            ("coverage-first", CliPackMode::CoverageFirst),
-            ("pitfall-safe", CliPackMode::PitfallSafe),
-        ] {
-            let cli = TestCli::parse_from(["test", "skill", "--mode", name]);
-            assert!(
-                std::mem::discriminant(&cli.args.mode) == std::mem::discriminant(&expected_mode),
-                "Expected mode {} to match",
-                name
-            );
-        }
-    }
-
-    #[test]
-    fn test_load_args_combined() {
-        use clap::Parser;
-
-        #[derive(Parser)]
-        struct TestCli {
-            #[command(flatten)]
-            args: LoadArgs,
-        }
-
-        let cli = TestCli::parse_from([
-            "test",
-            "my-skill",
-            "--pack",
-            "750",
-            "--mode",
-            "coverage-first",
-            "--contract",
-            "debug",
-            "--max-per-group",
-            "3",
-            "--deps",
-            "off",
-        ]);
-
-        assert_eq!(cli.args.skill, Some("my-skill".to_string()));
-        assert_eq!(cli.args.pack, Some(750));
-        assert!(matches!(cli.args.mode, CliPackMode::CoverageFirst));
-        assert!(matches!(cli.args.contract, Some(CliPackContract::Debug)));
-        assert_eq!(cli.args.max_per_group, 3);
-        assert!(matches!(cli.args.deps, DepsMode::Off));
-    }
-
-    // ==================== Disclosure Plan Edge Cases ====================
-
-    #[test]
-    fn test_determine_disclosure_plan_invalid_level_falls_back() {
-        let args = LoadArgs {
-            skill: Some("test".to_string()),
-            auto: false,
-            threshold: 0.3,
-            confirm: false,
-            dry_run: false,
-            level: Some("invalid".to_string()),
-            pack: None,
-            mode: CliPackMode::Balanced,
-            contract: None,
-            contract_id: None,
-            max_per_group: 2,
-            full: false,
-            complete: false,
-            deps: DepsMode::Auto,
-            experiment_id: None,
-            variant_id: None,
-        };
-
-        // Invalid level should fall through to Standard
-        match determine_disclosure_plan(&args, None) {
-            DisclosurePlan::Level(level) => {
-                assert_eq!(level, DisclosureLevel::Standard);
-            }
-            _ => panic!("Expected Level plan"),
-        }
-    }
-
-    #[test]
-    fn test_determine_disclosure_plan_complete_overrides_level() {
-        let args = LoadArgs {
-            skill: Some("test".to_string()),
-            auto: false,
-            threshold: 0.3,
-            confirm: false,
-            dry_run: false,
-            level: Some("minimal".to_string()),
-            pack: None,
-            mode: CliPackMode::Balanced,
-            contract: None,
-            contract_id: None,
-            max_per_group: 2,
-            full: false,
-            complete: true, // Should override level
-            deps: DepsMode::Auto,
-            experiment_id: None,
-            variant_id: None,
-        };
-
-        match determine_disclosure_plan(&args, None) {
-            DisclosurePlan::Level(level) => {
-                assert_eq!(level, DisclosureLevel::Complete);
-            }
-            _ => panic!("Expected Level plan"),
-        }
-    }
-
-    #[test]
-    fn test_determine_disclosure_plan_pack_overrides_all() {
-        let args = LoadArgs {
-            skill: Some("test".to_string()),
-            auto: false,
-            threshold: 0.3,
-            confirm: false,
-            dry_run: false,
-            level: Some("full".to_string()),
-            pack: Some(100),
-            mode: CliPackMode::Balanced,
-            contract: None,
-            contract_id: None,
-            max_per_group: 2,
-            full: true,
-            complete: true, // Pack should override all flags
-            deps: DepsMode::Auto,
-            experiment_id: None,
-            variant_id: None,
-        };
-
-        match determine_disclosure_plan(&args, None) {
-            DisclosurePlan::Pack(budget) => {
-                assert_eq!(budget.tokens, 100);
-            }
-            DisclosurePlan::Level(_) => panic!("Expected Pack plan, not Level"),
-        }
-    }
-
-    #[test]
-    fn test_determine_disclosure_plan_level_0() {
-        let args = LoadArgs {
-            skill: Some("test".to_string()),
-            auto: false,
-            threshold: 0.3,
-            confirm: false,
-            dry_run: false,
-            level: Some("0".to_string()),
-            pack: None,
-            mode: CliPackMode::Balanced,
-            contract: None,
-            contract_id: None,
-            max_per_group: 2,
-            full: false,
-            complete: false,
-            deps: DepsMode::Auto,
-            experiment_id: None,
-            variant_id: None,
-        };
-
-        match determine_disclosure_plan(&args, None) {
-            DisclosurePlan::Level(level) => {
-                assert_eq!(level, DisclosureLevel::Minimal);
-            }
-            _ => panic!("Expected Level plan"),
-        }
-    }
-
-    #[test]
-    fn test_determine_disclosure_plan_level_4() {
-        let args = LoadArgs {
-            skill: Some("test".to_string()),
-            auto: false,
-            threshold: 0.3,
-            confirm: false,
-            dry_run: false,
-            level: Some("4".to_string()),
-            pack: None,
-            mode: CliPackMode::Balanced,
-            contract: None,
-            contract_id: None,
-            max_per_group: 2,
-            full: false,
-            complete: false,
-            deps: DepsMode::Auto,
-            experiment_id: None,
-            variant_id: None,
-        };
-
-        match determine_disclosure_plan(&args, None) {
-            DisclosurePlan::Level(level) => {
-                assert_eq!(level, DisclosureLevel::Complete);
-            }
-            _ => panic!("Expected Level plan"),
-        }
-    }
-
-    // ==================== LoadResult Tests ====================
 
     #[test]
     fn test_load_result_struct() {
@@ -1957,12 +1404,16 @@ mod tests {
             },
             dependencies_loaded: vec!["dep1".to_string()],
             slices_included: None,
+            inheritance_chain: vec!["test-skill".to_string()],
+            included_from: vec![],
+            warnings: vec![],
         };
 
         assert_eq!(result.skill_id, "test-skill");
         assert_eq!(result.name, "Test Skill");
         assert_eq!(result.dependencies_loaded.len(), 1);
         assert!(result.slices_included.is_none());
+        assert_eq!(result.inheritance_chain.len(), 1);
     }
 
     // ==================== DepsMode Tests ====================

@@ -44,6 +44,31 @@ impl<'a> SkillRepository for GitSkillRepository<'a> {
     }
 }
 
+/// A `SkillRepository` backed by the SQLite database.
+///
+/// Loads skills from the database and parses their markdown bodies.
+pub struct DbSkillRepository<'a> {
+    db: &'a crate::storage::Database,
+}
+
+impl<'a> DbSkillRepository<'a> {
+    /// Create a new repository backed by the database.
+    pub const fn new(db: &'a crate::storage::Database) -> Self {
+        Self { db }
+    }
+}
+
+impl<'a> SkillRepository for DbSkillRepository<'a> {
+    fn get(&self, skill_id: &str) -> Result<Option<SkillSpec>> {
+        let Some(record) = self.db.get_skill(skill_id)? else {
+            return Ok(None);
+        };
+        // Parse the body to get the spec
+        let spec = crate::core::spec_lens::parse_markdown(&record.body)?;
+        Ok(Some(spec))
+    }
+}
+
 /// A resolved skill with inheritance and composition applied
 #[derive(Debug, Clone)]
 pub struct ResolvedSkillSpec {
@@ -703,7 +728,7 @@ mod tests {
                 assert!(cycle.contains(&"b".to_string()));
                 assert!(cycle.contains(&"c".to_string()));
             }
-            CycleDetectionResult::NoCycle => panic!("Expected cycle to be detected"),
+            CycleDetectionResult::NoCycle => assert!(false, "Expected cycle to be detected"),
         }
 
         // resolve_extends should fail with a cycle error
@@ -713,7 +738,7 @@ mod tests {
                 assert_eq!(skill_id, "a");
                 assert!(!cycle.is_empty());
             }
-            _ => panic!("Expected CyclicInheritance error"),
+            _ => assert!(false, "Expected CyclicInheritance error"),
         }
     }
 
@@ -728,7 +753,7 @@ mod tests {
                 assert_eq!(parent_id, "nonexistent");
                 assert_eq!(child_id, "child");
             }
-            _ => panic!("Expected ParentSkillNotFound error"),
+            _ => assert!(false, "Expected ParentSkillNotFound error"),
         }
     }
 
