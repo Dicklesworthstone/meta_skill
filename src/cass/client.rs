@@ -227,7 +227,14 @@ fn command_string(cmd: &Command) -> String {
     let program = cmd.get_program().to_string_lossy().to_string();
     let args = cmd
         .get_args()
-        .map(|arg| arg.to_string_lossy())
+        .map(|arg| {
+            let s = arg.to_string_lossy();
+            if s.chars().any(|c| c.is_whitespace() || "()[]{}$|&;<>`'\"*?!".contains(c)) {
+                format!("'{}'", s.replace('\'', "'\\''"))
+            } else {
+                s.to_string()
+            }
+        })
         .collect::<Vec<_>>();
     if args.is_empty() {
         program

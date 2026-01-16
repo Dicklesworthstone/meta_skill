@@ -12,6 +12,9 @@ use crate::storage::sqlite::SkillRecord;
 
 use super::types::{MetaDisclosureLevel, MetaSkill, MetaSkillSliceRef, SliceCondition};
 
+/// Overhead for each slice (newlines, titles, separators).
+const TOKEN_OVERHEAD_PER_SLICE: usize = 4;
+
 /// Result of loading a meta-skill.
 #[derive(Debug)]
 pub struct MetaSkillLoadResult {
@@ -69,7 +72,13 @@ impl<'a> ConditionContext<'a> {
             SliceCondition::TechStack { value } => {
                 self.tech_stacks.iter().any(|s| s.eq_ignore_ascii_case(value))
             }
-            SliceCondition::FileExists { value } => self.working_dir.join(value).exists(),
+            SliceCondition::FileExists { value } => {
+                if is_safe_relative_path(value) {
+                    self.working_dir.join(value).exists()
+                } else {
+                    false
+                }
+            }
             SliceCondition::EnvVar { value } => std::env::var(value).is_ok(),
             SliceCondition::DependsOn { skill_id, slice_id } => {
                 self.loaded_slices.contains(&(skill_id.clone(), slice_id.clone()))
@@ -80,6 +89,22 @@ impl<'a> ConditionContext<'a> {
     pub fn evaluate_all(&self, conditions: &[SliceCondition]) -> bool {
         conditions.iter().all(|c| self.evaluate(c))
     }
+}
+
+fn is_safe_relative_path(path_str: &str) -> bool {
+    let path = Path::new(path_str);
+    if path.is_absolute() {
+        return false;
+    }
+    for component in path.components() {
+        match component {
+            std::path::Component::ParentDir | std::path::Component::RootDir | std::path::Component::Prefix(_) => {
+                return false;
+            }
+            _ => {}
+        }
+    }
+    true
 }
 
 /// Manager for loading and resolving meta-skills.
@@ -296,12 +321,15 @@ impl<'a> MetaSkillManager<'a> {
         let mut used = 0usize;
 
         for slice in slices {
+            let slice_cost = slice.token_estimate + TOKEN_OVERHEAD_PER_SLICE;
+            
             if slice.required {
-                // Required slices always included (we already verified they fit)
-                used += slice.token_estimate;
+                // Required slices always included (we already verified they fit total budget, 
+                // though individual packing might slightly exceed if we didn't account for overhead before)
+                used += slice_cost;
                 packed.push(slice);
-            } else if used + slice.token_estimate <= budget {
-                used += slice.token_estimate;
+            } else if used + slice_cost <= budget {
+                used += slice_cost;
                 packed.push(slice);
             } else {
                 skipped.push(SkippedSlice {
@@ -409,5 +437,25 @@ mod tests {
             skill_id: "skill-b".to_string(),
             slice_id: "slice-2".to_string(),
         }));
+    }
+
+    #[test]
+    fn condition_file_exists_blocks_traversal() {
+        let ctx = ConditionContext {
+            working_dir: Path::new("/tmp/project"),
+            tech_stacks: &[],
+            loaded_slices: &HashSet::new(),
+        };
+
+        // Should return false (safe default) for unsafe paths, even if they exist
+        assert!(!ctx.evaluate(&SliceCondition::FileExists {
+            value: "/etc/passwd".to_string()
+        }));
+        assert!(!ctx.evaluate(&SliceCondition::FileExists {
+            value: "../outside".to_string()
+        }));
+        
+        // Safe relative path
+        // Note: we can't easily test true positive without fs, but false positive on unsafe is key
     }
 }

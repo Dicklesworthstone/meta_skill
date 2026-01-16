@@ -456,6 +456,19 @@ ms conflicts resolve <skill> --strategy prefer-local --apply
 ms machine info                      # Machine identity
 ```
 
+#### RU (Repo Updater) Backend
+
+If you use `ru` for repo sync, configure it in `config.toml`:
+
+```toml
+[ru]
+enabled = true
+ru_path = "/usr/local/bin/ru" # optional
+skill_repos = ["org/skills", "org/internal-skills@main"]
+auto_index = true
+parallel = 4
+```
+
 ### CASS Memory Integration
 
 ```bash

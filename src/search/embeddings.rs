@@ -315,7 +315,7 @@ fn tokenize(text: &str) -> Vec<String> {
     let lowered = text.to_lowercase();
     lowered
         .split(|c: char| !(c.is_alphanumeric() || c == '+' || c == '#'))
-        .filter(|token| token.len() >= 2)
+        .filter(|token| token.len() >= 1) // Allow 1-char tokens (like "c", "r")
         .map(|token| token.to_string())
         .collect()
 }
@@ -392,10 +392,19 @@ mod tests {
     #[test]
     fn test_embedding_empty_input() {
         let embedder = HashEmbedder::new(32);
-        // Use 1-char tokens which are filtered out by tokenizer (len >= 2)
-        let embedding = embedder.embed("a b c d");
+        // Test truly empty or whitespace-only input
+        let embedding = embedder.embed("   ");
         let norm = embedding.iter().map(|x| x * x).sum::<f32>().sqrt();
         assert_eq!(norm, 0.0);
+    }
+
+    #[test]
+    fn test_embedding_single_char_tokens() {
+        let embedder = HashEmbedder::new(32);
+        // 1-char tokens like "C" should now be included
+        let embedding = embedder.embed("a b c d");
+        let norm = embedding.iter().map(|x| x * x).sum::<f32>().sqrt();
+        assert!(norm > 0.0, "Single-char tokens should produce non-zero embedding");
     }
 
     #[test]
@@ -469,5 +478,13 @@ mod tests {
     fn next_u32(seed: &mut u64) -> u32 {
         *seed = seed.wrapping_mul(6364136223846793005).wrapping_add(1);
         (*seed >> 32) as u32
+    }
+
+    #[test]
+    fn test_tokenize_c_language() {
+        let tokens = tokenize("C programming");
+        // Currently fails: "C" is dropped because len < 2
+        assert!(tokens.contains(&"c".to_string()), "Should contain 'c'");
+        assert!(tokens.contains(&"programming".to_string()));
     }
 }

@@ -42,6 +42,31 @@ Top-level sections and purpose:
 - `[daemon]`: background watcher/daemon settings.
 - `[sync]` / `[ru]`: repo sync integration (if used).
 
+## RU Integration
+
+The `ru` backend handles repo synchronization for skill sources. Configure it under
+`[ru]` in `config.toml`:
+
+```toml
+[ru]
+enabled = true
+ru_path = "/usr/local/bin/ru" # optional, auto-detect if unset
+skill_repos = [
+  "Dicklesworthstone/claude-code-skills",
+  "myorg/internal-skills@main"
+]
+auto_index = true
+parallel = 4
+```
+
+Fields:
+
+- `enabled`: enable/disable ru integration.
+- `ru_path`: optional path override for the ru binary.
+- `skill_repos`: list of repo identifiers to treat as skill sources.
+- `auto_index`: re-index skills after ru sync completes.
+- `parallel`: number of parallel workers for `ru sync -j`.
+
 ## Merge Semantics
 
 The merge behavior is per-field and must be deterministic:

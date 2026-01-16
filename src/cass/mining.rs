@@ -360,17 +360,17 @@ pub fn segment_session(session: &Session) -> SegmentedSession {
 fn classify_message_phase(msg: &super::client::SessionMessage) -> SessionPhase {
     // Check tool calls to determine phase
     for tool in &msg.tool_calls {
-        match tool.name.as_str() {
+        match tool.name.to_lowercase().as_str() {
             // Reconnaissance tools
-            "Read" | "read" | "Glob" | "glob" | "Grep" | "grep" | "ListDirectory" => {
+            "read" | "glob" | "grep" | "listdirectory" => {
                 return SessionPhase::Reconnaissance;
             }
             // Change tools
-            "Edit" | "edit" | "Write" | "write" | "NotebookEdit" => {
+            "edit" | "write" | "notebookedit" => {
                 return SessionPhase::Change;
             }
             // Bash commands need deeper analysis
-            "Bash" | "bash" => {
+            "bash" | "shell" | "command" | "terminal" | "exec" => {
                 if let Some(cmd) = tool.arguments.get("command").and_then(|v| v.as_str()) {
                     return classify_bash_command(cmd);
                 }
@@ -866,38 +866,32 @@ fn collect_phase_actions(session: &Session, segment: &SessionSegment) -> Vec<Str
     for idx in segment.start_idx..segment.end_idx {
         if let Some(msg) = session.messages.get(idx) {
             for tool in &msg.tool_calls {
-                match tool.name.as_str() {
-                    "Bash" | "bash" => {
+                match tool.name.to_lowercase().as_str() {
+                    "bash" | "shell" | "command" | "terminal" | "exec" => {
                         if let Some(cmd) = tool.arguments.get("command").and_then(|v| v.as_str()) {
                             actions.push(format!("Run: {}", truncate(cmd, 50)));
                         }
                     }
-                    "Edit" | "edit" => {
+                    "edit" | "write" | "notebookedit" => {
                         if let Some(path) = tool.arguments.get("file_path").and_then(|v| v.as_str())
                         {
                             actions.push(format!("Edit: {}", path_basename(path)));
                         }
                     }
-                    "Read" | "read" => {
+                    "read" => {
                         if let Some(path) = tool.arguments.get("file_path").and_then(|v| v.as_str())
                         {
                             actions.push(format!("Read: {}", path_basename(path)));
                         }
                     }
-                    "Write" | "write" => {
-                        if let Some(path) = tool.arguments.get("file_path").and_then(|v| v.as_str())
-                        {
-                            actions.push(format!("Write: {}", path_basename(path)));
-                        }
-                    }
-                    "Glob" | "glob" => {
+                    "glob" | "list_directory" => {
                         if let Some(pattern) =
                             tool.arguments.get("pattern").and_then(|v| v.as_str())
                         {
                             actions.push(format!("Search: {}", pattern));
                         }
                     }
-                    "Grep" | "grep" => {
+                    "grep" | "search_file_content" => {
                         if let Some(pattern) =
                             tool.arguments.get("pattern").and_then(|v| v.as_str())
                         {
@@ -935,7 +929,8 @@ fn summarize_phase_actions(actions: &[String], phase: SessionPhase) -> String {
 
 /// Extract basename from a path
 fn path_basename(path: &str) -> &str {
-    path.rsplit('/').next().unwrap_or(path)
+    // Split by both forward and backslash to handle cross-platform paths
+    path.rsplit(|c| c == '/' || c == '\\').next().unwrap_or(path)
 }
 
 /// Extract error handling patterns from session
@@ -966,8 +961,8 @@ fn extract_error_patterns(session: &Session) -> Vec<ExtractedPattern> {
         if let Some(ref mut err_ctx) = current_error {
             // Check if this message contains resolution steps
             for tool in &msg.tool_calls {
-                match tool.name.as_str() {
-                    "Edit" | "edit" | "Write" | "write" => {
+                match tool.name.to_lowercase().as_str() {
+                    "edit" | "write" | "notebookedit" => {
                         if let Some(path) = tool.arguments.get("file_path").and_then(|v| v.as_str())
                         {
                             err_ctx
@@ -975,7 +970,7 @@ fn extract_error_patterns(session: &Session) -> Vec<ExtractedPattern> {
                                 .push(format!("Fix in {}", path_basename(path)));
                         }
                     }
-                    "Bash" | "bash" => {
+                    "bash" | "shell" | "command" | "terminal" | "exec" => {
                         if let Some(cmd) = tool.arguments.get("command").and_then(|v| v.as_str()) {
                             if !classify_bash_command(cmd).eq(&SessionPhase::Reconnaissance) {
                                 err_ctx
