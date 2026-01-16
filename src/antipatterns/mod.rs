@@ -292,7 +292,7 @@ fn extract_failure_modes(evidence: &[AntiPatternEvidence]) -> Vec<FailureMode> {
         let desc = &ev.incident.description;
         modes
             .entry(desc.clone())
-            .and_modify(|m| m.increment())
+            .and_modify(FailureMode::increment)
             .or_insert_with(|| {
                 let mut fm = FailureMode::new(desc);
                 fm.example_session = Some(ev.session_id.clone());
