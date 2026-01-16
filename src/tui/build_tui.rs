@@ -73,6 +73,8 @@ pub struct BuildTui {
     search_query: Option<String>,
     /// Whether search mode is active.
     search_mode: bool,
+    /// Active search filter (applied when Enter pressed in search mode).
+    active_filter: Option<String>,
 }
 
 impl BuildTui {
@@ -91,6 +93,7 @@ impl BuildTui {
             draft_token_count: 0,
             search_query: None,
             search_mode: false,
+            active_filter: None,
         }
     }
 
@@ -353,11 +356,15 @@ impl BuildTui {
             match key {
                 KeyCode::Enter => {
                     self.search_mode = false;
-                    // TODO: Perform search
-                    self.status_message = Some(format!(
-                        "Searched for: {}",
-                        self.search_query.as_deref().unwrap_or("")
-                    ));
+                    // Apply search filter
+                    self.active_filter = self.search_query.clone().filter(|q| !q.is_empty());
+                    if let Some(filter) = &self.active_filter {
+                        self.status_message = Some(format!("Filtering by: {filter} (press Esc to clear)"));
+                        // Reset selection to first item when filter changes
+                        self.pattern_list_state.select(Some(0));
+                    } else {
+                        self.status_message = Some("Search cleared".to_string());
+                    }
                 }
                 KeyCode::Esc => {
                     self.search_mode = false;
@@ -398,6 +405,17 @@ impl BuildTui {
             KeyCode::Char('/') => {
                 self.search_mode = true;
                 self.search_query = Some(String::new());
+                // Clear active filter when starting new search
+                self.active_filter = None;
+                return Ok(());
+            }
+            KeyCode::Esc => {
+                // Clear active filter when Escape pressed outside search mode
+                if self.active_filter.is_some() {
+                    self.active_filter = None;
+                    self.status_message = Some("Filter cleared".to_string());
+                    self.pattern_list_state.select(Some(0));
+                }
                 return Ok(());
             }
             KeyCode::Char('c') => {
@@ -674,7 +692,7 @@ impl BuildTui {
     }
 
     fn get_pattern_items(&self) -> Vec<(String, f32)> {
-        match self.wizard.state() {
+        let items: Vec<(String, f32)> = match self.wizard.state() {
             WizardState::SessionSelection {
                 results, selected, ..
             } => results
@@ -720,6 +738,17 @@ impl BuildTui {
                 .map(|r| (r.description.clone(), r.confidence))
                 .collect(),
             _ => vec![],
+        };
+
+        // Apply active filter if present (case-insensitive substring match)
+        if let Some(filter) = &self.active_filter {
+            let filter_lower = filter.to_lowercase();
+            items
+                .into_iter()
+                .filter(|(text, _)| text.to_lowercase().contains(&filter_lower))
+                .collect()
+        } else {
+            items
         }
     }
 
