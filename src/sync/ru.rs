@@ -460,4 +460,49 @@ mod tests {
         assert_eq!(result.errors.len(), 1);
         assert_eq!(result.errors[0].repo, "epsilon");
     }
+
+    #[test]
+    fn parse_sync_output_uses_repo_fallbacks_and_actions() {
+        let sample = r#"
+        {
+          "repos": [
+            {"repo":"alpha","status":"updated"},
+            {"name":"beta","status":"cloned"},
+            {"path":"/data/projects/gamma","status":"current"},
+            {"repo":"delta","action":"fail","message":"auth failed"}
+          ]
+        }
+        "#;
+        let result = parse_sync_output(sample, 1);
+        assert_eq!(result.pulled, vec!["alpha".to_string()]);
+        assert_eq!(result.cloned, vec!["beta".to_string()]);
+        assert_eq!(result.skipped, vec!["gamma".to_string()]);
+        assert_eq!(result.errors.len(), 1);
+        assert_eq!(result.errors[0].repo, "delta");
+        assert_eq!(result.errors[0].error, "auth failed");
+    }
+
+    #[test]
+    fn parse_sync_output_unknown_status_defaults_to_skipped() {
+        let sample = r#"
+        {
+          "repos": [
+            {"repo":"alpha","status":"weird","message":""}
+          ]
+        }
+        "#;
+        let result = parse_sync_output(sample, 0);
+        assert_eq!(result.skipped, vec!["alpha".to_string()]);
+        assert!(result.errors.is_empty());
+        assert!(result.conflicts.is_empty());
+    }
+
+    #[test]
+    fn parse_sync_output_invalid_json_records_error() {
+        let sample = "not json";
+        let result = parse_sync_output(sample, 3);
+        assert_eq!(result.errors.len(), 1);
+        assert_eq!(result.errors[0].repo, "unknown");
+        assert_eq!(result.errors[0].error, "not json");
+    }
 }

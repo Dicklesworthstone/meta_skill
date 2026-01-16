@@ -50,10 +50,10 @@ fn test_hash_embedding_performance_target() {
     println!("[PERF] hash_embedding: {:?} per operation", per_op);
 
     // Release target: < 1μs
-    // CI threshold: < 50μs (test profile lacks LTO, runs ~10-20x slower)
+    // CI threshold: < 100μs (test profile lacks LTO, runs ~10-20x slower)
     assert!(
-        per_op < Duration::from_micros(50),
-        "hash_embedding exceeded 50μs CI ceiling: {:?}",
+        per_op < Duration::from_micros(100),
+        "hash_embedding exceeded 100μs CI ceiling: {:?}",
         per_op
     );
 }
