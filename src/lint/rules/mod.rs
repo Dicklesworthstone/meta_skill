@@ -5,6 +5,8 @@
 //! - **Structural rules** (`structural`): Check skill structure integrity
 //! - **Reference rules** (`reference`): Validate references and inheritance
 //! - **Security rules** (`security`): Detect secrets, injection, and unsafe patterns
+//! - **Quality rules** (`quality`): Check content quality (descriptions, rules, examples)
+//! - **Performance rules** (`quality`): Token budget and embedding quality hints
 //!
 //! # Usage
 //!
@@ -18,6 +20,7 @@
 //! }
 //! ```
 
+pub mod quality;
 pub mod reference;
 pub mod security;
 pub mod structural;
@@ -25,6 +28,10 @@ pub mod structural;
 use crate::lint::rule::BoxedRule;
 
 // Re-export individual rules for direct use
+pub use quality::{
+    ActionableRulesRule, BalancedContentRule, EmbeddingQualityRule, ExamplesHaveCodeRule,
+    MeaningfulDescriptionRule, TokenBudgetRule,
+};
 pub use reference::{DeepInheritanceRule, FormatVersionRule, NoCycleRule, ValidExtendsRule};
 pub use security::{InputSanitizationRule, NoPromptInjectionRule, NoSecretsRule, SafePathsRule};
 pub use structural::{
@@ -47,6 +54,16 @@ pub fn security_rules() -> Vec<BoxedRule> {
     security::security_rules()
 }
 
+/// Returns all quality validation rules.
+pub fn quality_rules() -> Vec<BoxedRule> {
+    quality::quality_rules()
+}
+
+/// Returns all performance validation rules.
+pub fn performance_rules() -> Vec<BoxedRule> {
+    quality::performance_rules()
+}
+
 /// Returns all built-in validation rules.
 ///
 /// This is a convenience function that combines all rule categories.
@@ -54,6 +71,8 @@ pub fn all_rules() -> Vec<BoxedRule> {
     let mut rules = structural_rules();
     rules.extend(reference_rules());
     rules.extend(security_rules());
+    rules.extend(quality_rules());
+    rules.extend(performance_rules());
     rules
 }
 
@@ -65,8 +84,8 @@ mod tests {
     fn test_all_rules_not_empty() {
         let rules = all_rules();
         assert!(!rules.is_empty());
-        // Should have at least the rules we implemented (5 structural + 4 reference + 4 security)
-        assert!(rules.len() >= 13);
+        // Should have: 5 structural + 4 reference + 4 security + 4 quality + 2 performance = 19
+        assert!(rules.len() >= 19);
     }
 
     #[test]
@@ -85,6 +104,18 @@ mod tests {
     fn test_security_rules_count() {
         let rules = security_rules();
         assert_eq!(rules.len(), 4);
+    }
+
+    #[test]
+    fn test_quality_rules_count() {
+        let rules = quality_rules();
+        assert_eq!(rules.len(), 4);
+    }
+
+    #[test]
+    fn test_performance_rules_count() {
+        let rules = performance_rules();
+        assert_eq!(rules.len(), 2);
     }
 
     #[test]
