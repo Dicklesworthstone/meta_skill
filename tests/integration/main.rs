@@ -1,5 +1,6 @@
 mod cli_tests;
 mod backup_tests;
+mod composition_tests;
 mod db_state_tests;
 mod fixture;
 mod fixture_tests;
