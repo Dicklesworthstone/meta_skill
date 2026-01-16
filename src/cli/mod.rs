@@ -95,11 +95,20 @@ pub enum Commands {
     /// Record and inspect skill feedback
     Feedback(commands::feedback::FeedbackArgs),
 
+    /// Manage favorite skills
+    Favorite(commands::favorite::FavoriteArgs),
+
+    /// Hide skills from suggestions
+    Hide(commands::hide::HideArgs),
+
     /// Record implicit success/failure outcomes
     Outcome(commands::outcome::OutcomeArgs),
 
     /// Personalize skills to user coding style
     Personalize(commands::personalize::PersonalizeArgs),
+
+    /// Manage skill preferences (favorites/hidden)
+    Preferences(commands::preferences::PreferencesArgs),
 
     /// Manage skill experiments
     Experiment(commands::experiment::ExperimentArgs),
@@ -187,6 +196,9 @@ pub enum Commands {
 
     /// Use curated skill templates
     Template(commands::template::TemplateArgs),
+
+    /// Unhide a previously hidden skill
+    Unhide(commands::unhide::UnhideArgs),
 
     /// Run as MCP (Model Context Protocol) server
     Mcp(commands::mcp::McpArgs),

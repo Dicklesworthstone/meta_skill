@@ -1,10 +1,13 @@
 //! ms feedback - Record and inspect skill feedback.
 
+use std::path::PathBuf;
+
 use clap::{Args, Subcommand};
 
 use crate::app::AppContext;
 use crate::cli::output::{HumanLayout, emit_json};
 use crate::error::{MsError, Result};
+use crate::suggestions::bandit::{ContextualBandit, ContextFeatures, SkillFeedback};
 
 #[derive(Args, Debug)]
 pub struct FeedbackArgs {
@@ -82,6 +85,12 @@ fn run_add(ctx: &AppContext, args: &FeedbackAddArgs) -> Result<()> {
         args.rating,
         args.comment.as_deref(),
     )?;
+
+    // Update the contextual bandit with this feedback
+    if let Err(e) = update_contextual_bandit(&skill_id, &feedback_type, args.rating) {
+        // Log but don't fail - bandit update is best-effort
+        eprintln!("Warning: Failed to update bandit: {e}");
+    }
 
     if ctx.robot_mode {
         let payload = serde_json::json!({
@@ -175,6 +184,46 @@ fn resolve_skill_id(ctx: &AppContext, input: &str) -> Result<String> {
         }
     }
     Err(MsError::SkillNotFound(format!("skill not found: {input}")))
+}
+
+/// Update the contextual bandit with skill feedback.
+fn update_contextual_bandit(
+    skill_id: &str,
+    feedback_type: &str,
+    rating: Option<i64>,
+) -> Result<()> {
+    let path = default_contextual_bandit_path();
+
+    // Load existing bandit or create new
+    let mut bandit = ContextualBandit::load(&path)?;
+
+    // Convert feedback type to SkillFeedback enum
+    let feedback = match feedback_type {
+        "positive" => SkillFeedback::ExplicitHelpful,
+        "negative" => SkillFeedback::ExplicitNotHelpful { reason: None },
+        "rating" => {
+            let stars = rating.unwrap_or(3) as u8;
+            SkillFeedback::Rating { stars: stars.clamp(1, 5) }
+        }
+        _ => SkillFeedback::LoadedOnly, // Unknown type, treat as minimal signal
+    };
+
+    // Use default context features (user could be in any context)
+    let features = ContextFeatures::default();
+
+    // Update the bandit
+    bandit.update(skill_id, &features, &feedback);
+
+    // Save the updated bandit
+    bandit.save(&path)?;
+
+    Ok(())
+}
+
+/// Default path for the contextual bandit state file.
+fn default_contextual_bandit_path() -> PathBuf {
+    let base = dirs::data_dir().unwrap_or_else(|| PathBuf::from("."));
+    base.join("ms").join("contextual_bandit.json")
 }
 
 #[cfg(test)]

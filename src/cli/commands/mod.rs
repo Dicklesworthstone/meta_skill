@@ -31,9 +31,11 @@ pub mod edit;
 pub mod embed;
 pub mod evidence;
 pub mod experiment;
+pub mod favorite;
 pub mod feedback;
 pub mod fmt;
 pub mod graph;
+pub mod hide;
 pub mod import;
 pub mod index;
 pub mod init;
@@ -49,6 +51,7 @@ pub mod migrate;
 pub mod outcome;
 pub mod personalize;
 pub mod pre_commit;
+pub mod preferences;
 pub mod prune;
 pub mod quality;
 pub mod remote;
@@ -63,6 +66,7 @@ pub mod suggest;
 pub mod sync;
 pub mod template;
 pub mod test;
+pub mod unhide;
 pub mod update;
 pub mod validate;
 
@@ -87,9 +91,12 @@ pub fn run(ctx: &AppContext, command: &Commands) -> Result<()> {
         Commands::Dedup(args) => dedup::run(ctx, args),
         Commands::Alias(args) => alias::run(ctx, args),
         Commands::Requirements(args) => requirements::run(ctx, args),
+        Commands::Favorite(args) => favorite::run(ctx, args),
         Commands::Feedback(args) => feedback::run(ctx, args),
+        Commands::Hide(args) => hide::run(ctx, args),
         Commands::Outcome(args) => outcome::run(ctx, args),
         Commands::Personalize(args) => personalize::run(ctx, args),
+        Commands::Preferences(args) => preferences::run(ctx, args),
         Commands::Experiment(args) => experiment::run(ctx, args),
         Commands::Build(args) => build::run(ctx, args),
         Commands::Bundle(args) => bundle::run(ctx, args),
@@ -115,6 +122,7 @@ pub fn run(ctx: &AppContext, command: &Commands) -> Result<()> {
         Commands::Safety(args) => safety::run(ctx, args),
         Commands::Validate(args) => validate::run(ctx, args),
         Commands::Test(args) => test::run(ctx, args),
+        Commands::Unhide(args) => unhide::run(ctx, args),
         Commands::Simulate(args) => simulate::run(ctx, args),
         Commands::Quality(args) => quality::run(ctx, args),
         Commands::Evidence(args) => evidence::run(ctx, args),

@@ -113,6 +113,14 @@ pub struct SkillFeedbackRecord {
 }
 
 #[derive(Debug, Clone, serde::Serialize)]
+pub struct UserPreferenceRecord {
+    pub id: String,
+    pub skill_id: String,
+    pub preference_type: String,
+    pub created_at: String,
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
 pub struct ExperimentRecord {
     pub id: String,
     pub skill_id: String,
@@ -1169,6 +1177,102 @@ impl Database {
                 rating: row.get(3)?,
                 comment: row.get(4)?,
                 created_at: row.get(5)?,
+            });
+        }
+        Ok(records)
+    }
+
+    // =========================================================================
+    // User Preferences (favorites/hidden)
+    // =========================================================================
+
+    /// Add a user preference (favorite or hidden) for a skill.
+    pub fn set_user_preference(
+        &self,
+        skill_id: &str,
+        preference_type: &str,
+    ) -> Result<UserPreferenceRecord> {
+        let id = Uuid::new_v4().to_string();
+        let created_at = chrono::Utc::now().to_rfc3339();
+
+        self.conn.execute(
+            "INSERT OR REPLACE INTO user_preferences (id, skill_id, preference_type, created_at)
+             VALUES (?, ?, ?, ?)",
+            params![id, skill_id, preference_type, created_at],
+        )?;
+
+        Ok(UserPreferenceRecord {
+            id,
+            skill_id: skill_id.to_string(),
+            preference_type: preference_type.to_string(),
+            created_at,
+        })
+    }
+
+    /// Remove a user preference for a skill.
+    pub fn remove_user_preference(&self, skill_id: &str, preference_type: &str) -> Result<bool> {
+        let deleted = self.conn.execute(
+            "DELETE FROM user_preferences WHERE skill_id = ? AND preference_type = ?",
+            params![skill_id, preference_type],
+        )?;
+        Ok(deleted > 0)
+    }
+
+    /// Check if a skill has a specific preference.
+    pub fn has_user_preference(&self, skill_id: &str, preference_type: &str) -> Result<bool> {
+        let count: i64 = self.conn.query_row(
+            "SELECT COUNT(*) FROM user_preferences WHERE skill_id = ? AND preference_type = ?",
+            params![skill_id, preference_type],
+            |row| row.get(0),
+        )?;
+        Ok(count > 0)
+    }
+
+    /// List all skills with a specific preference type.
+    pub fn list_user_preferences(
+        &self,
+        preference_type: &str,
+        limit: usize,
+        offset: usize,
+    ) -> Result<Vec<UserPreferenceRecord>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT id, skill_id, preference_type, created_at
+             FROM user_preferences
+             WHERE preference_type = ?
+             ORDER BY created_at DESC
+             LIMIT ? OFFSET ?",
+        )?;
+
+        let mut rows = stmt.query(params![preference_type, limit as i64, offset as i64])?;
+        let mut records = Vec::new();
+        while let Some(row) = rows.next()? {
+            records.push(UserPreferenceRecord {
+                id: row.get(0)?,
+                skill_id: row.get(1)?,
+                preference_type: row.get(2)?,
+                created_at: row.get(3)?,
+            });
+        }
+        Ok(records)
+    }
+
+    /// Get all preferences for a skill.
+    pub fn get_skill_preferences(&self, skill_id: &str) -> Result<Vec<UserPreferenceRecord>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT id, skill_id, preference_type, created_at
+             FROM user_preferences
+             WHERE skill_id = ?
+             ORDER BY created_at DESC",
+        )?;
+
+        let mut rows = stmt.query(params![skill_id])?;
+        let mut records = Vec::new();
+        while let Some(row) = rows.next()? {
+            records.push(UserPreferenceRecord {
+                id: row.get(0)?,
+                skill_id: row.get(1)?,
+                preference_type: row.get(2)?,
+                created_at: row.get(3)?,
             });
         }
         Ok(records)
