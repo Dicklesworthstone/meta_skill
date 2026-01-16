@@ -154,7 +154,7 @@ pub struct LoadResult {
 
 pub fn run(ctx: &AppContext, args: &LoadArgs) -> Result<()> {
     // First try to load as meta-skill
-    if let Some(meta_result) = try_load_meta_skill(ctx, args)? {
+    if let Some(meta_result) = try_load_meta_skill(ctx, args, &args.skill)? {
         return if ctx.robot_mode {
             output_robot_meta(ctx, &meta_result, args)
         } else {
@@ -163,7 +163,7 @@ pub fn run(ctx: &AppContext, args: &LoadArgs) -> Result<()> {
     }
 
     // Fall back to regular skill loading
-    let result = load_skill(ctx, args)?;
+    let result = load_skill(ctx, args, &args.skill)?;
 
     if ctx.robot_mode {
         output_robot(ctx, &result, args)
