@@ -68,6 +68,9 @@ pub enum Commands {
     /// Check Agent Mail inbox
     Inbox(commands::inbox::InboxArgs),
 
+    /// Lint skill specifications for issues
+    Lint(commands::lint::LintArgs),
+
     /// Edit a skill (structured round-trip)
     Edit(commands::edit::EditArgs),
 

@@ -1,6 +1,7 @@
 //! ms load - Load a skill with progressive disclosure
 
 use std::collections::{HashMap, HashSet, VecDeque};
+use std::io::{self, Write};
 use std::path::PathBuf;
 
 use clap::{Args, ValueEnum};
@@ -8,6 +9,8 @@ use colored::Colorize;
 use serde::Deserialize;
 
 use crate::app::AppContext;
+use crate::context::collector::{ContextCollector, ContextCollectorConfig, CollectedContext};
+use crate::context::scoring::{RankedSkill, RelevanceScorer, WorkingContext};
 use crate::core::dependencies::{
     DependencyGraph, DependencyLoadMode, DependencyResolver, DisclosureLevel as DepDisclosure,
 };
@@ -94,8 +97,25 @@ impl From<CliPackMode> for PackMode {
 
 #[derive(Args, Debug)]
 pub struct LoadArgs {
-    /// Skill ID or name to load
-    pub skill: String,
+    /// Skill ID or name to load (optional when using --auto)
+    #[arg(required_unless_present = "auto")]
+    pub skill: Option<String>,
+
+    /// Automatically detect and load relevant skills based on context
+    #[arg(long)]
+    pub auto: bool,
+
+    /// Minimum relevance score for auto-loading (0.0-1.0)
+    #[arg(long, default_value = "0.3")]
+    pub threshold: f32,
+
+    /// Confirm before loading each skill in auto mode
+    #[arg(long)]
+    pub confirm: bool,
+
+    /// Show what would be loaded without actually loading (dry-run)
+    #[arg(long)]
+    pub dry_run: bool,
 
     /// Disclosure level (0=minimal, 1=overview, 2=standard, 3=full, 4=complete)
     #[arg(long, short = 'l')]
@@ -153,8 +173,18 @@ pub struct LoadResult {
 }
 
 pub fn run(ctx: &AppContext, args: &LoadArgs) -> Result<()> {
+    // Handle auto mode
+    if args.auto {
+        return run_auto_load(ctx, args);
+    }
+
+    // Get skill reference (unwrap is safe because clap requires it unless --auto is present)
+    let skill_ref = args.skill.as_ref().ok_or_else(|| {
+        MsError::ValidationFailed("skill argument required when not using --auto".to_string())
+    })?;
+
     // First try to load as meta-skill
-    if let Some(meta_result) = try_load_meta_skill(ctx, args, &args.skill)? {
+    if let Some(meta_result) = try_load_meta_skill(ctx, args, skill_ref)? {
         return if ctx.robot_mode {
             output_robot_meta(ctx, &meta_result, args)
         } else {
@@ -163,13 +193,416 @@ pub fn run(ctx: &AppContext, args: &LoadArgs) -> Result<()> {
     }
 
     // Fall back to regular skill loading
-    let result = load_skill(ctx, args, &args.skill)?;
+    let result = load_skill(ctx, args, skill_ref)?;
 
     if ctx.robot_mode {
         output_robot(ctx, &result, args)
     } else {
         output_human(ctx, &result, args)
     }
+}
+
+// =============================================================================
+// AUTO-LOAD IMPLEMENTATION
+// =============================================================================
+
+/// Result of auto-load operation
+#[derive(Debug)]
+pub struct AutoLoadResult {
+    pub context_summary: ContextSummary,
+    pub candidates: Vec<RankedSkill>,
+    pub loaded: Vec<LoadResult>,
+    pub skipped: Vec<String>,
+    pub total_tokens: usize,
+}
+
+/// Summary of detected context
+#[derive(Debug, Clone)]
+pub struct ContextSummary {
+    pub project_types: Vec<(String, f32)>,
+    pub recent_files_count: usize,
+    pub tools: Vec<String>,
+}
+
+/// Run auto-load: detect context, score skills, load relevant ones
+fn run_auto_load(ctx: &AppContext, args: &LoadArgs) -> Result<()> {
+    // Collect current working context
+    let working_dir = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+    let collector = ContextCollector::new(ContextCollectorConfig::default());
+    let collected = collector.collect(&working_dir)?;
+
+    // Convert to scoring context
+    let scoring_context = convert_to_scoring_context(&collected);
+    let context_summary = summarize_context(&collected);
+
+    // Get all indexed skills
+    let skills = get_all_skill_metadata(ctx)?;
+
+    if skills.is_empty() {
+        if ctx.robot_mode {
+            println!("{}", serde_json::to_string_pretty(&serde_json::json!({
+                "status": "ok",
+                "data": {
+                    "context": context_summary_to_json(&context_summary),
+                    "candidates": [],
+                    "loaded": [],
+                    "message": "No skills indexed"
+                }
+            }))?);
+        } else {
+            println!("{}", "No skills indexed. Run 'ms index' first.".yellow());
+        }
+        return Ok(());
+    }
+
+    // Score and rank skills
+    let scorer = RelevanceScorer::default();
+    let candidates = scorer.above_threshold(&skills, &scoring_context, args.threshold);
+
+    if candidates.is_empty() {
+        if ctx.robot_mode {
+            println!("{}", serde_json::to_string_pretty(&serde_json::json!({
+                "status": "ok",
+                "data": {
+                    "context": context_summary_to_json(&context_summary),
+                    "candidates": [],
+                    "loaded": [],
+                    "message": format!("No skills match threshold {}", args.threshold)
+                }
+            }))?);
+        } else {
+            println!("{}", format!("No skills match threshold {}.", args.threshold).yellow());
+            println!("Try lowering the threshold with --threshold 0.1");
+        }
+        return Ok(());
+    }
+
+    // Dry-run mode: just show what would be loaded
+    if args.dry_run {
+        return output_dry_run(ctx, &context_summary, &candidates, args);
+    }
+
+    // Load skills (with optional confirmation)
+    let mut loaded_results = Vec::new();
+    let mut skipped = Vec::new();
+    let mut total_tokens = 0usize;
+
+    for candidate in &candidates {
+        // Confirm mode: ask user before each load
+        if args.confirm && !ctx.robot_mode {
+            print!(
+                "Load {} (score: {:.2})? [Y/n] ",
+                candidate.skill_id.cyan(),
+                candidate.score
+            );
+            io::stdout().flush()?;
+
+            let mut input = String::new();
+            io::stdin().read_line(&mut input)?;
+            let input = input.trim().to_lowercase();
+
+            if input == "n" || input == "no" {
+                skipped.push(candidate.skill_id.clone());
+                continue;
+            }
+        }
+
+        // Load the skill
+        match load_skill(ctx, args, &candidate.skill_id) {
+            Ok(result) => {
+                total_tokens += result.disclosed.token_estimate;
+                loaded_results.push(result);
+            }
+            Err(e) => {
+                if ctx.verbosity > 0 {
+                    eprintln!("warning: failed to load {}: {}", candidate.skill_id, e);
+                }
+                skipped.push(candidate.skill_id.clone());
+            }
+        }
+    }
+
+    let auto_result = AutoLoadResult {
+        context_summary,
+        candidates,
+        loaded: loaded_results,
+        skipped,
+        total_tokens,
+    };
+
+    if ctx.robot_mode {
+        output_auto_robot(ctx, &auto_result, args)
+    } else {
+        output_auto_human(ctx, &auto_result, args)
+    }
+}
+
+/// Convert CollectedContext to WorkingContext for scoring
+fn convert_to_scoring_context(collected: &CollectedContext) -> WorkingContext {
+    WorkingContext::new()
+        .with_projects(collected.detected_projects.clone())
+        .with_recent_files(
+            collected
+                .recent_files
+                .iter()
+                .map(|f| f.path.to_string_lossy().to_string())
+                .collect(),
+        )
+        .with_tools(collected.detected_tools.iter().cloned())
+}
+
+/// Create a context summary for output
+fn summarize_context(collected: &CollectedContext) -> ContextSummary {
+    ContextSummary {
+        project_types: collected
+            .detected_projects
+            .iter()
+            .map(|p| (p.project_type.id().to_string(), p.confidence))
+            .collect(),
+        recent_files_count: collected.recent_files.len(),
+        tools: collected.detected_tools.iter().cloned().collect(),
+    }
+}
+
+/// Get all skill metadata from the database
+fn get_all_skill_metadata(ctx: &AppContext) -> Result<Vec<SkillMetadata>> {
+    let mut all_skills = Vec::new();
+    let mut offset = 0usize;
+    let limit = 200usize;
+
+    loop {
+        let batch = ctx.db.list_skills(limit, offset)?;
+        if batch.is_empty() {
+            break;
+        }
+        offset += batch.len();
+
+        for skill in batch {
+            all_skills.push(skill_record_to_metadata(&skill));
+        }
+    }
+
+    Ok(all_skills)
+}
+
+/// Convert SkillRecord to SkillMetadata
+fn skill_record_to_metadata(skill: &SkillRecord) -> SkillMetadata {
+    let meta_json: serde_json::Value =
+        serde_json::from_str(&skill.metadata_json).unwrap_or_default();
+
+    SkillMetadata {
+        id: skill.id.clone(),
+        name: skill.name.clone(),
+        version: skill.version.clone().unwrap_or_else(|| "0.1.0".to_string()),
+        description: skill.description.clone(),
+        tags: meta_json
+            .get("tags")
+            .and_then(|v| v.as_array())
+            .map(|arr| arr.iter().filter_map(|v| v.as_str().map(String::from)).collect())
+            .unwrap_or_default(),
+        requires: meta_json
+            .get("requires")
+            .and_then(|v| v.as_array())
+            .map(|arr| arr.iter().filter_map(|v| v.as_str().map(String::from)).collect())
+            .unwrap_or_default(),
+        provides: meta_json
+            .get("provides")
+            .and_then(|v| v.as_array())
+            .map(|arr| arr.iter().filter_map(|v| v.as_str().map(String::from)).collect())
+            .unwrap_or_default(),
+        context: serde_json::from_value(
+            meta_json.get("context").cloned().unwrap_or_default()
+        ).unwrap_or_default(),
+        ..Default::default()
+    }
+}
+
+fn context_summary_to_json(summary: &ContextSummary) -> serde_json::Value {
+    serde_json::json!({
+        "project_types": summary.project_types.iter().map(|(t, c)| {
+            serde_json::json!({"type": t, "confidence": c})
+        }).collect::<Vec<_>>(),
+        "recent_files": summary.recent_files_count,
+        "tools": summary.tools
+    })
+}
+
+/// Output dry-run results
+fn output_dry_run(
+    ctx: &AppContext,
+    context_summary: &ContextSummary,
+    candidates: &[RankedSkill],
+    args: &LoadArgs,
+) -> Result<()> {
+    if ctx.robot_mode {
+        let output = serde_json::json!({
+            "status": "ok",
+            "dry_run": true,
+            "data": {
+                "context": context_summary_to_json(context_summary),
+                "would_load": candidates.iter().map(|c| {
+                    serde_json::json!({
+                        "skill_id": c.skill_id,
+                        "name": c.skill_name,
+                        "score": c.score,
+                        "breakdown": {
+                            "project_type": c.breakdown.project_type,
+                            "file_patterns": c.breakdown.file_patterns,
+                            "tools": c.breakdown.tools,
+                            "signals": c.breakdown.signals
+                        }
+                    })
+                }).collect::<Vec<_>>(),
+                "threshold": args.threshold
+            }
+        });
+        println!("{}", serde_json::to_string_pretty(&output)?);
+    } else {
+        println!("{}", "Would load skills:".bold());
+        println!();
+
+        for (i, candidate) in candidates.iter().enumerate() {
+            println!(
+                "  {}. {} (score: {:.2})",
+                i + 1,
+                candidate.skill_id.cyan(),
+                candidate.score
+            );
+            if ctx.verbosity > 0 {
+                println!(
+                    "     {} project: {:.2}, files: {:.2}, tools: {:.2}",
+                    "├".dimmed(),
+                    candidate.breakdown.project_type,
+                    candidate.breakdown.file_patterns,
+                    candidate.breakdown.tools
+                );
+            }
+        }
+
+        println!();
+        println!(
+            "{} {} skills would be loaded (threshold: {})",
+            "Total:".dimmed(),
+            candidates.len(),
+            args.threshold
+        );
+    }
+
+    Ok(())
+}
+
+/// Output auto-load results in human-readable format
+fn output_auto_human(
+    ctx: &AppContext,
+    result: &AutoLoadResult,
+    _args: &LoadArgs,
+) -> Result<()> {
+    // Context summary
+    println!("{}", "Detecting context...".dimmed());
+    if !result.context_summary.project_types.is_empty() {
+        for (ptype, confidence) in &result.context_summary.project_types {
+            println!("  Project type: {} (confidence: {:.2})", ptype.cyan(), confidence);
+        }
+    }
+    println!(
+        "  Recent files: {}",
+        result.context_summary.recent_files_count
+    );
+    if ctx.verbosity > 0 && !result.context_summary.tools.is_empty() {
+        println!(
+            "  Tools detected: {}",
+            result.context_summary.tools.join(", ")
+        );
+    }
+    println!();
+
+    // Candidates found
+    if !result.candidates.is_empty() {
+        println!("{}", "Relevant skills found:".bold());
+        for candidate in &result.candidates {
+            let status = if result.loaded.iter().any(|l| l.skill_id == candidate.skill_id) {
+                "✓".green().to_string()
+            } else {
+                "⊘".dimmed().to_string()
+            };
+            println!(
+                "  {} [{:.2}] {} - {}",
+                status,
+                candidate.score,
+                candidate.skill_id.cyan(),
+                candidate.skill_name
+            );
+        }
+        println!();
+    }
+
+    // Loaded skills content
+    if !result.loaded.is_empty() {
+        println!(
+            "{} {} skills",
+            "Loading".bold(),
+            result.loaded.len()
+        );
+        println!();
+
+        for load_result in &result.loaded {
+            println!("{}", format!("# {}", load_result.name).bold());
+            if let Some(ref body) = load_result.disclosed.body {
+                println!("{}", body);
+            }
+            println!();
+        }
+    }
+
+    // Summary footer
+    println!(
+        "{} {} tokens",
+        "─".repeat(40).dimmed(),
+        result.total_tokens
+    );
+
+    if !result.skipped.is_empty() {
+        println!("{} {}", "Skipped:".dimmed(), result.skipped.join(", "));
+    }
+
+    Ok(())
+}
+
+/// Output auto-load results in robot mode (JSON)
+fn output_auto_robot(
+    _ctx: &AppContext,
+    result: &AutoLoadResult,
+    args: &LoadArgs,
+) -> Result<()> {
+    let output = serde_json::json!({
+        "status": "ok",
+        "timestamp": chrono::Utc::now().to_rfc3339(),
+        "version": env!("CARGO_PKG_VERSION"),
+        "data": {
+            "context": context_summary_to_json(&result.context_summary),
+            "candidates": result.candidates.iter().map(|c| {
+                serde_json::json!({
+                    "skill_id": c.skill_id,
+                    "name": c.skill_name,
+                    "score": c.score
+                })
+            }).collect::<Vec<_>>(),
+            "loaded": result.loaded.iter().map(|l| {
+                serde_json::json!({
+                    "skill_id": l.skill_id,
+                    "name": l.name,
+                    "token_count": l.disclosed.token_estimate,
+                    "content": l.disclosed.body
+                })
+            }).collect::<Vec<_>>(),
+            "skipped": result.skipped,
+            "total_tokens": result.total_tokens,
+            "threshold": args.threshold
+        },
+        "warnings": []
+    });
+    println!("{}", serde_json::to_string_pretty(&output)?);
+    Ok(())
 }
 
 pub(crate) fn load_skill(ctx: &AppContext, args: &LoadArgs, skill_ref: &str) -> Result<LoadResult> {
@@ -921,7 +1354,11 @@ mod tests {
     #[test]
     fn test_determine_disclosure_plan_default() {
         let args = LoadArgs {
-            skill: "test".to_string(),
+            skill: Some("test".to_string()),
+            auto: false,
+            threshold: 0.3,
+            confirm: false,
+            dry_run: false,
             level: None,
             pack: None,
             mode: CliPackMode::Balanced,
@@ -946,7 +1383,11 @@ mod tests {
     #[test]
     fn test_determine_disclosure_plan_full_flag() {
         let args = LoadArgs {
-            skill: "test".to_string(),
+            skill: Some("test".to_string()),
+            auto: false,
+            threshold: 0.3,
+            confirm: false,
+            dry_run: false,
             level: None,
             pack: None,
             mode: CliPackMode::Balanced,
@@ -971,7 +1412,11 @@ mod tests {
     #[test]
     fn test_determine_disclosure_plan_complete_flag() {
         let args = LoadArgs {
-            skill: "test".to_string(),
+            skill: Some("test".to_string()),
+            auto: false,
+            threshold: 0.3,
+            confirm: false,
+            dry_run: false,
             level: None,
             pack: None,
             mode: CliPackMode::Balanced,
@@ -996,7 +1441,11 @@ mod tests {
     #[test]
     fn test_determine_disclosure_plan_pack_budget() {
         let args = LoadArgs {
-            skill: "test".to_string(),
+            skill: Some("test".to_string()),
+            auto: false,
+            threshold: 0.3,
+            confirm: false,
+            dry_run: false,
             level: None,
             pack: Some(800),
             mode: CliPackMode::UtilityFirst,
@@ -1028,7 +1477,11 @@ mod tests {
     #[test]
     fn test_determine_disclosure_plan_explicit_level() {
         let args = LoadArgs {
-            skill: "test".to_string(),
+            skill: Some("test".to_string()),
+            auto: false,
+            threshold: 0.3,
+            confirm: false,
+            dry_run: false,
             level: Some("overview".to_string()),
             pack: None,
             mode: CliPackMode::Balanced,
@@ -1053,7 +1506,11 @@ mod tests {
     #[test]
     fn test_determine_disclosure_plan_numeric_level() {
         let args = LoadArgs {
-            skill: "test".to_string(),
+            skill: Some("test".to_string()),
+            auto: false,
+            threshold: 0.3,
+            confirm: false,
+            dry_run: false,
             level: Some("1".to_string()),
             pack: None,
             mode: CliPackMode::Balanced,
@@ -1124,7 +1581,7 @@ mod tests {
         }
 
         let cli = TestCli::parse_from(["test", "my-skill"]);
-        assert_eq!(cli.args.skill, "my-skill");
+        assert_eq!(cli.args.skill, Some("my-skill".to_string()));
         assert!(cli.args.level.is_none());
         assert!(cli.args.pack.is_none());
         assert!(!cli.args.full);
@@ -1322,7 +1779,7 @@ mod tests {
             "off",
         ]);
 
-        assert_eq!(cli.args.skill, "my-skill");
+        assert_eq!(cli.args.skill, Some("my-skill".to_string()));
         assert_eq!(cli.args.pack, Some(750));
         assert!(matches!(cli.args.mode, CliPackMode::CoverageFirst));
         assert!(matches!(cli.args.contract, Some(CliPackContract::Debug)));
@@ -1335,7 +1792,11 @@ mod tests {
     #[test]
     fn test_determine_disclosure_plan_invalid_level_falls_back() {
         let args = LoadArgs {
-            skill: "test".to_string(),
+            skill: Some("test".to_string()),
+            auto: false,
+            threshold: 0.3,
+            confirm: false,
+            dry_run: false,
             level: Some("invalid".to_string()),
             pack: None,
             mode: CliPackMode::Balanced,
@@ -1361,7 +1822,11 @@ mod tests {
     #[test]
     fn test_determine_disclosure_plan_complete_overrides_level() {
         let args = LoadArgs {
-            skill: "test".to_string(),
+            skill: Some("test".to_string()),
+            auto: false,
+            threshold: 0.3,
+            confirm: false,
+            dry_run: false,
             level: Some("minimal".to_string()),
             pack: None,
             mode: CliPackMode::Balanced,
@@ -1386,7 +1851,11 @@ mod tests {
     #[test]
     fn test_determine_disclosure_plan_pack_overrides_all() {
         let args = LoadArgs {
-            skill: "test".to_string(),
+            skill: Some("test".to_string()),
+            auto: false,
+            threshold: 0.3,
+            confirm: false,
+            dry_run: false,
             level: Some("full".to_string()),
             pack: Some(100),
             mode: CliPackMode::Balanced,
@@ -1411,7 +1880,11 @@ mod tests {
     #[test]
     fn test_determine_disclosure_plan_level_0() {
         let args = LoadArgs {
-            skill: "test".to_string(),
+            skill: Some("test".to_string()),
+            auto: false,
+            threshold: 0.3,
+            confirm: false,
+            dry_run: false,
             level: Some("0".to_string()),
             pack: None,
             mode: CliPackMode::Balanced,
@@ -1436,7 +1909,11 @@ mod tests {
     #[test]
     fn test_determine_disclosure_plan_level_4() {
         let args = LoadArgs {
-            skill: "test".to_string(),
+            skill: Some("test".to_string()),
+            auto: false,
+            threshold: 0.3,
+            confirm: false,
+            dry_run: false,
             level: Some("4".to_string()),
             pack: None,
             mode: CliPackMode::Balanced,

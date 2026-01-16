@@ -38,6 +38,7 @@ pub mod index;
 pub mod init;
 pub mod install;
 pub mod inbox;
+pub mod lint;
 pub mod list;
 pub mod load;
 pub mod machine;
@@ -77,6 +78,7 @@ pub fn run(ctx: &AppContext, command: &Commands) -> Result<()> {
         Commands::Show(args) => show::run(ctx, args),
         Commands::List(args) => list::run(ctx, args),
         Commands::Inbox(args) => inbox::run(ctx, args),
+        Commands::Lint(args) => lint::run(ctx, args),
         Commands::Edit(args) => edit::run(ctx, args),
         Commands::Fmt(args) => fmt::run(ctx, args),
         Commands::Diff(args) => diff::run(ctx, args),

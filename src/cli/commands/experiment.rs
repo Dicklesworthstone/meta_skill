@@ -452,7 +452,11 @@ fn run_load(ctx: &AppContext, args: &ExperimentLoadArgs) -> Result<()> {
     let selection = select_variant_for_experiment(&record, args.metric.as_deref(), &events)?;
 
     let load_args = LoadArgs {
-        skill: record.skill_id.clone(),
+        skill: Some(record.skill_id.clone()),
+        auto: false,
+        threshold: 0.3,
+        confirm: false,
+        dry_run: false,
         level: args.level.clone(),
         pack: args.pack,
         mode: args.mode,
@@ -466,7 +470,7 @@ fn run_load(ctx: &AppContext, args: &ExperimentLoadArgs) -> Result<()> {
         variant_id: Some(selection.variant.id.clone()),
     };
 
-    let load_result = load_skill(ctx, &load_args, &load_args.skill)?;
+    let load_result = load_skill(ctx, &load_args, &record.skill_id)?;
     let event = record_assignment_event(
         ctx,
         &record.id,

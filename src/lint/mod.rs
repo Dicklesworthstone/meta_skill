@@ -56,4 +56,6 @@ pub use engine::{FixResult, RuleInfo, ValidationEngine, ValidationResult};
 pub use rule::{BoxedRule, ValidationRule};
 
 // Re-export rule collection functions
-pub use rules::{all_rules, reference_rules, security_rules, structural_rules};
+pub use rules::{
+    all_rules, performance_rules, quality_rules, reference_rules, security_rules, structural_rules,
+};
