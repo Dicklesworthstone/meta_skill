@@ -537,31 +537,42 @@ fn try_improve(
         constraints.contract.as_ref(),
     );
 
-    for candidate in ranked {
-        let mut removable: Vec<(f32, usize)> = selected
-            .iter()
-            .enumerate()
-            .filter(|(_, slice)| !mandatory_ids.contains(&slice.id))
-            .map(|(idx, slice)| (score_slice_with_contract(slice, mode, constraints.contract.as_ref()), idx))
-            .collect();
-        if removable.is_empty() {
-            continue;
-        }
-        removable.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(Ordering::Equal));
+    // Optimization: Compute removable scores once since they don't change relative to candidates.
+    // We only swap once and return, so selected doesn't change during iteration.
+    let mut removable: Vec<(f32, usize)> = selected
+        .iter()
+        .enumerate()
+        .filter(|(_, slice)| !mandatory_ids.contains(&slice.id))
+        .map(|(idx, slice)| {
+            (
+                score_slice_with_contract(slice, mode, constraints.contract.as_ref()),
+                idx,
+            )
+        })
+        .collect();
 
-        for (score, remove_idx) in removable {
+    if removable.is_empty() {
+        return false;
+    }
+    removable.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(Ordering::Equal));
+
+    for candidate in ranked {
+        let candidate_score =
+            score_slice_with_contract(candidate, mode, constraints.contract.as_ref());
+
+        for (score, remove_idx) in &removable {
+            // Optimization: removable is sorted by score (ascending).
+            // If candidate_score <= *score, we don't gain utility.
+            // And for all subsequent items, score will be even higher, so we can stop checking.
+            if candidate_score <= *score {
+                break;
+            }
+
+            let remove_idx = *remove_idx;
             // Extract fields before removal to satisfy borrow checker
             let removed_id = selected[remove_idx].id.clone();
             let removed_tokens = selected[remove_idx].token_estimate;
             let removed_group = selected[remove_idx].coverage_group.clone();
-
-            // Only swap if we gain utility.
-            // Since we are doing a 1-for-1 swap, if we lose utility, we are strictly worse off
-            // unless this swap enables future swaps, but this local search is greedy.
-            let candidate_score = score_slice_with_contract(candidate, mode, constraints.contract.as_ref());
-            if candidate_score <= score {
-                continue;
-            }
 
             if selected
                 .iter()
