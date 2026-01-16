@@ -39,7 +39,7 @@ pub use skill::{
     SkillLayer, SkillMetadata, SkillSection, SkillSpec,
 };
 pub use resolution::{
-    CycleDetectionResult, ResolvedSkillSpec, ResolutionWarning, SkillRepository,
+    CycleDetectionResult, GitSkillRepository, ResolvedSkillSpec, ResolutionWarning, SkillRepository,
     detect_inheritance_cycle, get_inheritance_chain, resolve_extends, resolve_full,
     MAX_INHERITANCE_DEPTH,
 };

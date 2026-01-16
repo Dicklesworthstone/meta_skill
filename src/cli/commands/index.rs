@@ -10,9 +10,9 @@ use indicatif::{ProgressBar, ProgressStyle};
 use walkdir::WalkDir;
 
 use crate::app::AppContext;
-use crate::core::{SkillLayer, spec_lens::parse_markdown};
+use crate::core::{GitSkillRepository, ResolutionCache, SkillLayer, spec_lens::parse_markdown};
 use crate::error::{MsError, Result};
-use crate::storage::TxManager;
+use crate::storage::{SkillRecord, TxManager};
 use crate::storage::tx::GlobalLock;
 use crate::sync::ru::RuClient;
 
@@ -219,13 +219,17 @@ fn index_human(ctx: &AppContext, roots: &[SkillRoot], args: &IndexArgs) -> Resul
         ctx.ms_root.clone(),
     )?;
 
+    // Create resolution cache and repository for resolving inherited/composed skills
+    let resolution_cache = ResolutionCache::new();
+    let repository = GitSkillRepository::new(&ctx.git);
+
     for skill in &skill_files {
         pb.set_message(format!(
             "{}",
             skill.path.file_name().unwrap_or_default().to_string_lossy()
         ));
 
-        match index_skill_file(ctx, &tx_mgr, skill, args.force) {
+        match index_skill_file(ctx, &tx_mgr, &resolution_cache, &repository, skill, args.force) {
             Ok(()) => indexed += 1,
             Err(e) => {
                 errors += 1;
@@ -275,8 +279,12 @@ fn index_robot(ctx: &AppContext, roots: &[SkillRoot], args: &IndexArgs) -> Resul
         ctx.ms_root.clone(),
     )?;
 
+    // Create resolution cache and repository for resolving inherited/composed skills
+    let resolution_cache = ResolutionCache::new();
+    let repository = GitSkillRepository::new(&ctx.git);
+
     for skill in &skill_files {
-        match index_skill_file(ctx, &tx_mgr, skill, args.force) {
+        match index_skill_file(ctx, &tx_mgr, &resolution_cache, &repository, skill, args.force) {
             Ok(()) => indexed += 1,
             Err(e) => {
                 errors.push(serde_json::json!({
@@ -333,6 +341,8 @@ fn discover_skill_files(roots: &[SkillRoot]) -> Vec<DiscoveredSkill> {
 fn index_skill_file(
     ctx: &AppContext,
     tx_mgr: &TxManager,
+    resolution_cache: &ResolutionCache,
+    repository: &GitSkillRepository<'_>,
     skill: &DiscoveredSkill,
     force: bool,
 ) -> Result<()> {
@@ -351,10 +361,10 @@ fn index_skill_file(
     }
 
     // Check if already indexed (unless force)
+    let new_hash = compute_spec_hash(&spec)?;
     if !force {
         if let Ok(Some(existing)) = ctx.db.get_skill(&spec.metadata.id) {
             // Check content hash to skip unchanged skills
-            let new_hash = compute_spec_hash(&spec)?;
             let same_layer = existing.source_layer == skill.layer.as_str();
             if existing.content_hash == new_hash && same_layer {
                 return Ok(()); // Skip unchanged
@@ -362,7 +372,7 @@ fn index_skill_file(
         }
     }
 
-    // Write using 2PC transaction manager
+    // Write using 2PC transaction manager (stores raw spec)
     tx_mgr.write_skill_with_layer(&spec, skill.layer)?;
 
     // Compute and persist quality score
@@ -371,12 +381,92 @@ fn index_skill_file(
     ctx.db
         .update_skill_quality(&spec.metadata.id, f64::from(quality.overall))?;
 
-    // Also update Tantivy search index
-    if let Ok(Some(skill_record)) = ctx.db.get_skill(&spec.metadata.id) {
-        ctx.search.index_skill(&skill_record)?;
+    // Resolve the skill if it has inheritance or composition
+    let needs_resolution = spec.extends.is_some() || !spec.includes.is_empty();
+
+    if needs_resolution {
+        // Create a hash lookup function that reads skills from git archive and hashes them
+        let compute_hash = |skill_id: &str| -> Option<String> {
+            // For the current skill, use the already computed hash
+            if skill_id == spec.metadata.id {
+                return Some(new_hash.clone());
+            }
+            // For other skills, read from archive and compute hash
+            ctx.git
+                .read_skill(skill_id)
+                .ok()
+                .and_then(|dep_spec| compute_spec_hash(&dep_spec).ok())
+        };
+
+        // Get or compute the resolved skill
+        let db_conn = ctx.db.conn();
+        let resolved = resolution_cache.get_or_resolve(
+            db_conn,
+            &spec.metadata.id,
+            &spec,
+            repository,
+            compute_hash,
+        )?;
+
+        // Build a SkillRecord from the resolved spec for search indexing
+        let resolved_record = build_skill_record_from_resolved(&resolved.spec, skill, &new_hash);
+        ctx.search.index_skill(&resolved_record)?;
+    } else {
+        // No resolution needed - index the raw spec directly
+        if let Ok(Some(skill_record)) = ctx.db.get_skill(&spec.metadata.id) {
+            ctx.search.index_skill(&skill_record)?;
+        }
     }
 
     Ok(())
+}
+
+/// Build a SkillRecord from a resolved SkillSpec for search indexing
+fn build_skill_record_from_resolved(
+    spec: &crate::core::SkillSpec,
+    discovered: &DiscoveredSkill,
+    content_hash: &str,
+) -> SkillRecord {
+    // Concatenate all section content for the body field
+    let body = spec
+        .sections
+        .iter()
+        .flat_map(|section| section.blocks.iter())
+        .map(|block| block.content.as_str())
+        .collect::<Vec<_>>()
+        .join("\n\n");
+
+    // Serialize metadata for the JSON field
+    let metadata_json = serde_json::to_string(&spec.metadata).unwrap_or_default();
+
+    // Version may be empty string, convert to Option
+    let version = if spec.metadata.version.is_empty() {
+        None
+    } else {
+        Some(spec.metadata.version.clone())
+    };
+
+    SkillRecord {
+        id: spec.metadata.id.clone(),
+        name: spec.metadata.name.clone(),
+        description: spec.metadata.description.clone(),
+        version,
+        author: spec.metadata.author.clone(),
+        source_path: discovered.path.display().to_string(),
+        source_layer: discovered.layer.as_str().to_string(),
+        git_remote: None,
+        git_commit: None,
+        content_hash: content_hash.to_string(),
+        body,
+        metadata_json,
+        assets_json: "[]".to_string(), // No assets in current SkillSpec
+        token_count: 0,                // Will be computed separately if needed
+        quality_score: 0.0,            // Will be updated by quality scorer
+        indexed_at: chrono::Utc::now().to_rfc3339(),
+        modified_at: chrono::Utc::now().to_rfc3339(),
+        is_deprecated: false, // Not tracked in current SkillMetadata
+        deprecation_reason: None,
+    }
 }
 
 fn compute_spec_hash(spec: &crate::core::SkillSpec) -> Result<String> {

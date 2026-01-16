@@ -9,6 +9,6 @@ pub mod tombstone;
 pub mod tx;
 
 pub use git::GitArchive;
-pub use sqlite::Database;
+pub use sqlite::{Database, SkillRecord};
 pub use tombstone::{PurgeResult, RestoreResult, TombstoneManager, TombstoneRecord};
 pub use tx::{GlobalLock, RecoveryReport, TxManager, TxPhase, TxRecord};
