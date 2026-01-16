@@ -14,6 +14,7 @@ use crate::core::{SkillLayer, spec_lens::parse_markdown};
 use crate::error::{MsError, Result};
 use crate::storage::TxManager;
 use crate::storage::tx::GlobalLock;
+use crate::sync::ru::RuClient;
 
 #[derive(Args, Debug)]
 pub struct IndexArgs {
@@ -32,6 +33,10 @@ pub struct IndexArgs {
     /// Index all configured paths
     #[arg(long)]
     pub all: bool,
+
+    /// Index skills from ru-managed repositories
+    #[arg(long)]
+    pub from_ru: bool,
 }
 
 struct SkillRoot {
@@ -102,6 +107,11 @@ fn collect_index_paths(ctx: &AppContext, args: &IndexArgs) -> Result<Vec<SkillRo
             .collect());
     }
 
+    // If --from-ru, use ru-managed repositories
+    if args.from_ru {
+        return collect_ru_paths(ctx);
+    }
+
     // Use configured paths
     let mut roots: Vec<SkillRoot> = Vec::new();
 
@@ -132,6 +142,34 @@ fn collect_index_paths(ctx: &AppContext, args: &IndexArgs) -> Result<Vec<SkillRo
     }
 
     roots.sort_by_key(|root| root.layer);
+    Ok(roots)
+}
+
+/// Collect paths from ru-managed repositories
+fn collect_ru_paths(ctx: &AppContext) -> Result<Vec<SkillRoot>> {
+    let mut ru_client = RuClient::new();
+
+    if !ru_client.is_available() {
+        if ctx.robot_mode {
+            // Return empty list with no error for robot mode
+            return Ok(Vec::new());
+        }
+        return Err(MsError::Config(
+            "ru is not available. Install from /data/projects/repo_updater or use other index paths.".to_string(),
+        ));
+    }
+
+    let paths = ru_client.list_paths()?;
+
+    // Treat ru-managed repos as community/shared layer
+    let roots: Vec<SkillRoot> = paths
+        .into_iter()
+        .map(|path| SkillRoot {
+            path,
+            layer: SkillLayer::Base,
+        })
+        .collect();
+
     Ok(roots)
 }
 
@@ -508,6 +546,37 @@ mod tests {
         assert!(cli.args.force);
         assert!(cli.args.all);
         assert_eq!(cli.args.paths, vec!["./path"]);
+    }
+
+    #[test]
+    fn test_index_args_from_ru_flag() {
+        use clap::Parser;
+
+        #[derive(Parser)]
+        struct TestCli {
+            #[command(flatten)]
+            args: IndexArgs,
+        }
+
+        let cli = TestCli::parse_from(["test", "--from-ru"]);
+        assert!(cli.args.from_ru);
+        assert!(!cli.args.force);
+        assert!(!cli.args.all);
+    }
+
+    #[test]
+    fn test_index_args_from_ru_with_force() {
+        use clap::Parser;
+
+        #[derive(Parser)]
+        struct TestCli {
+            #[command(flatten)]
+            args: IndexArgs,
+        }
+
+        let cli = TestCli::parse_from(["test", "--from-ru", "--force"]);
+        assert!(cli.args.from_ru);
+        assert!(cli.args.force);
     }
 
     // ==================== Discover Skill Files Tests ====================

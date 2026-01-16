@@ -1,11 +1,14 @@
 use std::collections::HashMap;
 
 use clap::Args;
+use colored::Colorize;
 
 use crate::app::AppContext;
 use crate::cli::output::{HumanLayout, emit_human, emit_json};
 use crate::error::Result;
 use crate::sync::{MachineIdentity, SyncConfig, SyncEngine, SyncOptions, SyncState};
+
+use super::index::{IndexArgs, run as run_index};
 
 #[derive(Args, Debug, Default)]
 pub struct SyncArgs {
@@ -68,11 +71,32 @@ pub fn run(ctx: &AppContext, args: &SyncArgs) -> Result<()> {
         engine.sync_all(&options)?
     };
 
+    // Check if we should auto-reindex after sync
+    let should_reindex = !args.dry_run
+        && ctx.config.ru.auto_index
+        && reports.iter().any(|r| !r.cloned.is_empty() || !r.pulled.is_empty());
+
     if ctx.robot_mode {
-        let payload = serde_json::json!({
+        let mut payload = serde_json::json!({
             "status": "ok",
             "reports": reports,
         });
+
+        // Auto-reindex if configured and there were changes
+        if should_reindex {
+            let reindex_result = auto_reindex(ctx);
+            if let Some(obj) = payload.as_object_mut() {
+                obj.insert(
+                    "auto_reindex".to_string(),
+                    serde_json::json!({
+                        "triggered": true,
+                        "success": reindex_result.is_ok(),
+                        "error": reindex_result.err().map(|e| e.to_string()),
+                    }),
+                );
+            }
+        }
+
         emit_json(&payload)
     } else {
         let mut layout = HumanLayout::new();
@@ -91,8 +115,35 @@ pub fn run(ctx: &AppContext, args: &SyncArgs) -> Result<()> {
                 .blank();
         }
         emit_human(layout);
+
+        // Auto-reindex if configured and there were changes
+        if should_reindex {
+            println!();
+            println!("{}", "Auto-reindexing skills from synced repos...".cyan());
+            match auto_reindex(ctx) {
+                Ok(()) => {
+                    println!("{} Skills reindexed successfully", "✓".green().bold());
+                }
+                Err(e) => {
+                    println!("{} Failed to reindex skills: {}", "✗".red(), e);
+                }
+            }
+        }
+
         Ok(())
     }
+}
+
+/// Trigger auto-reindex of skills from ru-managed repositories
+fn auto_reindex(ctx: &AppContext) -> Result<()> {
+    let index_args = IndexArgs {
+        paths: Vec::new(),
+        watch: false,
+        force: false,
+        all: false,
+        from_ru: true,
+    };
+    run_index(ctx, &index_args)
 }
 
 fn status(ctx: &AppContext, _args: &SyncArgs) -> Result<()> {
