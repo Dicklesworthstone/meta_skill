@@ -252,7 +252,7 @@ impl BeadsClient {
 
         args.push("--json".to_string());
 
-        let args_refs: Vec<&str> = args.iter().map(|s| s.as_str()).collect();
+        let args_refs: Vec<&str> = args.iter().map(String::as_str).collect();
         let output = self.run_command(&args_refs)?;
 
         // bd create --json returns a single object (not an array)
@@ -302,7 +302,7 @@ impl BeadsClient {
 
         args.push("--json".to_string());
 
-        let args_refs: Vec<&str> = args.iter().map(|s| s.as_str()).collect();
+        let args_refs: Vec<&str> = args.iter().map(String::as_str).collect();
         let output = self.run_command(&args_refs)?;
 
         // bd update --json returns an array with one element
@@ -333,7 +333,7 @@ impl BeadsClient {
 
         args.push("--json".to_string());
 
-        let args_refs: Vec<&str> = args.iter().map(|s| s.as_str()).collect();
+        let args_refs: Vec<&str> = args.iter().map(String::as_str).collect();
         let output = self.run_command(&args_refs)?;
 
         // bd close --json returns an array with one element
@@ -360,7 +360,7 @@ impl BeadsClient {
         }
         args.push("--json".to_string());
 
-        let args_refs: Vec<&str> = args.iter().map(|s| s.as_str()).collect();
+        let args_refs: Vec<&str> = args.iter().map(String::as_str).collect();
         let output = self.run_command(&args_refs)?;
 
         let issues: Vec<Issue> = serde_json::from_slice(&output).map_err(|e| {

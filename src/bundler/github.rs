@@ -83,7 +83,7 @@ pub fn publish_bundle(path: &Path, config: &GitHubConfig) -> Result<PublishResul
 
     let repo = parse_repo(&config.repo)?;
     let (owner, repo_name) = (repo.owner, repo.repo);
-    let token = config.token.clone().or_else(|| token_from_env());
+    let token = config.token.clone().or_else(token_from_env);
     if token.is_none() {
         return Err(MsError::ValidationFailed(
             "GitHub token required for bundle publish".to_string(),
@@ -105,7 +105,7 @@ pub fn publish_bundle(path: &Path, config: &GitHubConfig) -> Result<PublishResul
         .or_else(|| {
             path.file_name()
                 .and_then(|s| s.to_str())
-                .map(|s| s.to_string())
+                .map(str::to_string)
         })
         .unwrap_or_else(|| format!("{}.msb", package.manifest.bundle.id));
 
@@ -149,7 +149,7 @@ pub fn download_bundle(
 ) -> Result<DownloadResult> {
     let repo = parse_repo(repo)?;
     let (owner, repo_name) = (repo.owner, repo.repo);
-    let token = token.or_else(|| token_from_env());
+    let token = token.or_else(token_from_env);
 
     let client = GitHubClient::new(token);
     let release = match tag {
