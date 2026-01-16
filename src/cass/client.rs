@@ -353,7 +353,7 @@ pub struct ToolResult {
 }
 
 /// Session metadata
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct SessionMetadata {
     pub project: Option<String>,
     pub agent: Option<String>,
