@@ -137,7 +137,7 @@ pub enum Suggestion {
 }
 
 /// Statistics about the import process.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, serde::Serialize)]
 pub struct ImportStats {
     /// Total blocks processed
     pub total_blocks: usize,

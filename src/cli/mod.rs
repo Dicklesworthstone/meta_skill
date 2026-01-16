@@ -44,6 +44,9 @@ pub enum Commands {
     /// Initialize ms in current directory or globally
     Init(commands::init::InitArgs),
 
+    /// Import skills from unstructured text documents
+    Import(commands::import::ImportArgs),
+
     /// Index skills from configured paths
     Index(commands::index::IndexArgs),
 

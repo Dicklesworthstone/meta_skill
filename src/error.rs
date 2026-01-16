@@ -99,6 +99,9 @@ pub enum MsError {
         parent_id: String,
         child_id: String,
     },
+
+    #[error("Import error: {0}")]
+    Import(String),
 }
 
 pub type Result<T> = std::result::Result<T, MsError>;

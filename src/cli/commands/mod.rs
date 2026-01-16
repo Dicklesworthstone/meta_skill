@@ -34,6 +34,7 @@ pub mod experiment;
 pub mod feedback;
 pub mod fmt;
 pub mod graph;
+pub mod import;
 pub mod index;
 pub mod init;
 pub mod install;
@@ -70,6 +71,7 @@ pub fn run(ctx: &AppContext, command: &Commands) -> Result<()> {
     match command {
         Commands::Antipatterns(args) => antipatterns::run(ctx, args),
         Commands::Init(args) => init::run(ctx, args),
+        Commands::Import(args) => import::run(ctx, args),
         Commands::Index(args) => index::run(ctx, args),
         Commands::Search(args) => search::run(ctx, args),
         Commands::Load(args) => load::run(ctx, args),
