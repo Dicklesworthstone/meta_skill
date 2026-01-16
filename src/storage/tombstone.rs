@@ -17,7 +17,7 @@ use crate::error::{MsError, Result};
 pub struct TombstoneRecord {
     /// Unique tombstone ID (UUID).
     pub id: String,
-    /// Original path relative to ms_root.
+    /// Original path relative to `ms_root`.
     pub original_path: String,
     /// Reason for deletion.
     pub reason: Option<String>,
@@ -40,6 +40,7 @@ pub struct TombstoneManager {
 
 impl TombstoneManager {
     /// Create a new tombstone manager.
+    #[must_use] 
     pub fn new(ms_root: &Path) -> Self {
         let tombstone_dir = ms_root.join("tombstones");
         Self {
@@ -69,7 +70,7 @@ impl TombstoneManager {
         let canonical_path = path.canonicalize().map_err(|e| {
             MsError::Io(std::io::Error::new(
                 std::io::ErrorKind::NotFound,
-                format!("cannot tombstone non-existent path: {}", e),
+                format!("cannot tombstone non-existent path: {e}"),
             ))
         })?;
         let canonical_root = self.ms_root.canonicalize()?;
@@ -105,11 +106,11 @@ impl TombstoneManager {
         let record = TombstoneRecord {
             id: id.clone(),
             original_path: relative_path,
-            reason: reason.map(|s| s.to_string()),
+            reason: reason.map(std::string::ToString::to_string),
             tombstoned_at,
             size_bytes,
             is_directory,
-            deleted_by: deleted_by.map(|s| s.to_string()),
+            deleted_by: deleted_by.map(std::string::ToString::to_string),
         };
 
         // Ensure tombstone directory exists
@@ -127,7 +128,7 @@ impl TombstoneManager {
         }
 
         // Write metadata
-        let meta_path = self.tombstone_dir.join(format!("{}.json", id));
+        let meta_path = self.tombstone_dir.join(format!("{id}.json"));
         let meta_json = serde_json::to_string_pretty(&record)?;
         fs::write(&meta_path, meta_json)?;
 
@@ -144,7 +145,7 @@ impl TombstoneManager {
         for entry in fs::read_dir(&self.tombstone_dir)? {
             let entry = entry?;
             let path = entry.path();
-            if path.extension().map(|e| e == "json").unwrap_or(false) {
+            if path.extension().is_some_and(|e| e == "json") {
                 let content = fs::read_to_string(&path)?;
                 if let Ok(record) = serde_json::from_str::<TombstoneRecord>(&content) {
                     records.push(record);
@@ -173,10 +174,10 @@ impl TombstoneManager {
         Self::validate_tombstone_id(id)?;
 
         let tombstone_path = self.tombstone_dir.join(id);
-        let meta_path = self.tombstone_dir.join(format!("{}.json", id));
+        let meta_path = self.tombstone_dir.join(format!("{id}.json"));
 
         if !meta_path.exists() {
-            return Err(MsError::NotFound(format!("tombstone not found: {}", id)));
+            return Err(MsError::NotFound(format!("tombstone not found: {id}")));
         }
 
         // Read the record first
@@ -208,10 +209,10 @@ impl TombstoneManager {
         Self::validate_tombstone_id(id)?;
 
         let tombstone_path = self.tombstone_dir.join(id);
-        let meta_path = self.tombstone_dir.join(format!("{}.json", id));
+        let meta_path = self.tombstone_dir.join(format!("{id}.json"));
 
         if !meta_path.exists() {
-            return Err(MsError::NotFound(format!("tombstone not found: {}", id)));
+            return Err(MsError::NotFound(format!("tombstone not found: {id}")));
         }
 
         // Read the record
@@ -319,9 +320,7 @@ impl TombstoneManager {
         // UUID format: 8-4-4-4-12 hex chars with hyphens
         // e.g., 550e8400-e29b-41d4-a716-446655440000
         if !id.chars().all(|c| c.is_ascii_hexdigit() || c == '-') {
-            return Err(MsError::ValidationFailed(format!(
-                "invalid tombstone ID: contains invalid characters (expected UUID format)"
-            )));
+            return Err(MsError::ValidationFailed("invalid tombstone ID: contains invalid characters (expected UUID format)".to_string()));
         }
         Ok(())
     }

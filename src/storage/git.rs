@@ -40,7 +40,7 @@ impl GitArchive {
         let signature = repo
             .signature()
             .or_else(|_| Signature::now("ms", "ms@localhost"))
-            .map_err(|err| MsError::Git(err))?;
+            .map_err(MsError::Git)?;
 
         Ok(Self {
             repo,
@@ -50,17 +50,20 @@ impl GitArchive {
     }
 
     /// Get a reference to the repository
-    pub fn repo(&self) -> &Repository {
+    #[must_use] 
+    pub const fn repo(&self) -> &Repository {
         &self.repo
     }
 
+    #[must_use] 
     pub fn root(&self) -> &Path {
         &self.root
     }
 
     /// Get the path to a skill directory in the archive
     ///
-    /// Returns None if skill_id contains path traversal sequences.
+    /// Returns None if `skill_id` contains path traversal sequences.
+    #[must_use] 
     pub fn skill_path(&self, skill_id: &str) -> Option<PathBuf> {
         // Prevent path traversal attacks
         if skill_id.trim().is_empty() {
@@ -81,10 +84,10 @@ impl GitArchive {
     }
 
     /// Check if a skill exists in the archive (has spec file)
+    #[must_use] 
     pub fn skill_exists(&self, skill_id: &str) -> bool {
         self.skill_path(skill_id)
-            .map(|p| p.join("skill.spec.json").exists())
-            .unwrap_or(false)
+            .is_some_and(|p| p.join("skill.spec.json").exists())
     }
 
     /// Check if a skill exists in the current HEAD commit.
@@ -277,7 +280,7 @@ impl GitArchive {
 
         let tree_id = index.write_tree()?;
         let tree = self.repo.find_tree(tree_id)?;
-        let message = format!("Update skill {}", skill_id);
+        let message = format!("Update skill {skill_id}");
         let oid = commit_with_parents(&self.repo, &self.signature, &tree, &message)?;
 
         Ok(SkillCommit {
@@ -328,7 +331,7 @@ impl GitArchive {
 
         let tree_id = index.write_tree()?;
         let tree = self.repo.find_tree(tree_id)?;
-        let message = format!("Tombstone skill {}", skill_id);
+        let message = format!("Tombstone skill {skill_id}");
         let oid = commit_with_parents(&self.repo, &self.signature, &tree, &message)?;
 
         Ok(SkillCommit {
@@ -380,22 +383,19 @@ fn render_skill_markdown(spec: &SkillSpec) -> String {
         out.push_str(&section.title);
         out.push_str("\n\n");
         for block in &section.blocks {
-            match block.block_type {
-                crate::core::BlockType::Code => {
-                    let content = block.content.trim_end();
-                    if content.trim_start().starts_with("```") {
-                        out.push_str(content);
-                        out.push_str("\n\n");
-                    } else {
-                        out.push_str("```\n");
-                        out.push_str(content);
-                        out.push_str("\n```\n\n");
-                    }
-                }
-                _ => {
-                    out.push_str(&block.content);
+            if block.block_type == crate::core::BlockType::Code {
+                let content = block.content.trim_end();
+                if content.trim_start().starts_with("```") {
+                    out.push_str(content);
                     out.push_str("\n\n");
+                } else {
+                    out.push_str("```\n");
+                    out.push_str(content);
+                    out.push_str("\n```\n\n");
                 }
+            } else {
+                out.push_str(&block.content);
+                out.push_str("\n\n");
             }
         }
     }
@@ -426,7 +426,7 @@ fn add_path(index: &mut git2::Index, root: &Path, path: &Path) -> Result<()> {
 }
 
 fn add_dir_recursive(index: &mut git2::Index, root: &Path, dir: &Path) -> Result<()> {
-    for entry in walkdir::WalkDir::new(dir).into_iter() {
+    for entry in walkdir::WalkDir::new(dir) {
         let entry = entry.map_err(|err| MsError::Config(format!("walk tombstone: {err}")))?;
         if entry.file_type().is_file() {
             add_path(index, root, entry.path())?;

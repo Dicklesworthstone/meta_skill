@@ -288,7 +288,7 @@ require_verbatim_approval = true
 "#
     };
 
-    fs::write(&config_path, default_config)?;
+    fs::write(config_path, default_config)?;
     Ok(())
 }
 

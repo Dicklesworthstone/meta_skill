@@ -62,11 +62,11 @@ fn estimate_code_ratio(content: &str) -> f64 {
         }
     }
 
-    code_lines as f64 / total_lines as f64
+    f64::from(code_lines) / total_lines as f64
 }
 
 /// Estimate token count from text (rough: ~4 chars per token).
-fn estimate_tokens(text: &str) -> usize {
+const fn estimate_tokens(text: &str) -> usize {
     text.len() / 4
 }
 
@@ -91,7 +91,8 @@ impl Default for MeaningfulDescriptionRule {
 
 impl MeaningfulDescriptionRule {
     /// Create a rule with custom length bounds.
-    pub fn with_bounds(min_length: usize, max_length: usize) -> Self {
+    #[must_use] 
+    pub const fn with_bounds(min_length: usize, max_length: usize) -> Self {
         Self {
             min_length,
             max_length,
@@ -100,15 +101,15 @@ impl MeaningfulDescriptionRule {
 }
 
 impl ValidationRule for MeaningfulDescriptionRule {
-    fn id(&self) -> &str {
+    fn id(&self) -> &'static str {
         "meaningful-description"
     }
 
-    fn name(&self) -> &str {
+    fn name(&self) -> &'static str {
         "Meaningful Description"
     }
 
-    fn description(&self) -> &str {
+    fn description(&self) -> &'static str {
         "Description should be informative and appropriate length"
     }
 
@@ -158,7 +159,7 @@ impl ValidationRule for MeaningfulDescriptionRule {
         }
 
         // Same as title check
-        let id_as_text = skill.metadata.id.replace('-', " ").replace('_', " ");
+        let id_as_text = skill.metadata.id.replace(['-', '_'], " ");
         if desc.to_lowercase() == id_as_text.to_lowercase() {
             diagnostics.push(
                 Diagnostic::warning(self.id(), "Description is the same as the skill ID")
@@ -258,15 +259,15 @@ impl Default for ActionableRulesRule {
 }
 
 impl ValidationRule for ActionableRulesRule {
-    fn id(&self) -> &str {
+    fn id(&self) -> &'static str {
         "actionable-rules"
     }
 
-    fn name(&self) -> &str {
+    fn name(&self) -> &'static str {
         "Actionable Rules"
     }
 
-    fn description(&self) -> &str {
+    fn description(&self) -> &'static str {
         "Rules should be actionable with verbs"
     }
 
@@ -332,15 +333,15 @@ impl ValidationRule for ActionableRulesRule {
 pub struct ExamplesHaveCodeRule;
 
 impl ValidationRule for ExamplesHaveCodeRule {
-    fn id(&self) -> &str {
+    fn id(&self) -> &'static str {
         "examples-have-code"
     }
 
-    fn name(&self) -> &str {
+    fn name(&self) -> &'static str {
         "Examples Have Code"
     }
 
-    fn description(&self) -> &str {
+    fn description(&self) -> &'static str {
         "Example sections should contain actual code examples"
     }
 
@@ -405,15 +406,15 @@ impl Default for BalancedContentRule {
 }
 
 impl ValidationRule for BalancedContentRule {
-    fn id(&self) -> &str {
+    fn id(&self) -> &'static str {
         "balanced-content"
     }
 
-    fn name(&self) -> &str {
+    fn name(&self) -> &'static str {
         "Balanced Content"
     }
 
-    fn description(&self) -> &str {
+    fn description(&self) -> &'static str {
         "Skills should have a balance of prose and code"
     }
 
@@ -475,7 +476,8 @@ impl Default for TokenBudgetRule {
 
 impl TokenBudgetRule {
     /// Create a rule with custom thresholds.
-    pub fn with_thresholds(warn: usize, error: usize) -> Self {
+    #[must_use] 
+    pub const fn with_thresholds(warn: usize, error: usize) -> Self {
         Self {
             total_warn_threshold: warn,
             total_error_threshold: error,
@@ -484,15 +486,15 @@ impl TokenBudgetRule {
 }
 
 impl ValidationRule for TokenBudgetRule {
-    fn id(&self) -> &str {
+    fn id(&self) -> &'static str {
         "token-budget"
     }
 
-    fn name(&self) -> &str {
+    fn name(&self) -> &'static str {
         "Token Budget"
     }
 
-    fn description(&self) -> &str {
+    fn description(&self) -> &'static str {
         "Estimates token usage and suggests optimizations"
     }
 
@@ -514,8 +516,7 @@ impl ValidationRule for TokenBudgetRule {
                 Diagnostic::warning(
                     self.id(),
                     format!(
-                        "Skill is very large (~{} tokens). Consider splitting.",
-                        estimated_tokens
+                        "Skill is very large (~{estimated_tokens} tokens). Consider splitting."
                     ),
                 )
                 .with_suggestion("Large skills load slowly. Split into focused skills.")
@@ -553,15 +554,15 @@ impl Default for EmbeddingQualityRule {
 }
 
 impl ValidationRule for EmbeddingQualityRule {
-    fn id(&self) -> &str {
+    fn id(&self) -> &'static str {
         "embedding-quality"
     }
 
-    fn name(&self) -> &str {
+    fn name(&self) -> &'static str {
         "Embedding Quality"
     }
 
-    fn description(&self) -> &str {
+    fn description(&self) -> &'static str {
         "Checks if content is suitable for semantic search"
     }
 
@@ -625,6 +626,7 @@ impl ValidationRule for EmbeddingQualityRule {
 // =============================================================================
 
 /// Returns all quality validation rules.
+#[must_use] 
 pub fn quality_rules() -> Vec<Box<dyn ValidationRule>> {
     vec![
         Box::new(MeaningfulDescriptionRule::default()),
@@ -635,6 +637,7 @@ pub fn quality_rules() -> Vec<Box<dyn ValidationRule>> {
 }
 
 /// Returns all performance validation rules.
+#[must_use] 
 pub fn performance_rules() -> Vec<Box<dyn ValidationRule>> {
     vec![
         Box::new(TokenBudgetRule::default()),
@@ -643,6 +646,7 @@ pub fn performance_rules() -> Vec<Box<dyn ValidationRule>> {
 }
 
 /// Returns all quality and performance validation rules.
+#[must_use] 
 pub fn quality_and_performance_rules() -> Vec<Box<dyn ValidationRule>> {
     let mut rules = quality_rules();
     rules.extend(performance_rules());

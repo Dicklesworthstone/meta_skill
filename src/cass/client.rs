@@ -29,6 +29,7 @@ pub struct CassClient {
 
 impl CassClient {
     /// Create a new CASS client with default settings
+    #[must_use] 
     pub fn new() -> Self {
         Self {
             cass_bin: PathBuf::from("cass"),
@@ -270,8 +271,7 @@ fn classify_cass_error(exit_code: i32, stderr: &str) -> MsError {
 
     // Default: CASS unavailable/generic error
     MsError::CassUnavailable(format!(
-        "CASS command failed (exit {}): {}",
-        exit_code, stderr
+        "CASS command failed (exit {exit_code}): {stderr}"
     ))
 }
 
@@ -405,8 +405,8 @@ pub struct FingerprintCache {
 }
 
 impl FingerprintCache {
-    /// Create a new fingerprint cache using the provided SQLite connection
-    pub fn new(conn: Connection) -> Self {
+    /// Create a new fingerprint cache using the provided `SQLite` connection
+    pub const fn new(conn: Connection) -> Self {
         Self { conn }
     }
 

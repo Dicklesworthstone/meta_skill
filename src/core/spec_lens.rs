@@ -5,16 +5,17 @@ use serde_json::Value as JsonValue;
 use super::skill::{BlockType, SkillBlock, SkillMetadata, SkillSection, SkillSpec};
 use crate::error::{MsError, Result};
 
-/// Bidirectional mapping between SkillSpec and SKILL.md.
+/// Bidirectional mapping between `SkillSpec` and SKILL.md.
 pub struct SpecLens;
 
 impl SpecLens {
-    /// Compile a SkillSpec to deterministic markdown.
+    /// Compile a `SkillSpec` to deterministic markdown.
+    #[must_use] 
     pub fn compile(&self, spec: &SkillSpec) -> String {
         compile_markdown(spec)
     }
 
-    /// Parse markdown into a SkillSpec.
+    /// Parse markdown into a `SkillSpec`.
     pub fn parse(&self, md: &str) -> Result<SkillSpec> {
         parse_markdown(md)
     }
@@ -32,7 +33,7 @@ impl SpecLens {
     }
 }
 
-/// Parse a SKILL.md file into a SkillSpec.
+/// Parse a SKILL.md file into a `SkillSpec`.
 pub fn parse_markdown(content: &str) -> Result<SkillSpec> {
     let mut name = String::new();
     let mut description_lines = Vec::new();
@@ -79,7 +80,7 @@ pub fn parse_markdown(content: &str) -> Result<SkillSpec> {
                 let yaml = frontmatter_lines.join("\n");
                 match serde_yaml::from_str::<SkillMetadata>(&yaml) {
                     Ok(meta) => metadata = meta,
-                    Err(e) => eprintln!("Failed to parse frontmatter: {}\nYAML:\n{}", e, yaml),
+                    Err(e) => eprintln!("Failed to parse frontmatter: {e}\nYAML:\n{yaml}"),
                 }
                 continue;
             }
@@ -176,7 +177,7 @@ pub fn parse_markdown(content: &str) -> Result<SkillSpec> {
     let id = if !metadata.id.is_empty() {
         metadata.id.clone()
     } else if name.is_empty() {
-        "".to_string()
+        String::new()
     } else {
         slugify(&name)
     };
@@ -207,10 +208,13 @@ pub fn parse_markdown(content: &str) -> Result<SkillSpec> {
         replace_examples: false,
         replace_pitfalls: false,
         replace_checklist: false,
+        // Composition fields - not parsed from markdown (use YAML frontmatter)
+        includes: Vec::new(),
     })
 }
 
-/// Compile a SkillSpec back to markdown.
+/// Compile a `SkillSpec` back to markdown.
+#[must_use] 
 pub fn compile_markdown(spec: &SkillSpec) -> String {
     let mut output = String::new();
 
@@ -231,22 +235,19 @@ pub fn compile_markdown(spec: &SkillSpec) -> String {
     for section in &spec.sections {
         output.push_str(&format!("## {}\n\n", section.title));
         for block in &section.blocks {
-            match block.block_type {
-                BlockType::Code => {
-                    let content = block.content.trim_end();
-                    if content.starts_with("```") {
-                        output.push_str(content);
-                        output.push_str("\n\n");
-                    } else {
-                        output.push_str("```\n");
-                        output.push_str(content);
-                        output.push_str("\n```\n\n");
-                    }
-                }
-                _ => {
-                    output.push_str(block.content.trim_end());
+            if block.block_type == BlockType::Code {
+                let content = block.content.trim_end();
+                if content.starts_with("```") {
+                    output.push_str(content);
                     output.push_str("\n\n");
+                } else {
+                    output.push_str("```\n");
+                    output.push_str(content);
+                    output.push_str("\n```\n\n");
                 }
+            } else {
+                output.push_str(block.content.trim_end());
+                output.push_str("\n\n");
             }
         }
     }

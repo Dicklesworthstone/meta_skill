@@ -129,37 +129,34 @@ fn check_lock_status(ctx: &AppContext, verbose: bool) -> Result<usize> {
 
     let ms_root = &ctx.ms_root;
 
-    match GlobalLock::status(ms_root)? {
-        Some(holder) => {
-            println!("{} Lock held", "!".yellow());
-            println!("  PID: {}", holder.pid);
-            println!("  Host: {}", holder.hostname);
-            println!("  Since: {}", holder.acquired_at);
+    if let Some(holder) = GlobalLock::status(ms_root)? {
+        println!("{} Lock held", "!".yellow());
+        println!("  PID: {}", holder.pid);
+        println!("  Host: {}", holder.hostname);
+        println!("  Since: {}", holder.acquired_at);
 
-            // Check if process is still alive
-            #[cfg(target_os = "linux")]
-            {
-                let proc_path = format!("/proc/{}", holder.pid);
-                if !Path::new(&proc_path).exists() {
-                    println!(
-                        "  {} Process {} no longer exists - lock may be stale",
-                        "!".yellow(),
-                        holder.pid
-                    );
-                    println!("  Use --break-lock to remove stale lock");
-                    return Ok(1);
-                }
+        // Check if process is still alive
+        #[cfg(target_os = "linux")]
+        {
+            let proc_path = format!("/proc/{}", holder.pid);
+            if !Path::new(&proc_path).exists() {
+                println!(
+                    "  {} Process {} no longer exists - lock may be stale",
+                    "!".yellow(),
+                    holder.pid
+                );
+                println!("  Use --break-lock to remove stale lock");
+                return Ok(1);
             }
+        }
 
-            if verbose {
-                println!("  Lock is held by an active process");
-            }
-            Ok(0) // Active lock is not an issue
+        if verbose {
+            println!("  Lock is held by an active process");
         }
-        None => {
-            println!("{} No lock held", "✓".green());
-            Ok(0)
-        }
+        Ok(0) // Active lock is not an issue
+    } else {
+        println!("{} No lock held", "✓".green());
+        Ok(0)
     }
 }
 
@@ -170,29 +167,26 @@ fn break_stale_lock(ctx: &AppContext) -> Result<bool> {
     let ms_root = &ctx.ms_root;
 
     // First check if there's a lock to break
-    match GlobalLock::status(ms_root)? {
-        Some(holder) => {
-            // Warn user about what we're doing
-            println!();
-            println!(
-                "  {} Breaking lock held by PID {} on {} since {}",
-                "!".yellow(),
-                holder.pid,
-                holder.hostname,
-                holder.acquired_at
-            );
+    if let Some(holder) = GlobalLock::status(ms_root)? {
+        // Warn user about what we're doing
+        println!();
+        println!(
+            "  {} Breaking lock held by PID {} on {} since {}",
+            "!".yellow(),
+            holder.pid,
+            holder.hostname,
+            holder.acquired_at
+        );
 
-            if GlobalLock::break_lock(ms_root)? {
-                Ok(true)
-            } else {
-                println!("  Lock file not found");
-                Ok(false)
-            }
-        }
-        None => {
-            println!("{} No lock to break", "✓".green());
+        if GlobalLock::break_lock(ms_root)? {
+            Ok(true)
+        } else {
+            println!("  Lock file not found");
             Ok(false)
         }
+    } else {
+        println!("{} No lock to break", "✓".green());
+        Ok(false)
     }
 }
 
@@ -275,21 +269,18 @@ fn check_safety(ctx: &AppContext, verbose: bool) -> Result<usize> {
     let gate = SafetyGate::from_context(ctx);
     let status = gate.status();
 
-    match status.dcg_version {
-        Some(version) => {
-            println!("{} dcg {}", "✓".green(), version);
-            if verbose {
-                println!("  dcg_bin: {}", status.dcg_bin.display());
-                if !status.packs.is_empty() {
-                    println!("  packs: {}", status.packs.join(", "));
-                }
+    if let Some(version) = status.dcg_version {
+        println!("{} dcg {}", "✓".green(), version);
+        if verbose {
+            println!("  dcg_bin: {}", status.dcg_bin.display());
+            if !status.packs.is_empty() {
+                println!("  packs: {}", status.packs.join(", "));
             }
-            Ok(0)
         }
-        None => {
-            println!("{} dcg not available", "!".yellow());
-            Ok(1)
-        }
+        Ok(0)
+    } else {
+        println!("{} dcg not available", "!".yellow());
+        Ok(1)
     }
 }
 
@@ -304,15 +295,12 @@ fn check_security(ctx: &AppContext, verbose: bool) -> Result<usize> {
     print!("  [1/5] Command safety (DCG)... ");
     let gate = SafetyGate::from_context(ctx);
     let status = gate.status();
-    match status.dcg_version {
-        Some(version) => {
-            println!("{} v{}", "✓".green(), version);
-        }
-        None => {
-            println!("{} not available", "!".yellow());
-            println!("        Commands will run without safety checks");
-            issues += 1;
-        }
+    if let Some(version) = status.dcg_version {
+        println!("{} v{}", "✓".green(), version);
+    } else {
+        println!("{} not available", "!".yellow());
+        println!("        Commands will run without safety checks");
+        issues += 1;
     }
 
     // 2. Check ACIP prompt availability
@@ -462,24 +450,18 @@ fn check_transactions(
         return Ok(0);
     }
 
-    let db = match crate::storage::Database::open(&db_path) {
-        Ok(db) => std::sync::Arc::new(db),
-        Err(_) => {
-            println!("{} Skipped (cannot open database)", "-".dimmed());
-            return Ok(0);
-        }
+    let db = if let Ok(db) = crate::storage::Database::open(&db_path) { std::sync::Arc::new(db) } else {
+        println!("{} Skipped (cannot open database)", "-".dimmed());
+        return Ok(0);
     };
 
-    let git = match crate::storage::GitArchive::open(&archive_path) {
-        Ok(git) => std::sync::Arc::new(git),
-        Err(_) => {
-            println!("{} Skipped (cannot open archive)", "-".dimmed());
-            return Ok(0);
-        }
+    let git = if let Ok(git) = crate::storage::GitArchive::open(&archive_path) { std::sync::Arc::new(git) } else {
+        println!("{} Skipped (cannot open archive)", "-".dimmed());
+        return Ok(0);
     };
 
     // Check for incomplete transactions
-    let tx_mgr = crate::storage::TxManager::new(db.clone(), git.clone(), ctx.ms_root.clone())?;
+    let tx_mgr = crate::storage::TxManager::new(db.clone(), git, ctx.ms_root.clone())?;
 
     if fix {
         let report = tx_mgr.recover()?;
@@ -519,7 +501,7 @@ fn check_transactions(
     }
 }
 
-/// Run comprehensive recovery diagnostics using RecoveryManager.
+/// Run comprehensive recovery diagnostics using `RecoveryManager`.
 fn run_comprehensive_check(
     ctx: &AppContext,
     fix: bool,
@@ -590,7 +572,7 @@ fn print_recovery_report(report: &RecoveryReport, verbose: bool) {
             if verbose {
                 println!("    Mode: {:?}", issue.mode);
                 if let Some(fix) = &issue.suggested_fix {
-                    println!("    Fix: {}", fix);
+                    println!("    Fix: {fix}");
                 }
             }
         }
@@ -632,7 +614,7 @@ fn print_recovery_report(report: &RecoveryReport, verbose: bool) {
     if let Some(duration) = report.duration {
         if verbose {
             println!();
-            println!("  Duration: {:?}", duration);
+            println!("  Duration: {duration:?}");
         }
     }
 }
@@ -680,10 +662,8 @@ fn check_perf(ctx: &AppContext, verbose: bool) -> Result<usize> {
     if elapsed.as_millis() > 50 {
         println!("{} Search latency high: {:?} (target < 50ms)", "!".yellow(), elapsed);
         issues += 1;
-    } else {
-        if verbose {
-             println!("  Search latency: {:?}", elapsed);
-        }
+    } else if verbose {
+         println!("  Search latency: {elapsed:?}");
     }
 
     Ok(issues)

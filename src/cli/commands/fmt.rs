@@ -83,20 +83,20 @@ fn simple_diff(old: &str, new: &str) -> String {
         match pair {
             itertools::EitherOrBoth::Both(left, right) if left == right => {}
             itertools::EitherOrBoth::Both(left, right) => {
-                out.push_str("-");
+                out.push('-');
                 out.push_str(left);
                 out.push('\n');
-                out.push_str("+");
+                out.push('+');
                 out.push_str(right);
                 out.push('\n');
             }
             itertools::EitherOrBoth::Left(left) => {
-                out.push_str("-");
+                out.push('-');
                 out.push_str(left);
                 out.push('\n');
             }
             itertools::EitherOrBoth::Right(right) => {
-                out.push_str("+");
+                out.push('+');
                 out.push_str(right);
                 out.push('\n');
             }

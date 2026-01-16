@@ -35,6 +35,7 @@ pub struct SkillSyncState {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Default)]
 pub struct SyncState {
     #[serde(default)]
     pub skill_states: HashMap<String, SkillSyncState>,
@@ -42,16 +43,9 @@ pub struct SyncState {
     pub last_full_sync: HashMap<String, DateTime<Utc>>,
 }
 
-impl Default for SyncState {
-    fn default() -> Self {
-        Self {
-            skill_states: HashMap::new(),
-            last_full_sync: HashMap::new(),
-        }
-    }
-}
 
 impl SyncState {
+    #[must_use] 
     pub fn path(ms_root: &Path) -> PathBuf {
         ms_root.join("sync").join("state.json")
     }

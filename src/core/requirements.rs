@@ -3,7 +3,7 @@
 use crate::error::Result;
 
 /// Check if all requirements are met
-pub fn check_requirements() -> Result<Vec<RequirementCheck>> {
+pub const fn check_requirements() -> Result<Vec<RequirementCheck>> {
     Ok(vec![])
 }
 

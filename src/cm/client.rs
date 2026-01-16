@@ -133,6 +133,7 @@ pub struct CmClient {
 
 impl CmClient {
     /// Create a new CM client with default settings.
+    #[must_use] 
     pub fn new() -> Self {
         Self {
             cm_bin: PathBuf::from("cm"),
@@ -142,6 +143,7 @@ impl CmClient {
     }
 
     /// Create a CM client from config.
+    #[must_use] 
     pub fn from_config(config: &CmConfig) -> Self {
         let mut client = Self::new();
         if let Some(path) = config.cm_path.as_ref() {
@@ -161,18 +163,21 @@ impl CmClient {
     }
 
     /// Set default flags for cm invocations.
+    #[must_use] 
     pub fn with_default_flags(mut self, flags: Vec<String>) -> Self {
         self.default_flags = flags;
         self
     }
 
     /// Attach a safety gate for command execution.
+    #[must_use] 
     pub fn with_safety(mut self, safety: SafetyGate) -> Self {
         self.safety = Some(safety);
         self
     }
 
     /// Check if CM is available and responsive.
+    #[must_use] 
     pub fn is_available(&self) -> bool {
         let mut cmd = Command::new(&self.cm_bin);
         cmd.arg("onboard").arg("status").arg("--json");
@@ -258,7 +263,7 @@ impl CmClient {
             .map_err(|e| MsError::CmUnavailable(format!("Failed to parse validate result: {e}")))?;
         Ok(result
             .get("valid")
-            .and_then(|v| v.as_bool())
+            .and_then(serde_json::Value::as_bool)
             .unwrap_or(false))
     }
 

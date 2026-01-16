@@ -34,7 +34,7 @@ where
         let elapsed = start.elapsed();
 
         if case.should_panic {
-            if !result.is_err() {
+            if result.is_ok() {
                 return Err(format!("Test '{}' expected panic", case.name));
             }
             println!("[TEST] Expected panic occurred");
@@ -50,8 +50,8 @@ where
         };
 
         println!("[TEST] Expected: {:?}", case.expected);
-        println!("[TEST] Actual: {:?}", actual);
-        println!("[TEST] Timing: {:?}", elapsed);
+        println!("[TEST] Actual: {actual:?}");
+        println!("[TEST] Timing: {elapsed:?}");
 
         if actual != case.expected {
             return Err(format!(

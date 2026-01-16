@@ -49,7 +49,9 @@ pub fn run(ctx: &AppContext, args: &ListArgs) -> Result<()> {
     };
 
     // Filter by tags if specified
-    let skills: Vec<_> = if !args.tags.is_empty() {
+    let skills: Vec<_> = if args.tags.is_empty() {
+        skills
+    } else {
         skills
             .into_iter()
             .filter(|s| {
@@ -66,15 +68,13 @@ pub fn run(ctx: &AppContext, args: &ListArgs) -> Result<()> {
                 false
             })
             .collect()
-    } else {
-        skills
     };
 
     // Filter deprecated unless explicitly included
-    let skills: Vec<_> = if !args.include_deprecated {
-        skills.into_iter().filter(|s| !s.is_deprecated).collect()
-    } else {
+    let skills: Vec<_> = if args.include_deprecated {
         skills
+    } else {
+        skills.into_iter().filter(|s| !s.is_deprecated).collect()
     };
 
     // Sort

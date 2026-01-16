@@ -49,29 +49,31 @@ pub enum CognitiveMoveTag {
 }
 
 impl CognitiveMoveTag {
-    pub fn all() -> &'static [CognitiveMoveTag] {
+    #[must_use] 
+    pub const fn all() -> &'static [Self] {
         &[
-            CognitiveMoveTag::ProblemSelection,
-            CognitiveMoveTag::HypothesisSlate,
-            CognitiveMoveTag::ThirdAlternative,
-            CognitiveMoveTag::IterativeRefinement,
-            CognitiveMoveTag::RuthlessKill,
-            CognitiveMoveTag::Quickie,
-            CognitiveMoveTag::MaterializationInstinct,
-            CognitiveMoveTag::InnerTruth,
+            Self::ProblemSelection,
+            Self::HypothesisSlate,
+            Self::ThirdAlternative,
+            Self::IterativeRefinement,
+            Self::RuthlessKill,
+            Self::Quickie,
+            Self::MaterializationInstinct,
+            Self::InnerTruth,
         ]
     }
 
-    pub fn description(&self) -> &'static str {
+    #[must_use] 
+    pub const fn description(&self) -> &'static str {
         match self {
-            CognitiveMoveTag::ProblemSelection => "How to pick what to work on",
-            CognitiveMoveTag::HypothesisSlate => "Explicit enumeration of approaches",
-            CognitiveMoveTag::ThirdAlternative => "Both approaches could be wrong",
-            CognitiveMoveTag::IterativeRefinement => "Multi-round improvement",
-            CognitiveMoveTag::RuthlessKill => "Abandoning failing approaches",
-            CognitiveMoveTag::Quickie => "Pilot experiments to de-risk",
-            CognitiveMoveTag::MaterializationInstinct => "What would I see if true?",
-            CognitiveMoveTag::InnerTruth => "The generalizable principle",
+            Self::ProblemSelection => "How to pick what to work on",
+            Self::HypothesisSlate => "Explicit enumeration of approaches",
+            Self::ThirdAlternative => "Both approaches could be wrong",
+            Self::IterativeRefinement => "Multi-round improvement",
+            Self::RuthlessKill => "Abandoning failing approaches",
+            Self::Quickie => "Pilot experiments to de-risk",
+            Self::MaterializationInstinct => "What would I see if true?",
+            Self::InnerTruth => "The generalizable principle",
         }
     }
 }
@@ -252,6 +254,7 @@ pub struct WizardCheckpoint {
 }
 
 impl WizardCheckpoint {
+    #[must_use] 
     pub fn new(query: &str, state: WizardState) -> Self {
         let now = Utc::now();
         Self {
@@ -292,6 +295,7 @@ pub enum WizardOutput {
 }
 
 /// Generate SKILL.md content from a draft (standalone function)
+#[must_use] 
 pub fn generate_skill_md(draft: &BrennerSkillDraft) -> String {
     let mut md = String::new();
 
@@ -310,9 +314,9 @@ pub fn generate_skill_md(draft: &BrennerSkillDraft) -> String {
             if !rule.evidence.is_empty() {
                 md.push_str("**Evidence:**\n");
                 for ev in &rule.evidence {
-                    md.push_str(&format!("- {}\n", ev));
+                    md.push_str(&format!("- {ev}\n"));
                 }
-                md.push_str("\n");
+                md.push('\n');
             }
         }
     }
@@ -329,15 +333,15 @@ pub fn generate_skill_md(draft: &BrennerSkillDraft) -> String {
     if !draft.avoid_when.is_empty() {
         md.push_str("## Avoid When\n\n");
         for avoid in &draft.avoid_when {
-            md.push_str(&format!("- {}\n", avoid));
+            md.push_str(&format!("- {avoid}\n"));
         }
-        md.push_str("\n");
+        md.push('\n');
     }
 
     if !draft.calibration.is_empty() {
         md.push_str("## Calibration Notes\n\n");
         for cal in &draft.calibration {
-            md.push_str(&format!("- {}\n", cal));
+            md.push_str(&format!("- {cal}\n"));
         }
     }
 
@@ -390,6 +394,7 @@ impl Default for BrennerConfig {
 
 impl BrennerWizard {
     /// Create a new wizard with a query
+    #[must_use] 
     pub fn new(query: &str, config: BrennerConfig) -> Self {
         let state = WizardState::SessionSelection {
             query: query.to_string(),
@@ -408,6 +413,7 @@ impl BrennerWizard {
     }
 
     /// Resume from a checkpoint
+    #[must_use] 
     pub fn resume(checkpoint: WizardCheckpoint, config: BrennerConfig) -> Self {
         Self {
             state: checkpoint.state.clone(),
@@ -419,17 +425,17 @@ impl BrennerWizard {
     }
 
     /// Get current checkpoint for saving
-    pub fn checkpoint(&self) -> &WizardCheckpoint {
+    pub const fn checkpoint(&self) -> &WizardCheckpoint {
         &self.checkpoint
     }
 
     /// Get current state
-    pub fn state(&self) -> &WizardState {
+    pub const fn state(&self) -> &WizardState {
         &self.state
     }
 
     /// Check if wizard is complete
-    pub fn is_complete(&self) -> bool {
+    pub const fn is_complete(&self) -> bool {
         matches!(
             self.state,
             WizardState::Complete { .. } | WizardState::Cancelled { .. }
@@ -700,7 +706,7 @@ impl BrennerWizard {
         let calibration_path = output_dir.join("calibration.md");
 
         self.state = WizardState::Complete {
-            output_dir: output_dir.clone(),
+            output_dir,
             skill_path: skill_path.clone(),
             manifest_path: manifest_path.clone(),
             draft: draft.clone(),
@@ -782,7 +788,7 @@ pub fn run_interactive(
                 println!("\n{}", "=".repeat(60));
                 println!("BRENNER WIZARD - Session Selection");
                 println!("{}", "=".repeat(60));
-                println!("\nQuery: {}", query);
+                println!("\nQuery: {query}");
 
                 if results.is_empty() {
                     println!("\nSearching for sessions...");
@@ -810,7 +816,7 @@ pub fn run_interactive(
                     "c" => {
                         // Build Vec<SelectedSession> from selected indices
                         let mut sessions = Vec::new();
-                        for &idx in selected.iter() {
+                        for &idx in selected {
                             if let Some(match_data) = results.get(idx) {
                                 match client.get_session(&match_data.session_id) {
                                     Ok(session) => {
@@ -833,7 +839,7 @@ pub fn run_interactive(
                             continue;
                         }
                         if let Err(e) = wizard.confirm_sessions(sessions) {
-                            println!("Error: {}", e);
+                            println!("Error: {e}");
                             continue;
                         }
                     }
@@ -885,8 +891,7 @@ pub fn run_interactive(
                     sessions.len(),
                     sessions
                         .get(*current_session_idx)
-                        .map(|s| s.session.id.as_str())
-                        .unwrap_or("?")
+                        .map_or("?", |s| s.session.id.as_str())
                 );
                 println!("Moves extracted: {}", moves.len());
 
@@ -919,7 +924,7 @@ pub fn run_interactive(
                     }
                     Some("f") => {
                         if let Err(e) = wizard.finish_extraction() {
-                            println!("Error: {}", e);
+                            println!("Error: {e}");
                             continue;
                         }
                     }
@@ -971,7 +976,7 @@ pub fn run_interactive(
                 if flagged_indices.is_empty() {
                     println!("\nNo moves flagged for review!");
                     if let Err(e) = wizard.finish_guard() {
-                        println!("Error: {}", e);
+                        println!("Error: {e}");
                     }
                     continue;
                 }
@@ -1101,7 +1106,7 @@ pub fn run_interactive(
                 println!("BRENNER WIZARD - Materialization Test");
                 println!("{}", "=".repeat(60));
 
-                println!("\nRunning tests for: {}", draft_name);
+                println!("\nRunning tests for: {draft_name}");
 
                 // Simulate test
                 let results = TestResults {

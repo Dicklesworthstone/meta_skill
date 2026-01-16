@@ -1,4 +1,4 @@
-//! SQLite database layer
+//! `SQLite` database layer
 
 use std::path::Path;
 
@@ -11,7 +11,7 @@ use crate::error::{MsError, Result};
 use crate::security::{CommandSafetyEvent, QuarantineRecord};
 use crate::storage::migrations;
 
-/// SQLite database wrapper for skill registry
+/// `SQLite` database wrapper for skill registry
 pub struct Database {
     conn: Connection,
     schema_version: u32,
@@ -158,12 +158,12 @@ impl Database {
     }
 
     /// Get a reference to the connection
-    pub fn conn(&self) -> &Connection {
+    pub const fn conn(&self) -> &Connection {
         &self.conn
     }
 
     /// Current schema version after migrations.
-    pub fn schema_version(&self) -> u32 {
+    pub const fn schema_version(&self) -> u32 {
         self.schema_version
     }
 
@@ -216,7 +216,7 @@ impl Database {
     ) -> Result<()> {
         self.conn.execute(
             "UPDATE skills SET is_deprecated = ?, deprecation_reason = ? WHERE id = ?",
-            params![if is_deprecated { 1 } else { 0 }, reason, skill_id],
+            params![i32::from(is_deprecated), reason, skill_id],
         )?;
         Ok(())
     }
@@ -258,7 +258,7 @@ impl Database {
                 skill_id,
                 project_path,
                 used_at,
-                disclosure_level as i64,
+                i64::from(disclosure_level),
                 keywords_json,
                 experiment_id,
                 variant_id
@@ -313,7 +313,7 @@ impl Database {
                 skill.quality_score,
                 skill.indexed_at,
                 skill.modified_at,
-                if skill.is_deprecated { 1 } else { 0 },
+                i32::from(skill.is_deprecated),
                 skill.deprecation_reason,
             ],
         )?;
@@ -334,7 +334,7 @@ impl Database {
         Ok(())
     }
 
-    /// Delete a transaction record from tx_log
+    /// Delete a transaction record from `tx_log`
     pub fn delete_tx_record(&self, id: &str) -> Result<()> {
         self.conn.execute("DELETE FROM tx_log WHERE id = ?", [id])?;
         Ok(())
@@ -381,7 +381,7 @@ impl Database {
         Ok(count > 0)
     }
 
-    /// List all aliases, optionally filtered by skill_id
+    /// List all aliases, optionally filtered by `skill_id`
     pub fn list_aliases(&self, skill_id: Option<&str>) -> Result<Vec<AliasRecord>> {
         let mut records = Vec::new();
 
@@ -527,7 +527,7 @@ impl Database {
     }
 
     /// Efficiently load all embeddings for the vector index.
-    /// Returns pairs of (skill_id, embedding_vector).
+    /// Returns pairs of (`skill_id`, `embedding_vector`).
     pub fn get_all_embeddings(&self) -> Result<Vec<(String, Vec<f32>)>> {
         let mut stmt = self.conn.prepare(
             "SELECT skill_id, embedding, dims FROM skill_embeddings"
@@ -734,7 +734,7 @@ impl Database {
     // TRANSACTION LOG METHODS (for 2PC)
     // =========================================================================
 
-    /// Insert a transaction record into tx_log
+    /// Insert a transaction record into `tx_log`
     pub fn insert_tx_record(&self, tx: &super::tx::TxRecord) -> Result<()> {
         self.conn.execute(
             "INSERT INTO tx_log (id, entity_type, entity_id, phase, payload_json, created_at)
@@ -760,7 +760,7 @@ impl Database {
         Ok(())
     }
 
-    /// Check if a transaction exists in tx_log
+    /// Check if a transaction exists in `tx_log`
     pub fn tx_exists(&self, tx_id: &str) -> Result<bool> {
         let exists: bool = self.conn.query_row(
             "SELECT EXISTS(SELECT 1 FROM tx_log WHERE id = ?)",
@@ -791,7 +791,7 @@ impl Database {
                             rusqlite::types::Type::Text,
                             Box::new(std::io::Error::new(
                                 std::io::ErrorKind::InvalidData,
-                                format!("unknown transaction phase: {}", unknown),
+                                format!("unknown transaction phase: {unknown}"),
                             )),
                         ));
                     }
@@ -824,11 +824,11 @@ impl Database {
 
     /// Insert or update a skill during 2PC pending phase.
     ///
-    /// For NEW skills: inserts with source_path='pending' marker.
+    /// For NEW skills: inserts with `source_path`='pending' marker.
     /// For EXISTING skills: updates only metadata fields, preserving the original
-    /// source_path and content_hash. This ensures rollback won't corrupt committed data.
+    /// `source_path` and `content_hash`. This ensures rollback won't corrupt committed data.
     ///
-    /// The source_path and content_hash are only finalized by `finalize_skill_commit`
+    /// The `source_path` and `content_hash` are only finalized by `finalize_skill_commit`
     /// after Git commit succeeds.
     pub fn upsert_skill_pending(
         &self,
@@ -866,9 +866,9 @@ impl Database {
         Ok(())
     }
 
-    /// Finalize a skill commit by updating source_path, content_hash, and body.
+    /// Finalize a skill commit by updating `source_path`, `content_hash`, and body.
     ///
-    /// This is called after Git commit succeeds to populate the full SQLite record
+    /// This is called after Git commit succeeds to populate the full `SQLite` record
     /// with searchable content (body for FTS).
     pub fn finalize_skill_commit(
         &self,
@@ -885,7 +885,7 @@ impl Database {
         Ok(())
     }
 
-    /// Run SQLite integrity check
+    /// Run `SQLite` integrity check
     pub fn integrity_check(&self) -> Result<bool> {
         let result: String = self
             .conn
@@ -897,7 +897,7 @@ impl Database {
     // SESSION QUALITY CACHE METHODS
     // =========================================================================
 
-    /// Get cached session quality by session_id
+    /// Get cached session quality by `session_id`
     pub fn get_session_quality(&self, session_id: &str) -> Result<Option<SessionQualityRecord>> {
         let mut stmt = self.conn.prepare(
             "SELECT session_id, content_hash, score, signals_json, missing_json, computed_at
@@ -930,7 +930,7 @@ impl Database {
             params![
                 record.session_id,
                 record.content_hash,
-                record.score as f64,
+                f64::from(record.score),
                 signals_json,
                 missing_json,
                 record.computed_at,
@@ -970,7 +970,7 @@ impl Database {
         Ok(())
     }
 
-    /// Get all evidence for a skill, reconstructuting the SkillEvidenceIndex.
+    /// Get all evidence for a skill, reconstructuting the `SkillEvidenceIndex`.
     pub fn get_evidence(&self, skill_id: &str) -> Result<crate::core::SkillEvidenceIndex> {
         let mut stmt = self.conn.prepare(
             "SELECT rule_id, evidence_json, coverage_json
@@ -993,7 +993,7 @@ impl Database {
             let (rule_id, evidence_json) = row?;
             let evidence_refs: Vec<crate::core::EvidenceRef> = serde_json::from_str(&evidence_json)
                 .map_err(|err| {
-                    MsError::Config(format!("decode evidence for rule {}: {}", rule_id, err))
+                    MsError::Config(format!("decode evidence for rule {rule_id}: {err}"))
                 })?;
 
             for e in &evidence_refs {
@@ -1041,7 +1041,7 @@ impl Database {
     }
 
     /// List all evidence records for provenance graph export.
-    /// Returns (skill_id, rule_id, evidence_refs, updated_at) tuples.
+    /// Returns (`skill_id`, `rule_id`, `evidence_refs`, `updated_at`) tuples.
     pub fn list_all_evidence(&self) -> Result<Vec<EvidenceRecord>> {
         let mut stmt = self.conn.prepare(
             "SELECT skill_id, rule_id, evidence_json, updated_at
@@ -1083,7 +1083,7 @@ impl Database {
     pub fn record_skill_outcome(&self, skill_id: &str, success: bool) -> Result<()> {
         let id = Uuid::new_v4().to_string();
         let created_at = chrono::Utc::now().to_rfc3339();
-        let success_signal = if success { 1 } else { 0 };
+        let success_signal = i32::from(success);
         let updated = self.conn.execute(
             "UPDATE skill_usage
              SET success_signal = ?
@@ -1130,7 +1130,7 @@ impl Database {
             skill_id: skill_id.to_string(),
             feedback_type: feedback_type.to_string(),
             rating,
-            comment: comment.map(|s| s.to_string()),
+            comment: comment.map(std::string::ToString::to_string),
             created_at,
         })
     }
@@ -1206,7 +1206,7 @@ impl Database {
             id,
             skill_id: skill_id.to_string(),
             scope: scope.to_string(),
-            scope_id: scope_id.map(|s| s.to_string()),
+            scope_id: scope_id.map(std::string::ToString::to_string),
             variants_json: variants_json.to_string(),
             allocation_json: allocation_json.to_string(),
             status: status.to_string(),
@@ -1245,7 +1245,7 @@ impl Database {
         let mut sql = "SELECT id, skill_id, scope, scope_id, variants_json, allocation_json, status, started_at 
                        FROM skill_experiments".to_string();
 
-        if let Some(_) = skill_id {
+        if skill_id.is_some() {
             sql.push_str(" WHERE skill_id = ?");
         }
 
@@ -1320,9 +1320,9 @@ impl Database {
             experiment_id: experiment_id.to_string(),
             variant_id: variant_id.to_string(),
             event_type: event_type.to_string(),
-            metrics_json: metrics_json.map(|s| s.to_string()),
-            context_json: context_json.map(|s| s.to_string()),
-            session_id: session_id.map(|s| s.to_string()),
+            metrics_json: metrics_json.map(std::string::ToString::to_string),
+            context_json: context_json.map(std::string::ToString::to_string),
+            session_id: session_id.map(std::string::ToString::to_string),
             created_at,
         })
     }

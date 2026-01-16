@@ -45,7 +45,8 @@ impl Default for RetryConfig {
 
 impl RetryConfig {
     /// Create a config for aggressive retries (quick recovery).
-    pub fn aggressive() -> Self {
+    #[must_use] 
+    pub const fn aggressive() -> Self {
         Self {
             max_attempts: 5,
             initial_delay: Duration::from_millis(50),
@@ -56,7 +57,8 @@ impl RetryConfig {
     }
 
     /// Create a config for patient retries (long-running ops).
-    pub fn patient() -> Self {
+    #[must_use] 
+    pub const fn patient() -> Self {
         Self {
             max_attempts: 10,
             initial_delay: Duration::from_millis(500),
@@ -67,6 +69,7 @@ impl RetryConfig {
     }
 
     /// Calculate delay for a given attempt number (0-indexed).
+    #[must_use] 
     pub fn delay_for_attempt(&self, attempt: u32) -> Duration {
         let base_delay =
             self.initial_delay.as_secs_f64() * self.backoff_multiplier.powi(attempt as i32);
@@ -91,7 +94,7 @@ impl RetryConfig {
 /// Categories of failures that can occur in ms operations.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum FailureMode {
-    /// SQLite database errors (corruption, lock contention, WAL issues).
+    /// `SQLite` database errors (corruption, lock contention, WAL issues).
     Database,
     /// Git archive errors (missing objects, index lock, corrupted refs).
     GitArchive,
@@ -109,28 +112,30 @@ pub enum FailureMode {
 
 impl FailureMode {
     /// Whether this failure mode is typically recoverable.
-    pub fn is_recoverable(&self) -> bool {
+    #[must_use] 
+    pub const fn is_recoverable(&self) -> bool {
         match self {
-            FailureMode::Database => true, // Often can recover via WAL checkpoint
-            FailureMode::GitArchive => true, // Can rebuild/fsck
-            FailureMode::SearchIndex => true, // Can rebuild from source
-            FailureMode::Cache => true,    // Always rebuildable
-            FailureMode::Transaction => true, // 2PC recovery
-            FailureMode::Lock => true,     // Can break stale locks
-            FailureMode::Config => false,  // Needs user intervention
+            Self::Database => true, // Often can recover via WAL checkpoint
+            Self::GitArchive => true, // Can rebuild/fsck
+            Self::SearchIndex => true, // Can rebuild from source
+            Self::Cache => true,    // Always rebuildable
+            Self::Transaction => true, // 2PC recovery
+            Self::Lock => true,     // Can break stale locks
+            Self::Config => false,  // Needs user intervention
         }
     }
 
     /// Human-readable description of the failure mode.
-    pub fn description(&self) -> &'static str {
+    #[must_use] 
+    pub const fn description(&self) -> &'static str {
         match self {
-            FailureMode::Database => "SQLite database issue",
-            FailureMode::GitArchive => "Git archive issue",
-            FailureMode::SearchIndex => "Search index issue",
-            FailureMode::Cache => "Cache inconsistency",
-            FailureMode::Transaction => "Incomplete transaction",
-            FailureMode::Lock => "Lock contention or stale lock",
-            FailureMode::Config => "Configuration problem",
+            Self::Database => "SQLite database issue",
+            Self::GitArchive => "Git archive issue",
+            Self::SearchIndex => "Search index issue",
+            Self::Cache => "Cache inconsistency",
+            Self::Transaction => "Incomplete transaction",
+            Self::Lock => "Lock contention or stale lock",
+            Self::Config => "Configuration problem",
         }
     }
 }
@@ -166,7 +171,8 @@ impl RecoveryIssue {
         self
     }
 
-    pub fn not_auto_recoverable(mut self) -> Self {
+    #[must_use] 
+    pub const fn not_auto_recoverable(mut self) -> Self {
         self.auto_recoverable = false;
         self
     }
@@ -195,7 +201,8 @@ pub struct RecoveryReport {
 
 impl RecoveryReport {
     /// Whether any recovery work was performed.
-    pub fn had_work(&self) -> bool {
+    #[must_use] 
+    pub const fn had_work(&self) -> bool {
         self.fixed > 0
             || self.rolled_back > 0
             || self.completed > 0
@@ -204,6 +211,7 @@ impl RecoveryReport {
     }
 
     /// Whether there are critical issues remaining.
+    #[must_use] 
     pub fn has_critical_issues(&self) -> bool {
         self.issues
             .iter()
@@ -211,6 +219,7 @@ impl RecoveryReport {
     }
 
     /// Summary string suitable for logging.
+    #[must_use] 
     pub fn summary(&self) -> String {
         let mut parts = Vec::new();
         if self.fixed > 0 {
@@ -262,13 +271,15 @@ impl RecoveryManager {
     }
 
     /// Set the git archive.
+    #[must_use] 
     pub fn with_git(mut self, git: Arc<GitArchive>) -> Self {
         self.git = Some(git);
         self
     }
 
     /// Set a custom retry configuration.
-    pub fn with_retry_config(mut self, config: RetryConfig) -> Self {
+    #[must_use] 
+    pub const fn with_retry_config(mut self, config: RetryConfig) -> Self {
         self.retry_config = config;
         self
     }
@@ -356,7 +367,7 @@ impl RecoveryManager {
                         RecoveryIssue::new(
                             FailureMode::Database,
                             1,
-                            format!("Database integrity check error: {}", e),
+                            format!("Database integrity check error: {e}"),
                         )
                         .with_fix("Check database permissions and disk space"),
                     );
@@ -455,7 +466,7 @@ impl RecoveryManager {
             // Check if there are any segment files at all
             let has_segments = std::fs::read_dir(&index_path)
                 .map(|entries| {
-                    entries.filter_map(|e| e.ok()).any(|e| {
+                    entries.filter_map(std::result::Result::ok).any(|e| {
                         e.file_name()
                             .to_str()
                             .is_some_and(|n| n.ends_with(".managed.json") || n.starts_with("seg_"))
@@ -536,11 +547,10 @@ impl RecoveryManager {
 
         if let Some(holder) = GlobalLock::status(&self.ms_root)? {
             // Only break lock if process is confirmed dead (cross-platform check)
-            if !is_process_alive(holder.pid) {
-                if GlobalLock::break_lock(&self.ms_root)? {
+            if !is_process_alive(holder.pid)
+                && GlobalLock::break_lock(&self.ms_root)? {
                     report.fixed += 1;
                 }
-            }
         }
         Ok(())
     }
@@ -575,11 +585,10 @@ impl RecoveryManager {
                 let path = entry.path();
                 if let Some(name) = path.file_name().and_then(|n| n.to_str()) {
                     // Clean up temp files
-                    if name.starts_with(".tmp") || name.ends_with(".tmp") {
-                        if tombstone_file(&self.ms_root, &path, "cache").is_ok() {
+                    if (name.starts_with(".tmp") || name.ends_with(".tmp"))
+                        && tombstone_file(&self.ms_root, &path, "cache").is_ok() {
                             report.cache_invalidated += 1;
                         }
-                    }
                 }
             }
         }
@@ -599,7 +608,7 @@ fn is_process_alive(pid: u32) -> bool {
     // On Linux, check /proc/{pid} for efficiency and safety
     #[cfg(target_os = "linux")]
     {
-        let proc_path = format!("/proc/{}", pid);
+        let proc_path = format!("/proc/{pid}");
         if std::path::Path::new("/proc").is_dir() {
             return std::path::Path::new(&proc_path).exists();
         }
@@ -618,11 +627,7 @@ fn is_process_alive(pid: u32) -> bool {
                 // kill -0 typically returns 1 for both.
                 // We check stderr for clues, though this is heuristic.
                 let stderr = String::from_utf8_lossy(&output.stderr).to_lowercase();
-                if stderr.contains("denied") || stderr.contains("permitted") {
-                    true
-                } else {
-                    false
-                }
+                stderr.contains("denied") || stderr.contains("permitted")
             }
         }
         Err(_) => {
@@ -741,8 +746,9 @@ impl Checkpoint {
     }
 
     /// Retrieve a state value.
+    #[must_use] 
     pub fn get_state(&self, key: &str) -> Option<&str> {
-        self.state.get(key).map(|s| s.as_str())
+        self.state.get(key).map(std::string::String::as_str)
     }
 
     /// Sanitize an operation ID for safe use in filenames.
@@ -775,14 +781,14 @@ impl Checkpoint {
 
         let checkpoints_dir = ms_root.join("checkpoints");
         std::fs::create_dir_all(&checkpoints_dir)
-            .map_err(|e| MsError::Config(format!("Failed to create checkpoints dir: {}", e)))?;
+            .map_err(|e| MsError::Config(format!("Failed to create checkpoints dir: {e}")))?;
 
-        let path = checkpoints_dir.join(format!("{}.json", safe_id));
+        let path = checkpoints_dir.join(format!("{safe_id}.json"));
         let json = serde_json::to_string_pretty(self)
-            .map_err(|e| MsError::Config(format!("Failed to serialize checkpoint: {}", e)))?;
+            .map_err(|e| MsError::Config(format!("Failed to serialize checkpoint: {e}")))?;
 
         std::fs::write(&path, json)
-            .map_err(|e| MsError::Config(format!("Failed to write checkpoint: {}", e)))?;
+            .map_err(|e| MsError::Config(format!("Failed to write checkpoint: {e}")))?;
 
         Ok(())
     }
@@ -793,16 +799,16 @@ impl Checkpoint {
 
         let path = ms_root
             .join("checkpoints")
-            .join(format!("{}.json", safe_id));
+            .join(format!("{safe_id}.json"));
         if !path.exists() {
             return Ok(None);
         }
 
         let json = std::fs::read_to_string(&path)
-            .map_err(|e| MsError::Config(format!("Failed to read checkpoint: {}", e)))?;
+            .map_err(|e| MsError::Config(format!("Failed to read checkpoint: {e}")))?;
 
         let checkpoint: Self = serde_json::from_str(&json)
-            .map_err(|e| MsError::Config(format!("Failed to parse checkpoint: {}", e)))?;
+            .map_err(|e| MsError::Config(format!("Failed to parse checkpoint: {e}")))?;
 
         Ok(Some(checkpoint))
     }
@@ -813,13 +819,13 @@ impl Checkpoint {
 
         let path = ms_root
             .join("checkpoints")
-            .join(format!("{}.json", safe_id));
+            .join(format!("{safe_id}.json"));
         if !path.exists() {
             return Ok(false);
         }
 
         tombstone_file(ms_root, &path, "checkpoints")
-            .map_err(|e| MsError::Config(format!("Failed to tombstone checkpoint: {}", e)))?;
+            .map_err(|e| MsError::Config(format!("Failed to tombstone checkpoint: {e}")))?;
 
         Ok(true)
     }
@@ -831,7 +837,7 @@ fn tombstone_file(ms_root: &Path, path: &Path, bucket: &str) -> Result<()> {
     }
     let tombstones = ms_root.join("tombstones").join(bucket);
     std::fs::create_dir_all(&tombstones)
-        .map_err(|e| MsError::Config(format!("Failed to create tombstones dir: {}", e)))?;
+        .map_err(|e| MsError::Config(format!("Failed to create tombstones dir: {e}")))?;
     let name = path
         .file_name()
         .ok_or_else(|| MsError::Config("Invalid tombstone file name".to_string()))?;

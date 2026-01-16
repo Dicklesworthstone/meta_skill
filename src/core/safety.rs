@@ -32,7 +32,7 @@ pub struct DcgDecision {
 }
 
 impl DcgDecision {
-    fn allowed(reason: String) -> Self {
+    const fn allowed(reason: String) -> Self {
         Self {
             allowed: true,
             tier: SafetyTier::Safe,
@@ -50,6 +50,7 @@ impl DcgDecision {
     /// This returns `allowed: false` (fail-closed) because when the safety
     /// system cannot evaluate a command, we must assume it could be dangerous.
     /// This is a fundamental security principle: fail-closed, not fail-open.
+    #[must_use] 
     pub fn unavailable(reason: String) -> Self {
         Self {
             allowed: false,
@@ -71,7 +72,8 @@ pub struct DcgGuard {
 }
 
 impl DcgGuard {
-    pub fn new(dcg_bin: PathBuf, packs: Vec<String>, explain_format: String) -> Self {
+    #[must_use] 
+    pub const fn new(dcg_bin: PathBuf, packs: Vec<String>, explain_format: String) -> Self {
         Self {
             dcg_bin,
             packs,
@@ -79,6 +81,7 @@ impl DcgGuard {
         }
     }
 
+    #[must_use] 
     pub fn version(&self) -> Option<String> {
         let output = Command::new(&self.dcg_bin).arg("--version").output().ok()?;
         if !output.status.success() {

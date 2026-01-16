@@ -13,7 +13,7 @@ use sha2::{Digest, Sha256};
 
 use crate::error::{MsError, Result};
 
-/// Format a SystemTime as RFC3339 string
+/// Format a `SystemTime` as RFC3339 string
 fn format_time(time: SystemTime) -> String {
     let datetime: DateTime<Utc> = time.into();
     datetime.to_rfc3339()
@@ -79,7 +79,8 @@ pub struct FileStatus {
 
 impl FileStatus {
     /// Check if this file requires user attention
-    pub fn needs_attention(&self) -> bool {
+    #[must_use] 
+    pub const fn needs_attention(&self) -> bool {
         matches!(
             self.status,
             ModificationStatus::Modified
@@ -120,23 +121,27 @@ pub struct ModificationSummary {
 
 impl ModificationSummary {
     /// Total number of files
-    pub fn total(&self) -> usize {
+    #[must_use] 
+    pub const fn total(&self) -> usize {
         self.clean + self.modified + self.new + self.deleted + self.conflict
     }
 
     /// Check if any files need attention
-    pub fn needs_attention(&self) -> bool {
+    #[must_use] 
+    pub const fn needs_attention(&self) -> bool {
         self.modified > 0 || self.deleted > 0 || self.conflict > 0
     }
 }
 
 impl SkillModificationReport {
     /// Check if any files in this skill need attention
-    pub fn needs_attention(&self) -> bool {
+    #[must_use] 
+    pub const fn needs_attention(&self) -> bool {
         self.summary.needs_attention()
     }
 
     /// Get list of modified files
+    #[must_use] 
     pub fn modified_files(&self) -> Vec<&FileStatus> {
         self.files
             .iter()
@@ -145,6 +150,7 @@ impl SkillModificationReport {
     }
 
     /// Get list of files in conflict
+    #[must_use] 
     pub fn conflicting_files(&self) -> Vec<&FileStatus> {
         self.files
             .iter()
@@ -188,6 +194,7 @@ pub fn hash_file(path: &Path) -> Result<String> {
 }
 
 /// Compute SHA256 hash of bytes
+#[must_use] 
 pub fn hash_bytes(data: &[u8]) -> String {
     let mut hasher = Sha256::new();
     hasher.update(data);
@@ -206,7 +213,7 @@ pub fn hash_directory(path: &Path) -> Result<HashMap<PathBuf, String>> {
     for entry in walkdir::WalkDir::new(path)
         .follow_links(false)
         .into_iter()
-        .filter_map(|e| e.ok())
+        .filter_map(std::result::Result::ok)
     {
         if entry.file_type().is_file() {
             let rel_path = entry
@@ -251,8 +258,8 @@ pub fn detect_modifications(
                 status,
                 current_hash: Some(current_hash.clone()),
                 expected_hash: Some(expected_hash.clone()),
-                size: metadata.as_ref().map(|m| m.len()),
-                modified_at: metadata.and_then(|m| m.modified().ok().map(|t| format_time(t))),
+                size: metadata.as_ref().map(std::fs::Metadata::len),
+                modified_at: metadata.and_then(|m| m.modified().ok().map(format_time)),
             });
         } else {
             summary.deleted += 1;
@@ -279,8 +286,8 @@ pub fn detect_modifications(
                 status: ModificationStatus::New,
                 current_hash: Some(current_hash.clone()),
                 expected_hash: None,
-                size: metadata.as_ref().map(|m| m.len()),
-                modified_at: metadata.and_then(|m| m.modified().ok().map(|t| format_time(t))),
+                size: metadata.as_ref().map(std::fs::Metadata::len),
+                modified_at: metadata.and_then(|m| m.modified().ok().map(format_time)),
             });
         }
     }
@@ -309,6 +316,7 @@ pub fn detect_modifications(
 }
 
 /// Detect conflicts between local files and incoming bundle
+#[must_use] 
 pub fn detect_conflicts(
     skill_path: &Path,
     skill_id: &str,
@@ -329,7 +337,7 @@ pub fn detect_conflicts(
                     local_hash: local_hash.clone(),
                     bundle_hash: bundle_hash.clone(),
                     local_is_newer: true, // Conservative default
-                    local_size: local_meta.as_ref().map(|m| m.len()).unwrap_or(0),
+                    local_size: local_meta.as_ref().map(std::fs::Metadata::len).unwrap_or(0),
                     bundle_size: 0, // Would need bundle content to determine
                 });
             }
@@ -451,7 +459,8 @@ pub struct ResolutionResult {
 }
 
 impl ResolutionResult {
-    pub fn new() -> Self {
+    #[must_use] 
+    pub const fn new() -> Self {
         Self {
             kept_local: Vec::new(),
             replaced: Vec::new(),
@@ -461,6 +470,7 @@ impl ResolutionResult {
     }
 
     /// Check if all conflicts were resolved
+    #[must_use] 
     pub fn is_complete(&self) -> bool {
         self.unresolved.is_empty()
     }

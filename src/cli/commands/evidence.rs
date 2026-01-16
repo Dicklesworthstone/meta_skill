@@ -143,8 +143,7 @@ fn run_export(ctx: &AppContext, args: &ExportEvidenceArgs) -> Result<()> {
         "dot" => export_dot(&filtered)?,
         other => {
             return Err(MsError::Config(format!(
-                "unsupported export format: {} (use json or dot)",
-                other
+                "unsupported export format: {other} (use json or dot)"
             )));
         }
     };
@@ -152,10 +151,10 @@ fn run_export(ctx: &AppContext, args: &ExportEvidenceArgs) -> Result<()> {
     if let Some(ref path) = args.output {
         std::fs::write(path, &output)?;
         if !ctx.robot_mode {
-            println!("Exported to: {}", path);
+            println!("Exported to: {path}");
         }
     } else {
-        println!("{}", output);
+        println!("{output}");
     }
 
     Ok(())
@@ -171,7 +170,7 @@ fn show_evidence_index_human(
     index: &crate::core::SkillEvidenceIndex,
     show_excerpts: bool,
 ) -> Result<()> {
-    println!("{}", format!("Evidence for: {}", skill_name).bold());
+    println!("{}", format!("Evidence for: {skill_name}").bold());
     println!("{}", "═".repeat(50));
     println!();
 
@@ -250,8 +249,7 @@ fn show_evidence_index_human(
     println!(
         "{}",
         format!(
-            "Jump to source: ms evidence show {} --rule <rule-id>",
-            skill_id
+            "Jump to source: ms evidence show {skill_id} --rule <rule-id>"
         )
         .dimmed()
     );
@@ -267,7 +265,7 @@ fn show_rule_evidence_human(
 ) -> Result<()> {
     println!(
         "{}",
-        format!("Evidence for {}/{}", skill_id, rule_id).bold()
+        format!("Evidence for {skill_id}/{rule_id}").bold()
     );
     println!("{}", "═".repeat(50));
     println!();
@@ -308,7 +306,7 @@ fn show_rule_evidence_human(
                 println!();
                 println!("  {}", "─".repeat(40).dimmed());
                 for line in excerpt.lines().take(5) {
-                    println!("  {}", line);
+                    println!("  {line}");
                 }
                 if excerpt.lines().count() > 5 {
                     println!("  {}", "...".dimmed());
@@ -425,7 +423,7 @@ fn export_json(records: &[crate::storage::sqlite::EvidenceRecord]) -> Result<Str
         "edges": build_edges(records),
     });
     serde_json::to_string_pretty(&graph)
-        .map_err(|e| MsError::Serialization(format!("JSON export failed: {}", e)))
+        .map_err(|e| MsError::Serialization(format!("JSON export failed: {e}")))
 }
 
 fn export_dot(records: &[crate::storage::sqlite::EvidenceRecord]) -> Result<String> {
@@ -449,8 +447,7 @@ fn export_dot(records: &[crate::storage::sqlite::EvidenceRecord]) -> Result<Stri
     dot.push_str("  // Skills\n");
     for skill in &skills {
         dot.push_str(&format!(
-            "  \"skill:{}\" [label=\"{}\" color=blue style=filled fillcolor=lightblue];\n",
-            skill, skill
+            "  \"skill:{skill}\" [label=\"{skill}\" color=blue style=filled fillcolor=lightblue];\n"
         ));
     }
 
@@ -459,8 +456,7 @@ fn export_dot(records: &[crate::storage::sqlite::EvidenceRecord]) -> Result<Stri
     for session in &sessions {
         let short_id = truncate_string(session, 12);
         dot.push_str(&format!(
-            "  \"session:{}\" [label=\"{}\" color=green style=filled fillcolor=lightgreen];\n",
-            session, short_id
+            "  \"session:{session}\" [label=\"{short_id}\" color=green style=filled fillcolor=lightgreen];\n"
         ));
     }
 

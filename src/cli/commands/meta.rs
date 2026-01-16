@@ -190,7 +190,7 @@ fn run_show(ctx: &AppContext, args: &ShowArgs) -> Result<()> {
         println!("  ID: {}", meta_skill.id);
         println!("  Version: {}", meta_skill.metadata.version);
         if let Some(author) = &meta_skill.metadata.author {
-            println!("  Author: {}", author);
+            println!("  Author: {author}");
         }
         println!("  Tags: {}", meta_skill.metadata.tags.join(", "));
         println!("  Tech Stacks: {}", meta_skill.metadata.tech_stacks.join(", "));
@@ -286,7 +286,7 @@ fn run_load(ctx: &AppContext, args: &LoadArgs) -> Result<()> {
                 let slice_info = skip
                     .slice_id
                     .as_ref()
-                    .map(|s| format!(":{}", s))
+                    .map(|s| format!(":{s}"))
                     .unwrap_or_default();
                 println!(
                     "  - {}{}: {:?}",
@@ -327,20 +327,18 @@ fn run_search(ctx: &AppContext, args: &SearchArgs) -> Result<()> {
             })
             .collect();
         println!("{}", serde_json::to_string_pretty(&json_results)?);
+    } else if results.is_empty() {
+        println!("No meta-skills found matching '{}'", args.query);
     } else {
-        if results.is_empty() {
-            println!("No meta-skills found matching '{}'", args.query);
-        } else {
-            println!(
-                "{} result(s) for '{}':\n",
-                results.len().to_string().bold(),
-                args.query
-            );
-            for ms in results {
-                println!("  {} - {}", ms.id.cyan(), ms.name);
-                println!("    {}", truncate(&ms.description, 60).dimmed());
-                println!();
-            }
+        println!(
+            "{} result(s) for '{}':\n",
+            results.len().to_string().bold(),
+            args.query
+        );
+        for ms in results {
+            println!("  {} - {}", ms.id.cyan(), ms.name);
+            println!("    {}", truncate(&ms.description, 60).dimmed());
+            println!();
         }
     }
 
@@ -498,7 +496,7 @@ ms meta bootstrap
 "#;
 
     let spec = crate::core::spec_lens::parse_markdown(content)
-        .map_err(|e| crate::error::MsError::ValidationFailed(format!("Failed to parse meta skill: {}", e)))?;
+        .map_err(|e| crate::error::MsError::ValidationFailed(format!("Failed to parse meta skill: {e}")))?;
     
     // Use 2PC to ensure consistency
     let tx_mgr = crate::storage::TxManager::new(

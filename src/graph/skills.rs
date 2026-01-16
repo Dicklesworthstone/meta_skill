@@ -148,7 +148,7 @@ fn quality_to_priority(score: f64) -> Priority {
     }
 }
 
-fn skill_status(skill: &SkillRecord) -> IssueStatus {
+const fn skill_status(skill: &SkillRecord) -> IssueStatus {
     if skill.is_deprecated {
         IssueStatus::Closed
     } else {

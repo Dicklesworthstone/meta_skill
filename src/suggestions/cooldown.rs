@@ -45,7 +45,8 @@ pub struct SuggestionCooldownCache {
 }
 
 impl SuggestionCooldownCache {
-    pub fn new() -> Self {
+    #[must_use] 
+    pub const fn new() -> Self {
         Self {
             entries: Vec::new(),
         }
@@ -59,6 +60,7 @@ impl SuggestionCooldownCache {
         cooldown_storage::save_cache(path, self)
     }
 
+    #[must_use] 
     pub fn stats(&self) -> CooldownStats {
         let now = Utc::now();
         let mut active = 0usize;
@@ -77,6 +79,7 @@ impl SuggestionCooldownCache {
         }
     }
 
+    #[must_use] 
     pub fn status(&self, fingerprint: u64, skill_id: &str) -> CooldownStatus {
         let now = Utc::now();
         let Some(entry) = self

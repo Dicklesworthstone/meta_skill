@@ -63,7 +63,7 @@ pub struct BundleBlob {
 impl BundlePackage {
     pub fn build(mut manifest: BundleManifest, root: &Path) -> Result<Self> {
         let mut blobs = Vec::new();
-        for skill in manifest.skills.iter_mut() {
+        for skill in &mut manifest.skills {
             let skill_path = root.join(&skill.path);
             let bytes = build_blob_bytes(&skill_path)?;
             let hash = hash_bytes(&bytes);
@@ -226,6 +226,7 @@ impl BundlePackage {
     }
 }
 
+#[must_use] 
 pub fn missing_blobs(manifest: &BundleManifest, store: &BlobStore) -> Vec<String> {
     manifest
         .skills
@@ -275,7 +276,7 @@ fn bundle_checksum(manifest: &BundleManifest, blobs: &[BundleBlob]) -> Result<St
     hasher.update(toml.as_bytes());
 
     let mut blob_hashes = blobs.iter().map(|b| b.hash.as_str()).collect::<Vec<_>>();
-    blob_hashes.sort();
+    blob_hashes.sort_unstable();
     for hash in blob_hashes {
         hasher.update(hash.as_bytes());
     }

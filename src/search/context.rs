@@ -1,6 +1,6 @@
 //! Context-aware search ranking and filtering
 //!
-//! Provides SearchContext for personalized ranking and SearchFilters
+//! Provides `SearchContext` for personalized ranking and `SearchFilters`
 //! for structured result filtering.
 
 use serde::{Deserialize, Serialize};
@@ -32,6 +32,7 @@ pub enum SearchLayer {
 
 impl SearchLayer {
     /// Parse from string
+    #[must_use] 
     pub fn from_str(s: &str) -> Option<Self> {
         match s.to_lowercase().as_str() {
             "base" | "system" => Some(Self::Base),
@@ -43,7 +44,8 @@ impl SearchLayer {
     }
 
     /// Convert to string
-    pub fn as_str(&self) -> &'static str {
+    #[must_use] 
+    pub const fn as_str(&self) -> &'static str {
         match self {
             Self::Base => "base",
             Self::Org => "org",
@@ -84,11 +86,13 @@ pub struct SearchFilters {
 
 impl SearchFilters {
     /// Create new empty filters
+    #[must_use] 
     pub fn new() -> Self {
         Self::default()
     }
 
     /// Create filters with tags
+    #[must_use] 
     pub fn with_tags(tags: Vec<String>) -> Self {
         Self {
             tags,
@@ -97,6 +101,7 @@ impl SearchFilters {
     }
 
     /// Create filters with layer
+    #[must_use] 
     pub fn with_layer(layer: SearchLayer) -> Self {
         Self {
             layer: Some(layer),
@@ -105,6 +110,7 @@ impl SearchFilters {
     }
 
     /// Create filters with minimum quality
+    #[must_use] 
     pub fn with_min_quality(min_quality: f32) -> Self {
         Self {
             min_quality: Some(min_quality.clamp(0.0, 1.0)),
@@ -113,30 +119,35 @@ impl SearchFilters {
     }
 
     /// Builder: add tags filter
+    #[must_use] 
     pub fn tags(mut self, tags: Vec<String>) -> Self {
         self.tags = tags;
         self
     }
 
     /// Builder: add layer filter
-    pub fn layer(mut self, layer: SearchLayer) -> Self {
+    #[must_use] 
+    pub const fn layer(mut self, layer: SearchLayer) -> Self {
         self.layer = Some(layer);
         self
     }
 
     /// Builder: set minimum quality
-    pub fn min_quality(mut self, min_quality: f32) -> Self {
+    #[must_use] 
+    pub const fn min_quality(mut self, min_quality: f32) -> Self {
         self.min_quality = Some(min_quality.clamp(0.0, 1.0));
         self
     }
 
     /// Builder: include deprecated skills
-    pub fn include_deprecated(mut self, include: bool) -> Self {
+    #[must_use] 
+    pub const fn include_deprecated(mut self, include: bool) -> Self {
         self.include_deprecated = include;
         self
     }
 
     /// Check if filters are empty (no filtering will occur)
+    #[must_use] 
     pub fn is_empty(&self) -> bool {
         self.tags.is_empty()
             && self.layer.is_none()
@@ -151,6 +162,7 @@ impl SearchFilters {
     /// * `skill_layer` - Layer the skill is from
     /// * `skill_quality` - Quality score (0.0 - 1.0)
     /// * `is_deprecated` - Whether the skill is deprecated
+    #[must_use] 
     pub fn matches(
         &self,
         skill_tags: &[String],
@@ -197,6 +209,7 @@ impl SearchFilters {
     }
 
     /// Parse tags from comma-separated string
+    #[must_use] 
     pub fn parse_tags(tags_str: &str) -> Vec<String> {
         tags_str
             .split(',')
@@ -227,6 +240,7 @@ pub struct FilterResult {
 
 impl FilterResult {
     /// Create new filter result tracking
+    #[must_use] 
     pub fn new(total_before: usize, filters: &SearchFilters) -> Self {
         Self {
             total_before,

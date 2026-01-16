@@ -39,7 +39,7 @@ pub struct SuggestArgs {
 }
 
 pub fn run(ctx: &AppContext, args: &SuggestArgs) -> Result<()> {
-    let cwd = args.cwd.as_ref().map(|v| v.into());
+    let cwd = args.cwd.as_ref().map(std::convert::Into::into);
     let capture = ContextCapture::capture_current(cwd)?;
     let fingerprint = ContextFingerprint::capture(&capture);
 
@@ -52,8 +52,7 @@ pub fn run(ctx: &AppContext, args: &SuggestArgs) -> Result<()> {
             Err(e) => {
                 if !ctx.robot_mode {
                     eprintln!(
-                        "Warning: Failed to load cooldown cache: {}. Starting with empty cache.",
-                        e
+                        "Warning: Failed to load cooldown cache: {e}. Starting with empty cache."
                     );
                 }
                 SuggestionCooldownCache::new()
@@ -97,8 +96,7 @@ pub fn run(ctx: &AppContext, args: &SuggestArgs) -> Result<()> {
             Err(e) => {
                 if !ctx.robot_mode {
                     eprintln!(
-                        "Warning: Failed to load bandit state: {}. Starting with new state.",
-                        e
+                        "Warning: Failed to load bandit state: {e}. Starting with new state."
                     );
                 }
                 SignalBandit::new()

@@ -18,7 +18,7 @@ pub struct QualityArgs {
     #[arg(long)]
     pub all: bool,
 
-    /// Update stored quality_score in SQLite
+    /// Update stored `quality_score` in `SQLite`
     #[arg(long)]
     pub update: bool,
 }
@@ -86,7 +86,7 @@ pub fn run(ctx: &AppContext, args: &QualityArgs) -> Result<()> {
 
         if args.update {
             ctx.db
-                .update_skill_quality(&skill_id, score.overall as f64)?;
+                .update_skill_quality(&skill_id, f64::from(score.overall))?;
         }
 
         let output = QualityOutput {

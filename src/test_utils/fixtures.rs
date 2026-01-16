@@ -8,12 +8,19 @@ pub struct UnitTestFixture {
     pub data_path: PathBuf,
 }
 
+impl Default for UnitTestFixture {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl UnitTestFixture {
+    #[must_use] 
     pub fn new() -> Self {
         let temp_dir = TempDir::new().expect("Failed to create temp dir");
         let data_path = temp_dir.path().to_path_buf();
 
-        println!("[FIXTURE] Created temp directory: {:?}", data_path);
+        println!("[FIXTURE] Created temp directory: {data_path:?}");
 
         Self {
             temp_dir,
@@ -22,6 +29,7 @@ impl UnitTestFixture {
     }
 
     /// Create a test file with content.
+    #[must_use] 
     pub fn create_file(&self, relative_path: &str, content: &str) -> PathBuf {
         let full_path = self.data_path.join(relative_path);
         if let Some(parent) = full_path.parent() {
@@ -37,8 +45,9 @@ impl UnitTestFixture {
     }
 
     /// Create a test skill file.
+    #[must_use] 
     pub fn create_skill(&self, name: &str, content: &str) -> PathBuf {
-        self.create_file(&format!("skills/{}/SKILL.md", name), content)
+        self.create_file(&format!("skills/{name}/SKILL.md"), content)
     }
 }
 

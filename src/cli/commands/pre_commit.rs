@@ -52,7 +52,7 @@ pub fn run(ctx: &AppContext, args: &PreCommitArgs) -> Result<()> {
     }
 
     println!("UBS: {} finding(s).", result.findings.len());
-    for finding in result.findings.iter() {
+    for finding in &result.findings {
         println!(
             "- {}:{}:{} {}",
             finding.file.display(),
@@ -61,7 +61,7 @@ pub fn run(ctx: &AppContext, args: &PreCommitArgs) -> Result<()> {
             finding.message
         );
         if let Some(fix) = &finding.suggested_fix {
-            println!("  {}", fix);
+            println!("  {fix}");
         }
     }
 

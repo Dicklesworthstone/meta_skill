@@ -1,6 +1,7 @@
 //! Output formatting utilities
 
 /// Truncate a string to a maximum length
+#[must_use] 
 pub fn truncate_string(s: &str, max_len: usize) -> String {
     let mut out = String::new();
     for (idx, ch) in s.chars().enumerate() {
@@ -25,6 +26,7 @@ pub fn truncate_string(s: &str, max_len: usize) -> String {
 }
 
 /// Format size in human-readable form
+#[must_use] 
 pub fn format_size(bytes: u64) -> String {
     const KB: u64 = 1024;
     const MB: u64 = KB * 1024;
@@ -37,18 +39,19 @@ pub fn format_size(bytes: u64) -> String {
     } else if bytes >= KB {
         format!("{:.1} KB", bytes as f64 / KB as f64)
     } else {
-        format!("{} B", bytes)
+        format!("{bytes} B")
     }
 }
 
 /// Format duration in human-readable form
+#[must_use] 
 pub fn format_duration(secs: u64) -> String {
     if secs >= 3600 {
         format!("{}h {}m", secs / 3600, (secs % 3600) / 60)
     } else if secs >= 60 {
         format!("{}m {}s", secs / 60, secs % 60)
     } else {
-        format!("{}s", secs)
+        format!("{secs}s")
     }
 }
 

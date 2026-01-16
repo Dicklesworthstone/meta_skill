@@ -98,7 +98,7 @@ fn render_human(reports: &[crate::testing::SkillTestReport]) {
             layout.push_line(line);
             if !result.failures.is_empty() {
                 for failure in &result.failures {
-                    layout.push_line(format!("  - {}", failure));
+                    layout.push_line(format!("  - {failure}"));
                 }
             }
         }
@@ -111,9 +111,9 @@ fn render_human(reports: &[crate::testing::SkillTestReport]) {
 fn parse_tags(raw: Option<&str>) -> Vec<String> {
     raw.unwrap_or("")
         .split(',')
-        .map(|v| v.trim())
+        .map(str::trim)
         .filter(|v| !v.is_empty())
-        .map(|v| v.to_string())
+        .map(std::string::ToString::to_string)
         .collect()
 }
 
@@ -124,7 +124,7 @@ fn parse_duration(raw: &str) -> Option<std::time::Duration> {
     }
     let (value, suffix) = trimmed
         .chars()
-        .partition::<String, _>(|c| c.is_ascii_digit());
+        .partition::<String, _>(char::is_ascii_digit);
     let value: u64 = value.parse().ok()?;
     match suffix.as_str() {
         "ms" => Some(std::time::Duration::from_millis(value)),

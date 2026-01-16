@@ -44,10 +44,12 @@ impl AgentMailClient {
         })
     }
 
+    #[must_use] 
     pub fn agent_name(&self) -> &str {
         &self.agent_name
     }
 
+    #[must_use] 
     pub fn project_key(&self) -> &str {
         &self.project_key
     }

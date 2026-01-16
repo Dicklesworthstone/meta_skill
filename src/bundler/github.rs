@@ -94,7 +94,7 @@ pub fn publish_bundle(path: &Path, config: &GitHubConfig) -> Result<PublishResul
     let tag = config
         .tag
         .clone()
-        .unwrap_or_else(|| format!("v{}", version));
+        .unwrap_or_else(|| format!("v{version}"));
     let release_name = format!(
         "{} v{}",
         package.manifest.bundle.name, package.manifest.bundle.version
@@ -133,7 +133,7 @@ pub fn publish_bundle(path: &Path, config: &GitHubConfig) -> Result<PublishResul
     client.upload_release_asset(&upload_url, &asset_name, &bytes)?;
 
     Ok(PublishResult {
-        repo: format!("{}/{}", owner, repo_name),
+        repo: format!("{owner}/{repo_name}"),
         release_url: release.html_url,
         asset_name,
         tag,
@@ -155,7 +155,7 @@ pub fn download_bundle(
     let release = match tag {
         Some(tag) => client
             .get_release_by_tag(&owner, &repo_name, tag)?
-            .ok_or_else(|| MsError::ValidationFailed(format!("release tag not found: {}", tag)))?,
+            .ok_or_else(|| MsError::ValidationFailed(format!("release tag not found: {tag}")))?,
         None => client.get_latest_release(&owner, &repo_name)?,
     };
 
@@ -163,7 +163,7 @@ pub fn download_bundle(
     let bytes = client.download_release_asset(&owner, &repo_name, asset.id)?;
 
     Ok(DownloadResult {
-        repo: format!("{}/{}", owner, repo_name),
+        repo: format!("{owner}/{repo_name}"),
         asset_name: asset.name,
         tag: release.tag_name,
         bytes,
@@ -200,7 +200,7 @@ fn select_asset(assets: &[ReleaseAsset], requested: Option<&str>) -> Result<Rele
             .iter()
             .find(|asset| asset.name == name)
             .cloned()
-            .ok_or_else(|| MsError::ValidationFailed(format!("bundle asset not found: {}", name)));
+            .ok_or_else(|| MsError::ValidationFailed(format!("bundle asset not found: {name}")));
     }
 
     let mut candidates = assets
@@ -236,15 +236,13 @@ fn parse_repo(input: &str) -> Result<RepoRef> {
     let repo = parts.next().unwrap_or("").trim();
     if owner.is_empty() || repo.is_empty() {
         return Err(MsError::ValidationFailed(format!(
-            "invalid repo reference: {}",
-            input
+            "invalid repo reference: {input}"
         )));
     }
     for part in parts {
         if !part.trim().is_empty() {
             return Err(MsError::ValidationFailed(format!(
-                "invalid repo reference: {}",
-                input
+                "invalid repo reference: {input}"
             )));
         }
     }

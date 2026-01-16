@@ -250,22 +250,23 @@ impl Default for NoSecretsRule {
 
 impl NoSecretsRule {
     /// Create a new rule with custom entropy threshold.
-    pub fn with_entropy_threshold(mut self, threshold: f64) -> Self {
+    #[must_use] 
+    pub const fn with_entropy_threshold(mut self, threshold: f64) -> Self {
         self.entropy_threshold = threshold;
         self
     }
 }
 
 impl ValidationRule for NoSecretsRule {
-    fn id(&self) -> &str {
+    fn id(&self) -> &'static str {
         "no-secrets"
     }
 
-    fn name(&self) -> &str {
+    fn name(&self) -> &'static str {
         "No Hardcoded Secrets"
     }
 
-    fn description(&self) -> &str {
+    fn description(&self) -> &'static str {
         "Detects potential secrets, API keys, and credentials in skill content"
     }
 
@@ -310,7 +311,7 @@ impl ValidationRule for NoSecretsRule {
                 // Skip if already flagged by pattern matching
                 let span = byte_offset_to_span(&content, mat.start(), mat.end());
                 let already_flagged = diagnostics.iter().any(|d| {
-                    d.span.as_ref().map_or(false, |s| {
+                    d.span.as_ref().is_some_and(|s| {
                         s.start_line == span.start_line && s.start_col == span.start_col
                     })
                 });
@@ -320,8 +321,7 @@ impl ValidationRule for NoSecretsRule {
                         Diagnostic::warning(
                             self.id(),
                             format!(
-                                "High-entropy string detected (entropy: {:.2})",
-                                entropy
+                                "High-entropy string detected (entropy: {entropy:.2})"
                             ),
                         )
                         .with_span(span)
@@ -403,15 +403,15 @@ impl Default for NoPromptInjectionRule {
 }
 
 impl ValidationRule for NoPromptInjectionRule {
-    fn id(&self) -> &str {
+    fn id(&self) -> &'static str {
         "no-injection"
     }
 
-    fn name(&self) -> &str {
+    fn name(&self) -> &'static str {
         "No Prompt Injection"
     }
 
-    fn description(&self) -> &str {
+    fn description(&self) -> &'static str {
         "Detects potential prompt injection patterns in skill content"
     }
 
@@ -486,15 +486,15 @@ impl Default for SafePathsRule {
 }
 
 impl ValidationRule for SafePathsRule {
-    fn id(&self) -> &str {
+    fn id(&self) -> &'static str {
         "safe-paths"
     }
 
-    fn name(&self) -> &str {
+    fn name(&self) -> &'static str {
         "Safe File Paths"
     }
 
-    fn description(&self) -> &str {
+    fn description(&self) -> &'static str {
         "Checks for path traversal patterns and references to sensitive paths"
     }
 
@@ -540,7 +540,7 @@ impl ValidationRule for SafePathsRule {
                 diagnostics.push(
                     Diagnostic::warning(
                         self.id(),
-                        format!("Reference to sensitive path: {}", sens_path),
+                        format!("Reference to sensitive path: {sens_path}"),
                     )
                     .with_span(byte_offset_to_span(&content, idx, idx + sens_path.len()))
                     .with_suggestion("Avoid hardcoding sensitive system paths")
@@ -561,15 +561,15 @@ impl ValidationRule for SafePathsRule {
 pub struct InputSanitizationRule;
 
 impl ValidationRule for InputSanitizationRule {
-    fn id(&self) -> &str {
+    fn id(&self) -> &'static str {
         "input-sanitization"
     }
 
-    fn name(&self) -> &str {
+    fn name(&self) -> &'static str {
         "Input Sanitization Guidance"
     }
 
-    fn description(&self) -> &str {
+    fn description(&self) -> &'static str {
         "Checks that skills handling user input include sanitization guidance"
     }
 
@@ -627,6 +627,7 @@ impl ValidationRule for InputSanitizationRule {
 // =============================================================================
 
 /// Returns all security validation rules.
+#[must_use] 
 pub fn security_rules() -> Vec<Box<dyn ValidationRule>> {
     vec![
         Box::new(NoSecretsRule::default()),

@@ -35,18 +35,21 @@ pub struct ValidationConfig {
 
 impl ValidationConfig {
     /// Create a new default config
+    #[must_use] 
     pub fn new() -> Self {
         Self::default()
     }
 
     /// Enable strict mode
-    pub fn strict(mut self) -> Self {
+    #[must_use] 
+    pub const fn strict(mut self) -> Self {
         self.strict = true;
         self
     }
 
     /// Set max errors
-    pub fn with_max_errors(mut self, max: usize) -> Self {
+    #[must_use] 
+    pub const fn with_max_errors(mut self, max: usize) -> Self {
         self.max_errors = Some(max);
         self
     }
@@ -64,11 +67,13 @@ impl ValidationConfig {
     }
 
     /// Check if a rule is disabled
+    #[must_use] 
     pub fn is_rule_disabled(&self, rule_id: &str) -> bool {
         self.disabled_rules.contains(rule_id)
     }
 
     /// Get effective severity for a rule
+    #[must_use] 
     pub fn effective_severity(&self, rule_id: &str, default: Severity) -> Severity {
         let severity = self
             .severity_overrides
@@ -104,6 +109,7 @@ pub struct ValidationContext<'a> {
 
 impl<'a> ValidationContext<'a> {
     /// Create a minimal context for validation
+    #[must_use] 
     pub fn new(skill: &'a SkillSpec, config: &'a ValidationConfig) -> Self {
         Self {
             skill,
@@ -121,13 +127,15 @@ impl<'a> ValidationContext<'a> {
     }
 
     /// Set the source text
-    pub fn with_source(mut self, source: &'a str) -> Self {
+    #[must_use] 
+    pub const fn with_source(mut self, source: &'a str) -> Self {
         self.source = Some(source);
         self
     }
 
     /// Set the file path
-    pub fn with_file_path(mut self, path: &'a Path) -> Self {
+    #[must_use] 
+    pub const fn with_file_path(mut self, path: &'a Path) -> Self {
         self.file_path = Some(path);
         self
     }

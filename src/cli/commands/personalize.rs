@@ -190,7 +190,7 @@ fn run_extract(ctx: &AppContext, args: &ExtractArgs) -> Result<()> {
             "✓".green(),
             sessions.len()
         );
-        println!("  Saved to: {}", output_path);
+        println!("  Saved to: {output_path}");
         println!();
         print_style_summary(&style);
     }
@@ -221,10 +221,10 @@ fn load_style_profile(ctx: &AppContext, path: Option<&str>) -> Result<StyleProfi
     if let Some(path) = path {
         // Load from specified path
         let content = std::fs::read_to_string(path).map_err(|e| {
-            crate::error::MsError::Config(format!("failed to read style profile: {}", e))
+            crate::error::MsError::Config(format!("failed to read style profile: {e}"))
         })?;
         let style: StyleProfile = serde_json::from_str(&content).map_err(|e| {
-            crate::error::MsError::Config(format!("failed to parse style profile: {}", e))
+            crate::error::MsError::Config(format!("failed to parse style profile: {e}"))
         })?;
         return Ok(style);
     }
@@ -237,10 +237,10 @@ fn load_style_profile(ctx: &AppContext, path: Option<&str>) -> Result<StyleProfi
 
     if default_path.exists() {
         let content = std::fs::read_to_string(&default_path).map_err(|e| {
-            crate::error::MsError::Config(format!("failed to read style profile: {}", e))
+            crate::error::MsError::Config(format!("failed to read style profile: {e}"))
         })?;
         let style: StyleProfile = serde_json::from_str(&content).map_err(|e| {
-            crate::error::MsError::Config(format!("failed to parse style profile: {}", e))
+            crate::error::MsError::Config(format!("failed to parse style profile: {e}"))
         })?;
         return Ok(style);
     }
@@ -436,13 +436,13 @@ fn output_personalized_human(personalized: &PersonalizedSkill, output_path: Opti
     println!();
     println!("{}", "Adaptations applied:".dimmed());
     for adaptation in &personalized.adaptations_applied {
-        println!("  • {}", adaptation);
+        println!("  • {adaptation}");
     }
     println!();
 
     if let Some(path) = output_path {
         std::fs::write(path, &personalized.adapted_content)?;
-        println!("Saved to: {}", path);
+        println!("Saved to: {path}");
     } else {
         println!("{}", "Adapted content:".dimmed());
         println!("{}", "-".repeat(40));
@@ -508,7 +508,7 @@ fn print_style_summary(style: &StyleProfile) {
         println!("  (none detected)");
     } else {
         for tech in &style.tech_preferences {
-            println!("  • {}", tech);
+            println!("  • {tech}");
         }
     }
 }

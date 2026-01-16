@@ -4,7 +4,7 @@
 //! - Fetch sessions from CASS
 //! - Apply redaction and injection filters
 //! - Extract patterns and generalize
-//! - Synthesize SkillSpec and compile SKILL.md
+//! - Synthesize `SkillSpec` and compile SKILL.md
 //!
 //! When `--guided` is passed, uses the Brenner Method wizard for
 //! structured reasoning and high-quality skill extraction.
@@ -57,39 +57,40 @@ pub enum BuildPhase {
 
 impl BuildPhase {
     /// Get the next phase in the pipeline.
-    pub fn next(&self) -> Option<BuildPhase> {
+    #[must_use] 
+    pub const fn next(&self) -> Option<Self> {
         match self {
-            BuildPhase::SearchSessions => Some(BuildPhase::QualityFilter),
-            BuildPhase::QualityFilter => Some(BuildPhase::ExtractPatterns),
-            BuildPhase::ExtractPatterns => Some(BuildPhase::FilterPatterns),
-            BuildPhase::FilterPatterns => Some(BuildPhase::Synthesize),
-            BuildPhase::Synthesize => Some(BuildPhase::Complete),
-            BuildPhase::Complete | BuildPhase::Failed => None,
+            Self::SearchSessions => Some(Self::QualityFilter),
+            Self::QualityFilter => Some(Self::ExtractPatterns),
+            Self::ExtractPatterns => Some(Self::FilterPatterns),
+            Self::FilterPatterns => Some(Self::Synthesize),
+            Self::Synthesize => Some(Self::Complete),
+            Self::Complete | Self::Failed => None,
         }
     }
 
     /// Get phase weight for overall progress calculation.
-    fn weight(&self) -> f64 {
+    const fn weight(&self) -> f64 {
         match self {
-            BuildPhase::SearchSessions => 0.15,
-            BuildPhase::QualityFilter => 0.15,
-            BuildPhase::ExtractPatterns => 0.30,
-            BuildPhase::FilterPatterns => 0.15,
-            BuildPhase::Synthesize => 0.25,
-            BuildPhase::Complete | BuildPhase::Failed => 0.0,
+            Self::SearchSessions => 0.15,
+            Self::QualityFilter => 0.15,
+            Self::ExtractPatterns => 0.30,
+            Self::FilterPatterns => 0.15,
+            Self::Synthesize => 0.25,
+            Self::Complete | Self::Failed => 0.0,
         }
     }
 
     /// Get cumulative weight of all phases before this one.
-    fn cumulative_weight(&self) -> f64 {
+    const fn cumulative_weight(&self) -> f64 {
         match self {
-            BuildPhase::SearchSessions => 0.0,
-            BuildPhase::QualityFilter => 0.15,
-            BuildPhase::ExtractPatterns => 0.30,
-            BuildPhase::FilterPatterns => 0.60,
-            BuildPhase::Synthesize => 0.75,
-            BuildPhase::Complete => 1.0,
-            BuildPhase::Failed => 0.0,
+            Self::SearchSessions => 0.0,
+            Self::QualityFilter => 0.15,
+            Self::ExtractPatterns => 0.30,
+            Self::FilterPatterns => 0.60,
+            Self::Synthesize => 0.75,
+            Self::Complete => 1.0,
+            Self::Failed => 0.0,
         }
     }
 }
@@ -97,15 +98,15 @@ impl BuildPhase {
 impl std::fmt::Display for BuildPhase {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let name = match self {
-            BuildPhase::SearchSessions => "search_sessions",
-            BuildPhase::QualityFilter => "quality_filter",
-            BuildPhase::ExtractPatterns => "extract_patterns",
-            BuildPhase::FilterPatterns => "filter_patterns",
-            BuildPhase::Synthesize => "synthesize",
-            BuildPhase::Complete => "complete",
-            BuildPhase::Failed => "failed",
+            Self::SearchSessions => "search_sessions",
+            Self::QualityFilter => "quality_filter",
+            Self::ExtractPatterns => "extract_patterns",
+            Self::FilterPatterns => "filter_patterns",
+            Self::Synthesize => "synthesize",
+            Self::Complete => "complete",
+            Self::Failed => "failed",
         };
-        write!(f, "{}", name)
+        write!(f, "{name}")
     }
 }
 
@@ -135,6 +136,7 @@ impl Default for QualityGates {
 
 /// Persistent state for resumable builds.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Default)]
 pub struct BuildState {
     /// Session IDs that passed quality filter.
     pub qualified_session_ids: Vec<String>,
@@ -144,15 +146,6 @@ pub struct BuildState {
     pub patterns_filtered: usize,
 }
 
-impl Default for BuildState {
-    fn default() -> Self {
-        Self {
-            qualified_session_ids: Vec::new(),
-            patterns_extracted: 0,
-            patterns_filtered: 0,
-        }
-    }
-}
 
 /// State machine for autonomous build execution.
 pub struct BuildSession {
@@ -182,6 +175,7 @@ pub struct BuildSession {
 
 impl BuildSession {
     /// Create a new build session.
+    #[must_use] 
     pub fn new(query: &str, gates: QualityGates) -> Self {
         let session_id = format!("build-{}", chrono::Utc::now().format("%Y%m%d-%H%M%S"));
         let now = Instant::now();
@@ -203,18 +197,21 @@ impl BuildSession {
     }
 
     /// Set maximum duration for the build.
-    pub fn with_max_duration(mut self, duration: Duration) -> Self {
+    #[must_use] 
+    pub const fn with_max_duration(mut self, duration: Duration) -> Self {
         self.max_duration = Some(duration);
         self
     }
 
     /// Set checkpoint interval.
-    pub fn with_checkpoint_interval(mut self, interval: Duration) -> Self {
+    #[must_use] 
+    pub const fn with_checkpoint_interval(mut self, interval: Duration) -> Self {
         self.checkpoint_interval = Some(interval);
         self
     }
 
     /// Calculate overall progress (0.0-1.0).
+    #[must_use] 
     pub fn overall_progress(&self) -> f64 {
         let base = self.phase.cumulative_weight();
         let phase_contribution = self.phase.weight() * self.phase_progress;
@@ -222,7 +219,7 @@ impl BuildSession {
     }
 
     /// Advance to the next phase.
-    pub fn advance_phase(&mut self) {
+    pub const fn advance_phase(&mut self) {
         if let Some(next) = self.phase.next() {
             self.phase = next;
             self.phase_progress = 0.0;
@@ -230,11 +227,12 @@ impl BuildSession {
     }
 
     /// Mark the build as failed.
-    pub fn fail(&mut self) {
+    pub const fn fail(&mut self) {
         self.phase = BuildPhase::Failed;
     }
 
     /// Check if the build has timed out.
+    #[must_use] 
     pub fn is_timed_out(&self) -> bool {
         if let Some(max_duration) = self.max_duration {
             self.started_at.elapsed() >= max_duration
@@ -244,6 +242,7 @@ impl BuildSession {
     }
 
     /// Check if a checkpoint should be saved.
+    #[must_use] 
     pub fn should_checkpoint(&self) -> bool {
         if let Some(interval) = self.checkpoint_interval {
             self.last_checkpoint.elapsed() >= interval
@@ -303,13 +302,14 @@ impl BuildSession {
     }
 
     /// Get remaining time if duration is set.
+    #[must_use] 
     pub fn remaining_time(&self) -> Option<Duration> {
         self.max_duration.map(|max| {
             let elapsed = self.started_at.elapsed();
             if elapsed >= max {
                 Duration::ZERO
             } else {
-                max - elapsed
+                max.checked_sub(elapsed).unwrap()
             }
         })
     }
@@ -331,12 +331,11 @@ pub fn parse_duration(s: &str) -> Result<Duration> {
         } else {
             if current_num.is_empty() {
                 return Err(MsError::Config(format!(
-                    "Missing number before '{}' in duration",
-                    c
+                    "Missing number before '{c}' in duration"
                 )));
             }
             let num: u64 = current_num.parse().map_err(|_| {
-                MsError::Config(format!("Invalid number in duration: {}", current_num))
+                MsError::Config(format!("Invalid number in duration: {current_num}"))
             })?;
             current_num.clear();
 
@@ -346,8 +345,7 @@ pub fn parse_duration(s: &str) -> Result<Duration> {
                 's' => total_secs += num,
                 _ => {
                     return Err(MsError::Config(format!(
-                        "Invalid duration unit '{}'. Use h, m, or s.",
-                        c
+                        "Invalid duration unit '{c}'. Use h, m, or s."
                     )));
                 }
             }
@@ -358,7 +356,7 @@ pub fn parse_duration(s: &str) -> Result<Duration> {
     if !current_num.is_empty() {
         let num: u64 = current_num
             .parse()
-            .map_err(|_| MsError::Config(format!("Invalid number in duration: {}", current_num)))?;
+            .map_err(|_| MsError::Config(format!("Invalid number in duration: {current_num}")))?;
         // If no unit specified, assume minutes for backwards compatibility
         total_secs += num * 60;
     }
@@ -516,7 +514,8 @@ pub struct BuildCompletion {
 }
 
 impl BuildCompletion {
-    pub fn success(duration_secs: f64) -> Self {
+    #[must_use] 
+    pub const fn success(duration_secs: f64) -> Self {
         Self {
             duration_secs,
             success: true,
@@ -541,6 +540,7 @@ impl BuildCompletion {
     }
 
     /// Format as markdown for bead notes.
+    #[must_use] 
     pub fn to_markdown(&self) -> String {
         let mut md = String::new();
 
@@ -556,13 +556,12 @@ impl BuildCompletion {
             (self.tests_passed, self.tests_failed, self.tests_skipped)
         {
             md.push_str(&format!(
-                "**Tests:** {} passed, {} failed, {} skipped\n",
-                p, f, s
+                "**Tests:** {p} passed, {f} failed, {s} skipped\n"
             ));
         }
 
         if let Some(cov) = self.coverage_percent {
-            md.push_str(&format!("**Coverage:** {:.1}%\n", cov));
+            md.push_str(&format!("**Coverage:** {cov:.1}%\n"));
         }
 
         if let Some(err) = &self.error_summary {
@@ -580,10 +579,10 @@ impl BuildCompletion {
 
 /// Tracks build progress in a beads issue.
 ///
-/// When a bead_id is provided, this tracker:
-/// - Sets the issue to in_progress at build start
+/// When a `bead_id` is provided, this tracker:
+/// - Sets the issue to `in_progress` at build start
 /// - Closes the issue on successful build
-/// - Adds failure notes on build failure (keeps in_progress)
+/// - Adds failure notes on build failure (keeps `in_progress`)
 pub struct BeadsTracker {
     client: BeadsClient,
     bead_id: String,
@@ -595,6 +594,7 @@ impl BeadsTracker {
     /// Create a new tracker for the given bead ID.
     ///
     /// Returns None if beads is not available.
+    #[must_use] 
     pub fn new(bead_id: String, close_on_success: bool) -> Option<Self> {
         let client = BeadsClient::new();
         if !client.is_available() {
@@ -612,7 +612,7 @@ impl BeadsTracker {
         })
     }
 
-    /// Mark the bead as in_progress at build start.
+    /// Mark the bead as `in_progress` at build start.
     pub fn on_start(&self) -> Result<()> {
         match self
             .client
@@ -679,11 +679,11 @@ impl BeadsTracker {
         }
     }
 
-    /// Add failure note on build failure (keeps in_progress).
+    /// Add failure note on build failure (keeps `in_progress`).
     pub fn on_failure(&self, error: &str) -> Result<()> {
         let completion = BuildCompletion::failure(self.duration_secs(), error);
         match self.append_completion_note(&completion) {
-            Ok(_) => {
+            Ok(()) => {
                 eprintln!(
                     "{} {} updated with failure note",
                     "Bead:".yellow(),
@@ -739,8 +739,8 @@ pub fn run(ctx: &AppContext, args: &BuildArgs) -> Result<()> {
     }
 
     // Warn about risky flags
-    if (args.no_redact || args.no_injection_filter) && !args.auto && !args.guided {
-        if !ctx.robot_mode {
+    if (args.no_redact || args.no_injection_filter) && !args.auto && !args.guided
+        && !ctx.robot_mode {
             eprintln!(
                 "{} Using --no-redact or --no-injection-filter bypasses safety filters.",
                 "Warning:".yellow()
@@ -753,7 +753,6 @@ pub fn run(ctx: &AppContext, args: &BuildArgs) -> Result<()> {
                 return Err(MsError::Config("Build cancelled".into()));
             }
         }
-    }
 
     // Initialize CM client if --with-cm flag is set
     let cm_context = if args.with_cm {
@@ -932,7 +931,7 @@ fn run_guided(
             } else {
                 let mut cal = "# Calibration Notes\n\n".to_string();
                 for note in &draft.calibration {
-                    cal.push_str(&format!("- {}\n", note));
+                    cal.push_str(&format!("- {note}\n"));
                 }
                 cal
             };
@@ -953,10 +952,10 @@ fn run_guided(
         } => {
             println!("\n{} Build cancelled: {}", "Info:".yellow(), reason);
             if let Some(id) = checkpoint_id {
-                println!("  Resume with: ms build --resume {}", id);
+                println!("  Resume with: ms build --resume {id}");
             }
             if let Some(t) = tracker {
-                t.on_failure(&format!("Cancelled: {}", reason))?;
+                t.on_failure(&format!("Cancelled: {reason}"))?;
             }
         }
     }
@@ -977,7 +976,7 @@ fn run_auto(
 
     // Use query_override (from checkpoint resume) or fall back to args.from_cass
     let query = query_override
-        .map(|s| s.to_string())
+        .map(std::string::ToString::to_string)
         .or_else(|| args.from_cass.clone())
         .ok_or_else(|| MsError::Config("--from-cass is required for --auto builds".into()))?;
 
@@ -1032,13 +1031,13 @@ fn run_auto(
     } else {
         println!("{}", "Starting automatic build...".bold());
         println!("  Session: {}", session.session_id);
-        println!("  Query: {}", query);
+        println!("  Query: {query}");
         println!("  Sessions: {}", args.sessions);
         println!("  Min confidence: {:.0}%", args.min_confidence * 100.0);
         println!("  Min sessions: {}", session.gates.min_sessions);
         println!("  Min patterns: {}", session.gates.min_patterns);
         if let Some(ref d) = args.duration {
-            println!("  Duration limit: {}", d);
+            println!("  Duration limit: {d}");
         }
         println!("  Output: {}", output_dir.display());
         if let Some(cm_ctx) = cm_context {
@@ -1305,7 +1304,7 @@ fn run_auto(
     // Check quality gates before synthesis
     if let Err(gate_error) = session.check_quality_gates() {
         if let Some(t) = &tracker {
-            t.on_failure(&format!("Quality gate failed: {}", gate_error))?;
+            t.on_failure(&format!("Quality gate failed: {gate_error}"))?;
         }
         return output_gate_fail(ctx, &session, &gate_error);
     }
@@ -1401,7 +1400,7 @@ fn run_auto(
     }
 
     if let Some(t) = tracker {
-        t.on_success(&format!("Auto build: {}", query))?;
+        t.on_success(&format!("Auto build: {query}"))?;
     }
 
     Ok(())
@@ -1605,28 +1604,25 @@ fn run_resume(
     use crate::core::recovery::Checkpoint;
 
     // Try to load checkpoint
-    let checkpoint = match Checkpoint::load(&ctx.ms_root, session_id)? {
-        Some(cp) => cp,
-        None => {
-            if ctx.robot_mode {
-                let output = json!({
-                    "error": true,
-                    "code": "checkpoint_not_found",
-                    "session_id": session_id,
-                    "message": format!("No checkpoint found for session: {}", session_id),
-                });
-                println!("{}", serde_json::to_string_pretty(&output)?);
-            } else {
-                println!(
-                    "{} No checkpoint found for session: {}",
-                    "Error:".red(),
-                    session_id
-                );
-                println!("\nTo list available checkpoints:");
-                println!("  ls {}/.ms/checkpoints/", ctx.ms_root.display());
-            }
-            return Ok(());
+    let checkpoint = if let Some(cp) = Checkpoint::load(&ctx.ms_root, session_id)? { cp } else {
+        if ctx.robot_mode {
+            let output = json!({
+                "error": true,
+                "code": "checkpoint_not_found",
+                "session_id": session_id,
+                "message": format!("No checkpoint found for session: {}", session_id),
+            });
+            println!("{}", serde_json::to_string_pretty(&output)?);
+        } else {
+            println!(
+                "{} No checkpoint found for session: {}",
+                "Error:".red(),
+                session_id
+            );
+            println!("\nTo list available checkpoints:");
+            println!("  ls {}/.ms/checkpoints/", ctx.ms_root.display());
         }
+        return Ok(());
     };
 
     // Validate checkpoint is for a build operation
@@ -1666,16 +1662,16 @@ fn run_resume(
         println!("{}", serde_json::to_string_pretty(&output)?);
     } else {
         println!("{}", "Resuming build from checkpoint...".bold());
-        println!("  Session: {}", session_id);
+        println!("  Session: {session_id}");
         println!("  Phase: {}", checkpoint.phase);
         println!("  Progress: {:.0}%", checkpoint.progress * 100.0);
         println!("  Created: {}", checkpoint.created_at);
 
         if let Some(query) = checkpoint.get_state("query") {
-            println!("  Query: {}", query);
+            println!("  Query: {query}");
         }
         if let Some(sessions) = checkpoint.get_state("sessions_processed") {
-            println!("  Sessions processed: {}", sessions);
+            println!("  Sessions processed: {sessions}");
         }
     }
 
@@ -1732,7 +1728,7 @@ fn run_resume(
 
                 // Resume by restarting with same parameters, using query from checkpoint
                 // (full incremental resume would require more state)
-                return run_auto(ctx, args, cm_context.as_ref(), tracker, Some(&query));
+                return run_auto(ctx, args, cm_context.as_ref(), tracker, Some(query));
             }
         }
         _ => {
@@ -1856,7 +1852,7 @@ fn run_resolve_uncertainties(ctx: &AppContext, args: &BuildArgs) -> Result<()> {
                 description.chars().take(50).collect::<String>(),
                 item.confidence * 100.0
             );
-            println!("     Reason: {}", reason_str);
+            println!("     Reason: {reason_str}");
             println!("     Queries: {}", item.suggested_queries.len());
             println!("     ID: {}", item.id);
             println!();
@@ -1884,12 +1880,12 @@ fn run_resolve_uncertainties(ctx: &AppContext, args: &BuildArgs) -> Result<()> {
         let mut rejected_count = 0;
         let mut updated_items = items.clone();
 
-        for item in pending_items.into_iter() {
+        for item in pending_items {
             let mut item = item.clone();
 
             // Execute unexecuted queries
             let mut new_sessions = Vec::new();
-            for query in item.suggested_queries.iter_mut() {
+            for query in &mut item.suggested_queries {
                 if query.executed {
                     continue;
                 }
@@ -1920,14 +1916,13 @@ fn run_resolve_uncertainties(ctx: &AppContext, args: &BuildArgs) -> Result<()> {
                                 query
                                     .results
                                     .as_ref()
-                                    .map(|r| r.sessions_found)
-                                    .unwrap_or(0)
+                                    .map_or(0, |r| r.sessions_found)
                             );
                         }
                     }
                     Err(e) => {
                         if !ctx.robot_mode {
-                            eprintln!("    Query failed: {}", e);
+                            eprintln!("    Query failed: {e}");
                         }
                     }
                 }
@@ -2048,9 +2043,9 @@ fn run_resolve_uncertainties(ctx: &AppContext, args: &BuildArgs) -> Result<()> {
         } else {
             println!();
             println!("{} Resolution complete", "Done:".green());
-            println!("  Resolved:  {}", resolved_count);
-            println!("  Escalated: {}", escalated_count);
-            println!("  Rejected:  {}", rejected_count);
+            println!("  Resolved:  {resolved_count}");
+            println!("  Escalated: {escalated_count}");
+            println!("  Rejected:  {rejected_count}");
         }
     } else if args.auto && pending_items.is_empty() {
         // Auto-resolution requested but no pending items (e.g., only in_progress)
@@ -2098,7 +2093,7 @@ fn load_uncertainties(
     if path.exists() {
         let content = fs::read_to_string(path)?;
         let items: Vec<UncertaintyItem> = serde_json::from_str(&content)
-            .map_err(|e| MsError::Config(format!("Failed to parse uncertainties file: {}", e)))?;
+            .map_err(|e| MsError::Config(format!("Failed to parse uncertainties file: {e}")))?;
         Ok((queue, items))
     } else {
         Ok((queue, Vec::new()))
@@ -2146,7 +2141,7 @@ fn format_uncertainty_reason(reason: &crate::cass::UncertaintyReason) -> String 
 
     match reason {
         UncertaintyReason::InsufficientInstances { have, need, .. } => {
-            format!("Insufficient instances ({}/{})", have, need)
+            format!("Insufficient instances ({have}/{need})")
         }
         UncertaintyReason::HighVariance { variance_score, .. } => {
             format!("High variance ({:.0}%)", variance_score * 100.0)
@@ -2164,7 +2159,7 @@ fn format_uncertainty_reason(reason: &crate::cass::UncertaintyReason) -> String 
             format!("Unclear preconditions ({} candidates)", candidates.len())
         }
         UncertaintyReason::UnknownBoundaries { dimension, .. } => {
-            format!("Unknown boundaries: {}", dimension)
+            format!("Unknown boundaries: {dimension}")
         }
         UncertaintyReason::OvergeneralizationFlagged { critique_summary } => {
             format!(

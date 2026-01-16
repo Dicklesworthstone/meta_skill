@@ -17,20 +17,22 @@ pub enum PackContractPreset {
 }
 
 impl PackContractPreset {
-    pub fn as_str(&self) -> &'static str {
+    #[must_use] 
+    pub const fn as_str(&self) -> &'static str {
         match self {
-            PackContractPreset::Complete => "complete",
-            PackContractPreset::Debug => "debug",
-            PackContractPreset::Refactor => "refactor",
-            PackContractPreset::Learn => "learn",
-            PackContractPreset::QuickRef => "quickref",
-            PackContractPreset::CodeGen => "codegen",
+            Self::Complete => "complete",
+            Self::Debug => "debug",
+            Self::Refactor => "refactor",
+            Self::Learn => "learn",
+            Self::QuickRef => "quickref",
+            Self::CodeGen => "codegen",
         }
     }
 
+    #[must_use] 
     pub fn contract(&self) -> PackContract {
         match self {
-            PackContractPreset::Complete => PackContract {
+            Self::Complete => PackContract {
                 id: "complete".to_string(),
                 description: "Full coverage with default constraints.".to_string(),
                 required_groups: Vec::new(),
@@ -39,7 +41,7 @@ impl PackContractPreset {
                 group_weights: None,
                 tag_weights: None,
             },
-            PackContractPreset::Debug => PackContract {
+            Self::Debug => PackContract {
                 id: "debug".to_string(),
                 description: "Debug-first pack (pitfalls, rules, commands).".to_string(),
                 required_groups: vec![
@@ -60,7 +62,7 @@ impl PackContractPreset {
                 ])),
                 tag_weights: Some(weight_map(&[("debug", 1.4), ("debugging", 1.4)])),
             },
-            PackContractPreset::Refactor => PackContract {
+            Self::Refactor => PackContract {
                 id: "refactor".to_string(),
                 description: "Refactor-focused pack (rules, examples, pitfalls).".to_string(),
                 required_groups: vec![
@@ -81,7 +83,7 @@ impl PackContractPreset {
                 ])),
                 tag_weights: Some(weight_map(&[("refactor", 1.3)])),
             },
-            PackContractPreset::Learn => PackContract {
+            Self::Learn => PackContract {
                 id: "learn".to_string(),
                 description: "Learning-focused pack (overview, examples).".to_string(),
                 required_groups: vec!["overview".to_string(), "examples".to_string()],
@@ -97,7 +99,7 @@ impl PackContractPreset {
                 ])),
                 tag_weights: Some(weight_map(&[("learn", 1.2), ("learning", 1.2)])),
             },
-            PackContractPreset::QuickRef => PackContract {
+            Self::QuickRef => PackContract {
                 id: "quickref".to_string(),
                 description: "Quick reference pack (overview + rules, tight budget).".to_string(),
                 required_groups: vec!["overview".to_string(), "rules".to_string()],
@@ -114,7 +116,7 @@ impl PackContractPreset {
                 ])),
                 tag_weights: None,
             },
-            PackContractPreset::CodeGen => PackContract {
+            Self::CodeGen => PackContract {
                 id: "codegen".to_string(),
                 description: "Code generation pack (examples, commands, rules).".to_string(),
                 required_groups: vec![
@@ -139,6 +141,7 @@ impl PackContractPreset {
     }
 }
 
+#[must_use] 
 pub fn contract_from_name(name: &str) -> Option<PackContract> {
     let normalized = name.trim().to_lowercase();
     let preset = match normalized.as_str() {
@@ -175,10 +178,12 @@ impl Default for ContractStore {
     }
 }
 
+#[must_use] 
 pub fn custom_contracts_path(ms_root: &Path) -> PathBuf {
     ms_root.join("contracts.json")
 }
 
+#[must_use] 
 pub fn builtin_contracts() -> Vec<PackContract> {
     [
         PackContractPreset::Complete,
@@ -189,7 +194,7 @@ pub fn builtin_contracts() -> Vec<PackContract> {
         PackContractPreset::CodeGen,
     ]
     .iter()
-    .map(|preset| preset.contract())
+    .map(PackContractPreset::contract)
     .collect()
 }
 

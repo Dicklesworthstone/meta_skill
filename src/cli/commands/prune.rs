@@ -417,8 +417,7 @@ fn build_proposals(ctx: &AppContext, args: &AnalyzeArgs, dry_run: bool) -> Resul
             for source in &proposal.sources {
                 let Some(skill) = ctx.db.get_skill(source)? else {
                     return Err(MsError::SkillNotFound(format!(
-                        "skill not found: {}",
-                        source
+                        "skill not found: {source}"
                     )));
                 };
                 records.push(skill);
@@ -560,7 +559,7 @@ fn run_proposals(ctx: &AppContext, args: &AnalyzeArgs, dry_run: bool) -> Result<
                 proposal.similarity
             );
             if let Some(path) = &proposal.draft_path {
-                line.push_str(&format!(" (draft: {})", path));
+                line.push_str(&format!(" (draft: {path})"));
             }
             layout.bullet(&line);
         }
@@ -579,7 +578,7 @@ fn run_proposals(ctx: &AppContext, args: &AnalyzeArgs, dry_run: bool) -> Result<
                 proposal.children.len()
             );
             if let Some(path) = proposal.draft_paths.first() {
-                line.push_str(&format!(" (draft: {})", path));
+                line.push_str(&format!(" (draft: {path})"));
             }
             layout.bullet(&line);
         }
@@ -806,7 +805,7 @@ fn merge_spec_from_records(
         .iter()
         .position(|r| r.id == target_id)
         .ok_or_else(|| {
-            MsError::ValidationFailed(format!("merge target not found: {}", target_id))
+            MsError::ValidationFailed(format!("merge target not found: {target_id}"))
         })?;
 
     let mut target_spec = parse_markdown(&records[target_idx].body).map_err(|e| {
@@ -869,7 +868,7 @@ fn split_specs_from_skill(
     }
 
     let child_count = child_count.max(2).min(spec.sections.len());
-    let chunk_size = (spec.sections.len() + child_count - 1) / child_count;
+    let chunk_size = spec.sections.len().div_ceil(child_count);
     let mut specs = Vec::new();
     for (idx, chunk) in spec.sections.chunks(chunk_size).enumerate() {
         let mut child_spec = spec.clone();
@@ -898,13 +897,12 @@ fn apply_deprecate(
     dry_run: bool,
 ) -> Result<ApplyOutcome> {
     let Some(skill) = ctx.db.get_skill(skill_id)? else {
-        return Err(MsError::SkillNotFound(format!("skill not found: {}", skill_id)));
+        return Err(MsError::SkillNotFound(format!("skill not found: {skill_id}")));
     };
     if let Some(target) = replacement {
         if ctx.db.get_skill(target)?.is_none() {
             return Err(MsError::SkillNotFound(format!(
-                "replacement skill not found: {}",
-                target
+                "replacement skill not found: {target}"
             )));
         }
     }
@@ -913,7 +911,7 @@ fn apply_deprecate(
         .map(|r| r.trim().to_string())
         .filter(|r| !r.is_empty())
         .unwrap_or_else(|| match replacement {
-            Some(target) => format!("Deprecated; use {}", target),
+            Some(target) => format!("Deprecated; use {target}"),
             None => "Deprecated via prune".to_string(),
         });
 
@@ -953,7 +951,7 @@ fn apply_merge(
     let mut records = Vec::new();
     for source in sources {
         let Some(skill) = ctx.db.get_skill(source)? else {
-            return Err(MsError::SkillNotFound(format!("skill not found: {}", source)));
+            return Err(MsError::SkillNotFound(format!("skill not found: {source}")));
         };
         records.push(skill);
     }
@@ -961,8 +959,7 @@ fn apply_merge(
     if let Some(target) = target_override {
         if !sources.iter().any(|id| id == target) {
             return Err(MsError::ValidationFailed(format!(
-                "merge target must be one of the sources: {}",
-                target
+                "merge target must be one of the sources: {target}"
             )));
         }
     }
@@ -985,9 +982,9 @@ fn apply_merge(
         action: "merge".to_string(),
         dry_run,
         message: if dry_run {
-            format!("Would create merge draft for {}", target_id)
+            format!("Would create merge draft for {target_id}")
         } else {
-            format!("Created merge draft for {}", target_id)
+            format!("Created merge draft for {target_id}")
         },
         drafts: vec![draft_path],
     })
@@ -1002,11 +999,11 @@ fn apply_split(
     dry_run: bool,
 ) -> Result<ApplyOutcome> {
     let Some(skill) = ctx.db.get_skill(skill_id)? else {
-        return Err(MsError::SkillNotFound(format!("skill not found: {}", skill_id)));
+        return Err(MsError::SkillNotFound(format!("skill not found: {skill_id}")));
     };
     let mut drafts = Vec::new();
     let section_count = parse_markdown(&skill.body)
-        .map_err(|e| MsError::ValidationFailed(format!("failed to parse {}: {}", skill_id, e)))?
+        .map_err(|e| MsError::ValidationFailed(format!("failed to parse {skill_id}: {e}")))?
         .sections
         .len();
     let child_count = child_count_override
@@ -1147,7 +1144,7 @@ fn analyze_candidates(ctx: &AppContext, args: &AnalyzeArgs) -> Result<PruneAnaly
         quality_map.insert(skill.id.clone(), skill.quality_score);
     }
 
-    let cutoff = (chrono::Utc::now() - chrono::Duration::days(args.days as i64)).to_rfc3339();
+    let cutoff = (chrono::Utc::now() - chrono::Duration::days(i64::from(args.days))).to_rfc3339();
 
     let mut low_usage = Vec::new();
     let mut low_quality = Vec::new();
@@ -1156,7 +1153,7 @@ fn analyze_candidates(ctx: &AppContext, args: &AnalyzeArgs) -> Result<PruneAnaly
     for skill in &skills {
         let uses = usage_since(ctx.db.as_ref(), &skill.id, &cutoff)?;
         usage_map.insert(skill.id.clone(), uses);
-        if uses < args.min_usage as u64 {
+        if uses < u64::from(args.min_usage) {
             low_usage.push(UsageCandidate {
                 skill_id: skill.id.clone(),
                 name: skill.name.clone(),
@@ -1335,7 +1332,7 @@ fn split_child_count(section_count: usize, max_children: usize) -> usize {
         return 0;
     }
     let max_children = max_children.max(2);
-    let desired = ((section_count + 3) / 4).max(2);
+    let desired = section_count.div_ceil(4).max(2);
     desired.min(max_children).min(section_count)
 }
 
@@ -1348,7 +1345,7 @@ fn build_split_children(
     if child_count == 0 {
         return Vec::new();
     }
-    let chunk_size = (spec.sections.len() + child_count - 1) / child_count;
+    let chunk_size = spec.sections.len().div_ceil(child_count);
     let mut children = Vec::new();
     for (idx, chunk) in spec.sections.chunks(chunk_size).enumerate() {
         let child_id = format!("{}-part-{}", skill_id, idx + 1);
@@ -1583,7 +1580,7 @@ fn run_list(ctx: &AppContext, args: &PruneArgs) -> Result<()> {
             );
             println!("    ID: {}", record.id.dimmed());
             if let Some(reason) = &record.reason {
-                println!("    Reason: {}", reason);
+                println!("    Reason: {reason}");
             }
             println!();
         }
@@ -1807,20 +1804,19 @@ fn run_stats(ctx: &AppContext) -> Result<()> {
         println!("{}", "─".repeat(30));
         println!();
         println!("  Total items:     {}", records.len().to_string().cyan());
-        println!("  Files:           {}", file_count);
-        println!("  Directories:     {}", dir_count);
+        println!("  Files:           {file_count}");
+        println!("  Directories:     {dir_count}");
         println!("  Total size:      {}", format_size(total_size).yellow());
         println!();
-        println!("  Older than 7d:   {}", older_than_7d);
-        println!("  Older than 30d:  {}", older_than_30d);
+        println!("  Older than 7d:   {older_than_7d}");
+        println!("  Older than 30d:  {older_than_30d}");
 
         if older_than_30d > 0 {
             println!();
             println!(
-                "  {} Consider running: {} {}",
+                "  {} Consider running: {} ",
                 "!".yellow(),
-                "ms prune purge all --older-than 30 --approve".cyan(),
-                ""
+                "ms prune purge all --older-than 30 --approve".cyan()
             );
         }
     }
@@ -1840,7 +1836,7 @@ fn format_size(bytes: u64) -> String {
     } else if bytes >= KB {
         format!("{:.2} KB", bytes as f64 / KB as f64)
     } else {
-        format!("{} B", bytes)
+        format!("{bytes} B")
     }
 }
 

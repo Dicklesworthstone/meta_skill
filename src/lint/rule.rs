@@ -34,7 +34,7 @@ pub trait ValidationRule: Send + Sync {
         false
     }
 
-    /// Apply auto-fix for issues (if can_fix() is true).
+    /// Apply auto-fix for issues (if `can_fix()` is true).
     /// Returns Ok(()) if fix was applied successfully.
     fn fix(&self, _skill: &mut SkillSpec, _diagnostic: &Diagnostic) -> Result<()> {
         Err(crate::error::MsError::NotImplemented(format!(

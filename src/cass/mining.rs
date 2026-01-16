@@ -207,13 +207,13 @@ pub enum PatternIR {
 
     /// Conditional structure
     Conditional {
-        condition: Box<PatternIR>,
-        then_branch: Box<PatternIR>,
-        else_branch: Option<Box<PatternIR>>,
+        condition: Box<Self>,
+        then_branch: Box<Self>,
+        else_branch: Option<Box<Self>>,
     },
 
     /// Sequence of IR nodes
-    Sequence { items: Vec<PatternIR> },
+    Sequence { items: Vec<Self> },
 
     /// Reference to another pattern
     PatternRef { pattern_id: String },
@@ -249,7 +249,7 @@ pub struct CommandIR {
 /// 1. Reconnaissance - understanding the problem, reading code
 /// 2. Change - making modifications to solve the problem
 /// 3. Validation - testing, verifying the changes work
-/// 4. WrapUp - committing, cleanup, final summaries
+/// 4. `WrapUp` - committing, cleanup, final summaries
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum SessionPhase {
@@ -289,11 +289,13 @@ pub struct SegmentedSession {
 
 impl SegmentedSession {
     /// Get all segments of a particular phase
+    #[must_use] 
     pub fn segments_for_phase(&self, phase: SessionPhase) -> Vec<&SessionSegment> {
         self.segments.iter().filter(|s| s.phase == phase).collect()
     }
 
     /// Get the dominant phase (most messages)
+    #[must_use] 
     pub fn dominant_phase(&self) -> Option<SessionPhase> {
         let mut counts = std::collections::HashMap::new();
         for seg in &self.segments {
@@ -312,8 +314,7 @@ pub fn segment_session(session: &Session) -> SegmentedSession {
     let mut current_phase = session
         .messages
         .first()
-        .map(classify_message_phase)
-        .unwrap_or(SessionPhase::Reconnaissance);
+        .map_or(SessionPhase::Reconnaissance, classify_message_phase);
     let mut phase_start = 0;
 
     for (idx, msg) in session.messages.iter().enumerate() {
@@ -492,7 +493,7 @@ fn merge_adjacent_segments(segments: Vec<SessionSegment>) -> Vec<SessionSegment>
             // Use saturating_sub to prevent underflow if segments have unexpected values
             let old_len = current_len.saturating_sub(seg_len);
             current.confidence = if current_len > 0 {
-                (current.confidence * old_len as f32 + seg.confidence * seg_len as f32)
+                current.confidence.mul_add(old_len as f32, seg.confidence * seg_len as f32)
                     / current_len as f32
             } else {
                 0.0
@@ -585,8 +586,8 @@ pub fn extract_patterns(session_path: &str) -> Result<Vec<Pattern>> {
     Ok(patterns)
 }
 
-/// Convert a full PatternType to the simple SimplePatternType
-fn pattern_type_to_simple(pt: &PatternType) -> SimplePatternType {
+/// Convert a full `PatternType` to the simple `SimplePatternType`
+const fn pattern_type_to_simple(pt: &PatternType) -> SimplePatternType {
     match pt {
         PatternType::CommandPattern { .. } => SimplePatternType::CommandRecipe,
         PatternType::CodePattern { .. } => SimplePatternType::PromptMacro, // Code is like a prompt/template
@@ -599,7 +600,7 @@ fn pattern_type_to_simple(pt: &PatternType) -> SimplePatternType {
     }
 }
 
-/// Extract the main content string from a PatternType
+/// Extract the main content string from a `PatternType`
 fn pattern_content(pt: &PatternType) -> String {
     match pt {
         PatternType::CommandPattern { commands, .. } => commands.join(" && "),
@@ -615,7 +616,7 @@ fn pattern_content(pt: &PatternType) -> String {
             format!("{}: {}", error_type, resolution_steps.join(", "))
         }
         PatternType::RefactorPattern { before_pattern, after_pattern, .. } => {
-            format!("{} -> {}", before_pattern, after_pattern)
+            format!("{before_pattern} -> {after_pattern}")
         }
         PatternType::ConfigPattern { config_type, settings, .. } => {
             let keys: Vec<_> = settings.iter().map(|s| s.key.clone()).collect();
@@ -965,7 +966,7 @@ fn collect_phase_actions(session: &Session, segment: &SessionSegment) -> Vec<Str
                         if let Some(pattern) =
                             tool.arguments.get("pattern").and_then(|v| v.as_str())
                         {
-                            actions.push(format!("Search: {}", pattern));
+                            actions.push(format!("Search: {pattern}"));
                         }
                     }
                     "grep" | "search_file_content" => {
@@ -987,7 +988,7 @@ fn collect_phase_actions(session: &Session, segment: &SessionSegment) -> Vec<Str
 /// Summarize phase actions into a description
 fn summarize_phase_actions(actions: &[String], phase: SessionPhase) -> String {
     if actions.is_empty() {
-        return format!("{:?} phase", phase);
+        return format!("{phase:?} phase");
     }
 
     let prefix = match phase {
@@ -1007,7 +1008,7 @@ fn summarize_phase_actions(actions: &[String], phase: SessionPhase) -> String {
 /// Extract basename from a path
 fn path_basename(path: &str) -> &str {
     // Split by both forward and backslash to handle cross-platform paths
-    path.rsplit(|c| c == '/' || c == '\\').next().unwrap_or(path)
+    path.rsplit(['/', '\\']).next().unwrap_or(path)
 }
 
 /// Extract error handling patterns from session
@@ -1219,21 +1220,21 @@ fn generate_pattern_description(pattern_type: &PatternType) -> String {
             format!("Command sequence with {} commands", commands.len())
         }
         PatternType::CodePattern { language, .. } => {
-            format!("Code pattern in {}", language)
+            format!("Code pattern in {language}")
         }
         PatternType::WorkflowPattern { steps, .. } => {
             format!("Workflow with {} steps", steps.len())
         }
         PatternType::ErrorPattern { error_type, .. } => {
-            format!("Error handling for {}", error_type)
+            format!("Error handling for {error_type}")
         }
         PatternType::DecisionPattern { .. } => "Decision tree pattern".to_string(),
         PatternType::RefactorPattern { .. } => "Refactoring pattern".to_string(),
         PatternType::ConfigPattern { config_type, .. } => {
-            format!("Configuration for {}", config_type)
+            format!("Configuration for {config_type}")
         }
         PatternType::ToolPattern { tool_name, .. } => {
-            format!("Tool usage pattern for {}", tool_name)
+            format!("Tool usage pattern for {tool_name}")
         }
     }
 }
@@ -1252,9 +1253,7 @@ fn deduplicate_patterns(patterns: Vec<ExtractedPattern>) -> Vec<ExtractedPattern
             .iter()
             .any(|existing| patterns_are_similar(existing, &pattern));
 
-        if !is_duplicate {
-            unique.push(pattern);
-        } else {
+        if is_duplicate {
             // Merge with existing similar pattern - increase frequency
             if let Some(existing) = unique
                 .iter_mut()
@@ -1265,6 +1264,8 @@ fn deduplicate_patterns(patterns: Vec<ExtractedPattern>) -> Vec<ExtractedPattern
                 // Boost confidence when pattern is seen multiple times
                 existing.confidence = (existing.confidence + 0.1).min(0.95);
             }
+        } else {
+            unique.push(pattern);
         }
     }
 
@@ -1341,7 +1342,7 @@ fn patterns_are_similar(a: &ExtractedPattern, b: &ExtractedPattern) -> bool {
 
 fn normalize_indentation_sensitive(code: &str) -> String {
     code.lines()
-        .map(|line| line.trim_end()) // Keep leading whitespace, trim trailing
+        .map(str::trim_end) // Keep leading whitespace, trim trailing
         .filter(|line| !line.is_empty()) // Remove empty lines
         .collect::<Vec<_>>()
         .join("\n")
@@ -1427,6 +1428,7 @@ fn extract_code_blocks(content: &str) -> Vec<(String, String)> {
 }
 
 /// Convert extracted pattern to IR
+#[must_use] 
 pub fn pattern_to_ir(pattern: &ExtractedPattern) -> PatternIR {
     match &pattern.pattern_type {
         PatternType::CommandPattern { commands, .. } => PatternIR::CommandSeq {
@@ -1436,7 +1438,7 @@ pub fn pattern_to_ir(pattern: &ExtractedPattern) -> PatternIR {
                     let parts: Vec<&str> = cmd.split_whitespace().collect();
                     CommandIR {
                         executable: parts.first().unwrap_or(&"").to_string(),
-                        args: parts.iter().skip(1).map(|s| s.to_string()).collect(),
+                        args: parts.iter().skip(1).map(std::string::ToString::to_string).collect(),
                         env: vec![],
                         description: None,
                     }

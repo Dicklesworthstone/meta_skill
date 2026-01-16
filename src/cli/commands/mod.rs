@@ -2,7 +2,7 @@
 //!
 //! Each subcommand has its own module with:
 //! - Args struct for command-line arguments
-//! - run() function to execute the command
+//! - `run()` function to execute the command
 
 use std::collections::HashSet;
 use std::path::PathBuf;

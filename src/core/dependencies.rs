@@ -28,19 +28,16 @@ pub enum DependencyLoadMode {
 /// Disclosure level for a skill
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
+#[derive(Default)]
 pub enum DisclosureLevel {
     Minimal,
     Overview,
+    #[default]
     Standard,
     Full,
     Complete,
 }
 
-impl Default for DisclosureLevel {
-    fn default() -> Self {
-        Self::Standard
-    }
-}
 
 /// A node in the dependency graph
 #[derive(Debug, Clone)]
@@ -67,7 +64,7 @@ pub struct DependencyEdge {
 /// The dependency graph for skills
 #[derive(Debug, Clone, Default)]
 pub struct DependencyGraph {
-    /// Nodes in the graph (skill_id -> node)
+    /// Nodes in the graph (`skill_id` -> node)
     nodes: HashMap<String, DependencyNode>,
     /// Edges in the graph
     edges: Vec<DependencyEdge>,
@@ -77,6 +74,7 @@ pub struct DependencyGraph {
 
 impl DependencyGraph {
     /// Create a new empty dependency graph
+    #[must_use] 
     pub fn new() -> Self {
         Self::default()
     }
@@ -138,16 +136,19 @@ impl DependencyGraph {
     }
 
     /// Get a specific node
+    #[must_use] 
     pub fn get_node(&self, skill_id: &str) -> Option<&DependencyNode> {
         self.nodes.get(skill_id)
     }
 
     /// Get all edges
+    #[must_use] 
     pub fn edges(&self) -> &[DependencyEdge] {
         &self.edges
     }
 
     /// Get direct dependencies of a skill
+    #[must_use] 
     pub fn direct_dependencies(&self, skill_id: &str) -> Vec<&str> {
         self.edges
             .iter()
@@ -157,6 +158,7 @@ impl DependencyGraph {
     }
 
     /// Get skills that directly depend on this skill
+    #[must_use] 
     pub fn direct_dependents(&self, skill_id: &str) -> Vec<&str> {
         self.edges
             .iter()
@@ -166,6 +168,7 @@ impl DependencyGraph {
     }
 
     /// Find providers for a capability
+    #[must_use] 
     pub fn find_providers(&self, capability: &str) -> Option<&Vec<String>> {
         self.capability_providers.get(capability)
     }
@@ -204,11 +207,13 @@ pub struct MissingCapability {
 
 impl ResolvedDependencyPlan {
     /// Check if resolution was successful (no missing deps, no cycles)
+    #[must_use] 
     pub fn is_ok(&self) -> bool {
         self.missing.is_empty() && self.cycles.is_empty()
     }
 
     /// Check if there are any issues
+    #[must_use] 
     pub fn has_issues(&self) -> bool {
         !self.missing.is_empty() || !self.cycles.is_empty()
     }
@@ -222,7 +227,8 @@ pub struct DependencyResolver<'a> {
 
 impl<'a> DependencyResolver<'a> {
     /// Create a new resolver
-    pub fn new(graph: &'a DependencyGraph) -> Self {
+    #[must_use] 
+    pub const fn new(graph: &'a DependencyGraph) -> Self {
         Self {
             graph,
             max_depth: 100, // Prevent infinite recursion
@@ -230,7 +236,8 @@ impl<'a> DependencyResolver<'a> {
     }
 
     /// Set maximum depth for dependency traversal
-    pub fn with_max_depth(mut self, depth: usize) -> Self {
+    #[must_use] 
+    pub const fn with_max_depth(mut self, depth: usize) -> Self {
         self.max_depth = depth;
         self
     }
@@ -419,7 +426,7 @@ impl<'a> DependencyResolver<'a> {
 
         // Sort adjacency lists for determinism
         for list in adj.values_mut() {
-            list.sort();
+            list.sort_unstable();
         }
 
         // Kahn's algorithm
@@ -429,7 +436,7 @@ impl<'a> DependencyResolver<'a> {
             .filter(|&(_, &degree)| degree == 0)
             .map(|(skill, _)| *skill)
             .collect();
-        zero_degree.sort();
+        zero_degree.sort_unstable();
 
         let mut queue: VecDeque<&str> = VecDeque::from(zero_degree);
 
@@ -480,7 +487,7 @@ impl<'a> DependencyResolver<'a> {
                 let (disclosure, reason) = if skill_id == root_skill_id {
                     (root_disclosure, "root".to_string())
                 } else {
-                    (dep_disclosure, format!("dependency of {}", root_skill_id))
+                    (dep_disclosure, format!("dependency of {root_skill_id}"))
                 };
 
                 SkillLoadPlan {

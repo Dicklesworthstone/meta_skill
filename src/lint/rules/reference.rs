@@ -12,15 +12,15 @@ use crate::lint::rule::ValidationRule;
 pub struct ValidExtendsRule;
 
 impl ValidationRule for ValidExtendsRule {
-    fn id(&self) -> &str {
+    fn id(&self) -> &'static str {
         "valid-extends"
     }
 
-    fn name(&self) -> &str {
+    fn name(&self) -> &'static str {
         "Valid Extends Reference"
     }
 
-    fn description(&self) -> &str {
+    fn description(&self) -> &'static str {
         "The extends field must reference an existing skill"
     }
 
@@ -52,7 +52,7 @@ impl ValidationRule for ValidExtendsRule {
                 vec![
                     Diagnostic::error(
                         self.id(),
-                        format!("Parent skill '{}' not found", parent_id),
+                        format!("Parent skill '{parent_id}' not found"),
                     )
                     .with_suggestion("Check that the parent skill ID is correct and indexed")
                     .with_category(RuleCategory::Reference),
@@ -61,7 +61,7 @@ impl ValidationRule for ValidExtendsRule {
             Err(e) => {
                 vec![Diagnostic::warning(
                     self.id(),
-                    format!("Could not validate parent skill '{}': {}", parent_id, e),
+                    format!("Could not validate parent skill '{parent_id}': {e}"),
                 )
                 .with_category(RuleCategory::Reference)]
             }
@@ -73,15 +73,15 @@ impl ValidationRule for ValidExtendsRule {
 pub struct NoCycleRule;
 
 impl ValidationRule for NoCycleRule {
-    fn id(&self) -> &str {
+    fn id(&self) -> &'static str {
         "no-cycle"
     }
 
-    fn name(&self) -> &str {
+    fn name(&self) -> &'static str {
         "No Circular Dependencies"
     }
 
-    fn description(&self) -> &str {
+    fn description(&self) -> &'static str {
         "Skills must not form circular inheritance chains"
     }
 
@@ -122,7 +122,7 @@ impl ValidationRule for NoCycleRule {
             Err(e) => {
                 vec![Diagnostic::warning(
                     self.id(),
-                    format!("Could not check for cycles: {}", e),
+                    format!("Could not check for cycles: {e}"),
                 )
                 .with_category(RuleCategory::Reference)]
             }
@@ -145,7 +145,8 @@ impl Default for DeepInheritanceRule {
 
 impl DeepInheritanceRule {
     /// Create a new rule with custom max depth.
-    pub fn with_max_depth(max_depth: usize) -> Self {
+    #[must_use] 
+    pub const fn with_max_depth(max_depth: usize) -> Self {
         Self { max_depth }
     }
 
@@ -173,15 +174,15 @@ impl DeepInheritanceRule {
 }
 
 impl ValidationRule for DeepInheritanceRule {
-    fn id(&self) -> &str {
+    fn id(&self) -> &'static str {
         "deep-inheritance"
     }
 
-    fn name(&self) -> &str {
+    fn name(&self) -> &'static str {
         "Deep Inheritance Warning"
     }
 
-    fn description(&self) -> &str {
+    fn description(&self) -> &'static str {
         "Warns about deeply nested inheritance chains"
     }
 
@@ -227,15 +228,15 @@ impl ValidationRule for DeepInheritanceRule {
 pub struct FormatVersionRule;
 
 impl ValidationRule for FormatVersionRule {
-    fn id(&self) -> &str {
+    fn id(&self) -> &'static str {
         "format-version"
     }
 
-    fn name(&self) -> &str {
+    fn name(&self) -> &'static str {
         "Format Version Check"
     }
 
-    fn description(&self) -> &str {
+    fn description(&self) -> &'static str {
         "Warns if format version is unknown or outdated"
     }
 
@@ -256,7 +257,7 @@ impl ValidationRule for FormatVersionRule {
                 self.id(),
                 "Skill has no format_version specified",
             )
-            .with_suggestion(format!("Add 'format_version: {}' to the metadata", current))
+            .with_suggestion(format!("Add 'format_version: {current}' to the metadata"))
             .with_category(RuleCategory::Structure)];
         }
 
@@ -273,7 +274,7 @@ impl ValidationRule for FormatVersionRule {
         if skill_version.is_empty() {
             return vec![Diagnostic::warning(
                 self.id(),
-                format!("Invalid format_version '{}' (expected X.Y)", version),
+                format!("Invalid format_version '{version}' (expected X.Y)"),
             )
             .with_category(RuleCategory::Structure)];
         }
@@ -283,8 +284,7 @@ impl ValidationRule for FormatVersionRule {
             return vec![Diagnostic::warning(
                 self.id(),
                 format!(
-                    "Skill format_version '{}' is newer than current '{}'",
-                    version, current
+                    "Skill format_version '{version}' is newer than current '{current}'"
                 ),
             )
             .with_suggestion("This skill may use features not supported by this version")
@@ -296,6 +296,7 @@ impl ValidationRule for FormatVersionRule {
 }
 
 /// Returns all reference validation rules.
+#[must_use] 
 pub fn reference_rules() -> Vec<Box<dyn ValidationRule>> {
     vec![
         Box::new(ValidExtendsRule),

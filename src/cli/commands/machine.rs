@@ -35,7 +35,7 @@ fn info(ctx: &AppContext) -> Result<()> {
     let config = SyncConfig::load()?;
     let machine = MachineIdentity::load_or_generate_with_name(
         config.machine.name.clone(),
-        config.machine.description.clone(),
+        config.machine.description,
     )?;
 
     if ctx.robot_mode {
@@ -75,7 +75,7 @@ fn rename(ctx: &AppContext, args: &MachineRenameArgs) -> Result<()> {
     let config = SyncConfig::load()?;
     let mut machine = MachineIdentity::load_or_generate_with_name(
         config.machine.name.clone(),
-        config.machine.description.clone(),
+        config.machine.description,
     )?;
     machine.rename(args.name.clone());
     machine.save()?;

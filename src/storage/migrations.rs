@@ -4,7 +4,7 @@ use rusqlite::Connection;
 
 use crate::error::{MsError, Result};
 
-const MIGRATIONS: [&str; 9] = [
+const MIGRATIONS: [&str; 10] = [
     include_str!("../../migrations/001_initial_schema.sql"),
     include_str!("../../migrations/002_add_fts.sql"),
     include_str!("../../migrations/003_add_vectors.sql"),
@@ -14,6 +14,7 @@ const MIGRATIONS: [&str; 9] = [
     include_str!("../../migrations/007_add_session_quality.sql"),
     include_str!("../../migrations/008_add_skill_experiment_events.sql"),
     include_str!("../../migrations/009_add_skill_feedback.sql"),
+    include_str!("../../migrations/010_add_resolution_cache.sql"),
 ];
 
 pub const SCHEMA_VERSION: u32 = MIGRATIONS.len() as u32;
@@ -31,13 +32,12 @@ pub fn run_migrations(conn: &Connection) -> Result<u32> {
         }
 
         conn.execute_batch(sql).map_err(|err| {
-            MsError::TransactionFailed(format!("migration {} failed: {err}", target_version))
+            MsError::TransactionFailed(format!("migration {target_version} failed: {err}"))
         })?;
-        conn.pragma_update(None, "user_version", &target_version)
+        conn.pragma_update(None, "user_version", target_version)
             .map_err(|err| {
                 MsError::TransactionFailed(format!(
-                    "failed to set user_version {}: {err}",
-                    target_version
+                    "failed to set user_version {target_version}: {err}"
                 ))
             })?;
     }

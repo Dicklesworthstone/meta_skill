@@ -92,7 +92,8 @@ pub struct SkillTestReport {
 
 impl SkillTestReport {
     /// Returns true if all tests passed.
-    pub fn success(&self) -> bool {
+    #[must_use] 
+    pub const fn success(&self) -> bool {
         self.failed == 0
     }
 }
@@ -105,7 +106,8 @@ pub struct SkillTestRunner<'a> {
 
 impl<'a> SkillTestRunner<'a> {
     /// Create a new test runner.
-    pub fn new(ctx: &'a AppContext, options: TestOptions) -> Self {
+    #[must_use] 
+    pub const fn new(ctx: &'a AppContext, options: TestOptions) -> Self {
         Self { ctx, options }
     }
 
@@ -275,7 +277,7 @@ impl<'a> SkillTestRunner<'a> {
 
             if path
                 .extension()
-                .map_or(false, |ext| ext == "yaml" || ext == "yml")
+                .is_some_and(|ext| ext == "yaml" || ext == "yml")
             {
                 let content = std::fs::read_to_string(&path).map_err(|e| {
                     MsError::Config(format!("Failed to read {}: {e}", path.display()))

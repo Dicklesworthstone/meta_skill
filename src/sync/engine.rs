@@ -42,6 +42,7 @@ pub struct SyncReport {
 }
 
 impl SyncReport {
+    #[must_use] 
     pub fn summary_line(&self) -> String {
         format!(
             "{}: ↓{} +{} ↑{} ⚠{} ↯{}",
@@ -74,7 +75,7 @@ pub struct SyncEngine {
 }
 
 impl SyncEngine {
-    pub fn new(
+    pub const fn new(
         config: SyncConfig,
         machine: MachineIdentity,
         state: SyncState,
@@ -94,15 +95,18 @@ impl SyncEngine {
         }
     }
 
-    pub fn config(&self) -> &SyncConfig {
+    #[must_use] 
+    pub const fn config(&self) -> &SyncConfig {
         &self.config
     }
 
-    pub fn state(&self) -> &SyncState {
+    #[must_use] 
+    pub const fn state(&self) -> &SyncState {
         &self.state
     }
 
-    pub fn machine(&self) -> &MachineIdentity {
+    #[must_use] 
+    pub const fn machine(&self) -> &MachineIdentity {
         &self.machine
     }
 
@@ -127,8 +131,7 @@ impl SyncEngine {
             .cloned()
         else {
             return Err(MsError::Config(format!(
-                "remote not found: {}",
-                remote_name
+                "remote not found: {remote_name}"
             )));
         };
 
@@ -264,7 +267,7 @@ impl SyncEngine {
                 .state
                 .skill_states
                 .get(&id)
-                .and_then(|state| state.remote_hashes.get(&remote.name).map(|s| s.as_str()));
+                .and_then(|state| state.remote_hashes.get(&remote.name).map(std::string::String::as_str));
 
             let status = determine_sync_status(local, remote_snap, base_hash);
 
@@ -307,7 +310,7 @@ impl SyncEngine {
                             .config
                             .conflict_strategies
                             .get(&id)
-                            .cloned()
+                            .copied()
                             .unwrap_or(self.config.sync.default_conflict_strategy);
                         final_status = self.apply_conflict_strategy(
                             &id,
@@ -523,7 +526,7 @@ impl SyncEngine {
             let spec = match archive.read_skill(&id) {
                 Ok(s) => s,
                 Err(e) => {
-                    errors.push(format!("Failed to read skill {}: {}", id, e));
+                    errors.push(format!("Failed to read skill {id}: {e}"));
                     continue;
                 }
             };
@@ -531,7 +534,7 @@ impl SyncEngine {
             let hash = match hash_skill_spec(&spec) {
                 Ok(h) => h,
                 Err(e) => {
-                    errors.push(format!("Failed to hash skill {}: {}", id, e));
+                    errors.push(format!("Failed to hash skill {id}: {e}"));
                     continue;
                 }
             };
@@ -545,7 +548,7 @@ impl SyncEngine {
                     let abs_path = archive.root().join(rel_path);
                     match std::fs::metadata(&abs_path) {
                         Ok(metadata) => {
-                            metadata.modified().map(DateTime::<Utc>::from).unwrap_or_else(|_| Utc::now())
+                            metadata.modified().map_or_else(|_| Utc::now(), DateTime::<Utc>::from)
                         },
                         Err(_) => Utc::now()
                     }
@@ -555,26 +558,25 @@ impl SyncEngine {
                 Utc::now()
             };
 
-            map.insert(id.clone(), SkillSnapshot { id, hash, modified });
+            map.insert(id.clone(), SkillSnapshot { hash, id, modified });
         }
         Ok((map, errors))
     }
 }
 
 fn unique_fork_id(archive: &GitArchive, id: &str) -> Result<String> {
-    let base = format!("{}-remote", id);
+    let base = format!("{id}-remote");
     if !archive.skill_exists(&base) {
         return Ok(base);
     }
     for suffix in 2..=1000 {
-        let candidate = format!("{}-remote-{}", id, suffix);
+        let candidate = format!("{id}-remote-{suffix}");
         if !archive.skill_exists(&candidate) {
             return Ok(candidate);
         }
     }
     Err(MsError::Config(format!(
-        "unable to allocate fork id for {}",
-        id
+        "unable to allocate fork id for {id}"
     )))
 }
 
@@ -653,7 +655,7 @@ fn sync_git_repo(
         .map_err(MsError::Git)?;
 
     let branch = resolve_branch_name(repo, branch_override)?;
-    let remote_ref = format!("refs/remotes/origin/{}", branch);
+    let remote_ref = format!("refs/remotes/origin/{branch}");
     let remote_ref = repo
         .find_reference(&remote_ref)
         .map_err(|_| MsError::Config(format!("remote branch not found: {branch}")))?;
@@ -675,7 +677,7 @@ fn sync_git_repo(
         )));
     }
 
-    let local_ref = format!("refs/heads/{}", branch);
+    let local_ref = format!("refs/heads/{branch}");
     let mut reference = match repo.find_reference(&local_ref) {
         Ok(r) => r,
         Err(_) => repo
@@ -705,7 +707,7 @@ fn push_git_repo(
         .map_err(MsError::Git)?;
 
     let branch = resolve_branch_name(repo, branch_override)?;
-    let refspec = format!("refs/heads/{0}:refs/heads/{0}", branch);
+    let refspec = format!("refs/heads/{branch}:refs/heads/{branch}");
 
     let mut push_options = git2::PushOptions::new();
     push_options.remote_callbacks(callbacks);

@@ -7,6 +7,7 @@ use crate::error::{MsError, Result};
 use crate::security::{AcipConfig, TrustLevel};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Default)]
 pub struct Config {
     #[serde(default)]
     pub skill_paths: SkillPathsConfig,
@@ -36,25 +37,6 @@ pub struct Config {
     pub safety: SafetyConfig,
 }
 
-impl Default for Config {
-    fn default() -> Self {
-        Self {
-            skill_paths: SkillPathsConfig::default(),
-            layers: LayersConfig::default(),
-            disclosure: DisclosureConfig::default(),
-            search: SearchConfig::default(),
-            cass: CassConfig::default(),
-            cm: CmConfig::default(),
-            ru: RuConfig::default(),
-            cache: CacheConfig::default(),
-            update: UpdateConfig::default(),
-            robot: RobotConfig::default(),
-            agent_mail: AgentMailConfig::default(),
-            security: SecurityConfig::default(),
-            safety: SafetyConfig::default(),
-        }
-    }
-}
 
 impl Config {
     pub fn load(explicit_path: Option<&Path>, ms_root: &Path) -> Result<Self> {
@@ -444,7 +426,7 @@ pub struct SearchConfig {
     pub bm25_weight: f32,
     #[serde(default)]
     pub semantic_weight: f32,
-    /// API endpoint for embedding service (e.g., OpenAI, Voyage)
+    /// API endpoint for embedding service (e.g., `OpenAI`, Voyage)
     #[serde(default)]
     pub api_endpoint: String,
     /// Model name for API embeddings
@@ -586,11 +568,11 @@ pub struct RuConfig {
     pub parallel: u32,
 }
 
-fn default_ru_auto_index() -> bool {
+const fn default_ru_auto_index() -> bool {
     true
 }
 
-fn default_ru_parallel() -> u32 {
+const fn default_ru_parallel() -> u32 {
     4
 }
 
@@ -647,7 +629,7 @@ impl Default for CacheConfig {
 }
 
 impl CacheConfig {
-    fn merge(&mut self, patch: CachePatch) {
+    const fn merge(&mut self, patch: CachePatch) {
         if let Some(value) = patch.enabled {
             self.enabled = value;
         }
@@ -742,9 +724,7 @@ impl Default for AgentMailConfig {
             enabled: false,
             endpoint: "http://localhost:3000/mcp".to_string(),
             project_key: "default".to_string(),
-            agent_name: hostname::get()
-                .map(|h| h.to_string_lossy().to_string())
-                .unwrap_or_else(|_| "unknown-agent".to_string()),
+            agent_name: hostname::get().map_or_else(|_| "unknown-agent".to_string(), |h| h.to_string_lossy().to_string()),
             timeout_secs: 10,
         }
     }
@@ -771,18 +751,12 @@ impl AgentMailConfig {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Default)]
 pub struct SecurityConfig {
     #[serde(default)]
     pub acip: AcipConfig,
 }
 
-impl Default for SecurityConfig {
-    fn default() -> Self {
-        Self {
-            acip: AcipConfig::default(),
-        }
-    }
-}
 
 impl SecurityConfig {
     fn merge(&mut self, patch: SecurityPatch) {
@@ -1083,9 +1057,9 @@ fn env_list(key: &str) -> Result<Option<Vec<String>>> {
         Ok(value) => {
             let list = value
                 .split(',')
-                .map(|entry| entry.trim())
+                .map(str::trim)
                 .filter(|entry| !entry.is_empty())
-                .map(|entry| entry.to_string())
+                .map(std::string::ToString::to_string)
                 .collect::<Vec<_>>();
             Ok(Some(list))
         }

@@ -141,7 +141,7 @@ struct EvidenceCluster {
 }
 
 impl EvidenceCluster {
-    fn new() -> Self {
+    const fn new() -> Self {
         Self {
             evidence: Vec::new(),
             primary_source_type: None,
@@ -256,7 +256,7 @@ fn synthesize_rule(cluster: &EvidenceCluster) -> NegativeRule {
             )
         }
         AntiPatternSource::MarkedAntiPattern { marker } => {
-            format!("AVOID: {}", marker)
+            format!("AVOID: {marker}")
         }
         AntiPatternSource::CounterExample { .. } => {
             "AVOID this counter-example pattern".to_string()
@@ -310,7 +310,7 @@ fn truncate(s: &str, max_chars: usize) -> String {
         s.to_string()
     } else {
         let truncated: String = s.chars().take(max_chars).collect();
-        format!("{}...", truncated)
+        format!("{truncated}...")
     }
 }
 
@@ -319,6 +319,7 @@ fn truncate(s: &str, max_chars: usize) -> String {
 // =============================================================================
 
 /// Format anti-patterns for inclusion in skill output
+#[must_use] 
 pub fn format_anti_patterns(anti_patterns: &[AntiPattern]) -> AntiPatternSection {
     let mut section = AntiPatternSection::default();
 
@@ -370,6 +371,7 @@ fn count_unique_sessions(evidence: &[AntiPatternEvidence]) -> usize {
 }
 
 /// Find orphaned anti-patterns (no positive counterpart)
+#[must_use] 
 pub fn find_orphaned(anti_patterns: &[AntiPattern]) -> Vec<&AntiPattern> {
     anti_patterns.iter().filter(|ap| ap.is_orphaned()).collect()
 }

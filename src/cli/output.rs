@@ -70,8 +70,15 @@ pub struct HumanLayout {
     key_width: usize,
 }
 
+impl Default for HumanLayout {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl HumanLayout {
-    pub fn new() -> Self {
+    #[must_use] 
+    pub const fn new() -> Self {
         Self {
             lines: Vec::new(),
             key_width: 18,
@@ -114,6 +121,7 @@ impl HumanLayout {
         self
     }
 
+    #[must_use] 
     pub fn build(self) -> String {
         self.lines.join("\n")
     }

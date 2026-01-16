@@ -140,6 +140,7 @@ pub struct SimulationEngine<'a> {
 }
 
 impl<'a> SimulationEngine<'a> {
+    #[must_use] 
     pub fn new(ctx: &'a AppContext) -> Self {
         Self {
             ctx,
@@ -245,7 +246,7 @@ impl<'a> SimulationEngine<'a> {
 
         Ok(SimulationReport {
             skill_id: skill.id.clone(),
-            skill_name: skill.name.clone(),
+            skill_name: skill.name,
             started_at: started,
             duration_ms,
             result,
@@ -275,7 +276,7 @@ impl<'a> SimulationEngine<'a> {
         };
 
         Ok(ElementResult {
-            element: format!("Command: {} ({})", command, source),
+            element: format!("Command: {command} ({source})"),
             status,
             duration_ms,
             stdout: Some(result.stdout),
@@ -343,7 +344,7 @@ fn extract_elements(spec: &SkillSpec) -> Vec<SimElement> {
                 continue;
             }
             let source = section.title.clone();
-            match lang.as_deref().map(|v| v.to_lowercase()) {
+            match lang.as_deref().map(str::to_lowercase) {
                 Some(lang) if is_shell_lang(&lang) => {
                     for cmd in extract_shell_commands(&content) {
                         elements.push(SimElement::Command {
@@ -503,9 +504,7 @@ impl SimulationSandbox {
     fn execute_command(&mut self, cmd: &str, cwd: Option<&Path>) -> Result<CommandResult> {
         let shell = if cfg!(windows) { "cmd" } else { "sh" };
         let shell_arg = if cfg!(windows) { "/C" } else { "-c" };
-        let working_dir = cwd
-            .map(|p| p.to_path_buf())
-            .unwrap_or_else(|| self.workspace.path().to_path_buf());
+        let working_dir = cwd.map_or_else(|| self.workspace.path().to_path_buf(), std::path::Path::to_path_buf);
 
         let mut command = Command::new(shell);
         command.arg(shell_arg).arg(cmd);
@@ -538,7 +537,7 @@ impl SimulationSandbox {
         for entry in WalkDir::new(self.workspace.path())
             .follow_links(false)
             .into_iter()
-            .filter_map(|e| e.ok())
+            .filter_map(std::result::Result::ok)
         {
             if !entry.file_type().is_file() {
                 continue;
@@ -575,7 +574,7 @@ impl FileSystemState {
         }
     }
 
-    fn diff(&self, other: &FileSystemState) -> FileSystemChanges {
+    fn diff(&self, other: &Self) -> FileSystemChanges {
         let mut created = Vec::new();
         let mut modified = Vec::new();
         let mut deleted = Vec::new();
@@ -722,7 +721,7 @@ fn hash_content(content: &[u8]) -> String {
     let mut hasher = Sha256::new();
     hasher.update(content);
     let digest = hasher.finalize();
-    format!("{:x}", digest)[..16].to_string()
+    format!("{digest:x}")[..16].to_string()
 }
 
 #[cfg(test)]

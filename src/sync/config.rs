@@ -7,18 +7,15 @@ use crate::error::{MsError, Result};
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "kebab-case")]
+#[derive(Default)]
 pub enum ConflictStrategy {
     PreferLocal,
     PreferRemote,
+    #[default]
     PreferNewest,
     KeepBoth,
 }
 
-impl Default for ConflictStrategy {
-    fn default() -> Self {
-        Self::PreferNewest
-    }
-}
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "kebab-case")]
@@ -60,17 +57,14 @@ impl RemoteType {
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "kebab-case")]
+#[derive(Default)]
 pub enum SyncDirection {
     PullOnly,
     PushOnly,
+    #[default]
     Bidirectional,
 }
 
-impl Default for SyncDirection {
-    fn default() -> Self {
-        Self::Bidirectional
-    }
-}
 
 impl SyncDirection {
     pub fn from_str(value: &str) -> Result<Self> {
@@ -84,16 +78,19 @@ impl SyncDirection {
         }
     }
 
-    pub fn allows_pull(self) -> bool {
+    #[must_use] 
+    pub const fn allows_pull(self) -> bool {
         matches!(self, Self::PullOnly | Self::Bidirectional)
     }
 
-    pub fn allows_push(self) -> bool {
+    #[must_use] 
+    pub const fn allows_push(self) -> bool {
         matches!(self, Self::PushOnly | Self::Bidirectional)
     }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Default)]
 pub struct MachineConfig {
     #[serde(default)]
     pub name: Option<String>,
@@ -101,14 +98,6 @@ pub struct MachineConfig {
     pub description: Option<String>,
 }
 
-impl Default for MachineConfig {
-    fn default() -> Self {
-        Self {
-            name: None,
-            description: None,
-        }
-    }
-}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SyncSettings {
@@ -126,7 +115,7 @@ pub struct SyncSettings {
     pub sync_bundles: bool,
 }
 
-fn default_sync_skills() -> bool {
+const fn default_sync_skills() -> bool {
     true
 }
 
@@ -165,7 +154,7 @@ pub struct RemoteConfig {
     pub include_patterns: Vec<String>,
 }
 
-fn default_remote_enabled() -> bool {
+const fn default_remote_enabled() -> bool {
     true
 }
 
@@ -200,6 +189,7 @@ pub fn validate_remote_name(name: &str) -> Result<()> {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Default)]
 pub struct SyncConfig {
     #[serde(default)]
     pub machine: MachineConfig,
@@ -211,16 +201,6 @@ pub struct SyncConfig {
     pub conflict_strategies: HashMap<String, ConflictStrategy>,
 }
 
-impl Default for SyncConfig {
-    fn default() -> Self {
-        Self {
-            machine: MachineConfig::default(),
-            sync: SyncSettings::default(),
-            remotes: Vec::new(),
-            conflict_strategies: HashMap::new(),
-        }
-    }
-}
 
 impl SyncConfig {
     pub fn path() -> Result<PathBuf> {
@@ -279,6 +259,7 @@ impl SyncConfig {
         before != self.remotes.len()
     }
 
+    #[must_use] 
     pub fn remote(&self, name: &str) -> Option<&RemoteConfig> {
         self.remotes.iter().find(|r| r.name == name)
     }

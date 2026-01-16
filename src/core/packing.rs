@@ -32,7 +32,8 @@ pub struct PackConstraints {
 }
 
 impl PackConstraints {
-    pub fn new(budget: usize, max_per_group: usize) -> Self {
+    #[must_use] 
+    pub const fn new(budget: usize, max_per_group: usize) -> Self {
         Self {
             budget,
             max_per_group,
@@ -352,8 +353,7 @@ fn is_excluded(slice: &SkillSlice, excluded: &HashSet<String>) -> bool {
     slice
         .coverage_group
         .as_ref()
-        .map(|group| excluded.contains(&group.to_lowercase()))
-        .unwrap_or(false)
+        .is_some_and(|group| excluded.contains(&group.to_lowercase()))
 }
 
 fn can_add_slice(
@@ -399,7 +399,7 @@ fn rank_by_density<'a>(
     mode: PackMode,
     contract: Option<&PackContract>,
 ) -> Vec<&'a SkillSlice> {
-    let recent: HashSet<&str> = recent_slice_ids.iter().map(|s| s.as_str()).collect();
+    let recent: HashSet<&str> = recent_slice_ids.iter().map(std::string::String::as_str).collect();
     let mut scored: Vec<(f32, &'a SkillSlice)> = slices
         .iter()
         .map(|slice| {
@@ -409,8 +409,7 @@ fn rank_by_density<'a>(
                 .coverage_group
                 .as_ref()
                 .and_then(|group| group_counts.get(group))
-                .map(|count| 0.8_f32.powi(*count as i32))
-                .unwrap_or(1.0);
+                .map_or(1.0, |count| 0.8_f32.powi(*count as i32));
             let novelty_penalty = if recent.contains(slice.id.as_str()) {
                 0.6
             } else {
@@ -580,7 +579,7 @@ fn try_improve(
             {
                 continue;
             }
-            if candidate.requires.iter().any(|req| *req == removed_id) {
+            if candidate.requires.contains(&removed_id) {
                 continue;
             }
 

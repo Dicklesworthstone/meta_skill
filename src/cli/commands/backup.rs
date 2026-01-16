@@ -90,8 +90,7 @@ fn run_create(ctx: &AppContext, args: &BackupCreateArgs) -> Result<()> {
     let backup_dir = backup_root.join(&backup_id);
     if backup_dir.exists() {
         return Err(MsError::ValidationFailed(format!(
-            "backup {} already exists",
-            backup_id
+            "backup {backup_id} already exists"
         )));
     }
     std::fs::create_dir_all(&backup_dir)
@@ -187,7 +186,7 @@ fn run_create(ctx: &AppContext, args: &BackupCreateArgs) -> Result<()> {
         return crate::cli::output::emit_json(&manifest);
     }
 
-    println!("Backup created: {}", backup_id);
+    println!("Backup created: {backup_id}");
     println!("Path: {}", backup_dir.display());
     println!("Entries: {}", manifest.entries.len());
     println!("Size: {} bytes", manifest.total_bytes);
@@ -211,10 +210,10 @@ fn run_list(ctx: &AppContext, args: &BackupListArgs) -> Result<()> {
     let mut backups = Vec::new();
     let mut dirs = std::fs::read_dir(&backup_root)
         .map_err(|err| MsError::Config(format!("read {}: {err}", backup_root.display())))?
-        .filter_map(|entry| entry.ok())
+        .filter_map(std::result::Result::ok)
         .filter(|entry| entry.path().is_dir())
         .collect::<Vec<_>>();
-    dirs.sort_by_key(|e| e.file_name());
+    dirs.sort_by_key(std::fs::DirEntry::file_name);
     dirs.reverse();
 
     for entry in dirs.into_iter().take(args.limit) {
@@ -293,8 +292,7 @@ fn run_restore(ctx: &AppContext, args: &BackupRestoreArgs) -> Result<()> {
     let manifest_path = backup_dir.join("manifest.json");
     if !manifest_path.exists() {
         return Err(MsError::NotFound(format!(
-            "backup {} missing manifest",
-            backup_id
+            "backup {backup_id} missing manifest"
         )));
     }
     let manifest_content = std::fs::read_to_string(&manifest_path)
@@ -343,7 +341,7 @@ fn run_restore(ctx: &AppContext, args: &BackupRestoreArgs) -> Result<()> {
     }
 
     println!("Restored backup: {}", manifest.id);
-    println!("Entries restored: {}", restored);
+    println!("Entries restored: {restored}");
     if !skipped.is_empty() {
         println!("Entries skipped: {}", skipped.join(", "));
     }
@@ -482,10 +480,10 @@ fn latest_backup_id(root: &Path) -> Result<String> {
     }
     let mut dirs = std::fs::read_dir(root)
         .map_err(|err| MsError::Config(format!("read {}: {err}", root.display())))?
-        .filter_map(|entry| entry.ok())
+        .filter_map(std::result::Result::ok)
         .filter(|entry| entry.path().is_dir())
         .collect::<Vec<_>>();
-    dirs.sort_by_key(|e| e.file_name());
+    dirs.sort_by_key(std::fs::DirEntry::file_name);
     let latest = dirs.pop().ok_or_else(|| MsError::NotFound("no backups found".to_string()))?;
     Ok(latest.file_name().to_string_lossy().to_string())
 }

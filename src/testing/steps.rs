@@ -28,6 +28,7 @@ pub struct StepExecutor<'a> {
 
 impl<'a> StepExecutor<'a> {
     /// Create a new step executor
+    #[must_use] 
     pub fn new(ctx: &'a AppContext, verbose: bool) -> Self {
         Self {
             ctx,
@@ -41,6 +42,7 @@ impl<'a> StepExecutor<'a> {
     ///
     /// When enabled, all `run` steps will be validated through DCG
     /// before execution.
+    #[must_use] 
     pub fn with_safety(mut self, gate: SafetyGate) -> Self {
         self.safety = Some(gate);
         self
@@ -52,7 +54,8 @@ impl<'a> StepExecutor<'a> {
     }
 
     /// Get a reference to the test context
-    pub fn test_context(&self) -> &TestContext {
+    #[must_use] 
+    pub const fn test_context(&self) -> &TestContext {
         &self.test_ctx
     }
 }
@@ -86,6 +89,7 @@ pub struct LoadedSkillInfo {
 
 impl TestContext {
     /// Expand variables in a string (${var} syntax)
+    #[must_use] 
     pub fn expand(&self, input: &str) -> String {
         let mut result = input.to_string();
         for (name, value) in &self.variables {
@@ -149,7 +153,7 @@ fn execute_run(
     let stdin = step.stdin.as_ref().map(|s| ctx.expand(s));
 
     if verbose {
-        println!("[STEP] run: {}", cmd);
+        println!("[STEP] run: {cmd}");
         if let Some(ref dir) = cwd {
             println!("[STEP]   cwd: {dir}");
         }
@@ -183,21 +187,21 @@ fn execute_run(
 
     let mut child = command
         .spawn()
-        .map_err(|err| MsError::Config(format!("failed to execute command '{}': {err}", cmd)))?;
+        .map_err(|err| MsError::Config(format!("failed to execute command '{cmd}': {err}")))?;
 
     if let Some(input) = stdin {
         if let Some(mut child_stdin) = child.stdin.take() {
             child_stdin.write_all(input.as_bytes()).map_err(|err| {
-                MsError::Config(format!("failed to write stdin for '{}': {err}", cmd))
+                MsError::Config(format!("failed to write stdin for '{cmd}': {err}"))
             })?;
         }
     }
 
     let stdout = child.stdout.take().ok_or_else(|| {
-        MsError::Config(format!("failed to capture stdout for '{}'", cmd))
+        MsError::Config(format!("failed to capture stdout for '{cmd}'"))
     })?;
     let stderr = child.stderr.take().ok_or_else(|| {
-        MsError::Config(format!("failed to capture stderr for '{}'", cmd))
+        MsError::Config(format!("failed to capture stderr for '{cmd}'"))
     })?;
 
     let stdout_handle = std::thread::spawn(move || {
@@ -226,7 +230,7 @@ fn execute_run(
                     timed_out = true;
                     let _ = child.kill();
                     exit_status = Some(child.wait().map_err(|err| {
-                        MsError::Config(format!("failed to wait for '{}': {err}", cmd))
+                        MsError::Config(format!("failed to wait for '{cmd}': {err}"))
                     })?);
                     break;
                 }
@@ -234,8 +238,7 @@ fn execute_run(
             }
             Err(err) => {
                 return Err(MsError::Config(format!(
-                    "failed to wait for command '{}': {err}",
-                    cmd
+                    "failed to wait for command '{cmd}': {err}"
                 )));
             }
         }
@@ -266,8 +269,7 @@ fn execute_run(
 
     if timed_out {
         return Err(MsError::ValidationFailed(format!(
-            "command timed out after {:?}: {}",
-            timeout, cmd
+            "command timed out after {timeout:?}: {cmd}"
         )));
     }
 
@@ -294,32 +296,31 @@ fn execute_assert(step: &Assertions, ctx: &mut TestContext, verbose: bool) -> Re
     // Check stdout contains
     if let Some(ref text) = step.stdout_contains {
         if !ctx.last_stdout.contains(text) {
-            failures.push(format!("stdout_contains: '{}' not found in stdout", text));
+            failures.push(format!("stdout_contains: '{text}' not found in stdout"));
         }
     }
 
     // Check stdout not contains
     if let Some(ref text) = step.stdout_not_contains {
         if ctx.last_stdout.contains(text) {
-            failures.push(format!("stdout_not_contains: '{}' found in stdout", text));
+            failures.push(format!("stdout_not_contains: '{text}' found in stdout"));
         }
     }
 
     // Check stderr empty
-    if step.stderr_empty == Some(true) {
-        if !ctx.last_stderr.trim().is_empty() {
+    if step.stderr_empty == Some(true)
+        && !ctx.last_stderr.trim().is_empty() {
             failures.push(format!(
                 "stderr_empty: stderr is not empty: {}",
                 ctx.last_stderr.trim()
             ));
         }
-    }
 
     // Check file exists
     if let Some(ref path) = step.file_exists {
         let expanded = ctx.expand(path);
         if !Path::new(&expanded).exists() {
-            failures.push(format!("file_exists: {} does not exist", expanded));
+            failures.push(format!("file_exists: {expanded} does not exist"));
         }
     }
 
@@ -336,17 +337,16 @@ fn execute_assert(step: &Assertions, ctx: &mut TestContext, verbose: bool) -> Re
                 }
             }
             Err(err) => {
-                failures.push(format!("file_contains: cannot read {}: {}", path, err));
+                failures.push(format!("file_contains: cannot read {path}: {err}"));
             }
         }
     }
 
     // Check skill loaded
-    if step.skill_loaded == Some(true) {
-        if ctx.loaded_skill.is_none() {
+    if step.skill_loaded == Some(true)
+        && ctx.loaded_skill.is_none() {
             failures.push("skill_loaded: no skill was loaded".to_string());
         }
-    }
 
     // Check sections present
     if let Some(ref expected_sections) = step.sections_present {
@@ -357,7 +357,7 @@ fn execute_assert(step: &Assertions, ctx: &mut TestContext, verbose: bool) -> Re
                     .iter()
                     .any(|s| s.eq_ignore_ascii_case(section))
                 {
-                    failures.push(format!("sections_present: section '{}' not found", section));
+                    failures.push(format!("sections_present: section '{section}' not found"));
                 }
             }
         } else {
@@ -376,7 +376,7 @@ fn execute_assert(step: &Assertions, ctx: &mut TestContext, verbose: bool) -> Re
     if let Some(max_rank) = step.retrieval_rank_le {
         if let Some(rank) = ctx.retrieval_rank {
             if rank > max_rank {
-                failures.push(format!("retrieval_rank_le: {} > {}", rank, max_rank));
+                failures.push(format!("retrieval_rank_le: {rank} > {max_rank}"));
             }
         }
     }
@@ -389,7 +389,7 @@ fn execute_assert(step: &Assertions, ctx: &mut TestContext, verbose: bool) -> Re
     } else {
         if verbose {
             for f in &failures {
-                println!("[STEP]   FAIL: {}", f);
+                println!("[STEP]   FAIL: {f}");
             }
         }
         Err(MsError::ValidationFailed(failures.join("; ")))
@@ -409,7 +409,7 @@ fn execute_write_file(step: &WriteFileStep, ctx: &mut TestContext, verbose: bool
         std::fs::create_dir_all(parent).map_err(|err| {
             MsError::Io(std::io::Error::new(
                 err.kind(),
-                format!("create parent dirs for {}: {err}", path),
+                format!("create parent dirs for {path}: {err}"),
             ))
         })?;
     }
@@ -417,7 +417,7 @@ fn execute_write_file(step: &WriteFileStep, ctx: &mut TestContext, verbose: bool
     std::fs::write(&path, &content).map_err(|err| {
         MsError::Io(std::io::Error::new(
             err.kind(),
-            format!("write {}: {err}", path),
+            format!("write {path}: {err}"),
         ))
     })?;
 
@@ -439,7 +439,7 @@ fn execute_mkdir(step: &MkdirStep, ctx: &mut TestContext, verbose: bool) -> Resu
     .map_err(|err| {
         MsError::Io(std::io::Error::new(
             err.kind(),
-            format!("mkdir {}: {err}", path),
+            format!("mkdir {path}: {err}"),
         ))
     })?;
 
@@ -470,7 +470,7 @@ fn execute_remove(step: &RemoveStep, ctx: &mut TestContext, verbose: bool) -> Re
     .map_err(|err| {
         MsError::Io(std::io::Error::new(
             err.kind(),
-            format!("remove {}: {err}", path),
+            format!("remove {path}: {err}"),
         ))
     })?;
 
@@ -482,7 +482,7 @@ fn execute_copy(step: &CopyStep, ctx: &mut TestContext, verbose: bool) -> Result
     let to = ctx.expand(&step.to);
 
     if verbose {
-        println!("[STEP] copy: {} -> {}", from, to);
+        println!("[STEP] copy: {from} -> {to}");
     }
 
     // Create parent directories if needed
@@ -490,7 +490,7 @@ fn execute_copy(step: &CopyStep, ctx: &mut TestContext, verbose: bool) -> Result
         std::fs::create_dir_all(parent).map_err(|err| {
             MsError::Io(std::io::Error::new(
                 err.kind(),
-                format!("create parent dirs for {}: {err}", to),
+                format!("create parent dirs for {to}: {err}"),
             ))
         })?;
     }
@@ -498,7 +498,7 @@ fn execute_copy(step: &CopyStep, ctx: &mut TestContext, verbose: bool) -> Result
     std::fs::copy(&from, &to).map_err(|err| {
         MsError::Io(std::io::Error::new(
             err.kind(),
-            format!("copy {} -> {}: {err}", from, to),
+            format!("copy {from} -> {to}: {err}"),
         ))
     })?;
 

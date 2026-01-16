@@ -23,11 +23,11 @@ pub enum RuleCategory {
 impl fmt::Display for RuleCategory {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            RuleCategory::Structure => write!(f, "structure"),
-            RuleCategory::Reference => write!(f, "reference"),
-            RuleCategory::Quality => write!(f, "quality"),
-            RuleCategory::Security => write!(f, "security"),
-            RuleCategory::Performance => write!(f, "performance"),
+            Self::Structure => write!(f, "structure"),
+            Self::Reference => write!(f, "reference"),
+            Self::Quality => write!(f, "quality"),
+            Self::Security => write!(f, "security"),
+            Self::Performance => write!(f, "performance"),
         }
     }
 }
@@ -47,9 +47,9 @@ pub enum Severity {
 impl fmt::Display for Severity {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Severity::Info => write!(f, "info"),
-            Severity::Warning => write!(f, "warning"),
-            Severity::Error => write!(f, "error"),
+            Self::Info => write!(f, "info"),
+            Self::Warning => write!(f, "warning"),
+            Self::Error => write!(f, "error"),
         }
     }
 }
@@ -69,7 +69,8 @@ pub struct SourceSpan {
 
 impl SourceSpan {
     /// Create a new source span
-    pub fn new(start_line: usize, start_col: usize, end_line: usize, end_col: usize) -> Self {
+    #[must_use] 
+    pub const fn new(start_line: usize, start_col: usize, end_line: usize, end_col: usize) -> Self {
         Self {
             start_line,
             start_col,
@@ -79,7 +80,8 @@ impl SourceSpan {
     }
 
     /// Create a span for a single line
-    pub fn line(line: usize) -> Self {
+    #[must_use] 
+    pub const fn line(line: usize) -> Self {
         Self {
             start_line: line,
             start_col: 1,
@@ -152,7 +154,8 @@ impl Diagnostic {
     }
 
     /// Set the span
-    pub fn with_span(mut self, span: SourceSpan) -> Self {
+    #[must_use] 
+    pub const fn with_span(mut self, span: SourceSpan) -> Self {
         self.span = Some(span);
         self
     }
@@ -164,13 +167,15 @@ impl Diagnostic {
     }
 
     /// Mark that a fix is available
-    pub fn with_fix(mut self) -> Self {
+    #[must_use] 
+    pub const fn with_fix(mut self) -> Self {
         self.fix_available = true;
         self
     }
 
     /// Set the category
-    pub fn with_category(mut self, category: RuleCategory) -> Self {
+    #[must_use] 
+    pub const fn with_category(mut self, category: RuleCategory) -> Self {
         self.category = category;
         self
     }
@@ -180,10 +185,10 @@ impl fmt::Display for Diagnostic {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "[{}] {}: {}", self.severity, self.rule_id, self.message)?;
         if let Some(span) = &self.span {
-            write!(f, " at {}", span)?;
+            write!(f, " at {span}")?;
         }
         if let Some(suggestion) = &self.suggestion {
-            write!(f, " (hint: {})", suggestion)?;
+            write!(f, " (hint: {suggestion})")?;
         }
         Ok(())
     }

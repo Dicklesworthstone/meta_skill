@@ -15,17 +15,14 @@ use crate::error::{MsError, Result};
 /// Update channel for release filtering.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
+#[derive(Default)]
 pub enum UpdateChannel {
+    #[default]
     Stable,
     Beta,
     Nightly,
 }
 
-impl Default for UpdateChannel {
-    fn default() -> Self {
-        Self::Stable
-    }
-}
 
 impl std::str::FromStr for UpdateChannel {
     type Err = MsError;
@@ -36,8 +33,7 @@ impl std::str::FromStr for UpdateChannel {
             "beta" => Ok(Self::Beta),
             "nightly" => Ok(Self::Nightly),
             _ => Err(MsError::ValidationFailed(format!(
-                "invalid update channel: {} (expected stable, beta, or nightly)",
-                s
+                "invalid update channel: {s} (expected stable, beta, or nightly)"
             ))),
         }
     }
@@ -84,6 +80,7 @@ pub struct UpdateChecker {
 
 impl UpdateChecker {
     /// Create a new update checker.
+    #[must_use] 
     pub fn new(current_version: Version, channel: UpdateChannel, repo: String) -> Self {
         Self {
             current_version,
@@ -94,6 +91,7 @@ impl UpdateChecker {
     }
 
     /// Set the GitHub token for authenticated requests.
+    #[must_use] 
     pub fn with_token(mut self, token: Option<String>) -> Self {
         self.token = token;
         self
@@ -140,12 +138,14 @@ impl UpdateChecker {
     }
 
     /// Get the current version being checked against.
-    pub fn current_version(&self) -> &Version {
+    #[must_use] 
+    pub const fn current_version(&self) -> &Version {
         &self.current_version
     }
 
     /// Get the update channel.
-    pub fn channel(&self) -> UpdateChannel {
+    #[must_use] 
+    pub const fn channel(&self) -> UpdateChannel {
         self.channel
     }
 
@@ -187,6 +187,7 @@ impl UpdateDownloader {
     }
 
     /// Set the GitHub token for authenticated downloads.
+    #[must_use] 
     pub fn with_token(mut self, token: Option<String>) -> Self {
         self.token = token;
         self
@@ -210,8 +211,7 @@ impl UpdateDownloader {
                     // Clean up failed download
                     let _ = std::fs::remove_file(&binary_path);
                     return Err(MsError::ValidationFailed(format!(
-                        "checksum mismatch: expected {}, got {}",
-                        expected_hash, actual_hash
+                        "checksum mismatch: expected {expected_hash}, got {actual_hash}"
                     )));
                 }
             }
@@ -247,7 +247,7 @@ impl UpdateDownloader {
             .or(candidates.first())
             .copied()
             .ok_or_else(|| {
-                MsError::ValidationFailed(format!("no suitable binary found for {}", target))
+                MsError::ValidationFailed(format!("no suitable binary found for {target}"))
             })
     }
 
@@ -272,7 +272,7 @@ impl UpdateDownloader {
         let client = GitHubClient::new(self.token.clone());
         let bytes = client.download_url(&asset.download_url)?;
         let content = String::from_utf8(bytes)
-            .map_err(|e| MsError::ValidationFailed(format!("invalid checksum file: {}", e)))?;
+            .map_err(|e| MsError::ValidationFailed(format!("invalid checksum file: {e}")))?;
 
         let mut checksums = std::collections::HashMap::new();
         for line in content.lines() {
@@ -345,7 +345,8 @@ impl UpdateInstaller {
     }
 
     /// Create an installer with explicit paths.
-    pub fn with_paths(current_binary: PathBuf, backup_dir: PathBuf) -> Self {
+    #[must_use] 
+    pub const fn with_paths(current_binary: PathBuf, backup_dir: PathBuf) -> Self {
         Self {
             current_binary,
             backup_dir,
@@ -480,11 +481,11 @@ impl GitHubClient {
 
         let raw_releases: Vec<GitHubRelease> = response
             .json()
-            .map_err(|e| MsError::ValidationFailed(format!("failed to parse releases: {}", e)))?;
+            .map_err(|e| MsError::ValidationFailed(format!("failed to parse releases: {e}")))?;
 
         Ok(raw_releases
             .into_iter()
-            .filter_map(|r| r.into_release_info())
+            .filter_map(GitHubRelease::into_release_info)
             .collect())
     }
 
@@ -496,7 +497,7 @@ impl GitHubClient {
 
         let response = request
             .send()
-            .map_err(|e| MsError::Config(format!("download failed: {}", e)))?;
+            .map_err(|e| MsError::Config(format!("download failed: {e}")))?;
 
         if !response.status().is_success() {
             return Err(MsError::ValidationFailed(format!(
@@ -508,7 +509,7 @@ impl GitHubClient {
         response
             .bytes()
             .map(|b| b.to_vec())
-            .map_err(|e| MsError::Config(format!("download read failed: {}", e)))
+            .map_err(|e| MsError::Config(format!("download read failed: {e}")))
     }
 
     fn get(&self, url: &str) -> Result<reqwest::blocking::Response> {
@@ -522,7 +523,7 @@ impl GitHubClient {
         }
         request
             .send()
-            .map_err(|e| MsError::Config(format!("github request failed: {}", e)))
+            .map_err(|e| MsError::Config(format!("github request failed: {e}")))
     }
 }
 
@@ -553,9 +554,7 @@ impl GitHubRelease {
         let published_at = self
             .published_at
             .as_ref()
-            .and_then(|s| DateTime::parse_from_rfc3339(s).ok())
-            .map(|dt| dt.with_timezone(&Utc))
-            .unwrap_or_else(Utc::now);
+            .and_then(|s| DateTime::parse_from_rfc3339(s).ok()).map_or_else(Utc::now, |dt| dt.with_timezone(&Utc));
 
         Some(ReleaseInfo {
             version,
@@ -597,8 +596,7 @@ fn parse_repo(input: &str) -> Result<(String, String)> {
     let parts: Vec<&str> = cleaned.split('/').collect();
     if parts.len() < 2 || parts[0].is_empty() || parts[1].is_empty() {
         return Err(MsError::ValidationFailed(format!(
-            "invalid repo reference: {}",
-            input
+            "invalid repo reference: {input}"
         )));
     }
 
@@ -635,7 +633,7 @@ fn current_target() -> String {
         "unknown"
     };
 
-    format!("{}-{}", os, arch)
+    format!("{os}-{arch}")
 }
 
 fn is_generic_binary(name: &str) -> bool {

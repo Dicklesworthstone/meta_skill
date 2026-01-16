@@ -77,6 +77,7 @@ pub struct CollectedContext {
 }
 
 impl CollectedContext {
+    #[must_use] 
     pub fn fingerprint(&self) -> CollectorFingerprint {
         let mut hasher = std::collections::hash_map::DefaultHasher::new();
 
@@ -120,6 +121,7 @@ pub struct ContextCollector {
 }
 
 impl ContextCollector {
+    #[must_use] 
     pub fn new(config: ContextCollectorConfig) -> Self {
         Self {
             config,
@@ -178,7 +180,7 @@ impl ContextCollector {
             .follow_links(false)
             .into_iter();
 
-        for entry in walker.filter_map(|e| e.ok()) {
+        for entry in walker.filter_map(std::result::Result::ok) {
             if !entry.file_type().is_file() {
                 continue;
             }
@@ -256,7 +258,7 @@ impl ContextCollector {
         checklist
             .iter()
             .filter(|tool| which::which(tool).is_ok())
-            .map(|s| s.to_string())
+            .map(std::string::ToString::to_string)
             .collect()
     }
 
@@ -275,12 +277,10 @@ impl ContextCollector {
         let mut recent_commits = Vec::new();
         if let Ok(mut revwalk) = repo.revwalk() {
             revwalk.push_head().ok()?;
-            for oid in revwalk.take(5) {
-                if let Ok(oid) = oid {
-                    if let Ok(commit) = repo.find_commit(oid) {
-                        if let Some(summary) = commit.summary() {
-                            recent_commits.push(summary.to_string());
-                        }
+            for oid in revwalk.take(5).flatten() {
+                if let Ok(commit) = repo.find_commit(oid) {
+                    if let Some(summary) = commit.summary() {
+                        recent_commits.push(summary.to_string());
                     }
                 }
             }

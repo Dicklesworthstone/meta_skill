@@ -16,6 +16,7 @@ pub struct UbsClient {
 }
 
 impl UbsClient {
+    #[must_use] 
     pub fn new(ubs_path: Option<PathBuf>) -> Self {
         Self {
             ubs_path: ubs_path.unwrap_or_else(|| PathBuf::from("ubs")),
@@ -23,6 +24,7 @@ impl UbsClient {
         }
     }
 
+    #[must_use] 
     pub fn with_safety(mut self, safety: SafetyGate) -> Self {
         self.safety = Some(safety);
         self
@@ -91,7 +93,7 @@ pub struct UbsResult {
 }
 
 impl UbsResult {
-    fn empty() -> Self {
+    const fn empty() -> Self {
         Self {
             exit_code: 0,
             stdout: String::new(),
@@ -100,6 +102,7 @@ impl UbsResult {
         }
     }
 
+    #[must_use] 
     pub fn is_clean(&self) -> bool {
         self.exit_code == 0 && self.findings.is_empty()
     }

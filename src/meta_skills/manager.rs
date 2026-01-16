@@ -1,4 +1,4 @@
-//! MetaSkill manager - resolves slices, evaluates conditions, and packs content.
+//! `MetaSkill` manager - resolves slices, evaluates conditions, and packs content.
 
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
@@ -66,7 +66,8 @@ pub struct ConditionContext<'a> {
     pub loaded_slices: &'a HashSet<(String, String)>,
 }
 
-impl<'a> ConditionContext<'a> {
+impl ConditionContext<'_> {
+    #[must_use] 
     pub fn evaluate(&self, condition: &SliceCondition) -> bool {
         match condition {
             SliceCondition::TechStack { value } => {
@@ -86,6 +87,7 @@ impl<'a> ConditionContext<'a> {
         }
     }
 
+    #[must_use] 
     pub fn evaluate_all(&self, conditions: &[SliceCondition]) -> bool {
         conditions.iter().all(|c| self.evaluate(c))
     }
@@ -113,7 +115,8 @@ pub struct MetaSkillManager<'a> {
 }
 
 impl<'a> MetaSkillManager<'a> {
-    pub fn new(ctx: &'a AppContext) -> Self {
+    #[must_use] 
+    pub const fn new(ctx: &'a AppContext) -> Self {
         Self { ctx }
     }
 
@@ -166,8 +169,7 @@ impl<'a> MetaSkillManager<'a> {
 
         if required_tokens > token_budget {
             return Err(MsError::ValidationFailed(format!(
-                "required slices need {} tokens but budget is {}",
-                required_tokens, token_budget
+                "required slices need {required_tokens} tokens but budget is {token_budget}"
             )));
         }
 
@@ -364,11 +366,11 @@ impl<'a> MetaSkillManager<'a> {
 
         // Sort skills by ID for deterministic output
         let mut skill_ids: Vec<&str> = by_skill.keys().copied().collect();
-        skill_ids.sort();
+        skill_ids.sort_unstable();
 
         for skill_id in skill_ids {
             let skill_slices = &by_skill[skill_id];
-            output.push_str(&format!("## From: {}\n\n", skill_id));
+            output.push_str(&format!("## From: {skill_id}\n\n"));
             for slice in skill_slices {
                 output.push_str(&slice.content);
                 output.push_str("\n\n");

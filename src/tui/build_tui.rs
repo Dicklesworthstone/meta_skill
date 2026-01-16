@@ -34,21 +34,21 @@ pub enum FocusPanel {
 }
 
 impl FocusPanel {
-    fn next(self) -> Self {
+    const fn next(self) -> Self {
         match self {
-            FocusPanel::Patterns => FocusPanel::Details,
-            FocusPanel::Details => FocusPanel::Draft,
-            FocusPanel::Draft => FocusPanel::Actions,
-            FocusPanel::Actions => FocusPanel::Patterns,
+            Self::Patterns => Self::Details,
+            Self::Details => Self::Draft,
+            Self::Draft => Self::Actions,
+            Self::Actions => Self::Patterns,
         }
     }
 
-    fn prev(self) -> Self {
+    const fn prev(self) -> Self {
         match self {
-            FocusPanel::Patterns => FocusPanel::Actions,
-            FocusPanel::Details => FocusPanel::Patterns,
-            FocusPanel::Draft => FocusPanel::Details,
-            FocusPanel::Actions => FocusPanel::Draft,
+            Self::Patterns => Self::Actions,
+            Self::Details => Self::Patterns,
+            Self::Draft => Self::Details,
+            Self::Actions => Self::Draft,
         }
     }
 }
@@ -185,7 +185,7 @@ impl BuildTui {
         let checkpoint_info = self
             .last_checkpoint
             .as_ref()
-            .map(|t| format!(" | Checkpoint: {}", t))
+            .map(|t| format!(" | Checkpoint: {t}"))
             .unwrap_or_default();
 
         let status_line = Line::from(vec![
@@ -538,7 +538,7 @@ impl BuildTui {
                     }
                 }
                 if let Err(e) = self.wizard.confirm_sessions(sessions) {
-                    self.status_message = Some(format!("Error: {}", e));
+                    self.status_message = Some(format!("Error: {e}"));
                 }
             }
             _ => {}
@@ -572,7 +572,7 @@ impl BuildTui {
             KeyCode::Char('f') => {
                 // Finish extraction
                 if let Err(e) = self.wizard.finish_extraction() {
-                    self.status_message = Some(format!("Error: {}", e));
+                    self.status_message = Some(format!("Error: {e}"));
                 }
             }
             _ => {}
@@ -582,14 +582,14 @@ impl BuildTui {
 
     fn handle_guard_key(&mut self, key: KeyCode) -> Result<()> {
         match key {
-            KeyCode::Char('y') | KeyCode::Char('a') => {
+            KeyCode::Char('y' | 'a') => {
                 // Accept
                 self.wizard.review_move(MoveDecision::Accept)?;
                 if !self.wizard.next_flagged_move() {
                     self.wizard.finish_guard()?;
                 }
             }
-            KeyCode::Char('n') | KeyCode::Char('r') => {
+            KeyCode::Char('n' | 'r') => {
                 // Reject
                 self.wizard.review_move(MoveDecision::Reject)?;
                 if !self.wizard.next_flagged_move() {
@@ -653,7 +653,7 @@ impl BuildTui {
 
     // Helper methods for getting display data
 
-    fn get_phase_name(&self) -> &'static str {
+    const fn get_phase_name(&self) -> &'static str {
         match self.wizard.state() {
             WizardState::SessionSelection { .. } => "Session Selection",
             WizardState::MoveExtraction { .. } => "Pattern Extraction",
@@ -670,13 +670,11 @@ impl BuildTui {
             WizardState::SkillFormalization { draft, .. } => draft
                 .validation
                 .as_ref()
-                .map(|v| v.confidence)
-                .unwrap_or(0.7),
+                .map_or(0.7, |v| v.confidence),
             WizardState::MaterializationTest { draft, .. } => draft
                 .validation
                 .as_ref()
-                .map(|v| v.confidence)
-                .unwrap_or(0.7),
+                .map_or(0.7, |v| v.confidence),
             _ => 0.7,
         }
     }
@@ -706,7 +704,7 @@ impl BuildTui {
                             prefix,
                             r.snippet.as_deref().unwrap_or(&r.session_id)
                         ),
-                        r.score as f32,
+                        r.score,
                     )
                 })
                 .collect(),
@@ -795,7 +793,7 @@ impl BuildTui {
                         )),
                     ];
                     for ev in &rule.evidence {
-                        lines.push(Line::from(format!("  - {}", ev)));
+                        lines.push(Line::from(format!("  - {ev}")));
                     }
                     lines.push(Line::from(""));
                     lines.push(Line::from(format!(

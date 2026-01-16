@@ -47,16 +47,17 @@ pub enum LogLevel {
 impl TestLogger {
     /// Create a new test logger for the given test.
     ///
-    /// Checks BEADS_TEST_VERBOSE environment variable to enable verbose output.
+    /// Checks `BEADS_TEST_VERBOSE` environment variable to enable verbose output.
+    #[must_use] 
     pub fn new(test_name: &str) -> Self {
         let verbose = std::env::var("BEADS_TEST_VERBOSE").is_ok();
-        let mut logger = TestLogger {
+        let mut logger = Self {
             test_name: test_name.to_string(),
             log_entries: Vec::new(),
             start_time: Instant::now(),
             verbose,
         };
-        logger.info("TEST_START", &format!("Starting test: {}", test_name), None);
+        logger.info("TEST_START", &format!("Starting test: {test_name}"), None);
         logger
     }
 
@@ -93,7 +94,7 @@ impl TestLogger {
         F: FnOnce() -> T,
     {
         let start = Instant::now();
-        self.debug(category, &format!("Starting: {}", message), None);
+        self.debug(category, &format!("Starting: {message}"), None);
         let result = f();
         let duration = start.elapsed();
         self.log(
@@ -172,7 +173,7 @@ impl TestLogger {
             if let Some(ref d) = entry.details {
                 if let Ok(pretty) = serde_json::to_string_pretty(d) {
                     for line in pretty.lines() {
-                        eprintln!("            {}", line);
+                        eprintln!("            {line}");
                     }
                 }
             }
@@ -182,6 +183,7 @@ impl TestLogger {
     }
 
     /// Generate final test report.
+    #[must_use] 
     pub fn report(&self) -> TestReport {
         let total_duration = self.start_time.elapsed();
         let errors = self
@@ -210,16 +212,18 @@ impl TestLogger {
     pub fn write_report(&self, path: &Path) -> std::io::Result<()> {
         let report = self.report();
         let json = serde_json::to_string_pretty(&report)
-            .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?;
+            .map_err(std::io::Error::other)?;
         std::fs::write(path, json)
     }
 
     /// Get elapsed time since test start.
+    #[must_use] 
     pub fn elapsed(&self) -> Duration {
         self.start_time.elapsed()
     }
 
     /// Check if any errors have been logged.
+    #[must_use] 
     pub fn has_errors(&self) -> bool {
         self.log_entries
             .iter()
@@ -227,6 +231,7 @@ impl TestLogger {
     }
 
     /// Get number of entries logged.
+    #[must_use] 
     pub fn entry_count(&self) -> usize {
         self.log_entries.len()
     }

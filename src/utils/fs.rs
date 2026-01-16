@@ -42,11 +42,7 @@ pub fn read_tail(path: impl AsRef<Path>, count: usize) -> Result<Vec<String>> {
 
     // Heuristic: Read last 8KB (enough for ~100 typical command lines)
     let chunk_size = 8 * 1024;
-    let seek_pos = if len > chunk_size {
-        len - chunk_size
-    } else {
-        0
-    };
+    let seek_pos = len.saturating_sub(chunk_size);
 
     file.seek(SeekFrom::Start(seek_pos))?;
     let mut buffer = Vec::new();

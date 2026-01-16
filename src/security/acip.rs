@@ -71,7 +71,8 @@ impl Default for TrustBoundaryConfig {
 }
 
 impl TrustBoundaryConfig {
-    pub fn level_for(&self, source: ContentSource) -> TrustLevel {
+    #[must_use] 
+    pub const fn level_for(&self, source: ContentSource) -> TrustLevel {
         match source {
             ContentSource::User => self.user_messages,
             ContentSource::Assistant => self.assistant_messages,
@@ -174,11 +175,13 @@ impl AcipEngine {
         })
     }
 
-    pub fn config(&self) -> &AcipConfig {
+    #[must_use] 
+    pub const fn config(&self) -> &AcipConfig {
         &self.config
     }
 }
 
+#[must_use] 
 pub fn build_quarantine_record(
     analysis: &AcipAnalysis,
     session_id: &str,
@@ -257,11 +260,13 @@ fn detect_sensitive(content: &str) -> bool {
 }
 
 /// Check if content contains prompt injection patterns.
+#[must_use] 
 pub fn contains_injection_patterns(content: &str) -> bool {
     detect_disallowed(content)
 }
 
 /// Check if content contains sensitive data patterns (API keys, secrets, etc.).
+#[must_use] 
 pub fn contains_sensitive_data(content: &str) -> bool {
     detect_sensitive(content)
 }

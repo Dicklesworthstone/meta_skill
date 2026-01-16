@@ -15,15 +15,15 @@ use crate::lint::rule::ValidationRule;
 pub struct RequiredMetadataRule;
 
 impl ValidationRule for RequiredMetadataRule {
-    fn id(&self) -> &str {
+    fn id(&self) -> &'static str {
         "required-metadata"
     }
 
-    fn name(&self) -> &str {
+    fn name(&self) -> &'static str {
         "Required Metadata"
     }
 
-    fn description(&self) -> &str {
+    fn description(&self) -> &'static str {
         "Skills must have id, name, and description fields"
     }
 
@@ -91,15 +91,15 @@ impl ValidationRule for RequiredMetadataRule {
 pub struct ValidVersionRule;
 
 impl ValidationRule for ValidVersionRule {
-    fn id(&self) -> &str {
+    fn id(&self) -> &'static str {
         "valid-version"
     }
 
-    fn name(&self) -> &str {
+    fn name(&self) -> &'static str {
         "Valid Version"
     }
 
-    fn description(&self) -> &str {
+    fn description(&self) -> &'static str {
         "Version must be a valid semver string"
     }
 
@@ -125,7 +125,7 @@ impl ValidationRule for ValidVersionRule {
         if parts.len() != 3 || !parts.iter().all(|p| p.parse::<u32>().is_ok()) {
             return vec![Diagnostic::warning(
                 self.id(),
-                format!("Version '{}' is not valid semver (expected X.Y.Z)", version),
+                format!("Version '{version}' is not valid semver (expected X.Y.Z)"),
             )
             .with_suggestion("Use semantic versioning like '1.0.0' or '2.1.3'")
             .with_category(RuleCategory::Structure)];
@@ -139,15 +139,15 @@ impl ValidationRule for ValidVersionRule {
 pub struct UniqueSectionIdsRule;
 
 impl ValidationRule for UniqueSectionIdsRule {
-    fn id(&self) -> &str {
+    fn id(&self) -> &'static str {
         "unique-section-ids"
     }
 
-    fn name(&self) -> &str {
+    fn name(&self) -> &'static str {
         "Unique Section IDs"
     }
 
-    fn description(&self) -> &str {
+    fn description(&self) -> &'static str {
         "All section IDs must be unique within a skill"
     }
 
@@ -184,15 +184,15 @@ impl ValidationRule for UniqueSectionIdsRule {
 pub struct UniqueBlockIdsRule;
 
 impl ValidationRule for UniqueBlockIdsRule {
-    fn id(&self) -> &str {
+    fn id(&self) -> &'static str {
         "unique-block-ids"
     }
 
-    fn name(&self) -> &str {
+    fn name(&self) -> &'static str {
         "Unique Block IDs"
     }
 
-    fn description(&self) -> &str {
+    fn description(&self) -> &'static str {
         "All block IDs must be unique within a section"
     }
 
@@ -235,15 +235,15 @@ impl ValidationRule for UniqueBlockIdsRule {
 pub struct NonEmptyBlocksRule;
 
 impl ValidationRule for NonEmptyBlocksRule {
-    fn id(&self) -> &str {
+    fn id(&self) -> &'static str {
         "non-empty-blocks"
     }
 
-    fn name(&self) -> &str {
+    fn name(&self) -> &'static str {
         "Non-Empty Blocks"
     }
 
-    fn description(&self) -> &str {
+    fn description(&self) -> &'static str {
         "Blocks should have meaningful content"
     }
 
@@ -281,6 +281,7 @@ impl ValidationRule for NonEmptyBlocksRule {
 }
 
 /// Returns all structural validation rules.
+#[must_use] 
 pub fn structural_rules() -> Vec<Box<dyn ValidationRule>> {
     vec![
         Box::new(RequiredMetadataRule),

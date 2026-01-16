@@ -191,7 +191,7 @@ fn run_list(ctx: &AppContext, args: &ListArgs) -> Result<()> {
             println!("{}", "(--orphaned filter active)".dimmed());
         }
         if let Some(ref sev) = args.severity {
-            println!("{}", format!("(--severity {} filter active)", sev).dimmed());
+            println!("{}", format!("(--severity {sev} filter active)").dimmed());
         }
     }
     Ok(())

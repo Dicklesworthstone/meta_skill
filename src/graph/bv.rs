@@ -23,7 +23,8 @@ pub struct BvClient {
 }
 
 impl BvClient {
-    /// Create a new BvClient with default settings.
+    /// Create a new `BvClient` with default settings.
+    #[must_use] 
     pub fn new() -> Self {
         Self {
             bv_bin: PathBuf::from("bv"),
@@ -32,7 +33,7 @@ impl BvClient {
         }
     }
 
-    /// Create a BvClient with a custom binary path.
+    /// Create a `BvClient` with a custom binary path.
     pub fn with_binary(binary: impl Into<PathBuf>) -> Self {
         Self {
             bv_bin: binary.into(),
@@ -54,6 +55,7 @@ impl BvClient {
     }
 
     /// Check if bv is available and responsive.
+    #[must_use] 
     pub fn is_available(&self) -> bool {
         let mut cmd = Command::new(&self.bv_bin);
         cmd.arg("--version");

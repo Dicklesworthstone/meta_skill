@@ -55,23 +55,23 @@ pub struct DedupConfig {
     pub tag_overlap_threshold: f32,
 }
 
-fn default_similarity_threshold() -> f32 {
+const fn default_similarity_threshold() -> f32 {
     0.85
 }
 
-fn default_semantic_weight() -> f32 {
+const fn default_semantic_weight() -> f32 {
     0.7
 }
 
-fn default_structural_weight() -> f32 {
+const fn default_structural_weight() -> f32 {
     0.3
 }
 
-fn default_max_candidates() -> usize {
+const fn default_max_candidates() -> usize {
     100
 }
 
-fn default_tag_overlap_threshold() -> f32 {
+const fn default_tag_overlap_threshold() -> f32 {
     0.5
 }
 
@@ -182,8 +182,7 @@ impl<'a> DeduplicationEngine<'a> {
                 self.compute_structural_similarity(skill, candidate);
 
             // Compute weighted overall score (clamped to valid range)
-            let similarity = (self.config.semantic_weight * semantic_score
-                + self.config.structural_weight * structural_score)
+            let similarity = self.config.semantic_weight.mul_add(semantic_score, self.config.structural_weight * structural_score)
                 .clamp(0.0, 1.0);
 
             // Only include if above threshold
@@ -263,8 +262,7 @@ impl<'a> DeduplicationEngine<'a> {
                     self.compute_structural_similarity(skill_a, skill_b);
 
                 // Compute weighted overall score (clamped to valid range)
-                let similarity = (self.config.semantic_weight * semantic_score
-                    + self.config.structural_weight * structural_score)
+                let similarity = self.config.semantic_weight.mul_add(semantic_score, self.config.structural_weight * structural_score)
                     .clamp(0.0, 1.0);
 
                 if similarity >= self.config.similarity_threshold {
@@ -492,13 +490,13 @@ fn word_overlap_similarity(a: &str, b: &str) -> f32 {
         .to_lowercase()
         .split_whitespace()
         .filter(|w| w.len() >= 3)
-        .map(|s| s.to_string())
+        .map(std::string::ToString::to_string)
         .collect();
     let words_b: HashSet<String> = b
         .to_lowercase()
         .split_whitespace()
         .filter(|w| w.len() >= 3)
-        .map(|s| s.to_string())
+        .map(std::string::ToString::to_string)
         .collect();
 
     if words_a.is_empty() || words_b.is_empty() {
@@ -530,6 +528,7 @@ pub struct DeduplicationSummary {
 
 impl DeduplicationSummary {
     /// Create summary from scan results
+    #[must_use] 
     pub fn from_pairs(total_skills: usize, pairs: Vec<DuplicatePair>, top_limit: usize) -> Self {
         let duplicate_pairs = pairs.len();
         let mut by_recommendation: HashMap<String, usize> = HashMap::new();
@@ -578,7 +577,7 @@ pub struct StyleProfile {
 /// A code pattern preference
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CodePattern {
-    /// Pattern name (e.g., "early_return", "guard_clause")
+    /// Pattern name (e.g., "`early_return`", "`guard_clause`")
     pub name: String,
     /// Description of the pattern
     pub description: String,
@@ -591,7 +590,7 @@ pub struct CodePattern {
 /// Variable naming convention
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct NamingConvention {
-    /// Variable case style (snake_case, camelCase, PascalCase)
+    /// Variable case style (`snake_case`, camelCase, `PascalCase`)
     pub variable_case: CaseStyle,
     /// Function case style
     pub function_case: CaseStyle,
@@ -650,12 +649,14 @@ pub struct Personalizer {
 
 impl Personalizer {
     /// Create a new personalizer with the given style profile
-    pub fn new(style: StyleProfile) -> Self {
+    #[must_use] 
+    pub const fn new(style: StyleProfile) -> Self {
         Self { style }
     }
 
     /// Get the style profile
-    pub fn style(&self) -> &StyleProfile {
+    #[must_use] 
+    pub const fn style(&self) -> &StyleProfile {
         &self.style
     }
 
@@ -665,6 +666,7 @@ impl Personalizer {
     /// - Convert variable/function naming to preferred case style in code blocks
     /// - Adjust terminology based on tech preferences
     /// - Apply pattern preferences where applicable
+    #[must_use] 
     pub fn personalize(&self, skill: &SkillRecord) -> PersonalizedSkill {
         let mut adaptations = Vec::new();
         let mut content = skill.body.clone();
@@ -695,6 +697,7 @@ impl Personalizer {
     ///
     /// Returns true if the style profile has patterns or tech preferences that
     /// could be applied, or if naming conventions differ from defaults.
+    #[must_use] 
     pub fn should_personalize(&self, _skill: &SkillRecord) -> bool {
         // Check if we have any non-default style preferences
         let has_naming_prefs = self.style.naming.variable_case != CaseStyle::SnakeCase
@@ -776,7 +779,7 @@ impl Personalizer {
         self.snake_to_camel(line)
     }
 
-    /// Convert snake_case identifiers to camelCase
+    /// Convert `snake_case` identifiers to camelCase
     fn snake_to_camel(&self, text: &str) -> String {
         let mut result = String::new();
         let mut chars = text.chars().peekable();

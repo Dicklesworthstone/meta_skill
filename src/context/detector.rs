@@ -34,7 +34,8 @@ pub enum ProjectType {
 
 impl ProjectType {
     /// Get a human-readable name for the project type.
-    pub fn name(&self) -> &'static str {
+    #[must_use] 
+    pub const fn name(&self) -> &'static str {
         match self {
             Self::Rust => "Rust",
             Self::Node => "Node.js",
@@ -59,7 +60,8 @@ impl ProjectType {
     }
 
     /// Get a lowercase identifier for the project type.
-    pub fn id(&self) -> &'static str {
+    #[must_use] 
+    pub const fn id(&self) -> &'static str {
         match self {
             Self::Rust => "rust",
             Self::Node => "node",
@@ -99,6 +101,7 @@ pub struct ProjectMarker {
 
 impl ProjectMarker {
     /// Create a new marker with exact filename match.
+    #[must_use] 
     pub const fn new(pattern: &'static str, project_type: ProjectType, confidence: f32) -> Self {
         Self {
             pattern,
@@ -109,6 +112,7 @@ impl ProjectMarker {
     }
 
     /// Create a new marker with glob pattern.
+    #[must_use] 
     pub const fn glob(pattern: &'static str, project_type: ProjectType, confidence: f32) -> Self {
         Self {
             pattern,
@@ -119,6 +123,7 @@ impl ProjectMarker {
     }
 
     /// Check if this marker matches a given filename.
+    #[must_use] 
     pub fn matches(&self, filename: &str) -> bool {
         if self.is_glob {
             self.glob_matches(filename)
@@ -203,6 +208,7 @@ impl Default for DefaultDetector {
 
 impl DefaultDetector {
     /// Create a new detector with the default marker registry.
+    #[must_use] 
     pub fn new() -> Self {
         Self {
             markers: default_markers(),
@@ -210,7 +216,8 @@ impl DefaultDetector {
     }
 
     /// Create a detector with custom markers.
-    pub fn with_markers(markers: Vec<ProjectMarker>) -> Self {
+    #[must_use] 
+    pub const fn with_markers(markers: Vec<ProjectMarker>) -> Self {
         Self { markers }
     }
 
@@ -220,6 +227,7 @@ impl DefaultDetector {
     }
 
     /// Get the marker registry.
+    #[must_use] 
     pub fn markers(&self) -> &[ProjectMarker] {
         &self.markers
     }
@@ -237,7 +245,7 @@ impl ProjectDetector for DefaultDetector {
 
         // Collect filenames
         let filenames: Vec<String> = entries
-            .filter_map(|e| e.ok())
+            .filter_map(std::result::Result::ok)
             .filter_map(|e| e.file_name().into_string().ok())
             .collect();
 
@@ -264,7 +272,7 @@ impl ProjectDetector for DefaultDetector {
             Err(_) => return false,
         };
 
-        for entry in entries.filter_map(|e| e.ok()) {
+        for entry in entries.filter_map(std::result::Result::ok) {
             if let Ok(name) = entry.file_name().into_string() {
                 // Check for exact match or glob pattern
                 if name == pattern {

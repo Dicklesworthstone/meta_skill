@@ -21,7 +21,7 @@ pub struct GraphArgs {
 
 #[derive(Subcommand, Debug)]
 pub enum GraphCommand {
-    /// Full graph insights (PageRank, betweenness, cycles)
+    /// Full graph insights (`PageRank`, betweenness, cycles)
     Insights(GraphInsightsArgs),
     /// Execution plan with parallel tracks
     Plan(GraphPlanArgs),
@@ -31,7 +31,7 @@ pub enum GraphCommand {
     Export(GraphExportArgs),
     /// Show detected cycles
     Cycles(GraphCyclesArgs),
-    /// Show top keystone skills (PageRank)
+    /// Show top keystone skills (`PageRank`)
     Keystones(GraphTopArgs),
     /// Show top bottleneck skills (betweenness)
     Bottlenecks(GraphTopArgs),
@@ -169,7 +169,7 @@ fn run_plan(ctx: &AppContext, client: &BvClient, issues: &[crate::beads::Issue])
     println!("Graph plan:");
     if let Some(summary) = value.get("plan").and_then(|v| v.get("summary")) {
         if let Some(best) = summary.get("highest_impact") {
-            println!("  highest_impact: {}", best);
+            println!("  highest_impact: {best}");
         }
     }
     Ok(())
@@ -182,7 +182,7 @@ fn run_triage(ctx: &AppContext, client: &BvClient, issues: &[crate::beads::Issue
     }
     if let Some(recs) = value.get("recommendations").and_then(|v| v.as_array()) {
         if let Some(first) = recs.first() {
-            println!("Top recommendation: {}", first);
+            println!("Top recommendation: {first}");
             return Ok(());
         }
     }
@@ -216,7 +216,7 @@ fn run_export(
         });
         return crate::cli::output::emit_json(&value);
     }
-    println!("{}", graph);
+    println!("{graph}");
     Ok(())
 }
 
@@ -243,9 +243,9 @@ fn run_cycles(
     }
 
     let limit = args.limit.min(cycles.len());
-    println!("Cycles (showing {}):", limit);
+    println!("Cycles (showing {limit}):");
     for cycle in cycles.iter().take(limit) {
-        println!("  {}", cycle);
+        println!("  {cycle}");
     }
     Ok(())
 }
@@ -293,12 +293,12 @@ fn resolve_metric_items(
         let mut id = None;
         let mut score = None;
         if let Some(obj) = item.as_object() {
-            id = obj.get("id").and_then(|v| v.as_str()).map(|s| s.to_string());
-            score = obj.get("value").and_then(|v| v.as_f64());
+            id = obj.get("id").and_then(|v| v.as_str()).map(std::string::ToString::to_string);
+            score = obj.get("value").and_then(serde_json::Value::as_f64);
         } else if let Some(arr) = item.as_array() {
             if let Some(first) = arr.first().and_then(|v| v.as_str()) {
                 id = Some(first.to_string());
-                score = arr.get(1).and_then(|v| v.as_f64());
+                score = arr.get(1).and_then(serde_json::Value::as_f64);
             }
         }
         if let Some(id) = id {
@@ -317,7 +317,7 @@ fn print_metric_table(
 ) {
     if let Some(table) = format_metric_table(title, items, names, limit) {
         println!();
-        println!("{}", table);
+        println!("{table}");
     }
 }
 
@@ -328,7 +328,7 @@ fn print_cycles_table(
 ) {
     if let Some(table) = format_cycles_table(cycles, names, limit) {
         println!();
-        println!("{}", table);
+        println!("{table}");
     }
 }
 
@@ -359,9 +359,7 @@ fn format_metric_table(
     ));
     for (idx, entry) in resolved.iter().enumerate() {
         let score_str = entry
-            .score
-            .map(|s| format!("{:.4}", s))
-            .unwrap_or_else(|| "-".to_string());
+            .score.map_or_else(|| "-".to_string(), |s| format!("{s:.4}"));
         lines.push(format!(
             "{:>4} {:>10} {:36} {}",
             idx + 1,
@@ -383,7 +381,7 @@ fn format_cycles_table(
     }
     let limit = limit.min(cycles.len());
     let mut lines = Vec::new();
-    lines.push(format!("Cycles (showing {}):", limit));
+    lines.push(format!("Cycles (showing {limit}):"));
     for (idx, cycle) in cycles.iter().take(limit).enumerate() {
         let chain = cycle
             .as_array()

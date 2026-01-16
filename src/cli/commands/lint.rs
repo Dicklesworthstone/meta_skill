@@ -28,7 +28,7 @@ pub enum LintFormat {
     Json,
     /// SARIF format for GitHub integration
     Sarif,
-    /// JUnit XML format for CI systems
+    /// `JUnit` XML format for CI systems
     Junit,
 }
 
@@ -132,7 +132,7 @@ pub fn run(ctx: &AppContext, args: &LintArgs) -> Result<()> {
     let rules_filter: Option<std::collections::HashSet<&str>> = args
         .rules
         .as_ref()
-        .map(|r| r.iter().map(|s| s.as_str()).collect());
+        .map(|r| r.iter().map(std::string::String::as_str).collect());
 
     for rule in all_rules() {
         if let Some(ref filter) = rules_filter {
@@ -192,8 +192,7 @@ pub fn run(ctx: &AppContext, args: &LintArgs) -> Result<()> {
     // Exit with appropriate code
     if total_errors > 0 {
         Err(MsError::ValidationFailed(format!(
-            "{} error(s) found",
-            total_errors
+            "{total_errors} error(s) found"
         )))
     } else {
         Ok(())
@@ -211,7 +210,7 @@ fn explain_rule(ctx: &AppContext, rule_id: &str) -> Result<()> {
     let rule = rules
         .iter()
         .find(|r| r.id() == rule_id)
-        .ok_or_else(|| MsError::NotFound(format!("Rule '{}' not found", rule_id)))?;
+        .ok_or_else(|| MsError::NotFound(format!("Rule '{rule_id}' not found")))?;
 
     if ctx.robot_mode {
         let info = RuleInfo {
@@ -491,8 +490,7 @@ fn output_junit(results: &[LintFileResult]) -> Result<()> {
     let mut xml = String::new();
     xml.push_str("<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n");
     xml.push_str(&format!(
-        "<testsuites tests=\"{}\" failures=\"{}\">\n",
-        total_tests, total_failures
+        "<testsuites tests=\"{total_tests}\" failures=\"{total_failures}\">\n"
     ));
 
     for file_result in results {

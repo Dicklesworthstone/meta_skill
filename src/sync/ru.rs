@@ -50,7 +50,8 @@ pub enum RuExitCode {
 }
 
 impl RuExitCode {
-    pub fn from_code(code: i32) -> Self {
+    #[must_use] 
+    pub const fn from_code(code: i32) -> Self {
         match code {
             0 => Self::Ok,
             1 => Self::Partial,
@@ -62,7 +63,8 @@ impl RuExitCode {
         }
     }
 
-    pub fn is_success(self) -> bool {
+    #[must_use] 
+    pub const fn is_success(self) -> bool {
         matches!(self, Self::Ok | Self::Partial)
     }
 }
@@ -133,16 +135,18 @@ impl Default for RuClient {
 }
 
 impl RuClient {
-    /// Create a new RuClient with auto-detection
-    pub fn new() -> Self {
+    /// Create a new `RuClient` with auto-detection
+    #[must_use] 
+    pub const fn new() -> Self {
         Self {
             ru_path: None,
             available: None,
         }
     }
 
-    /// Create an RuClient with explicit path
-    pub fn with_path(path: PathBuf) -> Self {
+    /// Create an `RuClient` with explicit path
+    #[must_use] 
+    pub const fn with_path(path: PathBuf) -> Self {
         Self {
             ru_path: Some(path),
             available: None,
@@ -161,11 +165,11 @@ impl RuClient {
     }
 
     /// Get the ru binary path
+    #[must_use] 
     pub fn ru_path(&self) -> &str {
         self.ru_path
             .as_ref()
-            .map(|p| p.to_str().unwrap_or("ru"))
-            .unwrap_or("ru")
+            .map_or("ru", |p| p.to_str().unwrap_or("ru"))
     }
 
     /// Detect if ru is installed and working

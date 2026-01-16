@@ -43,6 +43,7 @@ impl BlobStore {
             .map_err(|err| MsError::Config(format!("read blob {}: {err}", path.display())))
     }
 
+    #[must_use] 
     pub fn has_blob(&self, hash: &str) -> bool {
         self.blob_path(hash).map(|p| p.exists()).unwrap_or(false)
     }
@@ -74,7 +75,7 @@ impl BlobStore {
         for (rel, abs) in entries {
             let rel_str = rel.to_string_lossy();
             hasher.update(rel_str.as_bytes());
-            hasher.update(&[0u8]);
+            hasher.update([0u8]);
             let data = fs::read(&abs)
                 .map_err(|err| MsError::Config(format!("read {}: {err}", abs.display())))?;
             hasher.update(data);
@@ -116,9 +117,7 @@ impl BlobStore {
         }
         let hex_part = &hash[7..];
         if hex_part.len() != 64 || !hex_part.chars().all(|c| c.is_ascii_hexdigit()) {
-            return Err(MsError::ValidationFailed(format!(
-                "invalid blob hash: malformed hex component"
-            )));
+            return Err(MsError::ValidationFailed("invalid blob hash: malformed hex component".to_string()));
         }
 
         // Check for legacy flat structure first

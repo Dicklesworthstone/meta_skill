@@ -332,7 +332,7 @@ fn review_quarantine(
     } else {
         (
             "false_positive".to_string(),
-            false_positive.map(|value| value.to_string()),
+            false_positive.map(std::string::ToString::to_string),
         )
     };
 

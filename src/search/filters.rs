@@ -1,8 +1,8 @@
 //! Search filter utilities for post-fusion result filtering
 //!
-//! Provides utility functions for filtering search results using SearchFilters
-//! from the context module. These functions operate on SkillRecord lookups
-//! and HybridResult vectors.
+//! Provides utility functions for filtering search results using `SearchFilters`
+//! from the context module. These functions operate on `SkillRecord` lookups
+//! and `HybridResult` vectors.
 
 use crate::storage::sqlite::SkillRecord;
 
@@ -10,6 +10,7 @@ use super::context::SearchFilters;
 use super::hybrid::HybridResult;
 
 /// Check if a skill record matches the given filters
+#[must_use] 
 pub fn matches_skill_record(filters: &SearchFilters, skill: &SkillRecord) -> bool {
     let skill_tags = parse_tags_from_metadata(&skill.metadata_json);
     filters.matches(
@@ -62,7 +63,7 @@ fn parse_tags_from_metadata(metadata_json: &str) -> Vec<String> {
         if let Some(tags) = meta.get("tags").and_then(|t| t.as_array()) {
             return tags
                 .iter()
-                .filter_map(|v| v.as_str().map(|tag| tag.to_lowercase()))
+                .filter_map(|v| v.as_str().map(str::to_lowercase))
                 .collect();
         }
     }

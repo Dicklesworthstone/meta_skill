@@ -13,8 +13,8 @@
 //!
 //! Where:
 //! - k is a smoothing constant (typically 60)
-//! - rank_i(d) is the 1-indexed position of d in list i
-//! - weight_i is the importance weight for list i
+//! - `rank_i(d)` is the 1-indexed position of d in list i
+//! - `weight_i` is the importance weight for list i
 
 use std::collections::HashMap;
 
@@ -42,6 +42,7 @@ impl Default for RrfConfig {
 
 impl RrfConfig {
     /// Create config with custom k value
+    #[must_use] 
     pub fn with_k(k: f32) -> Self {
         Self {
             k,
@@ -50,6 +51,7 @@ impl RrfConfig {
     }
 
     /// Create config with custom weights
+    #[must_use] 
     pub fn with_weights(bm25_weight: f32, semantic_weight: f32) -> Self {
         Self {
             bm25_weight,
@@ -83,13 +85,14 @@ pub struct HybridResult {
 ///
 /// # Arguments
 ///
-/// * `bm25_results` - BM25 results as (skill_id, score) pairs
-/// * `semantic_results` - Semantic results as (skill_id, score) pairs
+/// * `bm25_results` - BM25 results as (`skill_id`, score) pairs
+/// * `semantic_results` - Semantic results as (`skill_id`, score) pairs
 /// * `config` - RRF configuration parameters
 ///
 /// # Returns
 ///
 /// Combined results sorted by RRF score
+#[must_use] 
 pub fn fuse_results(
     bm25_results: &[(String, f32)],
     semantic_results: &[(String, f32)],
@@ -152,7 +155,8 @@ pub fn fuse_results(
     results
 }
 
-/// Simple fusion returning only (skill_id, score) pairs
+/// Simple fusion returning only (`skill_id`, score) pairs
+#[must_use] 
 pub fn fuse_simple(
     bm25_results: &[(String, f32)],
     semantic_results: &[(String, f32)],
@@ -165,6 +169,7 @@ pub fn fuse_simple(
 }
 
 /// Fuse results with limit
+#[must_use] 
 pub fn fuse_with_limit(
     bm25_results: &[(String, f32)],
     semantic_results: &[(String, f32)],

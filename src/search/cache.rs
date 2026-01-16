@@ -88,6 +88,7 @@ pub struct CacheStats {
 
 impl CacheStats {
     /// Calculate query cache hit rate.
+    #[must_use] 
     pub fn query_hit_rate(&self) -> f64 {
         let total = self.query_hits + self.query_misses;
         if total == 0 {
@@ -98,6 +99,7 @@ impl CacheStats {
     }
 
     /// Calculate embedding cache hit rate.
+    #[must_use] 
     pub fn embedding_hit_rate(&self) -> f64 {
         let total = self.embedding_hits + self.embedding_misses;
         if total == 0 {
@@ -108,6 +110,7 @@ impl CacheStats {
     }
 
     /// Calculate fingerprint cache hit rate.
+    #[must_use] 
     pub fn fingerprint_hit_rate(&self) -> f64 {
         let total = self.fingerprint_hits + self.fingerprint_misses;
         if total == 0 {
@@ -126,6 +129,7 @@ impl Default for CacheLayer {
 
 impl CacheLayer {
     /// Create a new cache layer with default sizes.
+    #[must_use] 
     pub fn new() -> Self {
         Self::with_sizes(
             DEFAULT_QUERY_CACHE_SIZE,
@@ -135,6 +139,7 @@ impl CacheLayer {
     }
 
     /// Create a new cache layer with custom sizes.
+    #[must_use] 
     pub fn with_sizes(query_size: usize, embedding_size: usize, fingerprint_size: usize) -> Self {
         Self {
             query_cache: Mutex::new(LruCache::new(

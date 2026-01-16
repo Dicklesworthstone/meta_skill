@@ -48,7 +48,7 @@ pub fn run(ctx: &AppContext, args: &UpdateArgs) -> Result<()> {
         .transpose()
         .map_err(|err| MsError::ValidationFailed(format!("invalid target version: {err}")))?;
 
-    let checker = UpdateChecker::new(current_version.clone(), channel, DEFAULT_REPO.to_string());
+    let checker = UpdateChecker::new(current_version, channel, DEFAULT_REPO.to_string());
 
     if ctx.robot_mode {
         run_robot(args, &checker, target_version.as_ref())?;
@@ -79,8 +79,7 @@ fn run_robot(
         }
         let update_available = update
             .as_ref()
-            .map(|u| u.version != *checker.current_version())
-            .unwrap_or(false);
+            .is_some_and(|u| u.version != *checker.current_version());
         let response = UpdateCheckResponse {
             current_version: checker.current_version().to_string(),
             channel: checker.channel().to_string(),
@@ -137,8 +136,7 @@ fn run_robot(
         } else {
             if let Some(target) = target_version {
                 return Err(MsError::NotFound(format!(
-                    "target version not found: {}",
-                    target
+                    "target version not found: {target}"
                 )));
             }
             let response = UpdateCheckResponse {
@@ -178,35 +176,32 @@ fn run_interactive(
         } else {
             checker.check()?
         };
-        match update {
-            Some(release) => {
-                if release.version == *checker.current_version() && !args.force {
-                    println!("\n✓ You are already running v{}", release.version);
-                    return Ok(());
-                }
-                println!("\n✓ Update available: v{}", release.version);
-                println!("  Released: {}", release.published_at.format("%Y-%m-%d"));
-                if !release.changelog.is_empty() {
-                    println!("\nChangelog:");
-                    // Print first few lines
-                    for line in release.changelog.lines().take(10) {
-                        println!("  {}", line);
-                    }
-                    if release.changelog.lines().count() > 10 {
-                        println!("  ...");
-                    }
-                }
-                println!("\nRun `ms update` to install.");
+        if let Some(release) = update {
+            if release.version == *checker.current_version() && !args.force {
+                println!("\n✓ You are already running v{}", release.version);
+                return Ok(());
             }
-            None => {
-                if let Some(target) = target_version {
-                    println!("\n✗ Target version not found: v{target}");
-                    return Err(MsError::NotFound(format!(
-                        "target version not found: {target}"
-                    )));
+            println!("\n✓ Update available: v{}", release.version);
+            println!("  Released: {}", release.published_at.format("%Y-%m-%d"));
+            if !release.changelog.is_empty() {
+                println!("\nChangelog:");
+                // Print first few lines
+                for line in release.changelog.lines().take(10) {
+                    println!("  {line}");
                 }
-                println!("\n✓ You are up to date!");
+                if release.changelog.lines().count() > 10 {
+                    println!("  ...");
+                }
             }
+            println!("\nRun `ms update` to install.");
+        } else {
+            if let Some(target) = target_version {
+                println!("\n✗ Target version not found: v{target}");
+                return Err(MsError::NotFound(format!(
+                    "target version not found: {target}"
+                )));
+            }
+            println!("\n✓ You are up to date!");
         }
         return Ok(());
     }
@@ -221,18 +216,15 @@ fn run_interactive(
         checker.check()?
     };
 
-    let release = match update {
-        Some(r) => r,
-        None => {
-            if let Some(target) = target_version {
-                println!("✗ Target version not found: v{target}");
-                return Err(MsError::NotFound(format!(
-                    "target version not found: {target}"
-                )));
-            }
-            println!("✓ You are already running the latest version.");
-            return Ok(());
+    let release = if let Some(r) = update { r } else {
+        if let Some(target) = target_version {
+            println!("✗ Target version not found: v{target}");
+            return Err(MsError::NotFound(format!(
+                "target version not found: {target}"
+            )));
         }
+        println!("✓ You are already running the latest version.");
+        return Ok(());
     };
 
     if release.version == *checker.current_version() && target_version.is_some() && !args.force {
@@ -265,7 +257,7 @@ fn run_interactive(
     if !release.changelog.is_empty() {
         println!("\nChangelog:");
         for line in release.changelog.lines().take(15) {
-            println!("  {}", line);
+            println!("  {line}");
         }
     }
 

@@ -27,17 +27,20 @@ pub struct WorkingContext {
 
 impl WorkingContext {
     /// Create an empty working context.
+    #[must_use] 
     pub fn new() -> Self {
         Self::default()
     }
 
     /// Add detected projects from the project detector.
+    #[must_use] 
     pub fn with_projects(mut self, projects: Vec<DetectedProject>) -> Self {
         self.detected_projects = projects;
         self
     }
 
     /// Add recent files.
+    #[must_use] 
     pub fn with_recent_files(mut self, files: Vec<String>) -> Self {
         self.recent_files = files;
         self
@@ -50,12 +53,14 @@ impl WorkingContext {
     }
 
     /// Add content snippets for signal matching.
+    #[must_use] 
     pub fn with_content(mut self, content: Vec<String>) -> Self {
         self.content_snippets = content;
         self
     }
 
     /// Check if any content matches a signal pattern.
+    #[must_use] 
     pub fn matches_signal(&self, pattern: &str) -> bool {
         let regex = match regex::Regex::new(pattern) {
             Ok(r) => r,
@@ -65,6 +70,7 @@ impl WorkingContext {
     }
 
     /// Get the primary (highest confidence) project type.
+    #[must_use] 
     pub fn primary_project_type(&self) -> Option<ProjectType> {
         self.detected_projects
             .iter()
@@ -106,7 +112,8 @@ impl Default for ScoringWeights {
 
 impl ScoringWeights {
     /// Create weights with custom values.
-    pub fn new(
+    #[must_use] 
+    pub const fn new(
         project_type: f32,
         file_patterns: f32,
         tools: f32,
@@ -123,6 +130,7 @@ impl ScoringWeights {
     }
 
     /// Normalize weights to sum to 1.0.
+    #[must_use] 
     pub fn normalized(&self) -> Self {
         let sum =
             self.project_type + self.file_patterns + self.tools + self.signals + self.historical;
@@ -181,6 +189,7 @@ impl Default for RelevanceScorer {
 
 impl RelevanceScorer {
     /// Create a new scorer with the given weights.
+    #[must_use] 
     pub fn new(weights: ScoringWeights) -> Self {
         Self {
             weights: weights.normalized(),
@@ -188,17 +197,20 @@ impl RelevanceScorer {
     }
 
     /// Get the scoring weights.
-    pub fn weights(&self) -> &ScoringWeights {
+    #[must_use] 
+    pub const fn weights(&self) -> &ScoringWeights {
         &self.weights
     }
 
     /// Score a single skill against the given context.
+    #[must_use] 
     pub fn score(&self, metadata: &SkillMetadata, context: &WorkingContext) -> f32 {
         let breakdown = self.breakdown(metadata, context);
         self.weighted_score(&breakdown)
     }
 
     /// Get the score breakdown for a skill.
+    #[must_use] 
     pub fn breakdown(&self, metadata: &SkillMetadata, context: &WorkingContext) -> ScoreBreakdown {
         ScoreBreakdown {
             project_type: self.project_type_match(&metadata.context, context),
@@ -211,14 +223,11 @@ impl RelevanceScorer {
 
     /// Compute weighted score from breakdown.
     fn weighted_score(&self, breakdown: &ScoreBreakdown) -> f32 {
-        self.weights.project_type * breakdown.project_type
-            + self.weights.file_patterns * breakdown.file_patterns
-            + self.weights.tools * breakdown.tools
-            + self.weights.signals * breakdown.signals
-            + self.weights.historical * breakdown.historical
+        self.weights.historical.mul_add(breakdown.historical, self.weights.signals.mul_add(breakdown.signals, self.weights.tools.mul_add(breakdown.tools, self.weights.project_type.mul_add(breakdown.project_type, self.weights.file_patterns * breakdown.file_patterns))))
     }
 
     /// Score and rank multiple skills.
+    #[must_use] 
     pub fn rank(&self, skills: &[SkillMetadata], context: &WorkingContext) -> Vec<RankedSkill> {
         let mut ranked: Vec<RankedSkill> = skills
             .iter()
@@ -245,6 +254,7 @@ impl RelevanceScorer {
     }
 
     /// Get the top N relevant skills.
+    #[must_use] 
     pub fn top_n(
         &self,
         skills: &[SkillMetadata],
@@ -256,6 +266,7 @@ impl RelevanceScorer {
     }
 
     /// Get skills with relevance score above threshold.
+    #[must_use] 
     pub fn above_threshold(
         &self,
         skills: &[SkillMetadata],

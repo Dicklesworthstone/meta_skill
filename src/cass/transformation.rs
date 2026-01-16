@@ -73,16 +73,17 @@ pub struct StructuralPattern {
 /// Signature of a code pattern
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CodePatternSignature {
-    /// Pattern category (e.g., "error_handling", "initialization", "cleanup")
+    /// Pattern category (e.g., "`error_handling`", "initialization", "cleanup")
     pub category: String,
     /// Key tokens/identifiers involved
     pub key_tokens: Vec<String>,
-    /// Structural features (e.g., "uses_match", "async_await")
+    /// Structural features (e.g., "`uses_match`", "`async_await`")
     pub features: Vec<String>,
 }
 
 impl CodePatternSignature {
     /// Generate a searchable signature string
+    #[must_use] 
     pub fn signature(&self) -> String {
         format!(
             "{} {} {}",
@@ -106,6 +107,7 @@ pub struct SolutionApproach {
 
 impl SolutionApproach {
     /// Get keywords for search
+    #[must_use] 
     pub fn keywords(&self) -> &[String] {
         &self.keywords
     }
@@ -139,6 +141,7 @@ pub struct ClusteredInstance {
 
 impl ClusteredInstance {
     /// Convert to example format for general pattern
+    #[must_use] 
     pub fn to_example(&self) -> String {
         self.instance.content.chars().take(200).collect()
     }
@@ -229,6 +232,7 @@ pub struct GeneralizationValidation {
 
 impl GeneralizationValidation {
     /// Compute validation metrics for a pattern against instances
+    #[must_use] 
     pub fn compute(
         common: &CommonElements,
         instances: &[ClusteredInstance],
@@ -253,7 +257,7 @@ impl GeneralizationValidation {
 
         // Combined confidence with weights from spec
         let confidence =
-            0.35 * coverage + 0.35 * predictive_power + 0.20 * coherence + 0.10 * specificity;
+            0.10f32.mul_add(specificity, 0.20f32.mul_add(coherence, 0.35f32.mul_add(coverage, 0.35 * predictive_power)));
 
         // Identify counter-examples (instances that don't fit well)
         let counterexamples = Self::identify_counterexamples(instances, all_instances);
@@ -268,7 +272,7 @@ impl GeneralizationValidation {
         }
     }
 
-    fn empty() -> Self {
+    const fn empty() -> Self {
         Self {
             coverage: 0.0,
             predictive_power: 0.0,
@@ -306,7 +310,7 @@ impl GeneralizationValidation {
         let invariant_bonus = (invariants.len() as f32 * 0.05).min(0.2);
 
         // Slight preference for more specific patterns
-        let base_specificity = 1.0 - (coverage * 0.2);
+        let base_specificity = coverage.mul_add(-0.2, 1.0);
 
         (base_specificity + invariant_bonus).clamp(0.0, 1.0)
     }
@@ -576,7 +580,7 @@ impl SpecificToGeneralTransformer {
                 .instances
                 .iter()
                 .take(3)
-                .map(|i| i.to_example())
+                .map(ClusteredInstance::to_example)
                 .collect(),
             applicability: common.context_conditions,
             confidence: validation.confidence,
@@ -646,11 +650,10 @@ impl SpecificToGeneralTransformer {
         // Extract key tokens (simple tokenization)
         for word in content.split_whitespace() {
             let clean = word.trim_matches(|c: char| !c.is_alphanumeric());
-            if clean.len() > 3 && clean.chars().all(|c| c.is_alphanumeric() || c == '_') {
-                if !key_tokens.contains(&clean.to_string()) && key_tokens.len() < 10 {
+            if clean.len() > 3 && clean.chars().all(|c| c.is_alphanumeric() || c == '_')
+                && !key_tokens.contains(&clean.to_string()) && key_tokens.len() < 10 {
                     key_tokens.push(clean.to_string());
                 }
-            }
         }
 
         // Detect Rust-specific features
@@ -728,7 +731,7 @@ impl SpecificToGeneralTransformer {
         if content_lower.contains("iterator") || content_lower.contains("iter()") {
             tools_used.push("iterators".to_string());
         }
-        if content_lower.contains("closure") || content.contains("|") {
+        if content_lower.contains("closure") || content.contains('|') {
             tools_used.push("closures".to_string());
         }
         if content_lower.contains("macro") {
@@ -947,7 +950,7 @@ impl SpecificToGeneralTransformer {
 
         for (ft, count) in file_types {
             if count > instances.len() / 2 {
-                conditions.push(format!("file_type={}", ft));
+                conditions.push(format!("file_type={ft}"));
             }
         }
 
@@ -961,7 +964,7 @@ impl SpecificToGeneralTransformer {
 
         for (tag, count) in tag_counts {
             if count > instances.len() / 2 {
-                conditions.push(format!("tag={}", tag));
+                conditions.push(format!("tag={tag}"));
             }
         }
 
@@ -990,7 +993,7 @@ impl SpecificToGeneralTransformer {
 
         // Extraction confidence based on cluster coherence and size
         let size_factor = (cluster.instances.len() as f32 / 10.0).min(1.0);
-        let extraction_confidence = cluster.coherence * 0.7 + size_factor * 0.3;
+        let extraction_confidence = cluster.coherence.mul_add(0.7, size_factor * 0.3);
 
         Ok(CommonElements {
             abstracted_description,
@@ -1014,7 +1017,7 @@ impl SpecificToGeneralTransformer {
                 .instance
                 .content
                 .split_whitespace()
-                .map(|w| w.to_lowercase())
+                .map(str::to_lowercase)
                 .filter(|w| w.len() > 3)
                 .collect();
 
@@ -1047,7 +1050,7 @@ impl SpecificToGeneralTransformer {
         // Check for structural invariants
         let all_have_error_handling = instances.iter().all(|i| {
             let content = &i.instance.content.to_lowercase();
-            content.contains("error") || content.contains("result") || content.contains("?")
+            content.contains("error") || content.contains("result") || content.contains('?')
         });
         if all_have_error_handling {
             invariants.push("Uses error handling pattern".to_string());
@@ -1116,8 +1119,8 @@ impl SpecificToGeneralTransformer {
 
 impl From<GeneralPattern> for ExtractedPattern {
     fn from(gp: GeneralPattern) -> Self {
-        ExtractedPattern {
-            id: format!("gen_{}", uuid::Uuid::new_v4().to_string()[..8].to_string()),
+        Self {
+            id: format!("gen_{}", &uuid::Uuid::new_v4().to_string()[..8]),
             pattern_type: PatternType::WorkflowPattern {
                 steps: vec![],
                 triggers: gp.applicability.clone(),

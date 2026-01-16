@@ -297,6 +297,7 @@ impl TestSpec {
     }
 
     /// Check if this test should be skipped based on conditions
+    #[must_use] 
     pub fn should_skip(&self) -> Option<String> {
         let conditions = self.skip_if.as_ref()?;
         for condition in conditions {
@@ -370,6 +371,7 @@ impl TestSpec {
     }
 
     /// Check if test has a specific tag
+    #[must_use] 
     pub fn has_tag(&self, tag: &str) -> bool {
         self.tags.iter().any(|t| t.eq_ignore_ascii_case(tag))
     }

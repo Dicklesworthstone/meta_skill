@@ -226,7 +226,7 @@ fn index_human(ctx: &AppContext, roots: &[SkillRoot], args: &IndexArgs) -> Resul
         ));
 
         match index_skill_file(ctx, &tx_mgr, skill, args.force) {
-            Ok(_) => indexed += 1,
+            Ok(()) => indexed += 1,
             Err(e) => {
                 errors += 1;
                 pb.println(format!("{} {} - {}", "✗".red(), skill.path.display(), e));
@@ -277,7 +277,7 @@ fn index_robot(ctx: &AppContext, roots: &[SkillRoot], args: &IndexArgs) -> Resul
 
     for skill in &skill_files {
         match index_skill_file(ctx, &tx_mgr, skill, args.force) {
-            Ok(_) => indexed += 1,
+            Ok(()) => indexed += 1,
             Err(e) => {
                 errors.push(serde_json::json!({
                     "path": skill.path.display().to_string(),
@@ -316,7 +316,7 @@ fn discover_skill_files(roots: &[SkillRoot]) -> Vec<DiscoveredSkill> {
         for entry in WalkDir::new(&root.path)
             .follow_links(true)
             .into_iter()
-            .filter_map(|e| e.ok())
+            .filter_map(std::result::Result::ok)
         {
             if entry.file_type().is_file() && entry.file_name() == "SKILL.md" {
                 skill_files.push(DiscoveredSkill {
@@ -369,7 +369,7 @@ fn index_skill_file(
     let scorer = crate::quality::QualityScorer::with_defaults();
     let quality = scorer.score_spec(&spec, &crate::quality::QualityContext::default());
     ctx.db
-        .update_skill_quality(&spec.metadata.id, quality.overall as f64)?;
+        .update_skill_quality(&spec.metadata.id, f64::from(quality.overall))?;
 
     // Also update Tantivy search index
     if let Ok(Some(skill_record)) = ctx.db.get_skill(&spec.metadata.id) {

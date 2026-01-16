@@ -65,7 +65,7 @@ impl Bm25Index {
         let index = if path.join("meta.json").exists() {
             Index::open_in_dir(path)?
         } else {
-            Index::create_in_dir(path, schema.clone())?
+            Index::create_in_dir(path, schema)?
         };
 
         // Create reader with manual reload (we control when to refresh)
@@ -438,7 +438,7 @@ fn parse_metadata(metadata_json: &str) -> (String, String) {
             tags = tag_array
                 .iter()
                 .filter_map(|v| v.as_str())
-                .map(|tag| tag.to_lowercase())
+                .map(str::to_lowercase)
                 .collect::<Vec<_>>()
                 .join(" ");
         }
@@ -448,7 +448,7 @@ fn parse_metadata(metadata_json: &str) -> (String, String) {
             aliases = alias_array
                 .iter()
                 .filter_map(|v| v.as_str())
-                .map(|alias| alias.to_lowercase())
+                .map(str::to_lowercase)
                 .collect::<Vec<_>>()
                 .join(" ");
         }

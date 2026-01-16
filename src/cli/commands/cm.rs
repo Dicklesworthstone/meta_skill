@@ -74,14 +74,14 @@ pub fn run(ctx: &AppContext, args: &CmArgs) -> Result<()> {
             if ctx.robot_mode {
                 println!("{}", serde_json::to_string(&context).unwrap_or_default());
             } else {
-                println!("CM context for: {}", task);
+                println!("CM context for: {task}");
                 println!("relevant_bullets: {}", context.relevant_bullets.len());
                 println!("anti_patterns: {}", context.anti_patterns.len());
                 println!("history_snippets: {}", context.history_snippets.len());
                 if !context.suggested_cass_queries.is_empty() {
                     println!("suggested_cass_queries:");
                     for q in &context.suggested_cass_queries {
-                        println!("- {}", q);
+                        println!("- {q}");
                     }
                 }
             }
@@ -99,19 +99,17 @@ pub fn run(ctx: &AppContext, args: &CmArgs) -> Result<()> {
                         "count": rules.len()
                     })
                 );
+            } else if rules.is_empty() {
+                println!("No rules found");
             } else {
-                if rules.is_empty() {
-                    println!("No rules found");
-                } else {
-                    println!("Playbook rules ({} shown):\n", rules.len());
-                    for rule in &rules {
-                        println!("[{}] {} ({})", rule.id, rule.content, rule.category);
-                        println!(
-                            "    confidence: {:.2}, helpful: {}, harmful: {}",
-                            rule.confidence, rule.helpful_count, rule.harmful_count
-                        );
-                        println!();
-                    }
+                println!("Playbook rules ({} shown):\n", rules.len());
+                for rule in &rules {
+                    println!("[{}] {} ({})", rule.id, rule.content, rule.category);
+                    println!(
+                        "    confidence: {:.2}, helpful: {}, harmful: {}",
+                        rule.confidence, rule.helpful_count, rule.harmful_count
+                    );
+                    println!();
                 }
             }
         }
@@ -127,14 +125,12 @@ pub fn run(ctx: &AppContext, args: &CmArgs) -> Result<()> {
                         "matches": matches
                     })
                 );
+            } else if matches.is_empty() {
+                println!("No similar rules found for: {query}");
             } else {
-                if matches.is_empty() {
-                    println!("No similar rules found for: {}", query);
-                } else {
-                    println!("Similar rules for: {}\n", query);
-                    for m in &matches {
-                        println!("[{}] {} (similarity: {:.2})", m.id, m.content, m.similarity);
-                    }
+                println!("Similar rules for: {query}\n");
+                for m in &matches {
+                    println!("[{}] {} (similarity: {:.2})", m.id, m.content, m.similarity);
                 }
             }
         }
@@ -157,7 +153,7 @@ pub fn run(ctx: &AppContext, args: &CmArgs) -> Result<()> {
                     println!("✗ CM is not available");
                 }
                 if let Some(path) = &ctx.config.cm.cm_path {
-                    println!("  path: {}", path);
+                    println!("  path: {path}");
                 }
             }
         }

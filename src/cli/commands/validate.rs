@@ -50,7 +50,7 @@ pub fn run(ctx: &AppContext, args: &ValidateArgs) -> Result<()> {
 
     if !warnings.is_empty() {
         layout.section("Warnings");
-        for warning in warnings.iter() {
+        for warning in &warnings {
             layout.bullet(&format!("{}: {}", warning.field, warning.message));
         }
     }
@@ -59,7 +59,7 @@ pub fn run(ctx: &AppContext, args: &ValidateArgs) -> Result<()> {
         layout.section("UBS");
         layout.kv("Findings", &result.findings.len().to_string());
         layout.kv("Exit code", &result.exit_code.to_string());
-        for finding in result.findings.iter() {
+        for finding in &result.findings {
             layout.bullet(&format!(
                 "{}:{}:{} {} ({})",
                 finding.file.display(),
@@ -74,7 +74,7 @@ pub fn run(ctx: &AppContext, args: &ValidateArgs) -> Result<()> {
         }
     }
 
-    if warnings.is_empty() && ubs_result.as_ref().map(|r| r.is_clean()).unwrap_or(true) {
+    if warnings.is_empty() && ubs_result.as_ref().is_none_or(crate::quality::ubs::UbsResult::is_clean) {
         layout.section("Status");
         layout.bullet("OK");
     }
@@ -149,7 +149,7 @@ fn build_report(
         stderr: result.stderr.clone(),
         items: result.findings.iter().map(map_finding).collect::<Vec<_>>(),
     });
-    let clean = warning_items.is_empty() && ubs_result.map(|r| r.is_clean()).unwrap_or(true);
+    let clean = warning_items.is_empty() && ubs_result.is_none_or(crate::quality::ubs::UbsResult::is_clean);
 
     ValidateReport {
         skill: skill.to_string(),
@@ -172,7 +172,7 @@ fn map_finding(finding: &UbsFinding) -> UbsFindingOutput {
     }
 }
 
-fn severity_label(severity: UbsSeverity) -> &'static str {
+const fn severity_label(severity: UbsSeverity) -> &'static str {
     match severity {
         UbsSeverity::Critical => "critical",
         UbsSeverity::Important => "important",

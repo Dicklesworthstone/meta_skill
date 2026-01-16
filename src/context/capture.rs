@@ -44,9 +44,7 @@ impl ContextCapture {
     }
 
     fn find_repo_root(cwd: Option<&Path>) -> Result<PathBuf> {
-        let working = cwd
-            .map(PathBuf::from)
-            .unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")));
+        let working = cwd.map_or_else(|| std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")), PathBuf::from);
         let output = Command::new("git")
             .args(["rev-parse", "--show-toplevel"])
             .current_dir(&working)
@@ -147,9 +145,10 @@ impl ContextCapture {
             .join("ms")
             .join("command_history");
         
-        crate::utils::fs::read_tail(history_path, 20).map_err(|e| e.into())
+        crate::utils::fs::read_tail(history_path, 20)
     }
 
+    #[must_use] 
     pub fn compute_diff_hash(&self) -> u64 {
         let mut hasher = DefaultHasher::new();
         if let Some(diff) = &self.diff_content {
@@ -158,6 +157,7 @@ impl ContextCapture {
         hasher.finish()
     }
 
+    #[must_use] 
     pub fn compute_open_files_hash(&self) -> u64 {
         let mut hasher = DefaultHasher::new();
         let mut sorted = self.open_files.clone();
@@ -168,6 +168,7 @@ impl ContextCapture {
         hasher.finish()
     }
 
+    #[must_use] 
     pub fn compute_commands_hash(&self) -> u64 {
         let mut hasher = DefaultHasher::new();
         for cmd in &self.recent_commands {

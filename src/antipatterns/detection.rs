@@ -126,7 +126,8 @@ impl Default for DefaultDetector {
 
 impl DefaultDetector {
     /// Create a new detector with custom settings
-    pub fn new(min_confidence: f32, context_window: usize) -> Self {
+    #[must_use] 
+    pub const fn new(min_confidence: f32, context_window: usize) -> Self {
         Self {
             min_confidence,
             context_window,
@@ -330,7 +331,7 @@ fn truncate_content(content: &str, max_chars: usize) -> String {
         content.to_string()
     } else {
         let truncated: String = content.chars().take(max_chars).collect();
-        format!("{}...", truncated)
+        format!("{truncated}...")
     }
 }
 
@@ -525,8 +526,7 @@ fn extract_annotation(content: &str, marker: &str) -> Option<String> {
     let end_pos = content
         .char_indices()
         .nth(char_offset + marker_char_count)
-        .map(|(i, _)| i)
-        .unwrap_or(content.len());
+        .map_or(content.len(), |(i, _)| i);
 
     let after = &content[end_pos..];
     let annotation = after.trim().lines().next()?.trim().to_string();
@@ -593,9 +593,7 @@ pub fn extract_context(
 ) -> Result<AntiPatternContext> {
     let failed_action = signal
         .preceding_action
-        .as_ref()
-        .map(|a| a.description.clone())
-        .unwrap_or_else(|| "unknown action".to_string());
+        .as_ref().map_or_else(|| "unknown action".to_string(), |a| a.description.clone());
 
     let failure_reason = session
         .messages
@@ -657,6 +655,7 @@ fn find_correction_in_context(
 }
 
 /// Convert detection results into evidence
+#[must_use] 
 pub fn signals_to_evidence(
     signals: Vec<AntiPatternSignal>,
     session: &Session,
@@ -704,6 +703,7 @@ pub fn signals_to_evidence(
 }
 
 /// Convert rollbacks into evidence
+#[must_use] 
 pub fn rollbacks_to_evidence(
     rollbacks: Vec<RollbackSequence>,
     session: &Session,
@@ -736,6 +736,7 @@ pub fn rollbacks_to_evidence(
 }
 
 /// Convert corrections into evidence
+#[must_use] 
 pub fn corrections_to_evidence(
     corrections: Vec<Correction>,
     session: &Session,

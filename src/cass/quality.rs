@@ -24,11 +24,13 @@ pub struct SessionQuality {
 
 impl SessionQuality {
     /// Check if the session passes the quality threshold
+    #[must_use] 
     pub fn passes_threshold(&self, config: &QualityConfig) -> bool {
         self.score >= config.min_score
     }
 
     /// Get a human-readable summary of the quality assessment
+    #[must_use] 
     pub fn summary(&self) -> String {
         let grade = if self.score >= 0.8 {
             "excellent"
@@ -72,7 +74,8 @@ pub enum MissingSignal {
 
 impl MissingSignal {
     /// Get a human-readable description
-    pub fn description(&self) -> &'static str {
+    #[must_use] 
+    pub const fn description(&self) -> &'static str {
         match self {
             Self::NoTestsPassed => "No tests were run or passed",
             Self::NoUserConfirmation => "User did not confirm success",
@@ -139,16 +142,19 @@ pub struct QualityScorer {
 
 impl QualityScorer {
     /// Create a new quality scorer with the given config
-    pub fn new(config: QualityConfig) -> Self {
+    #[must_use] 
+    pub const fn new(config: QualityConfig) -> Self {
         Self { config }
     }
 
     /// Create a quality scorer with default config
+    #[must_use] 
     pub fn with_defaults() -> Self {
         Self::new(QualityConfig::default())
     }
 
     /// Score a session for quality
+    #[must_use] 
     pub fn score(&self, session: &Session) -> SessionQuality {
         let mut score: f32 = 0.0;
         let mut signals = Vec::new();
@@ -222,7 +228,8 @@ impl QualityScorer {
     }
 
     /// Get the configuration
-    pub fn config(&self) -> &QualityConfig {
+    #[must_use] 
+    pub const fn config(&self) -> &QualityConfig {
         &self.config
     }
 }
@@ -254,11 +261,10 @@ fn has_tests_passed(messages: &[SessionMessage]) -> bool {
             }
 
             // pytest success patterns
-            if content_lower.contains("pytest") && !content_lower.contains("failed") {
-                if content_lower.contains("passed") {
+            if content_lower.contains("pytest") && !content_lower.contains("failed")
+                && content_lower.contains("passed") {
                     return true;
                 }
-            }
 
             // cargo test success - require success indicator, not just "cargo test"
             if content_lower.contains("cargo test")
@@ -351,7 +357,7 @@ fn has_code_changes(messages: &[SessionMessage]) -> bool {
                         if cmd_lower.contains("git commit")
                             || cmd_lower.contains("git add")
                             || cmd_lower.contains("echo")
-                            || cmd_lower.contains(">")
+                            || cmd_lower.contains('>')
                             || cmd_lower.contains("sed")
                             || cmd_lower.contains("patch")
                         {

@@ -30,6 +30,7 @@ pub struct OverlayContext {
 
 impl OverlayContext {
     /// Create context from environment variables
+    #[must_use] 
     pub fn from_env() -> Self {
         let environment = std::env::var("MS_ENVIRONMENT").ok();
         Self {
@@ -76,11 +77,11 @@ impl SkillOverlay {
             match modification {
                 OverlayModification::AppendDescription(text) => {
                     spec.metadata.description.push_str(text);
-                    changes.push(format!("Appended to description: {}", text));
+                    changes.push(format!("Appended to description: {text}"));
                 }
                 OverlayModification::AddTag(tag) => {
                     spec.metadata.tags.push(tag.clone());
-                    changes.push(format!("Added tag: {}", tag));
+                    changes.push(format!("Added tag: {tag}"));
                 }
                 OverlayModification::SetMetadata { key, value } => {
                     let key_str = key.as_str();
@@ -92,7 +93,7 @@ impl SkillOverlay {
                         "description" => spec.metadata.description = value.clone(),
                         _ => {} // Unknown key
                     }
-                    changes.push(format!("Set metadata {}: {}", key, value));
+                    changes.push(format!("Set metadata {key}: {value}"));
                 }
             }
         }
@@ -104,7 +105,7 @@ impl SkillOverlay {
         }
     }
 
-    /// Apply this overlay (alias for apply_to).
+    /// Apply this overlay (alias for `apply_to`).
     pub fn apply(
         &self,
         spec: &mut SkillSpec,
@@ -145,11 +146,11 @@ pub enum OverlayCondition {
 impl OverlayCondition {
     fn is_met(&self, context: &OverlayContext) -> bool {
         match self {
-            OverlayCondition::Environment(env) => context.environment.as_ref() == Some(env),
-            OverlayCondition::UserSetting { key, value } => {
+            Self::Environment(env) => context.environment.as_ref() == Some(env),
+            Self::UserSetting { key, value } => {
                 context.user_settings.get(key) == Some(value)
             }
-            OverlayCondition::Always => true,
+            Self::Always => true,
         }
     }
 }

@@ -339,8 +339,8 @@ fn run_serve(ctx: &AppContext, args: &ServeArgs) -> Result<()> {
 
     if debug {
         eprintln!("[ms-mcp] Starting MCP server (stdio mode)");
-        eprintln!("[ms-mcp] Server: {} v{}", SERVER_NAME, SERVER_VERSION);
-        eprintln!("[ms-mcp] Protocol: {}", PROTOCOL_VERSION);
+        eprintln!("[ms-mcp] Server: {SERVER_NAME} v{SERVER_VERSION}");
+        eprintln!("[ms-mcp] Protocol: {PROTOCOL_VERSION}");
     }
 
     // Run the stdio server loop
@@ -356,7 +356,7 @@ fn run_stdio_server(ctx: &AppContext, debug: bool) -> Result<()> {
             Ok(l) => l,
             Err(e) => {
                 if debug {
-                    eprintln!("[ms-mcp] stdin read error: {}", e);
+                    eprintln!("[ms-mcp] stdin read error: {e}");
                 }
                 break;
             }
@@ -367,7 +367,7 @@ fn run_stdio_server(ctx: &AppContext, debug: bool) -> Result<()> {
         }
 
         if debug {
-            eprintln!("[ms-mcp] <- {}", line);
+            eprintln!("[ms-mcp] <- {line}");
         }
 
         // Handle request - returns None for notifications (no response needed)
@@ -376,17 +376,17 @@ fn run_stdio_server(ctx: &AppContext, debug: bool) -> Result<()> {
                 serde_json::to_string(&JsonRpcResponse::error(
                     None,
                     PARSE_ERROR,
-                    format!("Failed to serialize response: {}", e),
+                    format!("Failed to serialize response: {e}"),
                     None,
                 ))
                 .unwrap()
             });
 
             if debug {
-                eprintln!("[ms-mcp] -> {}", response_json);
+                eprintln!("[ms-mcp] -> {response_json}");
             }
 
-            if writeln!(stdout, "{}", response_json).is_err() {
+            if writeln!(stdout, "{response_json}").is_err() {
                 break;
             }
             let _ = stdout.flush();
@@ -410,7 +410,7 @@ fn handle_request(ctx: &AppContext, line: &str, debug: bool) -> Option<JsonRpcRe
             return Some(JsonRpcResponse::error(
                 None,
                 PARSE_ERROR,
-                format!("Parse error: {}", e),
+                format!("Parse error: {e}"),
                 None,
             ));
         }
@@ -497,7 +497,7 @@ fn handle_tools_call(
         .unwrap_or(serde_json::json!({}));
 
     if debug {
-        eprintln!("[ms-mcp] Calling tool: {} with {:?}", name, arguments);
+        eprintln!("[ms-mcp] Calling tool: {name} with {arguments:?}");
     }
 
     // Dispatch to tool handler
@@ -508,7 +508,7 @@ fn handle_tools_call(
         "list" => handle_tool_list(ctx, &arguments),
         "show" => handle_tool_show(ctx, &arguments),
         "doctor" => handle_tool_doctor(ctx, &arguments),
-        _ => Err(MsError::ValidationFailed(format!("Unknown tool: {}", name))),
+        _ => Err(MsError::ValidationFailed(format!("Unknown tool: {name}"))),
     };
 
     match result {
@@ -537,7 +537,7 @@ fn handle_tool_search(ctx: &AppContext, args: &Value) -> Result<ToolResult> {
         MsError::ValidationFailed("Missing required parameter: query".to_string())
     })?;
 
-    let limit = args.get("limit").and_then(|v| v.as_u64()).unwrap_or(20) as usize;
+    let limit = args.get("limit").and_then(serde_json::Value::as_u64).unwrap_or(20) as usize;
 
     // Use BM25 search via Tantivy
     let results = ctx.search.search(query, limit)?;
@@ -561,7 +561,7 @@ fn handle_tool_load(ctx: &AppContext, args: &Value) -> Result<ToolResult> {
         MsError::ValidationFailed("Missing required parameter: skill".to_string())
     })?;
 
-    let full = args.get("full").and_then(|v| v.as_bool()).unwrap_or(false);
+    let full = args.get("full").and_then(serde_json::Value::as_bool).unwrap_or(false);
 
     // Look up skill
     let skill = ctx
@@ -646,8 +646,8 @@ fn handle_tool_evidence(ctx: &AppContext, args: &Value) -> Result<ToolResult> {
 }
 
 fn handle_tool_list(ctx: &AppContext, args: &Value) -> Result<ToolResult> {
-    let limit = args.get("limit").and_then(|v| v.as_u64()).unwrap_or(50) as usize;
-    let offset = args.get("offset").and_then(|v| v.as_u64()).unwrap_or(0) as usize;
+    let limit = args.get("limit").and_then(serde_json::Value::as_u64).unwrap_or(50) as usize;
+    let offset = args.get("offset").and_then(serde_json::Value::as_u64).unwrap_or(0) as usize;
 
     let all_skills = ctx.db.list_skills(limit, offset)?;
 
@@ -671,7 +671,7 @@ fn handle_tool_show(ctx: &AppContext, args: &Value) -> Result<ToolResult> {
         MsError::ValidationFailed("Missing required parameter: skill".to_string())
     })?;
 
-    let full = args.get("full").and_then(|v| v.as_bool()).unwrap_or(false);
+    let full = args.get("full").and_then(serde_json::Value::as_bool).unwrap_or(false);
 
     let skill = ctx
         .db
@@ -701,7 +701,7 @@ fn handle_tool_show(ctx: &AppContext, args: &Value) -> Result<ToolResult> {
 }
 
 fn handle_tool_doctor(ctx: &AppContext, args: &Value) -> Result<ToolResult> {
-    let fix = args.get("fix").and_then(|v| v.as_bool()).unwrap_or(false);
+    let fix = args.get("fix").and_then(serde_json::Value::as_bool).unwrap_or(false);
 
     // Basic health checks
     let mut checks = Vec::new();

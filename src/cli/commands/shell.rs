@@ -62,7 +62,7 @@ fn resolve_shell(input: Option<&str>) -> Result<String> {
     }
 
     let env_shell = std::env::var("SHELL").unwrap_or_default();
-    let detected = env_shell.split('/').last().unwrap_or("").to_string();
+    let detected = env_shell.split('/').next_back().unwrap_or("").to_string();
     normalize_shell(&detected)
         .ok_or_else(|| MsError::ValidationFailed("unable to detect shell; use --shell".to_string()))
 }

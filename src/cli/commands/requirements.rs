@@ -125,19 +125,17 @@ pub fn run(ctx: &AppContext, args: &RequirementsArgs) -> Result<()> {
 
         let path_str = check
             .path
-            .as_ref()
-            .map(|p| p.to_string_lossy().to_string())
-            .unwrap_or_else(|| "Not found".dimmed().to_string());
+            .as_ref().map_or_else(|| "Not found".dimmed().to_string(), |p| p.to_string_lossy().to_string());
 
         let version_str = check
             .version
             .as_ref()
-            .map(|v| format!("(v{})", v))
+            .map(|v| format!("(v{v})"))
             .unwrap_or_default();
 
         println!("{} {} {}", status, check.name.bold(), version_str);
         println!("    Bin:  {}", check.bin.cyan());
-        println!("    Path: {}", path_str);
+        println!("    Path: {path_str}");
         if !check.present && !check.required {
             println!("    Note: Optional dependency");
         }

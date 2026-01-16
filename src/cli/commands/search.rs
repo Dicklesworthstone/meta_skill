@@ -343,7 +343,7 @@ fn parse_tags_from_metadata(metadata_json: &str) -> Vec<String> {
         if let Some(tags) = meta.get("tags").and_then(|t| t.as_array()) {
             return tags
                 .iter()
-                .filter_map(|v| v.as_str().map(|tag| tag.to_lowercase()))
+                .filter_map(|v| v.as_str().map(str::to_lowercase))
                 .collect();
         }
     }
@@ -367,20 +367,18 @@ fn find_snippet(body: &str, query: &str) -> Option<String> {
                 let start_char = body_chars[..start_char]
                     .iter()
                     .rposition(|c| c.is_whitespace())
-                    .map(|p| p + 1)
-                    .unwrap_or(start_char);
+                    .map_or(start_char, |p| p + 1);
                 let end_char = body_chars[end_char..]
                     .iter()
                     .position(|c| c.is_whitespace())
-                    .map(|p| end_char + p)
-                    .unwrap_or(end_char);
+                    .map_or(end_char, |p| end_char + p);
 
                 let snippet: String = body_chars[start_char..end_char].iter().collect();
                 let snippet = snippet.trim();
                 if !snippet.is_empty() {
                     let prefix = if start_char > 0 { "..." } else { "" };
                     let suffix = if end_char < total_chars { "..." } else { "" };
-                    return Some(format!("{}{}{}", prefix, snippet, suffix));
+                    return Some(format!("{prefix}{snippet}{suffix}"));
                 }
             }
         }
@@ -390,7 +388,7 @@ fn find_snippet(body: &str, query: &str) -> Option<String> {
 
 fn is_match_at(body: &str, start_byte: usize, word_lower: &str) -> bool {
     let slice = &body[start_byte..];
-    let mut slice_chars = slice.chars().flat_map(|c| c.to_lowercase());
+    let mut slice_chars = slice.chars().flat_map(char::to_lowercase);
     let mut word_chars = word_lower.chars();
     
     loop {

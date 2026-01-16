@@ -49,7 +49,7 @@ impl std::fmt::Display for PathPolicyViolation {
         match self {
             Self::TraversalAttempt => write!(f, "path contains traversal sequences"),
             Self::EscapesRoot { path, root } => {
-                write!(f, "path {:?} escapes root {:?}", path, root)
+                write!(f, "path {path:?} escapes root {root:?}")
             }
             Self::SymlinkEscape {
                 symlink,
@@ -58,15 +58,14 @@ impl std::fmt::Display for PathPolicyViolation {
             } => {
                 write!(
                     f,
-                    "symlink {:?} targets {:?} outside root {:?}",
-                    symlink, target, root
+                    "symlink {symlink:?} targets {target:?} outside root {root:?}"
                 )
             }
             Self::InvalidComponent { component, reason } => {
-                write!(f, "invalid path component {:?}: {}", component, reason)
+                write!(f, "invalid path component {component:?}: {reason}")
             }
             Self::OutsideRoot { path, root } => {
-                write!(f, "path {:?} is outside root {:?}", path, root)
+                write!(f, "path {path:?} is outside root {root:?}")
             }
         }
     }
@@ -76,7 +75,7 @@ impl std::error::Error for PathPolicyViolation {}
 
 impl From<PathPolicyViolation> for MsError {
     fn from(violation: PathPolicyViolation) -> Self {
-        MsError::ValidationFailed(violation.to_string())
+        Self::ValidationFailed(violation.to_string())
     }
 }
 
@@ -170,12 +169,12 @@ pub fn validate_path_component(component: &str) -> std::result::Result<(), PathP
 pub fn canonicalize_with_root(path: &Path, root: &Path) -> Result<PathBuf> {
     // Canonicalize root first
     let canonical_root = root.canonicalize().map_err(|e| {
-        MsError::ValidationFailed(format!("cannot canonicalize root {:?}: {}", root, e))
+        MsError::ValidationFailed(format!("cannot canonicalize root {root:?}: {e}"))
     })?;
 
     // Canonicalize the target path
     let canonical_path = path.canonicalize().map_err(|e| {
-        MsError::ValidationFailed(format!("cannot canonicalize path {:?}: {}", path, e))
+        MsError::ValidationFailed(format!("cannot canonicalize path {path:?}: {e}"))
     })?;
 
     // Verify the path is under root
@@ -342,6 +341,7 @@ pub fn safe_join(root: &Path, relative: &str, check_escape: bool) -> Result<Path
 /// let normalized = normalize_path(path);
 /// assert_eq!(normalized, PathBuf::from("/foo/baz"));
 /// ```
+#[must_use] 
 pub fn normalize_path(path: &Path) -> PathBuf {
     let mut normalized = PathBuf::new();
 
@@ -349,7 +349,7 @@ pub fn normalize_path(path: &Path) -> PathBuf {
         match component {
             Component::ParentDir => {
                 // Pop unless we're at root (can't go above root) or already empty
-                let last = normalized.components().last();
+                let last = normalized.components().next_back();
                 match last {
                     None => {}                       // Empty, nothing to pop
                     Some(Component::RootDir) => {}   // At root, can't go higher
@@ -381,6 +381,7 @@ pub fn normalize_path(path: &Path) -> PathBuf {
 ///
 /// * `true` if path is under root (or equals root)
 /// * `false` otherwise
+#[must_use] 
 pub fn is_under_root(path: &Path, root: &Path) -> bool {
     let normalized_path = normalize_path(path);
     let normalized_root = normalize_path(root);

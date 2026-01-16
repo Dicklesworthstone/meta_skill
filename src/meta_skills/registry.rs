@@ -16,6 +16,7 @@ pub struct MetaSkillRegistry {
 }
 
 impl MetaSkillRegistry {
+    #[must_use] 
     pub fn new() -> Self {
         Self::default()
     }
@@ -25,7 +26,7 @@ impl MetaSkillRegistry {
         let id = meta_skill.id.clone();
 
         // Remove old index entries if updating
-        if let Some(old) = self.meta_skills.insert(id.clone(), meta_skill.clone()) {
+        if let Some(old) = self.meta_skills.insert(id, meta_skill.clone()) {
             self.remove_from_indexes(&old);
         }
 
@@ -68,14 +69,17 @@ impl MetaSkillRegistry {
         }
     }
 
+    #[must_use] 
     pub fn get(&self, id: &str) -> Option<&MetaSkill> {
         self.meta_skills.get(id)
     }
 
+    #[must_use] 
     pub fn all(&self) -> Vec<&MetaSkill> {
         self.meta_skills.values().collect()
     }
 
+    #[must_use] 
     pub fn search(&self, query: &MetaSkillQuery) -> Vec<&MetaSkill> {
         let mut results: Vec<&MetaSkill> = self.meta_skills.values().collect();
 
@@ -119,7 +123,7 @@ impl MetaSkillRegistry {
                 for entry in WalkDir::new(path)
                     .follow_links(true)
                     .into_iter()
-                    .filter_map(|e| e.ok())
+                    .filter_map(std::result::Result::ok)
                 {
                     let entry_path = entry.path();
                     if !entry_path.is_file() {
@@ -135,6 +139,7 @@ impl MetaSkillRegistry {
         Ok(count)
     }
 
+    #[must_use] 
     pub fn stats(&self) -> MetaSkillRegistryStats {
         MetaSkillRegistryStats {
             total: self.meta_skills.len(),

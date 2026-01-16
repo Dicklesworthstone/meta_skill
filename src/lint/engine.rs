@@ -12,7 +12,7 @@ use super::rule::BoxedRule;
 pub struct ValidationResult {
     /// All diagnostics collected
     pub diagnostics: Vec<Diagnostic>,
-    /// Whether validation was truncated due to max_errors
+    /// Whether validation was truncated due to `max_errors`
     pub truncated: bool,
     /// Whether validation passed (no errors)
     pub passed: bool,
@@ -20,7 +20,8 @@ pub struct ValidationResult {
 
 impl ValidationResult {
     /// Create a new empty result
-    pub fn new() -> Self {
+    #[must_use] 
+    pub const fn new() -> Self {
         Self {
             diagnostics: Vec::new(),
             truncated: false,
@@ -57,16 +58,19 @@ impl ValidationResult {
     }
 
     /// Get count of errors
+    #[must_use] 
     pub fn error_count(&self) -> usize {
         self.errors().count()
     }
 
     /// Get count of warnings
+    #[must_use] 
     pub fn warning_count(&self) -> usize {
         self.warnings().count()
     }
 
     /// Get total count of diagnostics
+    #[must_use] 
     pub fn total_count(&self) -> usize {
         self.diagnostics.len()
     }
@@ -89,7 +93,8 @@ pub struct FixResult {
 
 impl FixResult {
     /// Create a new empty fix result
-    pub fn new() -> Self {
+    #[must_use] 
+    pub const fn new() -> Self {
         Self {
             fixed: Vec::new(),
             failed: Vec::new(),
@@ -97,11 +102,13 @@ impl FixResult {
     }
 
     /// Check if all fixes succeeded
+    #[must_use] 
     pub fn all_succeeded(&self) -> bool {
         self.failed.is_empty()
     }
 
     /// Get number of successful fixes
+    #[must_use] 
     pub fn fixed_count(&self) -> usize {
         self.fixed.len()
     }
@@ -121,6 +128,7 @@ pub struct ValidationEngine {
 
 impl ValidationEngine {
     /// Create a new validation engine with the given config
+    #[must_use] 
     pub fn new(config: ValidationConfig) -> Self {
         Self {
             rules: Vec::new(),
@@ -129,6 +137,7 @@ impl ValidationEngine {
     }
 
     /// Create a new engine with default config
+    #[must_use] 
     pub fn with_defaults() -> Self {
         Self::new(ValidationConfig::default())
     }
@@ -139,18 +148,21 @@ impl ValidationEngine {
     }
 
     /// Register a validation rule (builder pattern)
+    #[must_use] 
     pub fn with_rule(mut self, rule: BoxedRule) -> Self {
         self.register(rule);
         self
     }
 
     /// Get registered rules
+    #[must_use] 
     pub fn rules(&self) -> &[BoxedRule] {
         &self.rules
     }
 
     /// Get the config
-    pub fn config(&self) -> &ValidationConfig {
+    #[must_use] 
+    pub const fn config(&self) -> &ValidationConfig {
         &self.config
     }
 
@@ -160,12 +172,14 @@ impl ValidationEngine {
     }
 
     /// Validate a skill spec
+    #[must_use] 
     pub fn validate(&self, skill: &SkillSpec) -> ValidationResult {
         let ctx = ValidationContext::new(skill, &self.config);
         self.validate_with_context(&ctx)
     }
 
     /// Validate with a custom context
+    #[must_use] 
     pub fn validate_with_context(&self, ctx: &ValidationContext<'_>) -> ValidationResult {
         let mut result = ValidationResult::new();
         let mut error_count = 0;
@@ -229,7 +243,7 @@ impl ValidationEngine {
                 .rules
                 .iter()
                 .find(|r| r.id() == rule_id)
-                .ok_or_else(|| MsError::NotFound(format!("Rule '{}' not found", rule_id)))?;
+                .ok_or_else(|| MsError::NotFound(format!("Rule '{rule_id}' not found")))?;
 
             match rule.fix(skill, &diagnostic) {
                 Ok(()) => result.fixed.push(rule_id),
@@ -241,6 +255,7 @@ impl ValidationEngine {
     }
 
     /// List all registered rules
+    #[must_use] 
     pub fn list_rules(&self) -> Vec<RuleInfo> {
         self.rules
             .iter()

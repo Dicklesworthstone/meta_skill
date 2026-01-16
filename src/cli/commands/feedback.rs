@@ -99,9 +99,7 @@ fn run_add(ctx: &AppContext, args: &FeedbackAddArgs) -> Result<()> {
         .kv(
             "Rating",
             &record
-                .rating
-                .map(|r| r.to_string())
-                .unwrap_or_else(|| "-".to_string()),
+                .rating.map_or_else(|| "-".to_string(), |r| r.to_string()),
         )
         .kv(
             "Comment",
@@ -139,11 +137,9 @@ fn run_list(ctx: &AppContext, args: &FeedbackListArgs) -> Result<()> {
     for record in records {
         let label = format!("{} ({})", record.skill_id, record.feedback_type);
         let rating = record
-            .rating
-            .map(|r| r.to_string())
-            .unwrap_or_else(|| "-".to_string());
+            .rating.map_or_else(|| "-".to_string(), |r| r.to_string());
         let comment = record.comment.unwrap_or_else(|| "-".to_string());
-        layout.kv(&label, &format!("rating {} · {}", rating, comment));
+        layout.kv(&label, &format!("rating {rating} · {comment}"));
     }
     crate::cli::output::emit_human(layout);
     Ok(())

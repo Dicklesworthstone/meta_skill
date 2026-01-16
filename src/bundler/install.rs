@@ -27,11 +27,11 @@ pub struct InstallOptions<
     /// and signed bundles (without verifying signatures) are allowed.
     /// Default: false (signatures required and verified).
     pub allow_unsigned: bool,
-    /// Signature verifier for signed bundles. Only used when allow_unsigned is false.
+    /// Signature verifier for signed bundles. Only used when `allow_unsigned` is false.
     pub verifier: Option<&'a V>,
 }
 
-impl<'a, V: SignatureVerifier> Default for InstallOptions<'a, V> {
+impl<V: SignatureVerifier> Default for InstallOptions<'_, V> {
     fn default() -> Self {
         Self {
             allow_unsigned: false,
@@ -43,7 +43,8 @@ impl<'a, V: SignatureVerifier> Default for InstallOptions<'a, V> {
 impl<'a, V: SignatureVerifier> InstallOptions<'a, V> {
     /// Create options that skip signature verification (for development/testing).
     /// Both unsigned bundles and signed bundles will be accepted without verification.
-    pub fn allow_unsigned() -> Self {
+    #[must_use] 
+    pub const fn allow_unsigned() -> Self {
         Self {
             allow_unsigned: true,
             verifier: None,
@@ -51,7 +52,7 @@ impl<'a, V: SignatureVerifier> InstallOptions<'a, V> {
     }
 
     /// Create options with a signature verifier.
-    pub fn with_verifier(verifier: &'a V) -> Self {
+    pub const fn with_verifier(verifier: &'a V) -> Self {
         Self {
             allow_unsigned: false,
             verifier: Some(verifier),
@@ -242,16 +243,14 @@ fn ensure_safe_id(id: &str) -> Result<()> {
     }
     if id == "." || id == ".." {
         return Err(MsError::ValidationFailed(format!(
-            "skill id cannot be '.' or '..': {}",
-            id
+            "skill id cannot be '.' or '..': {id}"
         )));
     }
     // Only allow alphanumeric, hyphen, underscore, and dot
     // This prevents path separators (/, \), control characters, and other weirdness
     if !id.chars().all(|c| c.is_alphanumeric() || c == '-' || c == '_' || c == '.') {
         return Err(MsError::ValidationFailed(format!(
-            "skill id contains invalid characters (allowed: a-z, A-Z, 0-9, -, _, .): {}",
-            id
+            "skill id contains invalid characters (allowed: a-z, A-Z, 0-9, -, _, .): {id}"
         )));
     }
     Ok(())

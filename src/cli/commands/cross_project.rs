@@ -179,7 +179,7 @@ fn run_summary(ctx: &AppContext, args: &CrossProjectSummaryArgs) -> Result<()> {
             continue;
         }
 
-        let entry = aggregates.entry(project).or_insert_with(ProjectAggregate::default);
+        let entry = aggregates.entry(project).or_default();
         entry.session_count += 1;
         if let Some(ts) = m.timestamp.as_deref() {
             update_timestamp(entry, ts);
@@ -337,8 +337,7 @@ fn run_gaps(ctx: &AppContext, args: &CrossProjectGapsArgs) -> Result<()> {
 
         let covered = best
             .as_ref()
-            .map(|match_| match_.score >= args.min_score)
-            .unwrap_or(false);
+            .is_some_and(|match_| match_.score >= args.min_score);
 
         if !covered {
             gaps.push(GapSummary {
@@ -439,9 +438,7 @@ fn format_date(raw: Option<&str>) -> String {
         return "-".to_string();
     };
     let parsed = parse_timestamp(raw);
-    parsed
-        .map(|dt| dt.format("%Y-%m-%d").to_string())
-        .unwrap_or_else(|| raw.to_string())
+    parsed.map_or_else(|| raw.to_string(), |dt| dt.format("%Y-%m-%d").to_string())
 }
 
 fn cass_client(ctx: &AppContext, override_path: &Option<PathBuf>) -> CassClient {
@@ -505,7 +502,7 @@ fn collect_pattern_aggregates(
                 .or_insert_with(|| PatternAggregate::new(label.clone(), pattern.tags.clone()));
 
             entry.total += 1;
-            entry.confidence_sum += pattern.confidence as f64;
+            entry.confidence_sum += f64::from(pattern.confidence);
             *entry.projects.entry(project.clone()).or_insert(0) += 1;
 
             if entry.example.is_none() {
@@ -615,7 +612,7 @@ fn command_names(commands: &[String], limit: usize) -> Vec<String> {
 }
 
 fn one_line(input: &str) -> String {
-    input.replace('\n', " ").replace('\r', " ")
+    input.replace(['\n', '\r'], " ")
 }
 
 fn sanitize_query(input: &str) -> String {
@@ -900,9 +897,7 @@ fn print_gaps(report: &CrossProjectGapsReport) {
     for gap in &report.gaps {
         let best = gap
             .best_match
-            .as_ref()
-            .map(|m| format!("{} ({:.2})", m.skill_id, m.score))
-            .unwrap_or_else(|| "-".to_string());
+            .as_ref().map_or_else(|| "-".to_string(), |m| format!("{} ({:.2})", m.skill_id, m.score));
         let label = truncate_string(&gap.label, 36);
         layout.push_line(format!(
             "{:38} {:>6} {:>6} {:>8.2} {:>18}",

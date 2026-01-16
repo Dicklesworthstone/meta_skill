@@ -1,4 +1,4 @@
-//! Two-Phase Commit (2PC) for dual persistence to SQLite and Git.
+//! Two-Phase Commit (2PC) for dual persistence to `SQLite` and Git.
 //!
 //! All writes that touch both stores are wrapped in a lightweight transaction
 //! protocol to prevent split-brain states where one store is updated but the
@@ -46,9 +46,9 @@ fn write_and_sync(path: &Path, content: &str) -> std::io::Result<()> {
 pub enum TxPhase {
     /// Intent recorded, changes not yet staged
     Prepare,
-    /// SQLite write pending, Git not yet committed
+    /// `SQLite` write pending, Git not yet committed
     Pending,
-    /// Git committed, SQLite not yet marked complete
+    /// Git committed, `SQLite` not yet marked complete
     Committed,
     /// Transaction completed successfully
     Complete,
@@ -57,10 +57,10 @@ pub enum TxPhase {
 impl std::fmt::Display for TxPhase {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            TxPhase::Prepare => write!(f, "prepare"),
-            TxPhase::Pending => write!(f, "pending"),
-            TxPhase::Committed => write!(f, "committed"),
-            TxPhase::Complete => write!(f, "complete"),
+            Self::Prepare => write!(f, "prepare"),
+            Self::Pending => write!(f, "pending"),
+            Self::Committed => write!(f, "committed"),
+            Self::Complete => write!(f, "complete"),
         }
     }
 }
@@ -283,56 +283,53 @@ impl GlobalLock {
         // Note: Waiters blocked on `lock()` already have an open FD to this inode.
         // By keeping the file and just truncating it, we ensure they serialize correctly
         // instead of ending up with a lock on a deleted file.
-        match Self::try_acquire(ms_root)? {
-            Some(mut lock) => {
-                // We successfully acquired the lock.
-                // 1. Read stale content for audit
-                let mut content = String::new();
-                use std::io::{Read, Seek, SeekFrom};
-                lock.lock_file
-                    .seek(SeekFrom::Start(0))
-                    .map_err(|e| MsError::TransactionFailed(format!("seek lock file: {e}")))?;
-                lock.lock_file
-                    .read_to_string(&mut content)
-                    .map_err(|e| MsError::TransactionFailed(format!("read lock file: {e}")))?;
+        if let Some(mut lock) = Self::try_acquire(ms_root)? {
+            // We successfully acquired the lock.
+            // 1. Read stale content for audit
+            let mut content = String::new();
+            use std::io::{Read, Seek, SeekFrom};
+            lock.lock_file
+                .seek(SeekFrom::Start(0))
+                .map_err(|e| MsError::TransactionFailed(format!("seek lock file: {e}")))?;
+            lock.lock_file
+                .read_to_string(&mut content)
+                .map_err(|e| MsError::TransactionFailed(format!("read lock file: {e}")))?;
 
-                // 2. Tombstone the content if not empty
-                if !content.is_empty() {
-                    let tombstones = ms_root.join("tombstones").join("locks");
-                    fs::create_dir_all(&tombstones)?;
-                    let now = chrono::Utc::now();
-                    let stamp = format!(
-                        "{}{:09}",
-                        now.format("%Y%m%dT%H%M%S"),
-                        now.timestamp_subsec_nanos()
-                    );
-                    let dest = tombstones.join(format!("ms.lock_{}.json", stamp));
-                    fs::write(&dest, &content)?;
-                    
-                    // Parse holder for logging
-                    if let Ok(holder) = serde_json::from_str::<LockHolder>(&content) {
-                        warn!(
-                            "Breaking stale lock (holder PID {} since {} appears dead)",
-                            holder.pid, holder.acquired_at
-                        );
-                    }
-                }
-
-                // 3. Truncate the file to clear it
-                lock.lock_file
-                    .set_len(0)
-                    .map_err(|e| MsError::TransactionFailed(format!("truncate lock file: {e}")))?;
-                
-                info!("Stale lock file cleared (truncated)");
-                Ok(true)
-            }
-            None => {
-                warn!(
-                    "Refusing to break lock - it is currently held by another process. \
-                     Wait for the holder to release it or terminate the holder process."
+            // 2. Tombstone the content if not empty
+            if !content.is_empty() {
+                let tombstones = ms_root.join("tombstones").join("locks");
+                fs::create_dir_all(&tombstones)?;
+                let now = chrono::Utc::now();
+                let stamp = format!(
+                    "{}{:09}",
+                    now.format("%Y%m%dT%H%M%S"),
+                    now.timestamp_subsec_nanos()
                 );
-                Ok(false)
+                let dest = tombstones.join(format!("ms.lock_{stamp}.json"));
+                fs::write(&dest, &content)?;
+                
+                // Parse holder for logging
+                if let Ok(holder) = serde_json::from_str::<LockHolder>(&content) {
+                    warn!(
+                        "Breaking stale lock (holder PID {} since {} appears dead)",
+                        holder.pid, holder.acquired_at
+                    );
+                }
             }
+
+            // 3. Truncate the file to clear it
+            lock.lock_file
+                .set_len(0)
+                .map_err(|e| MsError::TransactionFailed(format!("truncate lock file: {e}")))?;
+            
+            info!("Stale lock file cleared (truncated)");
+            Ok(true)
+        } else {
+            warn!(
+                "Refusing to break lock - it is currently held by another process. \
+                 Wait for the holder to release it or terminate the holder process."
+            );
+            Ok(false)
         }
     }
 
@@ -531,7 +528,7 @@ impl TxManager {
     // Internal transaction phases
     // -------------------------------------------------------------------------
 
-    /// Write transaction record to tx_log and filesystem
+    /// Write transaction record to `tx_log` and filesystem
     fn write_tx_record(&self, tx: &TxRecord) -> Result<()> {
         debug!("Phase: prepare (tx={})", tx.id);
 
@@ -547,7 +544,7 @@ impl TxManager {
         Ok(())
     }
 
-    /// Write to SQLite in pending state
+    /// Write to `SQLite` in pending state
     fn db_write_pending(&self, tx: &TxRecord, layer: SkillLayer) -> Result<TxRecord> {
         debug!("Phase: pending (tx={})", tx.id);
 
@@ -597,7 +594,7 @@ impl TxManager {
         Ok(tx)
     }
 
-    /// Mark SQLite record as committed with final values
+    /// Mark `SQLite` record as committed with final values
     fn db_mark_committed(&self, tx: &TxRecord) -> Result<TxRecord> {
         debug!("Phase: complete (tx={})", tx.id);
 
@@ -701,7 +698,7 @@ impl TxManager {
         Ok(report)
     }
 
-    /// Recover a write transaction (entity_type = "skill")
+    /// Recover a write transaction (`entity_type` = "skill")
     fn recover_write_tx(&self, tx: &TxRecord, report: &mut RecoveryReport) -> Result<()> {
         match tx.phase {
             TxPhase::Prepare => {
@@ -742,7 +739,7 @@ impl TxManager {
         Ok(())
     }
 
-    /// Recover a delete transaction (entity_type = "delete_skill")
+    /// Recover a delete transaction (`entity_type` = "`delete_skill`")
     fn recover_delete_tx(&self, tx: &TxRecord, report: &mut RecoveryReport) -> Result<()> {
         match tx.phase {
             TxPhase::Prepare => {
@@ -846,7 +843,8 @@ pub struct RecoveryReport {
 
 impl RecoveryReport {
     /// Check if any recovery actions were needed
-    pub fn had_work(&self) -> bool {
+    #[must_use] 
+    pub const fn had_work(&self) -> bool {
         self.rolled_back > 0 || self.completed > 0 || self.orphaned_files > 0
     }
 }

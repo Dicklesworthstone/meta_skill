@@ -25,7 +25,8 @@ pub enum IssueStatus {
 
 impl IssueStatus {
     /// Check if the status represents an active (not terminal) state.
-    pub fn is_active(&self) -> bool {
+    #[must_use] 
+    pub const fn is_active(&self) -> bool {
         matches!(
             self,
             Self::Open | Self::InProgress | Self::Blocked | Self::Pinned | Self::Hooked
@@ -33,7 +34,8 @@ impl IssueStatus {
     }
 
     /// Check if the status represents a terminal state.
-    pub fn is_terminal(&self) -> bool {
+    #[must_use] 
+    pub const fn is_terminal(&self) -> bool {
         matches!(self, Self::Closed | Self::Tombstone)
     }
 }
@@ -50,7 +52,7 @@ impl std::fmt::Display for IssueStatus {
             Self::Pinned => "pinned",
             Self::Hooked => "hooked",
         };
-        write!(f, "{}", s)
+        write!(f, "{s}")
     }
 }
 
@@ -67,7 +69,7 @@ impl std::str::FromStr for IssueStatus {
             "tombstone" => Ok(Self::Tombstone),
             "pinned" => Ok(Self::Pinned),
             "hooked" => Ok(Self::Hooked),
-            _ => Err(format!("unknown issue status: {}", s)),
+            _ => Err(format!("unknown issue status: {s}")),
         }
     }
 }
@@ -110,7 +112,7 @@ impl std::fmt::Display for IssueType {
             Self::Question => "question",
             Self::Docs => "docs",
         };
-        write!(f, "{}", s)
+        write!(f, "{s}")
     }
 }
 
@@ -133,7 +135,7 @@ impl std::str::FromStr for IssueType {
             "slot" => Ok(Self::Slot),
             "question" => Ok(Self::Question),
             "docs" => Ok(Self::Docs),
-            _ => Err(format!("unknown issue type: {}", s)),
+            _ => Err(format!("unknown issue type: {s}")),
         }
     }
 }
@@ -211,12 +213,14 @@ pub struct Issue {
 
 impl Issue {
     /// Check if this issue is ready to work (open and not blocked).
+    #[must_use] 
     pub fn is_ready(&self) -> bool {
         self.status == IssueStatus::Open && self.dependencies.is_empty()
     }
 
     /// Check if this issue is in an active (workable) state.
-    pub fn is_active(&self) -> bool {
+    #[must_use] 
+    pub const fn is_active(&self) -> bool {
         self.status.is_active()
     }
 }
@@ -296,13 +300,15 @@ impl CreateIssueRequest {
     }
 
     /// Set the issue type.
-    pub fn with_type(mut self, issue_type: IssueType) -> Self {
+    #[must_use] 
+    pub const fn with_type(mut self, issue_type: IssueType) -> Self {
         self.issue_type = Some(issue_type);
         self
     }
 
     /// Set the priority.
-    pub fn with_priority(mut self, priority: Priority) -> Self {
+    #[must_use] 
+    pub const fn with_priority(mut self, priority: Priority) -> Self {
         self.priority = Some(priority);
         self
     }
@@ -364,12 +370,14 @@ pub struct UpdateIssueRequest {
 
 impl UpdateIssueRequest {
     /// Create an empty update request.
+    #[must_use] 
     pub fn new() -> Self {
         Self::default()
     }
 
     /// Set the status.
-    pub fn with_status(mut self, status: IssueStatus) -> Self {
+    #[must_use] 
+    pub const fn with_status(mut self, status: IssueStatus) -> Self {
         self.status = Some(status);
         self
     }
@@ -381,7 +389,8 @@ impl UpdateIssueRequest {
     }
 
     /// Set the priority.
-    pub fn with_priority(mut self, priority: Priority) -> Self {
+    #[must_use] 
+    pub const fn with_priority(mut self, priority: Priority) -> Self {
         self.priority = Some(priority);
         self
     }

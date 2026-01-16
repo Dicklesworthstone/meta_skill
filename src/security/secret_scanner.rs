@@ -98,22 +98,25 @@ pub struct SecretMatch {
 
 impl SecretMatch {
     /// Get a masked version of the matched text for logging.
+    #[must_use] 
     pub fn masked_preview(&self) -> String {
         let len = self.matched_text.len();
         if len <= 8 {
             "[REDACTED]".to_string()
         } else {
             let prefix: String = self.matched_text.chars().take(4).collect();
-            format!("{}...{} chars", prefix, len)
+            format!("{prefix}...{len} chars")
         }
     }
 
     /// Get the length of the matched secret.
+    #[must_use] 
     pub fn len(&self) -> usize {
         self.matched_text.len()
     }
 
     /// Check if the match is empty.
+    #[must_use] 
     pub fn is_empty(&self) -> bool {
         self.matched_text.is_empty()
     }
@@ -388,6 +391,7 @@ pub fn contains_secrets(content: &str) -> bool {
 /// # Returns
 ///
 /// Content with all detected secrets replaced with `[REDACTED]`.
+#[must_use] 
 pub fn redact_secrets(content: &str) -> String {
     let matches = scan_secrets(content);
     if matches.is_empty() {
@@ -431,6 +435,7 @@ pub fn redact_secrets(content: &str) -> String {
 /// # Returns
 ///
 /// Content with secrets replaced with type-specific markers like `[REDACTED:AWS_KEY]`.
+#[must_use] 
 pub fn redact_secrets_typed(content: &str) -> String {
     let matches = scan_secrets(content);
     if matches.is_empty() {
@@ -492,6 +497,7 @@ pub struct SecretScanSummary {
 }
 
 /// Scan content and return a summary without exposing secret values.
+#[must_use] 
 pub fn scan_secrets_summary(content: &str) -> SecretScanSummary {
     let matches = scan_secrets(content);
 

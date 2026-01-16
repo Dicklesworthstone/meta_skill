@@ -211,8 +211,8 @@ fn add(ctx: &AppContext, args: &RemoteAddArgs) -> Result<()> {
             .title("Remote Added")
             .kv("Name", &args.name)
             .kv("URL", &args.url)
-            .kv("Type", &format!("{:?}", remote_type))
-            .kv("Direction", &format!("{:?}", direction))
+            .kv("Type", &format!("{remote_type:?}"))
+            .kv("Direction", &format!("{direction:?}"))
             .kv("Enabled", &(!args.disabled).to_string());
         if let Some(branch) = &args.branch {
             layout.kv("Branch", branch);
@@ -252,9 +252,7 @@ fn list(ctx: &AppContext, _args: &RemoteListArgs) -> Result<()> {
                     "Auth",
                     &remote
                         .auth
-                        .as_ref()
-                        .map(|a| format!("{a:?}"))
-                        .unwrap_or_else(|| "none".to_string()),
+                        .as_ref().map_or_else(|| "none".to_string(), |a| format!("{a:?}")),
                 )
                 .blank();
         }
@@ -470,7 +468,7 @@ fn validate_remote_flags(
     Ok(())
 }
 
-fn has_auth_flags(
+const fn has_auth_flags(
     auth: Option<&String>,
     token_env: Option<&String>,
     username: Option<&String>,

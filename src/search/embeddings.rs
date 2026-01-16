@@ -2,7 +2,7 @@
 //!
 //! Supports multiple embedding strategies:
 //! - Hash: FNV-1a based, zero dependencies, fully deterministic
-//! - API: External embedding services (OpenAI, Voyage, etc.)
+//! - API: External embedding services (`OpenAI`, Voyage, etc.)
 //! - Local: ONNX runtime (not yet implemented)
 
 use std::cmp::Ordering;
@@ -47,7 +47,7 @@ pub fn build_embedder(config: &SearchConfig) -> Result<Box<dyn Embedder>> {
                 config.api_model.clone(),
                 api_key,
                 dims,
-            )))
+            )?))
         }
         other => Err(MsError::Config(format!(
             "unknown embedding backend: {other}"
@@ -69,16 +69,19 @@ impl Default for HashEmbedder {
 
 impl HashEmbedder {
     /// Create embedder with specified dimension
-    pub fn new(dim: usize) -> Self {
+    #[must_use] 
+    pub const fn new(dim: usize) -> Self {
         Self { dim }
     }
 
     /// Embedding dimension
-    pub fn dims(&self) -> usize {
+    #[must_use] 
+    pub const fn dims(&self) -> usize {
         self.dim
     }
 
     /// Embed text into vector
+    #[must_use] 
     pub fn embed(&self, text: &str) -> Vec<f32> {
         if self.dim == 0 {
             return Vec::new();
@@ -105,6 +108,7 @@ impl HashEmbedder {
     }
 
     /// Compute cosine similarity between two embeddings
+    #[must_use] 
     pub fn similarity(&self, a: &[f32], b: &[f32]) -> f32 {
         if a.len() != b.len() {
             return 0.0;
@@ -124,19 +128,19 @@ impl HashEmbedder {
 
 impl Embedder for HashEmbedder {
     fn embed(&self, text: &str) -> Vec<f32> {
-        HashEmbedder::embed(self, text)
+        Self::embed(self, text)
     }
 
     fn dims(&self) -> usize {
         self.dim
     }
 
-    fn name(&self) -> &str {
+    fn name(&self) -> &'static str {
         "hash"
     }
 }
 
-/// API-based embedder for external embedding services (OpenAI, Voyage, etc.)
+/// API-based embedder for external embedding services (`OpenAI`, Voyage, etc.)
 pub struct ApiEmbedder {
     client: reqwest::blocking::Client,
     endpoint: String,
@@ -150,19 +154,19 @@ pub struct ApiEmbedder {
 }
 
 impl ApiEmbedder {
-    pub fn new(endpoint: String, model: String, api_key: String, dims: usize) -> Self {
-        Self {
+    pub fn new(endpoint: String, model: String, api_key: String, dims: usize) -> Result<Self> {
+        Ok(Self {
             client: reqwest::blocking::Client::builder()
                 .timeout(Duration::from_secs(30))
                 .build()
-                .expect("failed to create HTTP client"),
+                .map_err(|e| MsError::Config(format!("failed to create HTTP client: {}", e)))?,
             endpoint,
             model,
             api_key,
             dims,
             last_request: Mutex::new(None),
             min_delay: Duration::from_millis(100),
-        }
+        })
     }
 
     fn rate_limit(&self) {
@@ -170,7 +174,7 @@ impl ApiEmbedder {
         if let Some(last_time) = *last {
             let elapsed = last_time.elapsed();
             if elapsed < self.min_delay {
-                std::thread::sleep(self.min_delay - elapsed);
+                std::thread::sleep(self.min_delay.checked_sub(elapsed).unwrap());
             }
         }
         *last = Some(Instant::now());
@@ -244,7 +248,7 @@ impl Embedder for ApiEmbedder {
         self.dims
     }
 
-    fn name(&self) -> &str {
+    fn name(&self) -> &'static str {
         "api"
     }
 }
@@ -257,6 +261,7 @@ pub struct VectorIndex {
 
 impl VectorIndex {
     /// Create a new empty vector index
+    #[must_use] 
     pub fn new(dims: usize) -> Self {
         Self {
             embeddings: HashMap::new(),
@@ -265,16 +270,19 @@ impl VectorIndex {
     }
 
     /// Current embedding dimension
-    pub fn dims(&self) -> usize {
+    #[must_use] 
+    pub const fn dims(&self) -> usize {
         self.dims
     }
 
     /// Number of embeddings stored
+    #[must_use] 
     pub fn len(&self) -> usize {
         self.embeddings.len()
     }
 
     /// Whether the index is empty
+    #[must_use] 
     pub fn is_empty(&self) -> bool {
         self.embeddings.is_empty()
     }
@@ -294,6 +302,7 @@ impl VectorIndex {
     }
 
     /// Cosine similarity search (expects embeddings to be L2 normalized)
+    #[must_use] 
     pub fn search(&self, query_embedding: &[f32], limit: usize) -> Vec<(String, f32)> {
         if query_embedding.len() != self.dims {
             return Vec::new();
@@ -315,8 +324,8 @@ fn tokenize(text: &str) -> Vec<String> {
     let lowered = text.to_lowercase();
     lowered
         .split(|c: char| !(c.is_alphanumeric() || c == '+' || c == '#'))
-        .filter(|token| token.len() >= 1) // Allow 1-char tokens (like "c", "r")
-        .map(|token| token.to_string())
+        .filter(|token| !token.is_empty()) // Allow 1-char tokens (like "c", "r")
+        .map(std::string::ToString::to_string)
         .collect()
 }
 
@@ -346,7 +355,7 @@ fn fnv1a_hash(data: &[u8]) -> u64 {
 
     let mut hash = FNV_OFFSET;
     for byte in data {
-        hash ^= *byte as u64;
+        hash ^= u64::from(*byte);
         hash = hash.wrapping_mul(FNV_PRIME);
     }
     hash

@@ -112,8 +112,7 @@ fn add_alias(ctx: &AppContext, alias: &str, target: &str, kind: &str) -> Result<
     // Check target skill exists
     if ctx.db.get_skill(target)?.is_none() {
         return Err(MsError::SkillNotFound(format!(
-            "Target skill '{}' not found",
-            target
+            "Target skill '{target}' not found"
         )));
     }
 

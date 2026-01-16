@@ -1,4 +1,4 @@
-//! Mock BeadsClient for testing.
+//! Mock `BeadsClient` for testing.
 //!
 //! Provides a `BeadsOperations` trait and `MockBeadsClient` implementation
 //! for unit testing code that depends on beads operations without spawning
@@ -75,14 +75,14 @@ pub enum BeadsErrorKind {
 }
 
 impl BeadsErrorKind {
-    /// Convert to an MsError with the given context.
+    /// Convert to an `MsError` with the given context.
     fn to_error(&self, context: &str) -> MsError {
         match self {
-            Self::Unavailable => MsError::BeadsUnavailable(format!("mock error: {}", context)),
-            Self::NotFound => MsError::NotFound(format!("mock error: {}", context)),
-            Self::ValidationFailed => MsError::ValidationFailed(format!("mock error: {}", context)),
+            Self::Unavailable => MsError::BeadsUnavailable(format!("mock error: {context}")),
+            Self::NotFound => MsError::NotFound(format!("mock error: {context}")),
+            Self::ValidationFailed => MsError::ValidationFailed(format!("mock error: {context}")),
             Self::TransactionFailed => {
-                MsError::TransactionFailed(format!("mock error: {}", context))
+                MsError::TransactionFailed(format!("mock error: {context}"))
             }
             Self::Custom(msg) => MsError::BeadsUnavailable(msg.clone()),
         }
@@ -102,7 +102,7 @@ pub enum ErrorInjection {
     IssueId(String, BeadsErrorKind),
 }
 
-/// Mock BeadsClient for testing.
+/// Mock `BeadsClient` for testing.
 ///
 /// Provides an in-memory implementation of beads operations that can be
 /// used in unit tests without spawning subprocesses or requiring bd.
@@ -126,6 +126,7 @@ pub struct MockBeadsClient {
 
 impl MockBeadsClient {
     /// Create a new mock that reports as available.
+    #[must_use] 
     pub fn new() -> Self {
         Self {
             available: true,
@@ -137,6 +138,7 @@ impl MockBeadsClient {
     }
 
     /// Create a mock that reports as unavailable.
+    #[must_use] 
     pub fn unavailable() -> Self {
         Self {
             available: false,
@@ -197,7 +199,7 @@ impl MockBeadsClient {
                     return Err(kind.to_error(op));
                 }
                 ErrorInjection::IssueId(target_id, kind) if Some(target_id.as_str()) == id => {
-                    return Err(kind.to_error(&format!("{}: {}", op, target_id)));
+                    return Err(kind.to_error(&format!("{op}: {target_id}")));
                 }
                 _ => {}
             }
@@ -298,7 +300,7 @@ impl BeadsOperations for MockBeadsClient {
         store
             .get(id)
             .cloned()
-            .ok_or_else(|| MsError::NotFound(format!("issue not found: {}", id)))
+            .ok_or_else(|| MsError::NotFound(format!("issue not found: {id}")))
     }
 
     fn create(&self, request: &CreateIssueRequest) -> Result<Issue> {
@@ -339,7 +341,7 @@ impl BeadsOperations for MockBeadsClient {
         let mut store = self.issues.borrow_mut();
         let issue = store
             .get_mut(id)
-            .ok_or_else(|| MsError::NotFound(format!("issue not found: {}", id)))?;
+            .ok_or_else(|| MsError::NotFound(format!("issue not found: {id}")))?;
 
         // Apply updates
         if let Some(ref status) = request.status {
@@ -404,6 +406,7 @@ impl BeadsOperations for MockBeadsClient {
 }
 
 /// Helper to create a test issue with minimal fields.
+#[must_use] 
 pub fn test_issue(id: &str, title: &str) -> Issue {
     Issue {
         id: id.to_string(),

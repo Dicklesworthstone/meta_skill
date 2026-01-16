@@ -130,7 +130,9 @@ pub enum SliceCondition {
 /// Strategy for resolving skill versions when loading meta-skills.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
+#[derive(Default)]
 pub enum PinStrategy {
+    #[default]
     LatestCompatible,
     ExactVersion(String),
     FloatingMajor,
@@ -138,11 +140,6 @@ pub enum PinStrategy {
     PerSkill(HashMap<String, String>),
 }
 
-impl Default for PinStrategy {
-    fn default() -> Self {
-        PinStrategy::LatestCompatible
-    }
-}
 
 /// TOML document for meta-skill definitions.
 #[derive(Debug, Clone, Serialize, Deserialize)]

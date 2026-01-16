@@ -19,7 +19,8 @@ pub struct LogStorage {
 }
 
 impl LogStorage {
-    pub fn new(max_entries: usize) -> Self {
+    #[must_use] 
+    pub const fn new(max_entries: usize) -> Self {
         Self {
             entries: VecDeque::new(),
             max_entries,
@@ -33,7 +34,8 @@ impl LogStorage {
         self.entries.push_back(entry);
     }
 
-    pub fn entries(&self) -> &VecDeque<LogEntry> {
+    #[must_use] 
+    pub const fn entries(&self) -> &VecDeque<LogEntry> {
         &self.entries
     }
 
@@ -41,26 +43,32 @@ impl LogStorage {
         self.entries.clear();
     }
 
+    #[must_use] 
     pub fn contains_message(&self, message: &str) -> bool {
         self.entries.iter().any(|e| e.message.contains(message))
     }
 
+    #[must_use] 
     pub fn contains_level(&self, level: Level) -> bool {
         self.entries.iter().any(|e| e.level == level)
     }
 
+    #[must_use] 
     pub fn has_errors(&self) -> bool {
         self.contains_level(Level::ERROR)
     }
 
+    #[must_use] 
     pub fn has_warnings(&self) -> bool {
         self.contains_level(Level::WARN)
     }
 
+    #[must_use] 
     pub fn filter_by_level(&self, level: Level) -> Vec<&LogEntry> {
         self.entries.iter().filter(|e| e.level == level).collect()
     }
 
+    #[must_use] 
     pub fn filter_by_message(&self, pattern: &str) -> Vec<&LogEntry> {
         self.entries
             .iter()
@@ -80,6 +88,7 @@ pub struct LogEntry {
 }
 
 impl LogEntry {
+    #[must_use] 
     pub fn new(level: Level, target: &str, message: &str) -> Self {
         Self {
             level,
@@ -90,12 +99,14 @@ impl LogEntry {
         }
     }
 
+    #[must_use] 
     pub fn with_field(mut self, key: &str, value: &str) -> Self {
         self.fields.push((key.to_string(), value.to_string()));
         self
     }
 
     /// Format as JSON for structured output.
+    #[must_use] 
     pub fn to_json(&self) -> String {
         let fields_json: Vec<String> = self
             .fields
@@ -134,6 +145,7 @@ pub fn clear_logs() {
 }
 
 /// Get all captured log entries.
+#[must_use] 
 pub fn get_logs() -> Vec<LogEntry> {
     if let Ok(storage) = get_log_storage().lock() {
         storage.entries().iter().cloned().collect()
@@ -143,6 +155,7 @@ pub fn get_logs() -> Vec<LogEntry> {
 }
 
 /// Check if logs contain a message.
+#[must_use] 
 pub fn logs_contain(message: &str) -> bool {
     if let Ok(storage) = get_log_storage().lock() {
         storage.contains_message(message)
@@ -152,6 +165,7 @@ pub fn logs_contain(message: &str) -> bool {
 }
 
 /// Check if logs have any errors.
+#[must_use] 
 pub fn logs_have_errors() -> bool {
     if let Ok(storage) = get_log_storage().lock() {
         storage.has_errors()
@@ -161,6 +175,7 @@ pub fn logs_have_errors() -> bool {
 }
 
 /// Check if logs have any warnings.
+#[must_use] 
 pub fn logs_have_warnings() -> bool {
     if let Ok(storage) = get_log_storage().lock() {
         storage.has_warnings()
@@ -170,6 +185,7 @@ pub fn logs_have_warnings() -> bool {
 }
 
 /// Format logs for display on test failure.
+#[must_use] 
 pub fn format_logs_for_display() -> String {
     let logs = get_logs();
     if logs.is_empty() {
@@ -196,7 +212,7 @@ pub fn format_logs_for_display() -> String {
         ));
 
         for (key, value) in &entry.fields {
-            output.push_str(&format!("    {} = {}\n", key, value));
+            output.push_str(&format!("    {key} = {value}\n"));
         }
     }
 
@@ -210,7 +226,7 @@ pub struct TestLogLayer {
 }
 
 impl TestLogLayer {
-    pub fn new(storage: Arc<Mutex<LogStorage>>) -> Self {
+    pub const fn new(storage: Arc<Mutex<LogStorage>>) -> Self {
         Self { storage }
     }
 }
@@ -237,7 +253,7 @@ where
             fields: &'a mut Vec<(String, String)>,
         }
 
-        impl<'a> tracing::field::Visit for MessageVisitor<'a> {
+        impl tracing::field::Visit for MessageVisitor<'_> {
             fn record_str(&mut self, field: &tracing::field::Field, value: &str) {
                 if field.name() == "message" {
                     *self.message = value.to_string();
@@ -248,7 +264,7 @@ where
             }
 
             fn record_debug(&mut self, field: &tracing::field::Field, value: &dyn std::fmt::Debug) {
-                let value_str = format!("{:?}", value);
+                let value_str = format!("{value:?}");
                 if field.name() == "message" {
                     *self.message = value_str;
                 } else {
@@ -276,6 +292,7 @@ where
 ///
 /// Call this at the start of your test to enable log capture.
 /// Returns a guard that will print logs on drop if the test failed.
+#[must_use] 
 pub fn init_test_logging(level: &str) -> TestLoggingGuard {
     let storage = get_log_storage();
 
@@ -286,7 +303,7 @@ pub fn init_test_logging(level: &str) -> TestLoggingGuard {
 
     let filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new(level));
 
-    let test_layer = TestLogLayer::new(storage.clone());
+    let test_layer = TestLogLayer::new(storage);
 
     let subscriber = tracing_subscriber::registry().with(filter).with(test_layer);
 
@@ -308,16 +325,19 @@ pub struct TestLoggingGuard {
 }
 
 impl TestLoggingGuard {
+    #[must_use] 
     pub fn with_name(mut self, name: &str) -> Self {
         self.test_name = name.to_string();
         self
     }
 
-    pub fn no_print_on_failure(mut self) -> Self {
+    #[must_use] 
+    pub const fn no_print_on_failure(mut self) -> Self {
         self.print_on_failure = false;
         self
     }
 
+    #[must_use] 
     pub fn elapsed(&self) -> std::time::Duration {
         self.start_time.elapsed()
     }
@@ -415,11 +435,12 @@ pub struct TestLogger {
 }
 
 impl TestLogger {
+    #[must_use] 
     pub fn new(test_name: &str) -> Self {
         let separator = "=".repeat(60);
-        println!("\n{}", separator);
-        println!("[TEST START] {}", test_name);
-        println!("{}", separator);
+        println!("\n{separator}");
+        println!("[TEST START] {test_name}");
+        println!("{separator}");
         Self {
             test_name: test_name.to_string(),
             start_time: Instant::now(),
@@ -427,31 +448,32 @@ impl TestLogger {
     }
 
     pub fn log_input<T: std::fmt::Debug>(&self, name: &str, value: &T) {
-        println!("[INPUT] {}: {:?}", name, value);
+        println!("[INPUT] {name}: {value:?}");
     }
 
     pub fn log_expected<T: std::fmt::Debug>(&self, value: &T) {
-        println!("[EXPECTED] {:?}", value);
+        println!("[EXPECTED] {value:?}");
     }
 
     pub fn log_actual<T: std::fmt::Debug>(&self, value: &T) {
-        println!("[ACTUAL] {:?}", value);
+        println!("[ACTUAL] {value:?}");
     }
 
     pub fn pass(&self) {
         let elapsed = self.start_time.elapsed();
-        println!("[RESULT] PASSED in {:?}", elapsed);
+        println!("[RESULT] PASSED in {elapsed:?}");
         println!("{}\n", "=".repeat(60));
     }
 
     pub fn fail(&self, reason: &str) {
         let elapsed = self.start_time.elapsed();
-        println!("[RESULT] FAILED in {:?}", elapsed);
-        println!("[REASON] {}", reason);
+        println!("[RESULT] FAILED in {elapsed:?}");
+        println!("[REASON] {reason}");
         println!("{}\n", "=".repeat(60));
     }
 
     #[allow(dead_code)]
+    #[must_use] 
     pub fn test_name(&self) -> &str {
         &self.test_name
     }

@@ -1,4 +1,4 @@
-//! Micro-slicing engine for SkillSpec content.
+//! Micro-slicing engine for `SkillSpec` content.
 
 use std::collections::HashMap;
 
@@ -14,10 +14,11 @@ pub struct SkillSliceIndex {
     pub generated_at: DateTime<Utc>,
 }
 
-/// Slice a SkillSpec into atomic slices for packing.
+/// Slice a `SkillSpec` into atomic slices for packing.
 pub struct SkillSlicer;
 
 impl SkillSlicer {
+    #[must_use] 
     pub fn slice(spec: &SkillSpec) -> SkillSliceIndex {
         let mut slices = Vec::new();
         let mut counters: HashMap<&'static str, usize> = HashMap::new();
@@ -32,6 +33,7 @@ impl SkillSlicer {
         }
     }
 
+    #[must_use] 
     pub fn estimate_total_tokens(spec: &SkillSpec) -> usize {
         let mut total = 0;
         for section in &spec.sections {
@@ -127,7 +129,7 @@ fn slice_id(
     format!("{prefix}-{counter}")
 }
 
-fn slice_type_tag(slice_type: SliceType) -> &'static str {
+const fn slice_type_tag(slice_type: SliceType) -> &'static str {
     match slice_type {
         SliceType::Rule => "rule",
         SliceType::Command => "command",
@@ -156,7 +158,7 @@ fn coverage_group(slice_type: SliceType) -> Option<String> {
     )
 }
 
-fn utility_score(slice_type: SliceType) -> f32 {
+const fn utility_score(slice_type: SliceType) -> f32 {
     match slice_type {
         SliceType::Policy => 0.95,
         SliceType::Rule => 0.9,
@@ -171,7 +173,7 @@ fn utility_score(slice_type: SliceType) -> f32 {
 
 fn estimate_tokens(content: &str) -> usize {
     let chars = content.chars().count();
-    let estimate = (chars + 3) / 4;
+    let estimate = chars.div_ceil(4);
     estimate.max(1)
 }
 

@@ -39,9 +39,9 @@ pub enum DepsMode {
 impl From<DepsMode> for DependencyLoadMode {
     fn from(mode: DepsMode) -> Self {
         match mode {
-            DepsMode::Auto => DependencyLoadMode::Auto,
-            DepsMode::Off => DependencyLoadMode::Off,
-            DepsMode::Full => DependencyLoadMode::Full,
+            DepsMode::Auto => Self::Auto,
+            DepsMode::Off => Self::Off,
+            DepsMode::Full => Self::Full,
         }
     }
 }
@@ -72,14 +72,14 @@ pub enum CliPackContract {
 }
 
 impl CliPackContract {
-    fn preset(self) -> PackContractPreset {
+    const fn preset(self) -> PackContractPreset {
         match self {
-            CliPackContract::Complete => PackContractPreset::Complete,
-            CliPackContract::Debug => PackContractPreset::Debug,
-            CliPackContract::Refactor => PackContractPreset::Refactor,
-            CliPackContract::Learn => PackContractPreset::Learn,
-            CliPackContract::Quickref => PackContractPreset::QuickRef,
-            CliPackContract::Codegen => PackContractPreset::CodeGen,
+            Self::Complete => PackContractPreset::Complete,
+            Self::Debug => PackContractPreset::Debug,
+            Self::Refactor => PackContractPreset::Refactor,
+            Self::Learn => PackContractPreset::Learn,
+            Self::Quickref => PackContractPreset::QuickRef,
+            Self::Codegen => PackContractPreset::CodeGen,
         }
     }
 }
@@ -87,10 +87,10 @@ impl CliPackContract {
 impl From<CliPackMode> for PackMode {
     fn from(mode: CliPackMode) -> Self {
         match mode {
-            CliPackMode::Balanced => PackMode::Balanced,
-            CliPackMode::UtilityFirst => PackMode::UtilityFirst,
-            CliPackMode::CoverageFirst => PackMode::CoverageFirst,
-            CliPackMode::PitfallSafe => PackMode::PitfallSafe,
+            CliPackMode::Balanced => Self::Balanced,
+            CliPackMode::UtilityFirst => Self::UtilityFirst,
+            CliPackMode::CoverageFirst => Self::CoverageFirst,
+            CliPackMode::PitfallSafe => Self::PitfallSafe,
         }
     }
 }
@@ -337,7 +337,7 @@ fn run_auto_load(ctx: &AppContext, args: &LoadArgs) -> Result<()> {
     }
 }
 
-/// Convert CollectedContext to WorkingContext for scoring
+/// Convert `CollectedContext` to `WorkingContext` for scoring
 fn convert_to_scoring_context(collected: &CollectedContext) -> WorkingContext {
     WorkingContext::new()
         .with_projects(collected.detected_projects.clone())
@@ -385,7 +385,7 @@ fn get_all_skill_metadata(ctx: &AppContext) -> Result<Vec<SkillMetadata>> {
     Ok(all_skills)
 }
 
-/// Convert SkillRecord to SkillMetadata
+/// Convert `SkillRecord` to `SkillMetadata`
 fn skill_record_to_metadata(skill: &SkillRecord) -> SkillMetadata {
     let meta_json: serde_json::Value =
         serde_json::from_str(&skill.metadata_json).unwrap_or_default();
@@ -548,7 +548,7 @@ fn output_auto_human(
         for load_result in &result.loaded {
             println!("{}", format!("# {}", load_result.name).bold());
             if let Some(ref body) = load_result.disclosed.body {
-                println!("{}", body);
+                println!("{body}");
             }
             println!();
         }
@@ -634,7 +634,7 @@ pub(crate) fn load_skill(ctx: &AppContext, args: &LoadArgs, skill_ref: &str) -> 
 
     // Parse skill body into SkillSpec
     let spec = parse_markdown(&skill.body)
-        .map_err(|e| MsError::ValidationFailed(format!("failed to parse skill body: {}", e)))?;
+        .map_err(|e| MsError::ValidationFailed(format!("failed to parse skill body: {e}")))?;
 
     // Merge metadata from database into spec metadata
     let metadata = merge_metadata(&skill, &spec.metadata);
@@ -650,10 +650,10 @@ pub(crate) fn load_skill(ctx: &AppContext, args: &LoadArgs, skill_ref: &str) -> 
     let slices_included = disclosed.slices_included;
 
     // Handle dependencies if enabled
-    let dependencies_loaded = if !matches!(args.deps, DepsMode::Off) {
-        load_dependencies(ctx, &skill, args)?
-    } else {
+    let dependencies_loaded = if matches!(args.deps, DepsMode::Off) {
         vec![]
+    } else {
+        load_dependencies(ctx, &skill, args)?
     };
 
     let result = LoadResult {
@@ -689,8 +689,7 @@ fn resolve_skill(ctx: &AppContext, skill_ref: &str) -> Result<SkillRecord> {
     }
 
     Err(MsError::SkillNotFound(format!(
-        "skill not found: {}",
-        skill_ref
+        "skill not found: {skill_ref}"
     )))
 }
 
@@ -741,7 +740,7 @@ fn try_load_meta_skill(ctx: &AppContext, args: &LoadArgs, skill_ref: &str) -> Re
 
     Ok(Some(MetaSkillLoadResultWrapper {
         meta_skill_id: result.meta_skill_id,
-        meta_skill_name: meta_skill.name.clone(),
+        meta_skill_name: meta_skill.name,
         tokens_used: result.tokens_used,
         slices_loaded: result.slices.len(),
         slices_skipped: result.skipped.len(),
@@ -882,8 +881,7 @@ fn resolve_contract(ctx: &AppContext, args: &LoadArgs) -> Result<Option<PackCont
         let path = custom_contracts_path(&ctx.ms_root);
         let Some(contract) = find_custom_contract(&path, id)? else {
             return Err(MsError::SkillNotFound(format!(
-                "contract not found: {}",
-                id
+                "contract not found: {id}"
             )));
         };
         return Ok(Some(contract));
@@ -950,8 +948,7 @@ fn validate_experiment_usage(
 
     if !variants.iter().any(|variant| variant.id == variant_id) {
         return Err(MsError::ValidationFailed(format!(
-            "unknown variant id for experiment {}: {}",
-            experiment_id, variant_id
+            "unknown variant id for experiment {experiment_id}: {variant_id}"
         )));
     }
 
@@ -1067,11 +1064,10 @@ fn load_dependencies(
 
         // Direct skill-id match (capability equals skill id).
         if let Some(dep_skill) = skill_index.get(&cap) {
-            if add_dependency_node(&mut graph, dep_skill, &meta_cache, &cap, &mut queue) {
-                if loaded_set.insert(dep_skill.id.clone()) {
+            if add_dependency_node(&mut graph, dep_skill, &meta_cache, &cap, &mut queue)
+                && loaded_set.insert(dep_skill.id.clone()) {
                     loaded_deps.push(dep_skill.id.clone());
                 }
-            }
             continue;
         }
 
@@ -1079,11 +1075,10 @@ fn load_dependencies(
         if let Some(provider_ids) = provider_index.get(&cap) {
             for provider_id in provider_ids {
                 if let Some(dep_skill) = skill_index.get(provider_id) {
-                    if add_dependency_node(&mut graph, dep_skill, &meta_cache, &cap, &mut queue) {
-                        if loaded_set.insert(dep_skill.id.clone()) {
+                    if add_dependency_node(&mut graph, dep_skill, &meta_cache, &cap, &mut queue)
+                        && loaded_set.insert(dep_skill.id.clone()) {
                             loaded_deps.push(dep_skill.id.clone());
                         }
-                    }
                 }
             }
         }
@@ -1256,7 +1251,7 @@ pub(crate) fn output_human(
 
     // Main body content
     if let Some(ref body) = disclosed.body {
-        println!("{}", body);
+        println!("{body}");
     }
 
     // Scripts (at Complete level)
@@ -1302,7 +1297,7 @@ pub(crate) fn build_robot_payload(result: &LoadResult, args: &LoadArgs) -> serde
         serde_json::json!({
             "budget": tokens,
             "mode": format!("{:?}", args.mode),
-            "contract": args.contract.map(|c| format!("{:?}", c)),
+            "contract": args.contract.map(|c| format!("{c:?}")),
             "contract_id": args.contract_id.clone(),
         })
     } else {

@@ -139,7 +139,7 @@ fn show_human(
         println!("{}", "─".repeat(40).dimmed());
         if let Ok(meta) = serde_json::from_str::<serde_json::Value>(&skill.metadata_json) {
             if let Ok(pretty) = serde_json::to_string_pretty(&meta) {
-                println!("{}", pretty);
+                println!("{pretty}");
             }
         }
     }
@@ -165,7 +165,7 @@ fn show_human(
                 } else {
                     for req in requires {
                         if let Some(req_str) = req.as_str() {
-                            println!("  → {}", req_str);
+                            println!("  → {req_str}");
                         }
                     }
                 }

@@ -83,15 +83,12 @@ fn run_status(ctx: &AppContext) -> Result<()> {
         println!("{}", "─".repeat(30));
         println!();
 
-        match &status.dcg_version {
-            Some(version) => {
-                println!("  {} DCG Available", "✓".green());
-                println!("    Version: {}", version.cyan());
-            }
-            None => {
-                println!("  {} DCG Not Available", "✗".red());
-                println!("    Commands will be allowed with warnings");
-            }
+        if let Some(version) = &status.dcg_version {
+            println!("  {} DCG Available", "✓".green());
+            println!("    Version: {}", version.cyan());
+        } else {
+            println!("  {} DCG Not Available", "✗".red());
+            println!("    Commands will be allowed with warnings");
         }
         println!("    Binary: {}", status.dcg_bin.display());
 
@@ -326,7 +323,7 @@ fn truncate_command(cmd: &str, max_len: usize) -> String {
         cmd.to_string()
     } else {
         let truncated: String = cmd.chars().take(max_len.saturating_sub(3)).collect();
-        format!("{}...", truncated)
+        format!("{truncated}...")
     }
 }
 

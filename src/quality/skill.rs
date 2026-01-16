@@ -10,14 +10,17 @@ pub struct QualityScorer {
 }
 
 impl QualityScorer {
-    pub fn new(weights: QualityWeights) -> Self {
+    #[must_use] 
+    pub const fn new(weights: QualityWeights) -> Self {
         Self { weights }
     }
 
+    #[must_use] 
     pub fn with_defaults() -> Self {
         Self::new(QualityWeights::default())
     }
 
+    #[must_use] 
     pub fn score_spec(&self, spec: &SkillSpec, context: &QualityContext) -> QualityScore {
         let structure = score_structure(spec);
         let content = score_content(spec);

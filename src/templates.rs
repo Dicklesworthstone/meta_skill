@@ -26,7 +26,7 @@ impl TemplateContext {
 
     fn tags_yaml(&self, defaults: &[&str]) -> String {
         let mut tags = if self.tags.is_empty() {
-            defaults.iter().map(|tag| tag.to_string()).collect::<Vec<_>>()
+            defaults.iter().map(std::string::ToString::to_string).collect::<Vec<_>>()
         } else {
             self.tags.clone()
         };
@@ -47,10 +47,12 @@ impl TemplateContext {
     }
 }
 
+#[must_use] 
 pub fn list_templates() -> &'static [SkillTemplate] {
     TEMPLATES
 }
 
+#[must_use] 
 pub fn find_template(id: &str) -> Option<&'static SkillTemplate> {
     TEMPLATES
         .iter()

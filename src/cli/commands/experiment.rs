@@ -92,7 +92,7 @@ pub struct ExperimentStatusArgs {
     /// Experiment ID
     pub experiment_id: String,
 
-    /// Metric key to analyze (default: task_success)
+    /// Metric key to analyze (default: `task_success`)
     #[arg(long)]
     pub metric: Option<String>,
 }
@@ -102,7 +102,7 @@ pub struct ExperimentAssignArgs {
     /// Experiment ID
     pub experiment_id: String,
 
-    /// Metric key to use for bandit selection (default: task_success)
+    /// Metric key to use for bandit selection (default: `task_success`)
     #[arg(long)]
     pub metric: Option<String>,
 
@@ -120,7 +120,7 @@ pub struct ExperimentLoadArgs {
     /// Experiment ID
     pub experiment_id: String,
 
-    /// Metric key to use for bandit selection (default: task_success)
+    /// Metric key to use for bandit selection (default: `task_success`)
     #[arg(long)]
     pub metric: Option<String>,
 
@@ -385,16 +385,12 @@ fn run_status(ctx: &AppContext, args: &ExperimentStatusArgs) -> Result<()> {
             .kv(
                 "Significance",
                 &analysis
-                    .significance
-                    .map(|s| format!("{:.2}", s))
-                    .unwrap_or_else(|| "-".to_string()),
+                    .significance.map_or_else(|| "-".to_string(), |s| format!("{s:.2}")),
             )
             .kv(
                 "p-value",
                 &analysis
-                    .p_value
-                    .map(|p| format!("{:.4}", p))
-                    .unwrap_or_else(|| "-".to_string()),
+                    .p_value.map_or_else(|| "-".to_string(), |p| format!("{p:.4}")),
             )
             .kv("Recommendation", &analysis.recommendation);
     }
@@ -631,8 +627,7 @@ fn build_variants_payload(
         }
         if !seen.insert(id.to_string()) {
             return Err(MsError::ValidationFailed(format!(
-                "duplicate variant id: {}",
-                id
+                "duplicate variant id: {id}"
             )));
         }
         let weight = weight_map.get(id).copied();
@@ -647,11 +642,10 @@ fn build_variants_payload(
     }
 
     if !weight_map.is_empty() {
-        for (id, _) in &weight_map {
+        for id in weight_map.keys() {
             if !seen.contains(id) {
                 return Err(MsError::ValidationFailed(format!(
-                    "weight provided for unknown variant id: {}",
-                    id
+                    "weight provided for unknown variant id: {id}"
                 )));
             }
         }
@@ -759,14 +753,12 @@ fn parse_weight_specs(weights: &[String]) -> Result<HashMap<String, f64>> {
         }
         if value < 0.0 {
             return Err(MsError::ValidationFailed(format!(
-                "weight must be >= 0 for {}",
-                id
+                "weight must be >= 0 for {id}"
             )));
         }
         if map.insert(id.to_string(), value).is_some() {
             return Err(MsError::ValidationFailed(format!(
-                "duplicate weight for {}",
-                id
+                "duplicate weight for {id}"
             )));
         }
     }
@@ -861,9 +853,7 @@ fn parse_metric_value(raw: &str) -> serde_json::Value {
             if let Ok(number) = raw.parse::<i64>() {
                 serde_json::Value::Number(number.into())
             } else if let Ok(number) = raw.parse::<f64>() {
-                serde_json::Number::from_f64(number)
-                    .map(serde_json::Value::Number)
-                    .unwrap_or_else(|| serde_json::Value::String(raw.to_string()))
+                serde_json::Number::from_f64(number).map_or_else(|| serde_json::Value::String(raw.to_string()), serde_json::Value::Number)
             } else {
                 serde_json::Value::String(raw.to_string())
             }
@@ -890,7 +880,7 @@ fn resolve_metric_key(
         if let Some(metrics_json) = event.metrics_json.as_deref() {
             if let Ok(serde_json::Value::Object(map)) = serde_json::from_str(metrics_json) {
                 if let Some(key) = map.keys().next() {
-                    return Some(key.to_string());
+                    return Some(key.clone());
                 }
             }
         }
@@ -1047,14 +1037,14 @@ fn two_proportion_test(
 
     let se_diff = (p1 * (1.0 - p1) / n1 + p2 * (1.0 - p2) / n2).sqrt();
     let diff = p1 - p2;
-    let ci = [diff - 1.96 * se_diff, diff + 1.96 * se_diff];
+    let ci = [1.96f64.mul_add(-se_diff, diff), 1.96f64.mul_add(se_diff, diff)];
     (Some(p_value), Some(ci))
 }
 
 fn normal_cdf(z: f64) -> f64 {
     // Abramowitz-Stegun approximation for standard normal CDF.
     // Constants use standard mathematical notation with separators.
-    let t = 1.0 / (1.0 + 0.231_641_9 * z);
+    let t = 1.0 / 0.231_641_9f64.mul_add(z, 1.0);
     let d = 0.398_942_3 * (-0.5 * z * z).exp();
     let prob = d
         * t
@@ -1080,8 +1070,7 @@ fn select_variant(
         "weighted" => select_weighted(variants, &allocation.weights),
         "bandit" => select_bandit(variants, events, metric),
         other => Err(MsError::ValidationFailed(format!(
-            "unknown allocation strategy: {}",
-            other
+            "unknown allocation strategy: {other}"
         ))),
     }
 }
@@ -1135,8 +1124,8 @@ fn select_bandit(
     let mut best: Option<(f64, &ExperimentVariant)> = None;
     for variant in variants {
         let stat = stats.iter().find(|s| s.id == variant.id);
-        let successes = stat.map(|s| s.successes).unwrap_or(0) as f64;
-        let outcomes = stat.map(|s| s.outcomes).unwrap_or(0) as f64;
+        let successes = stat.map_or(0, |s| s.successes) as f64;
+        let outcomes = stat.map_or(0, |s| s.outcomes) as f64;
         let failures = (outcomes - successes).max(0.0);
         let alpha = 1.0 + successes;
         let beta = 1.0 + failures;
@@ -1144,14 +1133,12 @@ fn select_bandit(
             MsError::ValidationFailed("invalid bandit beta distribution".to_string())
         })?;
         let sample = dist.sample(&mut rng);
-        if best.as_ref().map(|(v, _)| sample > *v).unwrap_or(true) {
+        if best.as_ref().is_none_or(|(v, _)| sample > *v) {
             best = Some((sample, variant));
         }
     }
 
-    Ok(best
-        .map(|(_, variant)| variant.clone())
-        .unwrap_or_else(|| variants[0].clone()))
+    Ok(best.map_or_else(|| variants[0].clone(), |(_, variant)| variant.clone()))
 }
 
 fn get_experiment(ctx: &AppContext, id: &str) -> Result<crate::storage::sqlite::ExperimentRecord> {

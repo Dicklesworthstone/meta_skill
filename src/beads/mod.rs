@@ -27,7 +27,7 @@
 //! }
 //! ```
 //!
-//! # Testing with MockBeadsClient
+//! # Testing with `MockBeadsClient`
 //!
 //! For testing code that depends on beads operations, use `MockBeadsClient`:
 //!

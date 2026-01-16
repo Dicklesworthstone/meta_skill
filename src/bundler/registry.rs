@@ -40,14 +40,14 @@ impl std::fmt::Display for InstallSource {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::GitHub { repo, tag, .. } => {
-                write!(f, "github:{}", repo)?;
+                write!(f, "github:{repo}")?;
                 if let Some(t) = tag {
-                    write!(f, "@{}", t)?;
+                    write!(f, "@{t}")?;
                 }
                 Ok(())
             }
-            Self::File { path } => write!(f, "file:{}", path),
-            Self::Url { url } => write!(f, "{}", url),
+            Self::File { path } => write!(f, "file:{path}"),
+            Self::Url { url } => write!(f, "{url}"),
         }
     }
 }
@@ -125,8 +125,7 @@ impl ParsedSource {
 
         if parts.len() < 2 {
             return Err(MsError::ValidationFailed(format!(
-                "invalid GitHub source: {} (expected owner/repo)",
-                input
+                "invalid GitHub source: {input} (expected owner/repo)"
             )));
         }
 
@@ -140,7 +139,7 @@ impl ParsedSource {
 
         Ok(Self {
             source: InstallSource::GitHub {
-                repo: format!("{}/{}", owner, repo),
+                repo: format!("{owner}/{repo}"),
                 tag,
                 asset: asset.clone(),
             },
@@ -189,7 +188,7 @@ impl BundleRegistry {
         let bundles = if path.exists() {
             let content = std::fs::read_to_string(&path)?;
             serde_json::from_str(&content)
-                .map_err(|e| MsError::ValidationFailed(format!("invalid bundle registry: {}", e)))?
+                .map_err(|e| MsError::ValidationFailed(format!("invalid bundle registry: {e}")))?
         } else {
             HashMap::new()
         };
@@ -213,6 +212,7 @@ impl BundleRegistry {
     }
 
     /// Get an installed bundle by ID.
+    #[must_use] 
     pub fn get(&self, id: &str) -> Option<&InstalledBundle> {
         self.bundles.get(id)
     }
@@ -223,6 +223,7 @@ impl BundleRegistry {
     }
 
     /// Check if a bundle is installed.
+    #[must_use] 
     pub fn is_installed(&self, id: &str) -> bool {
         self.bundles.contains_key(id)
     }
@@ -231,16 +232,16 @@ impl BundleRegistry {
         use std::io::Write;
 
         let content = serde_json::to_string_pretty(&self.bundles)
-            .map_err(|e| MsError::Config(format!("serialize bundle registry: {}", e)))?;
+            .map_err(|e| MsError::Config(format!("serialize bundle registry: {e}")))?;
 
         // Atomic write: write to temp file, sync, then rename
         let temp_path = self.path.with_extension("json.tmp");
         let mut file = std::fs::File::create(&temp_path)
-            .map_err(|e| MsError::Config(format!("create temp registry file: {}", e)))?;
+            .map_err(|e| MsError::Config(format!("create temp registry file: {e}")))?;
         file.write_all(content.as_bytes())
-            .map_err(|e| MsError::Config(format!("write temp registry file: {}", e)))?;
+            .map_err(|e| MsError::Config(format!("write temp registry file: {e}")))?;
         file.sync_all()
-            .map_err(|e| MsError::Config(format!("sync temp registry file: {}", e)))?;
+            .map_err(|e| MsError::Config(format!("sync temp registry file: {e}")))?;
         drop(file);
 
         match std::fs::rename(&temp_path, &self.path) {
@@ -248,19 +249,18 @@ impl BundleRegistry {
             Err(err) if err.kind() == std::io::ErrorKind::AlreadyExists => {
                 // Windows does not allow renaming over an existing file.
                 std::fs::remove_file(&self.path).map_err(|e| {
-                    MsError::Config(format!("remove existing registry file: {}", e))
+                    MsError::Config(format!("remove existing registry file: {e}"))
                 })?;
                 if let Err(err) = std::fs::rename(&temp_path, &self.path) {
                     let _ = std::fs::remove_file(&temp_path);
-                    return Err(MsError::Config(format!("rename registry file: {}", err)));
+                    return Err(MsError::Config(format!("rename registry file: {err}")));
                 }
             }
             Err(err) => {
                 // Clean up temp file on rename failure
                 let _ = std::fs::remove_file(&temp_path);
                 return Err(MsError::Config(format!(
-                    "rename registry file: {}",
-                    err
+                    "rename registry file: {err}"
                 )));
             }
         }

@@ -171,7 +171,7 @@ fn run_scan_human(
             pair.semantic_score,
             pair.structural_score
         );
-        println!("   Recommendation: {}", action_str);
+        println!("   Recommendation: {action_str}");
 
         if pair.structural_details.tag_overlap > 0 {
             println!(

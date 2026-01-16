@@ -184,7 +184,7 @@ fn run_apply(ctx: &AppContext, args: &TemplateApplyArgs) -> Result<()> {
 
     println!("Created skill: {}", spec.metadata.id);
     if !skill_path.is_empty() {
-        println!("Path: {}", skill_path);
+        println!("Path: {skill_path}");
     }
     Ok(())
 }

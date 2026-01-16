@@ -7,7 +7,7 @@
 //!
 //! When implemented, this will:
 //! - Load ONNX models (e.g., all-MiniLM-L6-v2)
-//! - Tokenize input using HuggingFace tokenizers
+//! - Tokenize input using `HuggingFace` tokenizers
 //! - Run inference locally without network access
 //! - Provide higher quality embeddings than hash-based
 //!
@@ -43,7 +43,7 @@ impl LocalEmbedder {
     ///
     /// # Errors
     ///
-    /// Currently always returns NotImplemented error.
+    /// Currently always returns `NotImplemented` error.
     pub fn new(_model_path: &std::path::Path, _dims: usize) -> Result<Self> {
         Err(MsError::NotImplemented(
             "Local ONNX embeddings require the 'ort' crate. \
@@ -53,7 +53,8 @@ impl LocalEmbedder {
     }
 
     /// Check if local embeddings are available
-    pub fn is_available() -> bool {
+    #[must_use] 
+    pub const fn is_available() -> bool {
         false
     }
 }
@@ -69,7 +70,7 @@ impl Embedder for LocalEmbedder {
         self.dims
     }
 
-    fn name(&self) -> &str {
+    fn name(&self) -> &'static str {
         "local"
     }
 }

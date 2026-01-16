@@ -180,7 +180,7 @@ pub struct BundleUpdateArgs {
     #[arg(long)]
     pub check: bool,
 
-    /// Update all bundles (ignores bundle_id)
+    /// Update all bundles (ignores `bundle_id`)
     #[arg(long)]
     pub all: bool,
 
@@ -251,24 +251,27 @@ fn run_create(ctx: &AppContext, args: &BundleCreateArgs) -> Result<()> {
     }
 
     let bundle_id = args.id.clone().unwrap_or_else(|| slugify(&args.name));
-    let root = ctx.git.root().to_path_buf();
+    let root = if let Some(ref dir) = args.from_dir {
+        dir.canonicalize().unwrap_or(dir.clone())
+    } else {
+        ctx.git.root().canonicalize().unwrap_or(ctx.git.root().to_path_buf())
+    };
 
     let mut entries = Vec::new();
     for skill_id in skills {
-        // Resolve skill directory: check archive first, then from_dir
-        let skill_dir = if let Some(path) = ctx.git.skill_path(&skill_id) {
+        // Resolve skill directory: check root first (handle --from-dir), then archive
+        let skill_dir = root.join(&skill_id);
+        let skill_dir = if skill_dir.exists() {
+            skill_dir
+        } else if let Some(path) = ctx.git.skill_path(&skill_id) {
             if path.exists() {
                 path
-            } else if let Some(ref from_dir) = args.from_dir {
-                from_dir.join(&skill_id)
             } else {
                 return Err(MsError::SkillNotFound(format!(
                     "skill not found in archive: {}",
                     skill_id
                 )));
             }
-        } else if let Some(ref from_dir) = args.from_dir {
-            from_dir.join(&skill_id)
         } else {
             return Err(MsError::SkillNotFound(format!(
                 "invalid skill id: {}",
@@ -283,9 +286,10 @@ fn run_create(ctx: &AppContext, args: &BundleCreateArgs) -> Result<()> {
             )));
         }
 
-        let rel = skill_dir
+        let skill_canon = skill_dir.canonicalize().unwrap_or(skill_dir.clone());
+        let rel = skill_canon
             .strip_prefix(&root)
-            .unwrap_or(&skill_dir)
+            .unwrap_or(&skill_canon)
             .to_path_buf();
 
         // Read metadata if available, use defaults otherwise
@@ -331,17 +335,14 @@ fn run_create(ctx: &AppContext, args: &BundleCreateArgs) -> Result<()> {
 
     // Sign the bundle if requested
     if args.sign {
-        let key_path = match args.sign_key.clone() {
-            Some(path) => path,
-            None => {
-                let home = dirs::home_dir().ok_or_else(|| {
-                    MsError::Config(
-                        "cannot find home directory for default SSH key; use --sign-key to specify"
-                            .to_string(),
-                    )
-                })?;
-                home.join(".ssh").join("id_ed25519")
-            }
+        let key_path = if let Some(path) = args.sign_key.clone() { path } else {
+            let home = dirs::home_dir().ok_or_else(|| {
+                MsError::Config(
+                    "cannot find home directory for default SSH key; use --sign-key to specify"
+                        .to_string(),
+                )
+            })?;
+            home.join(".ssh").join("id_ed25519")
         };
 
         let signer = crate::bundler::Ed25519Signer::from_openssh_file(&key_path)?;
@@ -462,8 +463,7 @@ fn run_install(ctx: &AppContext, args: &BundleInstallArgs) -> Result<()> {
     if registry.is_installed(&bundle_id) {
         if !args.force {
             return Err(MsError::ValidationFailed(format!(
-                "bundle {} is already installed; use --force to reinstall or ms bundle remove first",
-                bundle_id
+                "bundle {bundle_id} is already installed; use --force to reinstall or ms bundle remove first"
             )));
         }
         // --force: remove existing skill directories before reinstalling
@@ -473,8 +473,7 @@ fn run_install(ctx: &AppContext, args: &BundleInstallArgs) -> Result<()> {
                     if skill_path.exists() {
                         std::fs::remove_dir_all(&skill_path).map_err(|err| {
                             MsError::Config(format!(
-                                "failed to remove existing skill {}: {}",
-                                skill_id, err
+                                "failed to remove existing skill {skill_id}: {err}"
                             ))
                         })?;
                     }
@@ -531,7 +530,7 @@ fn run_install(ctx: &AppContext, args: &BundleInstallArgs) -> Result<()> {
     let installed = InstalledBundle {
         id: bundle_id,
         version: bundle_version,
-        source: source.clone(),
+        source,
         installed_at: chrono::Utc::now(),
         skills: report.installed.clone(),
         checksum,
@@ -621,7 +620,7 @@ fn run_remove(ctx: &AppContext, args: &BundleRemoveArgs) -> Result<()> {
     if !removed_skills.is_empty() {
         println!("Removed skills:");
         for skill in &removed_skills {
-            println!("  - {}", skill);
+            println!("  - {skill}");
         }
     }
     Ok(())
@@ -670,7 +669,7 @@ fn run_update(ctx: &AppContext, args: &BundleUpdateArgs) -> Result<()> {
             registry
                 .get(id)
                 .cloned()
-                .ok_or_else(|| MsError::NotFound(format!("bundle '{}' is not installed", id)))?,
+                .ok_or_else(|| MsError::NotFound(format!("bundle '{id}' is not installed")))?,
         ]
     } else {
         registry.list().cloned().collect()
@@ -748,7 +747,7 @@ fn fetch_update_candidate(
         InstallSource::Url { url } => (download_url(url, args.token.clone())?, None),
         InstallSource::File { path } => (
             std::fs::read(path)
-                .map_err(|err| MsError::Config(format!("read bundle {}: {err}", path)))?,
+                .map_err(|err| MsError::Config(format!("read bundle {path}: {err}")))?,
             None,
         ),
     };
@@ -802,7 +801,7 @@ fn build_update_item(
     let mut item = BundleUpdateItem {
         bundle_id: installed.id.clone(),
         current_version: installed.version.clone(),
-        available_version: Some(new_version.clone()),
+        available_version: Some(new_version),
         update_available,
         applied: false,
         source: installed.source.to_string(),
@@ -850,28 +849,25 @@ fn apply_bundle_update(
         let target = resolve_bundle_target(ctx.git.root(), &skill.path, &skill.name)?;
 
         let report = if target.exists() {
-            match load_bundle_meta(&target)? {
-                Some(existing_hashes) => {
-                    let report = detect_modifications(&target, &skill.name, &existing_hashes)?;
-                    if report.needs_attention() {
-                        conflicts.push(BundleConflictSummary {
-                            skill_id: report.skill_id.clone(),
-                            modified: report.summary.modified,
-                            deleted: report.summary.deleted,
-                            conflict: report.summary.conflict,
-                        });
-                    }
-                    Some(report)
+            if let Some(existing_hashes) = load_bundle_meta(&target)? {
+                let report = detect_modifications(&target, &skill.name, &existing_hashes)?;
+                if report.needs_attention() {
+                    conflicts.push(BundleConflictSummary {
+                        skill_id: report.skill_id.clone(),
+                        modified: report.summary.modified,
+                        deleted: report.summary.deleted,
+                        conflict: report.summary.conflict,
+                    });
                 }
-                None => {
-                    if !ctx.robot_mode {
-                        eprintln!(
-                            "Warning: bundle metadata missing for '{}'; update will overwrite without modification detection.",
-                            skill.name
-                        );
-                    }
-                    None
+                Some(report)
+            } else {
+                if !ctx.robot_mode {
+                    eprintln!(
+                        "Warning: bundle metadata missing for '{}'; update will overwrite without modification detection.",
+                        skill.name
+                    );
                 }
+                None
             }
         } else {
             None
@@ -892,7 +888,7 @@ fn apply_bundle_update(
         let skill_backup_root = backup_root.join(&skill_name);
         if let Some(report) = report {
             if report.needs_attention() && args.force {
-                for file in report.files.iter() {
+                for file in &report.files {
                     if matches!(
                         file.status,
                         ModificationStatus::Modified | ModificationStatus::Conflict
@@ -1037,8 +1033,7 @@ fn ensure_safe_id(id: &str) -> Result<()> {
     }
     if id.contains("..") || id.contains('/') || id.contains('\\') {
         return Err(MsError::ValidationFailed(format!(
-            "skill id contains invalid characters: {}",
-            id
+            "skill id contains invalid characters: {id}"
         )));
     }
     Ok(())
@@ -1114,7 +1109,7 @@ fn print_update_summary(updates: &[BundleUpdateItem]) {
             update.current_version
         );
         if let Some(ref available) = update.available_version {
-            println!("  available: {}", available);
+            println!("  available: {available}");
         }
         if !update.conflicts.is_empty() {
             println!("  conflicts:");
@@ -1126,10 +1121,10 @@ fn print_update_summary(updates: &[BundleUpdateItem]) {
             }
         }
         if let Some(ref reason) = update.skipped_reason {
-            println!("  skipped: {}", reason);
+            println!("  skipped: {reason}");
         }
         if let Some(ref error) = update.error {
-            println!("  error: {}", error);
+            println!("  error: {error}");
         }
     }
 }
@@ -1200,8 +1195,7 @@ fn run_conflicts(ctx: &AppContext, args: &BundleConflictsArgs) -> Result<()> {
         if !skill_path.exists() {
             if args.skill.is_some() {
                 return Err(MsError::SkillNotFound(format!(
-                    "skill not found: {}",
-                    skill_id
+                    "skill not found: {skill_id}"
                 )));
             }
             continue;
@@ -1275,8 +1269,7 @@ fn run_conflicts(ctx: &AppContext, args: &BundleConflictsArgs) -> Result<()> {
     }
 
     println!(
-        "Summary: {} skill(s) with modifications, {} conflict(s)",
-        total_modified, total_conflicts
+        "Summary: {total_modified} skill(s) with modifications, {total_conflicts} conflict(s)"
     );
 
     Ok(())
@@ -1367,22 +1360,22 @@ fn run_show(ctx: &AppContext, args: &BundleShowArgs) -> Result<()> {
     println!("Bundle: {} ({})", manifest.bundle.name, manifest.bundle.id);
     println!("Version: {}", manifest.bundle.version);
     if let Some(desc) = &manifest.bundle.description {
-        println!("Description: {}", desc);
+        println!("Description: {desc}");
     }
     if !manifest.bundle.authors.is_empty() {
         println!("Authors: {}", manifest.bundle.authors.join(", "));
     }
     if let Some(license) = &manifest.bundle.license {
-        println!("License: {}", license);
+        println!("License: {license}");
     }
     if let Some(repo) = &manifest.bundle.repository {
-        println!("Repository: {}", repo);
+        println!("Repository: {repo}");
     }
     if !manifest.bundle.keywords.is_empty() {
         println!("Keywords: {}", manifest.bundle.keywords.join(", "));
     }
     if let Some(ms_ver) = &manifest.bundle.ms_version {
-        println!("MS Version: {}", ms_ver);
+        println!("MS Version: {ms_ver}");
     }
 
     println!("\nSkills ({}):", manifest.skills.len());
@@ -1393,7 +1386,7 @@ fn run_show(ctx: &AppContext, args: &BundleShowArgs) -> Result<()> {
     }
 
     if let Some(checksum) = &manifest.checksum {
-        println!("\nChecksum: {}", checksum);
+        println!("\nChecksum: {checksum}");
     }
     if manifest.signatures.is_empty() {
         println!("Signed: no");
@@ -1486,13 +1479,13 @@ fn print_install_report(report: &InstallReport) {
     if !report.installed.is_empty() {
         println!("Installed:");
         for skill in &report.installed {
-            println!("  - {}", skill);
+            println!("  - {skill}");
         }
     }
     if !report.skipped.is_empty() {
         println!("Skipped:");
         for skill in &report.skipped {
-            println!("  - {}", skill);
+            println!("  - {skill}");
         }
     }
     println!("Blobs written: {}", report.blobs_written);

@@ -158,7 +158,7 @@ fn parse_duration(raw: &str) -> Option<std::time::Duration> {
     }
     let (value, suffix) = trimmed
         .chars()
-        .partition::<String, _>(|c| c.is_ascii_digit());
+        .partition::<String, _>(char::is_ascii_digit);
     let value: u64 = value.parse().ok()?;
     match suffix.as_str() {
         "ms" => Some(std::time::Duration::from_millis(value)),

@@ -1,7 +1,7 @@
-//! BeadsClient - CLI wrapper for the beads (bd) issue tracker.
+//! `BeadsClient` - CLI wrapper for the beads (bd) issue tracker.
 //!
 //! Provides programmatic access to beads using the `--json` flag
-//! for structured output, following the same patterns as CassClient and UbsClient.
+//! for structured output, following the same patterns as `CassClient` and `UbsClient`.
 
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -32,7 +32,8 @@ pub struct BeadsClient {
 }
 
 impl BeadsClient {
-    /// Create a new BeadsClient with default settings.
+    /// Create a new `BeadsClient` with default settings.
+    #[must_use] 
     pub fn new() -> Self {
         Self {
             bd_bin: PathBuf::from("bd"),
@@ -42,7 +43,7 @@ impl BeadsClient {
         }
     }
 
-    /// Create a BeadsClient with a custom binary path.
+    /// Create a `BeadsClient` with a custom binary path.
     pub fn with_binary(binary: impl Into<PathBuf>) -> Self {
         Self {
             bd_bin: binary.into(),
@@ -65,12 +66,14 @@ impl BeadsClient {
     }
 
     /// Set the safety gate for command execution.
+    #[must_use] 
     pub fn with_safety(mut self, safety: SafetyGate) -> Self {
         self.safety = Some(safety);
         self
     }
 
     /// Check if beads is available and responsive.
+    #[must_use] 
     pub fn is_available(&self) -> bool {
         let mut cmd = Command::new(&self.bd_bin);
         cmd.arg("--version");
@@ -89,6 +92,7 @@ impl BeadsClient {
     }
 
     /// Get beads version.
+    #[must_use] 
     pub fn version(&self) -> Option<String> {
         let mut cmd = Command::new(&self.bd_bin);
         cmd.arg("--version");
@@ -158,25 +162,25 @@ impl BeadsClient {
         // Build filter arguments
         let status_str;
         if let Some(status) = &filter.status {
-            status_str = format!("--status={}", status);
+            status_str = format!("--status={status}");
             args.push(&status_str);
         }
 
         let type_str;
         if let Some(issue_type) = &filter.issue_type {
-            type_str = format!("--type={}", issue_type);
+            type_str = format!("--type={issue_type}");
             args.push(&type_str);
         }
 
         let assignee_str;
         if let Some(assignee) = &filter.assignee {
-            assignee_str = format!("--assignee={}", assignee);
+            assignee_str = format!("--assignee={assignee}");
             args.push(&assignee_str);
         }
 
         let limit_str;
         if let Some(limit) = filter.limit {
-            limit_str = format!("--limit={}", limit);
+            limit_str = format!("--limit={limit}");
             args.push(&limit_str);
         }
 
@@ -184,7 +188,7 @@ impl BeadsClient {
         let label_args: Vec<String> = filter
             .labels
             .iter()
-            .map(|l| format!("--label={}", l))
+            .map(|l| format!("--label={l}"))
             .collect();
         for label_arg in &label_args {
             args.push(label_arg);
@@ -192,7 +196,7 @@ impl BeadsClient {
 
         let output = self.run_command(&args)?;
         let issues: Vec<Issue> = serde_json::from_slice(&output).map_err(|e| {
-            MsError::BeadsUnavailable(format!("failed to parse list output: {}", e))
+            MsError::BeadsUnavailable(format!("failed to parse list output: {e}"))
         })?;
         Ok(issues)
     }
@@ -201,7 +205,7 @@ impl BeadsClient {
     pub fn ready(&self) -> Result<Vec<Issue>> {
         let output = self.run_command(&["ready", "--json"])?;
         let issues: Vec<Issue> = serde_json::from_slice(&output).map_err(|e| {
-            MsError::BeadsUnavailable(format!("failed to parse ready output: {}", e))
+            MsError::BeadsUnavailable(format!("failed to parse ready output: {e}"))
         })?;
         Ok(issues)
     }
@@ -215,13 +219,13 @@ impl BeadsClient {
 
         // bd show returns an array with one element
         let issues: Vec<Issue> = serde_json::from_slice(&output).map_err(|e| {
-            MsError::BeadsUnavailable(format!("failed to parse show output: {}", e))
+            MsError::BeadsUnavailable(format!("failed to parse show output: {e}"))
         })?;
 
         issues
             .into_iter()
             .next()
-            .ok_or_else(|| MsError::NotFound(format!("issue not found: {}", issue_id)))
+            .ok_or_else(|| MsError::NotFound(format!("issue not found: {issue_id}")))
     }
 
     /// Create a new issue.
@@ -231,23 +235,23 @@ impl BeadsClient {
         args.push(format!("--title={}", req.title));
 
         if let Some(ref desc) = req.description {
-            args.push(format!("--description={}", desc));
+            args.push(format!("--description={desc}"));
         }
 
         if let Some(issue_type) = &req.issue_type {
-            args.push(format!("--type={}", issue_type));
+            args.push(format!("--type={issue_type}"));
         }
 
         if let Some(priority) = req.priority {
-            args.push(format!("--priority={}", priority));
+            args.push(format!("--priority={priority}"));
         }
 
         for label in &req.labels {
-            args.push(format!("--label={}", label));
+            args.push(format!("--label={label}"));
         }
 
         if let Some(ref parent) = req.parent {
-            args.push(format!("--parent={}", parent));
+            args.push(format!("--parent={parent}"));
         }
 
         args.push("--json".to_string());
@@ -257,7 +261,7 @@ impl BeadsClient {
 
         // bd create --json returns a single object (not an array)
         let issue: Issue = serde_json::from_slice(&output).map_err(|e| {
-            MsError::BeadsUnavailable(format!("failed to parse create output: {}", e))
+            MsError::BeadsUnavailable(format!("failed to parse create output: {e}"))
         })?;
         Ok(issue)
     }
@@ -269,35 +273,35 @@ impl BeadsClient {
         let mut args = vec!["update".to_string(), issue_id.to_string()];
 
         if let Some(status) = &req.status {
-            args.push(format!("--status={}", status));
+            args.push(format!("--status={status}"));
         }
 
         if let Some(ref title) = req.title {
-            args.push(format!("--title={}", title));
+            args.push(format!("--title={title}"));
         }
 
         if let Some(ref desc) = req.description {
-            args.push(format!("--description={}", desc));
+            args.push(format!("--description={desc}"));
         }
 
         if let Some(priority) = req.priority {
-            args.push(format!("--priority={}", priority));
+            args.push(format!("--priority={priority}"));
         }
 
         if let Some(ref assignee) = req.assignee {
-            args.push(format!("--assignee={}", assignee));
+            args.push(format!("--assignee={assignee}"));
         }
 
         if let Some(ref notes) = req.notes {
-            args.push(format!("--notes={}", notes));
+            args.push(format!("--notes={notes}"));
         }
 
         for label in &req.add_labels {
-            args.push(format!("--add-label={}", label));
+            args.push(format!("--add-label={label}"));
         }
 
         for label in &req.remove_labels {
-            args.push(format!("--remove-label={}", label));
+            args.push(format!("--remove-label={label}"));
         }
 
         args.push("--json".to_string());
@@ -307,13 +311,13 @@ impl BeadsClient {
 
         // bd update --json returns an array with one element
         let issues: Vec<Issue> = serde_json::from_slice(&output).map_err(|e| {
-            MsError::BeadsUnavailable(format!("failed to parse update output: {}", e))
+            MsError::BeadsUnavailable(format!("failed to parse update output: {e}"))
         })?;
 
         issues
             .into_iter()
             .next()
-            .ok_or_else(|| MsError::NotFound(format!("issue not found: {}", issue_id)))
+            .ok_or_else(|| MsError::NotFound(format!("issue not found: {issue_id}")))
     }
 
     /// Update just the status of an issue (convenience method).
@@ -328,7 +332,7 @@ impl BeadsClient {
         let mut args = vec!["close".to_string(), issue_id.to_string()];
 
         if let Some(reason) = reason {
-            args.push(format!("--reason={}", reason));
+            args.push(format!("--reason={reason}"));
         }
 
         args.push("--json".to_string());
@@ -338,13 +342,13 @@ impl BeadsClient {
 
         // bd close --json returns an array with one element
         let issues: Vec<Issue> = serde_json::from_slice(&output).map_err(|e| {
-            MsError::BeadsUnavailable(format!("failed to parse close output: {}", e))
+            MsError::BeadsUnavailable(format!("failed to parse close output: {e}"))
         })?;
 
         issues
             .into_iter()
             .next()
-            .ok_or_else(|| MsError::NotFound(format!("issue not found: {}", issue_id)))
+            .ok_or_else(|| MsError::NotFound(format!("issue not found: {issue_id}")))
     }
 
     /// Close multiple issues at once.
@@ -364,7 +368,7 @@ impl BeadsClient {
         let output = self.run_command(&args_refs)?;
 
         let issues: Vec<Issue> = serde_json::from_slice(&output).map_err(|e| {
-            MsError::BeadsUnavailable(format!("failed to parse close output: {}", e))
+            MsError::BeadsUnavailable(format!("failed to parse close output: {e}"))
         })?;
         Ok(issues)
     }
@@ -573,8 +577,7 @@ fn validate_issue_id(id: &str) -> Result<()> {
         .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_' || c == '.')
     {
         return Err(MsError::ValidationFailed(format!(
-            "issue ID contains invalid characters: {}",
-            id
+            "issue ID contains invalid characters: {id}"
         )));
     }
 
@@ -606,14 +609,14 @@ fn classify_beads_error(exit_code: i32, stderr: &str) -> MsError {
 
     // Database locked errors (transient, retriable)
     if stderr_lower.contains("database") && stderr_lower.contains("locked") {
-        return MsError::TransactionFailed(format!("beads database locked: {}", stderr));
+        return MsError::TransactionFailed(format!("beads database locked: {stderr}"));
     }
 
     // Sync errors
     if stderr_lower.contains("sync")
         && (stderr_lower.contains("fail") || stderr_lower.contains("error"))
     {
-        return MsError::TransactionFailed(format!("beads sync failed: {}", stderr));
+        return MsError::TransactionFailed(format!("beads sync failed: {stderr}"));
     }
 
     // Validation errors
@@ -623,8 +626,7 @@ fn classify_beads_error(exit_code: i32, stderr: &str) -> MsError {
 
     // Default: beads unavailable
     MsError::BeadsUnavailable(format!(
-        "beads command failed (exit {}): {}",
-        exit_code, stderr
+        "beads command failed (exit {exit_code}): {stderr}"
     ))
 }
 

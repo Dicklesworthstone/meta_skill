@@ -69,10 +69,10 @@ fn run_human(
     let mean = sum / embedding.len() as f32;
     let norm: f32 = embedding.iter().map(|x| x * x).sum::<f32>().sqrt();
 
-    println!("  Min: {:.6}", min);
-    println!("  Max: {:.6}", max);
-    println!("  Mean: {:.6}", mean);
-    println!("  L2 Norm: {:.6}", norm);
+    println!("  Min: {min:.6}");
+    println!("  Max: {max:.6}");
+    println!("  Mean: {mean:.6}");
+    println!("  L2 Norm: {norm:.6}");
 
     // Non-zero count (for sparse embeddings)
     let non_zero = embedding.iter().filter(|&&x| x.abs() > 1e-10).count();
@@ -89,7 +89,7 @@ fn run_human(
             if i > 0 && i % 8 == 0 {
                 println!();
             }
-            print!("{:8.5} ", v);
+            print!("{v:8.5} ");
         }
         println!();
     }
@@ -127,7 +127,7 @@ fn run_human(
 
         println!(
             "  Cosine Similarity: {}",
-            format!("{:.4}", similarity).color(sim_color)
+            format!("{similarity:.4}").color(sim_color)
         );
     }
 

@@ -199,12 +199,13 @@ impl SignatureVerifier for NoopSignatureVerifier {
 
 /// Ed25519 signature verifier using the ring crate.
 pub struct Ed25519Verifier {
-    /// Map of key_id -> public key bytes (32 bytes)
+    /// Map of `key_id` -> public key bytes (32 bytes)
     trusted_keys: std::collections::HashMap<String, Vec<u8>>,
 }
 
 impl Ed25519Verifier {
     /// Create a new verifier with no trusted keys.
+    #[must_use] 
     pub fn new() -> Self {
         Self {
             trusted_keys: std::collections::HashMap::new(),
@@ -216,7 +217,7 @@ impl Ed25519Verifier {
         self.trusted_keys.insert(key_id.into(), public_key);
     }
 
-    /// Create a verifier from an iterator of (key_id, public_key) pairs.
+    /// Create a verifier from an iterator of (`key_id`, `public_key`) pairs.
     pub fn from_keys<I, K>(keys: I) -> Self
     where
         I: IntoIterator<Item = (K, Vec<u8>)>,
@@ -293,7 +294,8 @@ impl Ed25519Signer {
         Ok(Self { keypair, key_id })
     }
 
-    /// Sign data and return a BundleSignature.
+    /// Sign data and return a `BundleSignature`.
+    #[must_use] 
     pub fn sign(&self, payload: &[u8], signer_name: &str) -> BundleSignature {
         let signature = self.keypair.sign(payload);
         BundleSignature {
@@ -304,17 +306,19 @@ impl Ed25519Signer {
     }
 
     /// Get the public key bytes (32 bytes).
+    #[must_use] 
     pub fn public_key(&self) -> &[u8] {
         self.keypair.public_key().as_ref()
     }
 
     /// Get the key ID.
+    #[must_use] 
     pub fn key_id(&self) -> &str {
         &self.key_id
     }
 }
 
-/// Parse an OpenSSH Ed25519 private key and return (seed, public_key).
+/// Parse an OpenSSH Ed25519 private key and return (seed, `public_key`).
 ///
 /// The OpenSSH format is documented at:
 /// <https://github.com/openssh/openssh-portable/blob/master/PROTOCOL.key>
@@ -341,7 +345,7 @@ fn parse_openssh_ed25519_key(pem: &str) -> Result<([u8; 32], [u8; 32])> {
 
     let data = base64::engine::general_purpose::STANDARD
         .decode(&b64_content)
-        .map_err(|err| MsError::ValidationFailed(format!("invalid base64 in SSH key: {}", err)))?;
+        .map_err(|err| MsError::ValidationFailed(format!("invalid base64 in SSH key: {err}")))?;
 
     // Verify magic bytes
     if !data.starts_with(AUTH_MAGIC) {
@@ -356,8 +360,7 @@ fn parse_openssh_ed25519_key(pem: &str) -> Result<([u8; 32], [u8; 32])> {
     let cipher = read_openssh_string(&data, &mut cursor)?;
     if cipher != "none" {
         return Err(MsError::ValidationFailed(format!(
-            "encrypted SSH keys not supported (cipher: {})",
-            cipher
+            "encrypted SSH keys not supported (cipher: {cipher})"
         )));
     }
 
@@ -365,8 +368,7 @@ fn parse_openssh_ed25519_key(pem: &str) -> Result<([u8; 32], [u8; 32])> {
     let kdf = read_openssh_string(&data, &mut cursor)?;
     if kdf != "none" {
         return Err(MsError::ValidationFailed(format!(
-            "encrypted SSH keys not supported (kdf: {})",
-            kdf
+            "encrypted SSH keys not supported (kdf: {kdf})"
         )));
     }
 
@@ -377,8 +379,7 @@ fn parse_openssh_ed25519_key(pem: &str) -> Result<([u8; 32], [u8; 32])> {
     let num_keys = read_openssh_u32(&data, &mut cursor)?;
     if num_keys != 1 {
         return Err(MsError::ValidationFailed(format!(
-            "multi-key SSH files not supported (found {} keys)",
-            num_keys
+            "multi-key SSH files not supported (found {num_keys} keys)"
         )));
     }
 
@@ -406,8 +407,7 @@ fn parse_openssh_ed25519_key(pem: &str) -> Result<([u8; 32], [u8; 32])> {
     let key_type = read_openssh_string(&data, &mut cursor)?;
     if key_type != "ssh-ed25519" {
         return Err(MsError::ValidationFailed(format!(
-            "expected ssh-ed25519 key, found: {}",
-            key_type
+            "expected ssh-ed25519 key, found: {key_type}"
         )));
     }
 
@@ -432,7 +432,7 @@ fn parse_openssh_ed25519_key(pem: &str) -> Result<([u8; 32], [u8; 32])> {
     let mut seed = [0u8; 32];
     let mut public_key = [0u8; 32];
     seed.copy_from_slice(&private_key_bytes[..32]);
-    public_key.copy_from_slice(&public_key_bytes);
+    public_key.copy_from_slice(public_key_bytes);
 
     Ok((seed, public_key))
 }

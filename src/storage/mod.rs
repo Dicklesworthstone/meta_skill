@@ -1,6 +1,6 @@
 //! Storage layer for ms
 //!
-//! Implements dual persistence: SQLite for queries, Git for audit/versioning.
+//! Implements dual persistence: `SQLite` for queries, Git for audit/versioning.
 
 pub mod git;
 pub mod migrations;

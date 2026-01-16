@@ -18,6 +18,7 @@ use super::slicing::SkillSlicer;
 /// Disclosure level for skill loading
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
+#[derive(Default)]
 pub enum DisclosureLevel {
     /// Level 0: Just name and one-line description (~50-100 tokens)
     Minimal,
@@ -30,62 +31,62 @@ pub enum DisclosureLevel {
     /// Level 4: Full content + scripts + references (5000+ tokens)
     Complete,
     /// Auto-select based on context
+    #[default]
     Auto,
 }
 
-impl Default for DisclosureLevel {
-    fn default() -> Self {
-        Self::Auto
-    }
-}
 
 impl DisclosureLevel {
     /// Target token budget for this disclosure level
-    pub fn token_budget(&self) -> Option<usize> {
+    #[must_use] 
+    pub const fn token_budget(&self) -> Option<usize> {
         match self {
-            DisclosureLevel::Minimal => Some(100),
-            DisclosureLevel::Overview => Some(500),
-            DisclosureLevel::Standard => Some(1500),
-            DisclosureLevel::Full => None,
-            DisclosureLevel::Complete => None,
-            DisclosureLevel::Auto => None,
+            Self::Minimal => Some(100),
+            Self::Overview => Some(500),
+            Self::Standard => Some(1500),
+            Self::Full => None,
+            Self::Complete => None,
+            Self::Auto => None,
         }
     }
 
     /// Parse from string (CLI argument)
+    #[must_use] 
     pub fn from_str_or_level(s: &str) -> Option<Self> {
         match s.to_lowercase().as_str() {
-            "minimal" | "0" => Some(DisclosureLevel::Minimal),
-            "overview" | "1" => Some(DisclosureLevel::Overview),
-            "standard" | "moderate" | "2" => Some(DisclosureLevel::Standard),
-            "full" | "3" => Some(DisclosureLevel::Full),
-            "complete" | "4" => Some(DisclosureLevel::Complete),
-            "auto" => Some(DisclosureLevel::Auto),
+            "minimal" | "0" => Some(Self::Minimal),
+            "overview" | "1" => Some(Self::Overview),
+            "standard" | "moderate" | "2" => Some(Self::Standard),
+            "full" | "3" => Some(Self::Full),
+            "complete" | "4" => Some(Self::Complete),
+            "auto" => Some(Self::Auto),
             _ => None,
         }
     }
 
     /// Get human-readable name
-    pub fn name(&self) -> &'static str {
+    #[must_use] 
+    pub const fn name(&self) -> &'static str {
         match self {
-            DisclosureLevel::Minimal => "minimal",
-            DisclosureLevel::Overview => "overview",
-            DisclosureLevel::Standard => "standard",
-            DisclosureLevel::Full => "full",
-            DisclosureLevel::Complete => "complete",
-            DisclosureLevel::Auto => "auto",
+            Self::Minimal => "minimal",
+            Self::Overview => "overview",
+            Self::Standard => "standard",
+            Self::Full => "full",
+            Self::Complete => "complete",
+            Self::Auto => "auto",
         }
     }
 
     /// Numeric level for comparison
-    pub fn level_num(&self) -> u8 {
+    #[must_use] 
+    pub const fn level_num(&self) -> u8 {
         match self {
-            DisclosureLevel::Minimal => 0,
-            DisclosureLevel::Overview => 1,
-            DisclosureLevel::Standard => 2,
-            DisclosureLevel::Full => 3,
-            DisclosureLevel::Complete => 4,
-            DisclosureLevel::Auto => 2, // Default to standard for comparison
+            Self::Minimal => 0,
+            Self::Overview => 1,
+            Self::Standard => 2,
+            Self::Full => 3,
+            Self::Complete => 4,
+            Self::Auto => 2, // Default to standard for comparison
         }
     }
 }
@@ -105,7 +106,7 @@ pub enum DisclosurePlan {
 
 impl Default for DisclosurePlan {
     fn default() -> Self {
-        DisclosurePlan::Level(DisclosureLevel::Standard)
+        Self::Level(DisclosureLevel::Standard)
     }
 }
 
@@ -124,7 +125,8 @@ pub struct TokenBudget {
 
 impl TokenBudget {
     /// Create a new token budget with defaults
-    pub fn new(tokens: usize) -> Self {
+    #[must_use] 
+    pub const fn new(tokens: usize) -> Self {
         Self {
             tokens,
             mode: PackMode::Balanced,
@@ -134,7 +136,8 @@ impl TokenBudget {
     }
 
     /// Create with a specific mode
-    pub fn with_mode(tokens: usize, mode: PackMode) -> Self {
+    #[must_use] 
+    pub const fn with_mode(tokens: usize, mode: PackMode) -> Self {
         Self {
             tokens,
             mode,
@@ -147,8 +150,10 @@ impl TokenBudget {
 /// Packing mode for token budget optimization
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
+#[derive(Default)]
 pub enum PackMode {
     /// Even distribution across slice types
+    #[default]
     Balanced,
     /// Prioritize highest-utility slices
     UtilityFirst,
@@ -158,20 +163,16 @@ pub enum PackMode {
     PitfallSafe,
 }
 
-impl Default for PackMode {
-    fn default() -> Self {
-        PackMode::Balanced
-    }
-}
 
 impl PackMode {
     /// Parse from string (CLI argument)
+    #[must_use] 
     pub fn from_str(s: &str) -> Option<Self> {
         match s.to_lowercase().replace('-', "_").as_str() {
-            "balanced" => Some(PackMode::Balanced),
-            "utility_first" | "utility" => Some(PackMode::UtilityFirst),
-            "coverage_first" | "coverage" => Some(PackMode::CoverageFirst),
-            "pitfall_safe" | "pitfall" => Some(PackMode::PitfallSafe),
+            "balanced" => Some(Self::Balanced),
+            "utility_first" | "utility" => Some(Self::UtilityFirst),
+            "coverage_first" | "coverage" => Some(Self::CoverageFirst),
+            "pitfall_safe" | "pitfall" => Some(Self::PitfallSafe),
             _ => None,
         }
     }
@@ -287,6 +288,7 @@ pub enum RequestType {
 // =============================================================================
 
 /// Generate content at a specified disclosure plan
+#[must_use] 
 pub fn disclose(spec: &SkillSpec, assets: &SkillAssets, plan: &DisclosurePlan) -> DisclosedContent {
     match plan {
         DisclosurePlan::Level(level) => disclose_level(spec, assets, *level),
@@ -295,6 +297,7 @@ pub fn disclose(spec: &SkillSpec, assets: &SkillAssets, plan: &DisclosurePlan) -
 }
 
 /// Generate content at a specified disclosure level
+#[must_use] 
 pub fn disclose_level(
     spec: &SkillSpec,
     assets: &SkillAssets,
@@ -468,7 +471,10 @@ fn render_packed_body(slices: &[crate::core::skill::SkillSlice]) -> String {
 
     for slice in slices {
         if let Some(title) = &slice.section_title {
-            if last_section.as_ref() != Some(title) {
+            if last_section.as_ref() == Some(title) {
+                // Same section, just add spacer
+                out.push_str("\n\n");
+            } else {
                 if !out.is_empty() {
                     out.push_str("\n\n");
                 }
@@ -476,9 +482,6 @@ fn render_packed_body(slices: &[crate::core::skill::SkillSlice]) -> String {
                 out.push_str(title);
                 out.push_str("\n\n");
                 last_section = Some(title.clone());
-            } else {
-                // Same section, just add spacer
-                out.push_str("\n\n");
             }
         } else {
             // No section title (e.g. Overview maybe?), just spacer
@@ -492,6 +495,7 @@ fn render_packed_body(slices: &[crate::core::skill::SkillSlice]) -> String {
 }
 
 /// Determine optimal disclosure level based on context
+#[must_use] 
 pub fn optimal_disclosure(context: &DisclosureContext) -> DisclosurePlan {
     // If explicitly requested, use that level
     if let Some(level) = context.explicit_level {
@@ -621,8 +625,8 @@ fn estimate_tokens_frontmatter(meta: &SkillMetadata, minimal: bool) -> usize {
     let extras = if minimal {
         0
     } else {
-        meta.tags.iter().map(|t| t.len()).sum::<usize>()
-            + meta.requires.iter().map(|r| r.len()).sum::<usize>()
+        meta.tags.iter().map(std::string::String::len).sum::<usize>()
+            + meta.requires.iter().map(std::string::String::len).sum::<usize>()
     };
     // Rough: 4 chars per token
     (base + extras) / 4 + 20 // +20 for formatting overhead
@@ -630,7 +634,7 @@ fn estimate_tokens_frontmatter(meta: &SkillMetadata, minimal: bool) -> usize {
 
 /// Estimate tokens for body content
 fn estimate_tokens_body(body: Option<&str>) -> usize {
-    body.map(|b| b.len() / 4).unwrap_or(0)
+    body.map_or(0, |b| b.len() / 4)
 }
 
 /// Estimate tokens for assets

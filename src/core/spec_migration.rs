@@ -1,4 +1,4 @@
-//! SkillSpec format migrations.
+//! `SkillSpec` format migrations.
 
 use crate::core::SkillSpec;
 use crate::error::{MsError, Result};
@@ -14,12 +14,14 @@ pub struct MigrationRegistry {
 }
 
 impl MigrationRegistry {
-    pub fn with_defaults() -> Self {
+    #[must_use] 
+    pub const fn with_defaults() -> Self {
         Self {
             migrations: Vec::new(),
         }
     }
 
+    #[must_use] 
     pub fn find(&self, from: &str) -> Option<&SpecMigration> {
         self.migrations.iter().find(|m| m.from == from)
     }
@@ -43,7 +45,7 @@ pub fn migrate_spec(mut spec: SkillSpec) -> Result<(SkillSpec, bool)> {
     while spec.format_version != target {
         let current = spec.format_version.clone();
         let migration = registry.find(&current).ok_or_else(|| {
-            MsError::NotFound(format!("no migration path from {} to {}", current, target))
+            MsError::NotFound(format!("no migration path from {current} to {target}"))
         })?;
 
         let mut updated = (migration.apply)(spec)?;
@@ -53,8 +55,7 @@ pub fn migrate_spec(mut spec: SkillSpec) -> Result<(SkillSpec, bool)> {
 
         if spec.format_version == current {
             return Err(MsError::ValidationFailed(format!(
-                "migration {} -> {} did not advance format version",
-                current, target
+                "migration {current} -> {target} did not advance format version"
             )));
         }
     }
