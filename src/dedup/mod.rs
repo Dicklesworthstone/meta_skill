@@ -782,8 +782,22 @@ impl Personalizer {
         let mut chars = text.chars().peekable();
         let mut in_string = false;
         let mut string_char = ' ';
+        let mut prev_was_escape = false;
 
         while let Some(c) = chars.next() {
+            // Handle escape sequences in strings
+            if in_string && prev_was_escape {
+                prev_was_escape = false;
+                result.push(c);
+                continue;
+            }
+
+            if c == '\\' && in_string {
+                prev_was_escape = true;
+                result.push(c);
+                continue;
+            }
+
             // Track string boundaries
             if (c == '"' || c == '\'') && !in_string {
                 in_string = true;
