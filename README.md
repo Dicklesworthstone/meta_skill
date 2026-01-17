@@ -295,6 +295,50 @@ ms suggest                           # Context-aware recommendations
 ms suggest --cwd /path/to/project    # Explicit context
 ```
 
+### Context-Aware Auto-Loading
+
+Automatically load relevant skills based on your current project context:
+
+```bash
+ms load --auto                       # Auto-detect and load relevant skills
+ms load --auto --threshold 0.5       # Only load skills scoring above 0.5
+ms load --auto --dry-run             # Preview what would be loaded
+ms load --auto --confirm             # Prompt before loading each skill
+```
+
+Auto-loading analyzes your project to determine relevant skills:
+
+- **Project detection**: Identifies Rust, Node.js, Python, Go, etc. from marker files
+- **File patterns**: Matches recently modified files against skill file patterns
+- **Tool detection**: Checks for installed tools (cargo, npm, pip, etc.)
+- **Context signals**: Scans file content for framework/library patterns
+
+Skills can specify context requirements in their frontmatter:
+
+```yaml
+---
+name: rust-error-handling
+context:
+  project_types: [rust]
+  file_patterns: ["*.rs"]
+  tools: [cargo, rustc]
+  signals:
+    - pattern: "use thiserror"
+      weight: 0.8
+---
+```
+
+Configuration options in `config.toml`:
+
+```toml
+[auto_load]
+learning_enabled = true      # Enable bandit learning from feedback
+exploration_rate = 0.1       # Rate of exploration for new skills
+bandit_blend = 0.3           # Blend factor for learned vs computed scores
+cold_start_threshold = 10    # Min uses before trusting learned weights
+persist_state = true         # Save bandit state between sessions
+```
+
 ### Pack Contracts
 
 Pack contracts let you persist custom packing rules (required groups, weights, max-per-group)

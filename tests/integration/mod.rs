@@ -1,4 +1,5 @@
 mod agent_detection_tests;
+mod auto_load_tests;
 mod fixture;
 mod cli_tests;
 mod db_state_tests;
