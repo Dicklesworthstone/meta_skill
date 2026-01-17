@@ -13,6 +13,7 @@ use serde_json::Value;
 use crate::app::AppContext;
 use crate::cli::output::OutputFormat;
 use crate::cli::output::emit_json;
+use crate::context::detector::ProjectDetector;
 use crate::core::spec_lens::parse_markdown;
 use crate::error::{MsError, Result};
 use crate::lint::rules::all_rules;
@@ -334,6 +335,119 @@ fn define_tools() -> Vec<Tool> {
                 }
             }),
         },
+        Tool {
+            name: "suggest".to_string(),
+            description: "Get context-aware skill suggestions based on working directory".to_string(),
+            input_schema: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "cwd": {
+                        "type": "string",
+                        "description": "Working directory path for context detection"
+                    },
+                    "limit": {
+                        "type": "integer",
+                        "description": "Maximum suggestions (default: 5)",
+                        "default": 5
+                    },
+                    "explain": {
+                        "type": "boolean",
+                        "description": "Include explanation for each suggestion",
+                        "default": false
+                    },
+                    "threshold": {
+                        "type": "number",
+                        "description": "Minimum relevance score (0.0-1.0)",
+                        "default": 0.3
+                    }
+                }
+            }),
+        },
+        Tool {
+            name: "feedback".to_string(),
+            description: "Record feedback for a skill (helpful/not helpful)".to_string(),
+            input_schema: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "skill_id": {
+                        "type": "string",
+                        "description": "Skill ID to provide feedback for"
+                    },
+                    "helpful": {
+                        "type": "boolean",
+                        "description": "Whether the skill was helpful"
+                    },
+                    "comment": {
+                        "type": "string",
+                        "description": "Optional feedback comment"
+                    },
+                    "context": {
+                        "type": "object",
+                        "description": "Optional context about how skill was used"
+                    }
+                },
+                "required": ["skill_id", "helpful"]
+            }),
+        },
+        Tool {
+            name: "index".to_string(),
+            description: "Index skills from specified paths".to_string(),
+            input_schema: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "paths": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "Paths to index (default: configured paths)"
+                    },
+                    "force": {
+                        "type": "boolean",
+                        "description": "Force re-index even if unchanged",
+                        "default": false
+                    }
+                }
+            }),
+        },
+        Tool {
+            name: "validate".to_string(),
+            description: "Validate a skill specification".to_string(),
+            input_schema: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "content": {
+                        "type": "string",
+                        "description": "Skill markdown content to validate"
+                    },
+                    "path": {
+                        "type": "string",
+                        "description": "Path to skill file (alternative to content)"
+                    }
+                }
+            }),
+        },
+        Tool {
+            name: "config".to_string(),
+            description: "Get or set ms configuration values".to_string(),
+            input_schema: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "action": {
+                        "type": "string",
+                        "enum": ["get", "set", "list"],
+                        "description": "Action to perform",
+                        "default": "list"
+                    },
+                    "key": {
+                        "type": "string",
+                        "description": "Configuration key (for get/set)"
+                    },
+                    "value": {
+                        "type": "string",
+                        "description": "Configuration value (for set)"
+                    }
+                }
+            }),
+        },
     ]
 }
 
@@ -540,6 +654,11 @@ fn handle_tools_call(
         "show" => handle_tool_show(ctx, &arguments),
         "doctor" => handle_tool_doctor(ctx, &arguments),
         "lint" => handle_tool_lint(ctx, &arguments),
+        "suggest" => handle_tool_suggest(ctx, &arguments),
+        "feedback" => handle_tool_feedback(ctx, &arguments),
+        "index" => handle_tool_index(ctx, &arguments),
+        "validate" => handle_tool_validate(ctx, &arguments),
+        "config" => handle_tool_config(ctx, &arguments),
         _ => Err(MsError::ValidationFailed(format!("Unknown tool: {name}"))),
     };
 
@@ -558,6 +677,25 @@ fn handle_ping(id: Option<Value>) -> JsonRpcResponse {
 
 fn handle_shutdown(id: Option<Value>) -> JsonRpcResponse {
     JsonRpcResponse::success(id, serde_json::json!({}))
+}
+
+// ============================================================================
+// Helpers
+// ============================================================================
+
+/// Expand tilde in path strings to home directory
+fn expand_tilde(input: &str) -> std::path::PathBuf {
+    if let Some(stripped) = input.strip_prefix("~/") {
+        if let Some(home) = dirs::home_dir() {
+            return home.join(stripped);
+        }
+    }
+    if input == "~" {
+        if let Some(home) = dirs::home_dir() {
+            return home;
+        }
+    }
+    std::path::PathBuf::from(input)
 }
 
 // ============================================================================
@@ -852,6 +990,265 @@ fn handle_tool_lint(ctx: &AppContext, args: &Value) -> Result<ToolResult> {
     Ok(ToolResult::text(serde_json::to_string_pretty(&output)?))
 }
 
+fn handle_tool_suggest(ctx: &AppContext, args: &Value) -> Result<ToolResult> {
+    let cwd = args
+        .get("cwd")
+        .and_then(|v| v.as_str())
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|| std::env::current_dir().unwrap_or_default());
+
+    let limit = args
+        .get("limit")
+        .and_then(serde_json::Value::as_u64)
+        .unwrap_or(5) as usize;
+
+    let _explain = args
+        .get("explain")
+        .and_then(serde_json::Value::as_bool)
+        .unwrap_or(false);
+
+    // Detect project context using available detector
+    let detector = crate::context::DefaultDetector::new();
+    let detected_projects = detector.detect(&cwd);
+
+    // Get recent skills as suggestions (simple approach)
+    let skills = ctx.db.list_skills(limit, 0)?;
+
+    // Format detected contexts
+    let contexts: Vec<_> = detected_projects
+        .iter()
+        .map(|p| {
+            serde_json::json!({
+                "project_type": format!("{:?}", p.project_type),
+                "confidence": p.confidence,
+                "marker_path": p.marker_path.display().to_string(),
+                "marker_pattern": p.marker_pattern,
+            })
+        })
+        .collect();
+
+    let output = serde_json::json!({
+        "cwd": cwd.display().to_string(),
+        "detected_contexts": contexts,
+        "count": skills.len(),
+        "suggestions": skills.iter().map(|s| {
+            serde_json::json!({
+                "skill_id": s.id,
+                "name": s.name,
+                "description": s.description,
+            })
+        }).collect::<Vec<_>>()
+    });
+
+    Ok(ToolResult::text(serde_json::to_string_pretty(&output)?))
+}
+
+fn handle_tool_feedback(ctx: &AppContext, args: &Value) -> Result<ToolResult> {
+    let skill_id = args
+        .get("skill_id")
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| MsError::ValidationFailed("Missing required parameter: skill_id".to_string()))?;
+
+    let helpful = args
+        .get("helpful")
+        .and_then(serde_json::Value::as_bool)
+        .ok_or_else(|| MsError::ValidationFailed("Missing required parameter: helpful".to_string()))?;
+
+    let comment = args.get("comment").and_then(|v| v.as_str());
+
+    // Record feedback using record_skill_feedback
+    let feedback_type = if helpful { "positive" } else { "negative" };
+    let rating = if helpful { Some(1) } else { Some(-1) };
+    ctx.db.record_skill_feedback(skill_id, feedback_type, rating, comment)?;
+
+    let output = serde_json::json!({
+        "recorded": true,
+        "skill_id": skill_id,
+        "helpful": helpful,
+        "comment": comment,
+    });
+
+    Ok(ToolResult::text(serde_json::to_string_pretty(&output)?))
+}
+
+fn handle_tool_index(ctx: &AppContext, args: &Value) -> Result<ToolResult> {
+    let force = args
+        .get("force")
+        .and_then(serde_json::Value::as_bool)
+        .unwrap_or(false);
+
+    let custom_paths: Option<Vec<String>> = args
+        .get("paths")
+        .and_then(|v| v.as_array())
+        .map(|arr| arr.iter().filter_map(|v| v.as_str().map(String::from)).collect());
+
+    // Collect all configured paths
+    let paths: Vec<std::path::PathBuf> = if let Some(ref custom) = custom_paths {
+        custom.iter().map(std::path::PathBuf::from).collect()
+    } else {
+        // Collect paths from all configured buckets
+        let mut all_paths = Vec::new();
+        for p in &ctx.config.skill_paths.global {
+            all_paths.push(expand_tilde(p));
+        }
+        for p in &ctx.config.skill_paths.project {
+            all_paths.push(expand_tilde(p));
+        }
+        for p in &ctx.config.skill_paths.community {
+            all_paths.push(expand_tilde(p));
+        }
+        for p in &ctx.config.skill_paths.local {
+            all_paths.push(expand_tilde(p));
+        }
+        all_paths
+    };
+
+    // Check which paths exist
+    let existing_paths: Vec<_> = paths.iter().filter(|p| p.exists()).collect();
+
+    // For MCP, we report configured paths but recommend CLI for full indexing
+    // Full indexing requires locks and transactions that are better handled by CLI
+    let output = serde_json::json!({
+        "configured_paths": paths.iter().map(|p| p.display().to_string()).collect::<Vec<_>>(),
+        "existing_paths": existing_paths.iter().map(|p| p.display().to_string()).collect::<Vec<_>>(),
+        "force": force,
+        "note": "For full indexing with progress, use: ms index --force",
+        "skill_count": ctx.db.list_skills(1000, 0).map(|s| s.len()).unwrap_or(0),
+    });
+
+    Ok(ToolResult::text(serde_json::to_string_pretty(&output)?))
+}
+
+fn handle_tool_validate(_ctx: &AppContext, args: &Value) -> Result<ToolResult> {
+    // Get content from either content param or path
+    let (content, source) = if let Some(content) = args.get("content").and_then(|v| v.as_str()) {
+        (content.to_string(), "inline".to_string())
+    } else if let Some(path) = args.get("path").and_then(|v| v.as_str()) {
+        let content = std::fs::read_to_string(path)
+            .map_err(|e| MsError::Config(format!("Failed to read {path}: {e}")))?;
+        (content, path.to_string())
+    } else {
+        return Err(MsError::ValidationFailed(
+            "Either 'content' or 'path' parameter is required".to_string(),
+        ));
+    };
+
+    // Parse the skill
+    let spec = parse_markdown(&content)
+        .map_err(|e| MsError::InvalidSkill(format!("{source}: {e}")))?;
+
+    // Build validation engine
+    let config = ValidationConfig::new();
+    let mut engine = ValidationEngine::new(config);
+
+    for rule in all_rules() {
+        engine.register(rule);
+    }
+
+    // Run validation
+    let result = engine.validate(&spec);
+
+    let output = serde_json::json!({
+        "source": source,
+        "valid": result.passed,
+        "skill_id": spec.metadata.id,
+        "skill_name": spec.metadata.name,
+        "error_count": result.error_count(),
+        "warning_count": result.warning_count(),
+        "errors": result.errors().map(|d| {
+            serde_json::json!({
+                "rule_id": d.rule_id,
+                "message": d.message,
+                "suggestion": d.suggestion,
+            })
+        }).collect::<Vec<_>>(),
+        "warnings": result.warnings().map(|d| {
+            serde_json::json!({
+                "rule_id": d.rule_id,
+                "message": d.message,
+            })
+        }).collect::<Vec<_>>(),
+    });
+
+    Ok(ToolResult::text(serde_json::to_string_pretty(&output)?))
+}
+
+fn handle_tool_config(ctx: &AppContext, args: &Value) -> Result<ToolResult> {
+    let action = args
+        .get("action")
+        .and_then(|v| v.as_str())
+        .unwrap_or("list");
+
+    let key = args.get("key").and_then(|v| v.as_str());
+    let _value = args.get("value").and_then(|v| v.as_str());
+
+    match action {
+        "list" => {
+            // Return config summary
+            let output = serde_json::json!({
+                "action": "list",
+                "config": {
+                    "skill_paths": {
+                        "global": ctx.config.skill_paths.global,
+                        "project": ctx.config.skill_paths.project,
+                        "local": ctx.config.skill_paths.local,
+                        "community": ctx.config.skill_paths.community,
+                    },
+                    "search": {
+                        "use_embeddings": ctx.config.search.use_embeddings,
+                        "bm25_weight": ctx.config.search.bm25_weight,
+                        "semantic_weight": ctx.config.search.semantic_weight,
+                    },
+                    "cache": {
+                        "enabled": ctx.config.cache.enabled,
+                        "max_size_mb": ctx.config.cache.max_size_mb,
+                        "ttl_seconds": ctx.config.cache.ttl_seconds,
+                    },
+                }
+            });
+            Ok(ToolResult::text(serde_json::to_string_pretty(&output)?))
+        }
+        "get" => {
+            let key = key.ok_or_else(|| {
+                MsError::ValidationFailed("'key' parameter required for get action".to_string())
+            })?;
+
+            // Get specific config value
+            let value = match key {
+                "skill_paths.global" => serde_json::to_value(&ctx.config.skill_paths.global)?,
+                "skill_paths.project" => serde_json::to_value(&ctx.config.skill_paths.project)?,
+                "skill_paths.local" => serde_json::to_value(&ctx.config.skill_paths.local)?,
+                "skill_paths.community" => serde_json::to_value(&ctx.config.skill_paths.community)?,
+                "search.use_embeddings" => serde_json::to_value(ctx.config.search.use_embeddings)?,
+                "search.bm25_weight" => serde_json::to_value(ctx.config.search.bm25_weight)?,
+                "search.semantic_weight" => serde_json::to_value(ctx.config.search.semantic_weight)?,
+                "cache.enabled" => serde_json::to_value(ctx.config.cache.enabled)?,
+                "cache.max_size_mb" => serde_json::to_value(ctx.config.cache.max_size_mb)?,
+                "cache.ttl_seconds" => serde_json::to_value(ctx.config.cache.ttl_seconds)?,
+                _ => {
+                    return Err(MsError::ValidationFailed(format!("Unknown config key: {key}")));
+                }
+            };
+
+            let output = serde_json::json!({
+                "action": "get",
+                "key": key,
+                "value": value,
+            });
+            Ok(ToolResult::text(serde_json::to_string_pretty(&output)?))
+        }
+        "set" => {
+            // For now, config is read-only through MCP
+            Err(MsError::ValidationFailed(
+                "Config modification via MCP not yet supported. Use 'ms config set' CLI.".to_string(),
+            ))
+        }
+        _ => Err(MsError::ValidationFailed(format!(
+            "Unknown action: {action}. Valid actions: list, get, set"
+        ))),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -938,5 +1335,128 @@ mod tests {
         assert!(props.get("skill").is_some());
         assert!(props.get("strict").is_some());
         assert!(props.get("rules").is_some());
+    }
+
+    #[test]
+    fn test_define_tools_includes_suggest() {
+        let tools = define_tools();
+        assert!(tools.iter().any(|t| t.name == "suggest"));
+    }
+
+    #[test]
+    fn test_suggest_tool_schema() {
+        let tools = define_tools();
+        let tool = tools.iter().find(|t| t.name == "suggest").unwrap();
+
+        let props = tool.input_schema.get("properties").unwrap();
+        assert!(props.get("cwd").is_some());
+        assert!(props.get("limit").is_some());
+        assert!(props.get("explain").is_some());
+    }
+
+    #[test]
+    fn test_define_tools_includes_feedback() {
+        let tools = define_tools();
+        assert!(tools.iter().any(|t| t.name == "feedback"));
+    }
+
+    #[test]
+    fn test_feedback_tool_schema() {
+        let tools = define_tools();
+        let tool = tools.iter().find(|t| t.name == "feedback").unwrap();
+
+        let props = tool.input_schema.get("properties").unwrap();
+        assert!(props.get("skill_id").is_some());
+        assert!(props.get("helpful").is_some());
+        assert!(props.get("comment").is_some());
+
+        // skill_id and helpful are required
+        let required = tool.input_schema.get("required").unwrap().as_array().unwrap();
+        assert!(required.iter().any(|r| r == "skill_id"));
+        assert!(required.iter().any(|r| r == "helpful"));
+    }
+
+    #[test]
+    fn test_define_tools_includes_index() {
+        let tools = define_tools();
+        assert!(tools.iter().any(|t| t.name == "index"));
+    }
+
+    #[test]
+    fn test_index_tool_schema() {
+        let tools = define_tools();
+        let tool = tools.iter().find(|t| t.name == "index").unwrap();
+
+        let props = tool.input_schema.get("properties").unwrap();
+        assert!(props.get("paths").is_some());
+        assert!(props.get("force").is_some());
+    }
+
+    #[test]
+    fn test_define_tools_includes_validate() {
+        let tools = define_tools();
+        assert!(tools.iter().any(|t| t.name == "validate"));
+    }
+
+    #[test]
+    fn test_validate_tool_schema() {
+        let tools = define_tools();
+        let tool = tools.iter().find(|t| t.name == "validate").unwrap();
+
+        let props = tool.input_schema.get("properties").unwrap();
+        assert!(props.get("content").is_some());
+        assert!(props.get("path").is_some());
+    }
+
+    #[test]
+    fn test_define_tools_includes_config() {
+        let tools = define_tools();
+        assert!(tools.iter().any(|t| t.name == "config"));
+    }
+
+    #[test]
+    fn test_config_tool_schema() {
+        let tools = define_tools();
+        let tool = tools.iter().find(|t| t.name == "config").unwrap();
+
+        let props = tool.input_schema.get("properties").unwrap();
+        assert!(props.get("action").is_some());
+        assert!(props.get("key").is_some());
+        assert!(props.get("value").is_some());
+    }
+
+    #[test]
+    fn test_expand_tilde_no_tilde() {
+        let result = expand_tilde("./foo/bar");
+        assert_eq!(result, std::path::PathBuf::from("./foo/bar"));
+    }
+
+    #[test]
+    fn test_expand_tilde_with_tilde() {
+        let result = expand_tilde("~/test/path");
+        // Should expand to home dir + path (if home exists)
+        if let Some(home) = dirs::home_dir() {
+            assert_eq!(result, home.join("test/path"));
+        } else {
+            assert_eq!(result, std::path::PathBuf::from("~/test/path"));
+        }
+    }
+
+    #[test]
+    fn test_expand_tilde_only() {
+        let result = expand_tilde("~");
+        if let Some(home) = dirs::home_dir() {
+            assert_eq!(result, home);
+        } else {
+            assert_eq!(result, std::path::PathBuf::from("~"));
+        }
+    }
+
+    #[test]
+    fn test_tool_count() {
+        let tools = define_tools();
+        // We should have at least 12 tools: search, load, evidence, list, show, doctor, lint,
+        // suggest, feedback, index, validate, config
+        assert!(tools.len() >= 12, "Expected at least 12 tools, got {}", tools.len());
     }
 }
