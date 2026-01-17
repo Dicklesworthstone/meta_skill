@@ -1,3 +1,4 @@
+pub mod agent_detection;
 pub mod agent_mail;
 pub mod antipatterns;
 pub mod app;
