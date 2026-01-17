@@ -466,8 +466,199 @@ mod tests {
         assert!(!ctx.evaluate(&SliceCondition::FileExists {
             value: "../outside".to_string()
         }));
-        
+
         // Safe relative path
         // Note: we can't easily test true positive without fs, but false positive on unsafe is key
+    }
+
+    // =========================================
+    // is_safe_relative_path Tests
+    // =========================================
+
+    #[test]
+    fn safe_relative_path_simple() {
+        assert!(is_safe_relative_path("file.txt"));
+        assert!(is_safe_relative_path("src/main.rs"));
+        assert!(is_safe_relative_path("a/b/c/d.txt"));
+    }
+
+    #[test]
+    fn safe_relative_path_blocks_absolute() {
+        assert!(!is_safe_relative_path("/etc/passwd"));
+        assert!(!is_safe_relative_path("/home/user/file.txt"));
+    }
+
+    #[test]
+    fn safe_relative_path_blocks_parent_traversal() {
+        assert!(!is_safe_relative_path("../file.txt"));
+        assert!(!is_safe_relative_path("a/../../../etc/passwd"));
+        assert!(!is_safe_relative_path(".."));
+    }
+
+    #[test]
+    fn safe_relative_path_allows_current_dir() {
+        assert!(is_safe_relative_path("./file.txt"));
+        assert!(is_safe_relative_path("./src/main.rs"));
+    }
+
+    // =========================================
+    // ConditionContext evaluate_all Tests
+    // =========================================
+
+    #[test]
+    fn evaluate_all_empty_conditions() {
+        let ctx = ConditionContext {
+            working_dir: Path::new("/tmp"),
+            tech_stacks: &[],
+            loaded_slices: &HashSet::new(),
+        };
+
+        // Empty conditions should return true (all satisfied)
+        assert!(ctx.evaluate_all(&[]));
+    }
+
+    #[test]
+    fn evaluate_all_single_condition_true() {
+        let ctx = ConditionContext {
+            working_dir: Path::new("/tmp"),
+            tech_stacks: &["rust".to_string()],
+            loaded_slices: &HashSet::new(),
+        };
+
+        let conditions = vec![SliceCondition::TechStack { value: "rust".to_string() }];
+        assert!(ctx.evaluate_all(&conditions));
+    }
+
+    #[test]
+    fn evaluate_all_single_condition_false() {
+        let ctx = ConditionContext {
+            working_dir: Path::new("/tmp"),
+            tech_stacks: &[],
+            loaded_slices: &HashSet::new(),
+        };
+
+        let conditions = vec![SliceCondition::TechStack { value: "rust".to_string() }];
+        assert!(!ctx.evaluate_all(&conditions));
+    }
+
+    #[test]
+    fn evaluate_all_multiple_conditions_all_true() {
+        let mut loaded = HashSet::new();
+        loaded.insert(("skill-a".to_string(), "slice-1".to_string()));
+
+        let ctx = ConditionContext {
+            working_dir: Path::new("/tmp"),
+            tech_stacks: &["rust".to_string()],
+            loaded_slices: &loaded,
+        };
+
+        let conditions = vec![
+            SliceCondition::TechStack { value: "rust".to_string() },
+            SliceCondition::DependsOn { skill_id: "skill-a".to_string(), slice_id: "slice-1".to_string() },
+        ];
+        assert!(ctx.evaluate_all(&conditions));
+    }
+
+    #[test]
+    fn evaluate_all_multiple_conditions_one_false() {
+        let ctx = ConditionContext {
+            working_dir: Path::new("/tmp"),
+            tech_stacks: &["rust".to_string()],
+            loaded_slices: &HashSet::new(),
+        };
+
+        let conditions = vec![
+            SliceCondition::TechStack { value: "rust".to_string() },  // true
+            SliceCondition::TechStack { value: "python".to_string() }, // false
+        ];
+        assert!(!ctx.evaluate_all(&conditions));
+    }
+
+    // =========================================
+    // SkipReason Tests
+    // =========================================
+
+    #[test]
+    fn skip_reason_variants() {
+        let _ = SkipReason::ConditionNotMet("test".to_string());
+        let _ = SkipReason::BudgetExceeded;
+        let _ = SkipReason::SkillNotFound;
+        let _ = SkipReason::SliceNotFound;
+        let _ = SkipReason::ResolutionError("error".to_string());
+    }
+
+    #[test]
+    fn skip_reason_debug() {
+        let reason = SkipReason::BudgetExceeded;
+        let debug = format!("{:?}", reason);
+        assert!(debug.contains("BudgetExceeded"));
+    }
+
+    // =========================================
+    // SkippedSlice Tests
+    // =========================================
+
+    #[test]
+    fn skipped_slice_debug() {
+        let skipped = SkippedSlice {
+            skill_id: "skill-a".to_string(),
+            slice_id: Some("slice-1".to_string()),
+            reason: SkipReason::BudgetExceeded,
+        };
+        let debug = format!("{:?}", skipped);
+        assert!(debug.contains("SkippedSlice"));
+        assert!(debug.contains("skill-a"));
+    }
+
+    // =========================================
+    // ResolvedSlice Tests
+    // =========================================
+
+    #[test]
+    fn resolved_slice_clone() {
+        let slice = ResolvedSlice {
+            skill_id: "skill-a".to_string(),
+            slice_id: "slice-1".to_string(),
+            content: "content".to_string(),
+            token_estimate: 100,
+            priority: 5,
+            required: true,
+        };
+        let cloned = slice.clone();
+        assert_eq!(cloned.skill_id, "skill-a");
+        assert_eq!(cloned.token_estimate, 100);
+    }
+
+    #[test]
+    fn resolved_slice_debug() {
+        let slice = ResolvedSlice {
+            skill_id: "skill-a".to_string(),
+            slice_id: "slice-1".to_string(),
+            content: "content".to_string(),
+            token_estimate: 100,
+            priority: 5,
+            required: true,
+        };
+        let debug = format!("{:?}", slice);
+        assert!(debug.contains("ResolvedSlice"));
+        assert!(debug.contains("skill-a"));
+    }
+
+    // =========================================
+    // MetaSkillLoadResult Tests
+    // =========================================
+
+    #[test]
+    fn load_result_debug() {
+        let result = MetaSkillLoadResult {
+            meta_skill_id: "meta-1".to_string(),
+            slices: vec![],
+            tokens_used: 500,
+            skipped: vec![],
+            packed_content: "content".to_string(),
+        };
+        let debug = format!("{:?}", result);
+        assert!(debug.contains("MetaSkillLoadResult"));
+        assert!(debug.contains("meta-1"));
     }
 }
