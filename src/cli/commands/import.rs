@@ -12,6 +12,7 @@ use glob::glob;
 use serde::Serialize;
 
 use crate::app::AppContext;
+use crate::cli::output::OutputFormat;
 use crate::cli::output::{emit_human, emit_json, HumanLayout};
 use crate::core::spec_lens::compile_markdown;
 use crate::error::{MsError, Result};
@@ -151,12 +152,12 @@ fn run_single(ctx: &AppContext, args: &ImportArgs) -> Result<()> {
     let hints = build_hints(args);
 
     // Run classification preview (always shown in human mode)
-    if !ctx.robot_mode {
+    if ctx.output_format == OutputFormat::Human {
         show_classification_preview(&blocks);
     }
 
     // In interactive mode, prompt for review
-    if !args.non_interactive && !ctx.robot_mode {
+    if !args.non_interactive && ctx.output_format == OutputFormat::Human {
         // For now, we skip true interactive mode since we can't do terminal prompts
         // In a real implementation, this would use dialoguer or similar
         eprintln!(
@@ -188,7 +189,7 @@ fn run_single(ctx: &AppContext, args: &ImportArgs) -> Result<()> {
     });
 
     // Show warnings and suggestions
-    if !ctx.robot_mode {
+    if ctx.output_format == OutputFormat::Human {
         show_generation_warnings(&generated.warnings);
         show_suggestions(&generated.suggestions);
     }
@@ -211,7 +212,7 @@ fn run_single(ctx: &AppContext, args: &ImportArgs) -> Result<()> {
     };
 
     // Output based on mode
-    if ctx.robot_mode {
+    if ctx.output_format != OutputFormat::Human {
         let report = ImportReport {
             source: args.path.display().to_string(),
             output: output_path.display().to_string(),
@@ -249,14 +250,14 @@ fn run_single(ctx: &AppContext, args: &ImportArgs) -> Result<()> {
             MsError::Config(format!("Failed to write {}: {e}", output_path.display()))
         })?;
 
-        if !ctx.robot_mode {
+        if ctx.output_format == OutputFormat::Human {
             println!(
                 "\n{} Created {}",
                 style("✓").green(),
                 style(output_path.display()).bold()
             );
         }
-    } else if !ctx.robot_mode {
+    } else if ctx.output_format == OutputFormat::Human {
         println!(
             "\n{} Dry run - no file written",
             style("ℹ").blue()
@@ -311,7 +312,7 @@ fn run_batch(ctx: &AppContext, args: &ImportArgs) -> Result<()> {
     let total = files.len();
 
     for (i, file) in files.iter().enumerate() {
-        if !ctx.robot_mode {
+        if ctx.output_format == OutputFormat::Human {
             println!(
                 "\n[{}/{}] {}",
                 i + 1,
@@ -328,7 +329,7 @@ fn run_batch(ctx: &AppContext, args: &ImportArgs) -> Result<()> {
     }
 
     // Output summary
-    if ctx.robot_mode {
+    if ctx.output_format != OutputFormat::Human {
         let report = BatchReport {
             total: results.len(),
             imported: results.iter().filter(|r| r.result.is_ok()).count(),
@@ -443,7 +444,7 @@ fn import_single_for_batch(
             MsError::Config(format!("Failed to write {}: {e}", output_path.display()))
         })?;
 
-        if !ctx.robot_mode {
+        if ctx.output_format == OutputFormat::Human {
             println!(
                 "  {} → {} ({} rules, {} examples)",
                 style("✓").green(),

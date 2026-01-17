@@ -5,6 +5,7 @@ use std::path::PathBuf;
 use clap::{Args, Subcommand};
 
 use crate::app::AppContext;
+use crate::cli::output::OutputFormat;
 use crate::error::{MsError, Result};
 use crate::graph::bv::{BvClient, run_bv_on_issues, run_bv_on_issues_raw};
 use crate::graph::skills::skills_to_issues;
@@ -132,7 +133,7 @@ fn run_insights(
     names: &std::collections::HashMap<String, String>,
 ) -> Result<()> {
     let value: serde_json::Value = run_bv_on_issues(client, issues, &["--robot-insights"])?;
-    if ctx.robot_mode {
+    if ctx.output_format != OutputFormat::Human {
         return crate::cli::output::emit_json(&value);
     }
     let cycles = value
@@ -163,7 +164,7 @@ fn run_insights(
 
 fn run_plan(ctx: &AppContext, client: &BvClient, issues: &[crate::beads::Issue]) -> Result<()> {
     let value: serde_json::Value = run_bv_on_issues(client, issues, &["--robot-plan"])?;
-    if ctx.robot_mode {
+    if ctx.output_format != OutputFormat::Human {
         return crate::cli::output::emit_json(&value);
     }
     println!("Graph plan:");
@@ -177,7 +178,7 @@ fn run_plan(ctx: &AppContext, client: &BvClient, issues: &[crate::beads::Issue])
 
 fn run_triage(ctx: &AppContext, client: &BvClient, issues: &[crate::beads::Issue]) -> Result<()> {
     let value: serde_json::Value = run_bv_on_issues(client, issues, &["--robot-triage"])?;
-    if ctx.robot_mode {
+    if ctx.output_format != OutputFormat::Human {
         return crate::cli::output::emit_json(&value);
     }
     if let Some(recs) = value.get("recommendations").and_then(|v| v.as_array()) {
@@ -199,7 +200,7 @@ fn run_export(
     let arg = format!("--graph-format={}", args.format);
     if args.format == "json" {
         let value: serde_json::Value = run_bv_on_issues(client, issues, &["--robot-graph", &arg])?;
-        if ctx.robot_mode {
+        if ctx.output_format != OutputFormat::Human {
             return crate::cli::output::emit_json(&value);
         }
         println!("{}", serde_json::to_string_pretty(&value)?);
@@ -208,7 +209,7 @@ fn run_export(
 
     let output = run_bv_on_issues_raw(client, issues, &["--robot-graph", &arg])?;
     let graph = String::from_utf8_lossy(&output).to_string();
-    if ctx.robot_mode {
+    if ctx.output_format != OutputFormat::Human {
         let value = serde_json::json!({
             "status": "ok",
             "format": args.format,
@@ -233,7 +234,7 @@ fn run_cycles(
         .cloned()
         .unwrap_or_default();
 
-    if ctx.robot_mode {
+    if ctx.output_format != OutputFormat::Human {
         let output = serde_json::json!({
             "status": "ok",
             "count": cycles.len(),
@@ -265,7 +266,7 @@ fn run_top(
         .cloned()
         .unwrap_or_default();
 
-    if ctx.robot_mode {
+    if ctx.output_format != OutputFormat::Human {
         let output = serde_json::json!({
             "status": "ok",
             "count": items.len(),
@@ -403,7 +404,7 @@ fn format_cycles_table(
 
 fn run_health(ctx: &AppContext, client: &BvClient, issues: &[crate::beads::Issue]) -> Result<()> {
     let value: serde_json::Value = run_bv_on_issues(client, issues, &["--robot-label-health"])?;
-    if ctx.robot_mode {
+    if ctx.output_format != OutputFormat::Human {
         return crate::cli::output::emit_json(&value);
     }
     println!("{}", serde_json::to_string_pretty(&value)?);

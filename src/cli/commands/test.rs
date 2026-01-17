@@ -3,6 +3,7 @@
 use clap::Args;
 
 use crate::app::AppContext;
+use crate::cli::output::OutputFormat;
 use crate::cli::output::{HumanLayout, emit_json};
 use crate::error::Result;
 use crate::testing::{SkillTestRunner, TestOptions, TestStatus};
@@ -55,7 +56,7 @@ pub fn run(ctx: &AppContext, args: &TestArgs) -> Result<()> {
         vec![runner.run_for_skill(args.skill.as_ref().unwrap())?]
     };
 
-    if ctx.robot_mode {
+    if ctx.output_format != OutputFormat::Human {
         let status = if reports.iter().any(|r| !r.success()) {
             "partial"
         } else {

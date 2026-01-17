@@ -5,6 +5,7 @@ use std::sync::Arc;
 use clap::{Args, Subcommand, ValueEnum};
 
 use crate::app::AppContext;
+use crate::cli::output::OutputFormat;
 use crate::core::{SkillLayer, spec_lens::parse_markdown};
 use crate::error::{MsError, Result};
 use crate::storage::TxManager;
@@ -82,7 +83,7 @@ pub fn run(ctx: &AppContext, args: &TemplateArgs) -> Result<()> {
 fn run_list(ctx: &AppContext, _args: &TemplateListArgs) -> Result<()> {
     let templates = list_templates();
 
-    if ctx.robot_mode {
+    if ctx.output_format != OutputFormat::Human {
         let payload = templates
             .iter()
             .map(|template| {
@@ -120,7 +121,7 @@ fn run_show(ctx: &AppContext, args: &TemplateShowArgs) -> Result<()> {
         "body": template.body,
     });
 
-    if ctx.robot_mode || matches!(args.format, TemplateFormat::Json) {
+    if ctx.output_format != OutputFormat::Human || matches!(args.format, TemplateFormat::Json) {
         return crate::cli::output::emit_json(&payload);
     }
 
@@ -173,7 +174,7 @@ fn run_apply(ctx: &AppContext, args: &TemplateApplyArgs) -> Result<()> {
         .map(|path| path.display().to_string())
         .unwrap_or_default();
 
-    if ctx.robot_mode {
+    if ctx.output_format != OutputFormat::Human {
         return crate::cli::output::emit_json(&serde_json::json!({
             "status": "ok",
             "template": template.id,

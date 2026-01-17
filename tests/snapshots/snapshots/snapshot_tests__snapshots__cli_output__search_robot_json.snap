@@ -4,7 +4,6 @@ expression: json
 ---
 {
   "count": 1,
-  "limit": 20,
   "query": "rust",
   "results": [
     {
@@ -14,7 +13,7 @@ expression: json
       "layer": "project",
       "name": "Rust Error Handling",
       "quality": 0.48500001430511475,
-      "score": 0.008196720853447914
+      "score": 0.008196721
     }
   ],
   "search_type": "hybrid",

@@ -4,6 +4,7 @@ use clap::Args;
 use serde::Serialize;
 
 use crate::app::AppContext;
+use crate::cli::output::OutputFormat;
 use crate::cli::output::{HumanLayout, emit_json};
 use crate::core::spec_lens::parse_markdown;
 use crate::error::{MsError, Result};
@@ -110,7 +111,7 @@ pub fn run(ctx: &AppContext, args: &QualityArgs) -> Result<()> {
         outputs.push(output);
     }
 
-    if ctx.robot_mode {
+    if ctx.output_format != OutputFormat::Human {
         let payload = serde_json::json!({
             "status": "ok",
             "count": outputs.len(),

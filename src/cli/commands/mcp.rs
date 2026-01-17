@@ -11,6 +11,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::app::AppContext;
+use crate::cli::output::OutputFormat;
 use crate::cli::output::emit_json;
 use crate::core::spec_lens::parse_markdown;
 use crate::error::{MsError, Result};
@@ -349,7 +350,7 @@ pub fn run(ctx: &AppContext, args: &McpArgs) -> Result<()> {
 
 fn run_tools(ctx: &AppContext) -> Result<()> {
     let tools = define_tools();
-    if ctx.robot_mode {
+    if ctx.output_format != OutputFormat::Human {
         emit_json(&serde_json::json!({
             "tools": tools,
             "count": tools.len()

@@ -3,6 +3,7 @@
 use clap::Args;
 
 use crate::app::AppContext;
+use crate::cli::output::OutputFormat;
 use crate::cli::output::{HumanLayout, emit_json};
 use crate::error::{MsError, Result};
 
@@ -31,7 +32,7 @@ pub fn run(ctx: &AppContext, args: &OutcomeArgs) -> Result<()> {
     let success = args.success;
     ctx.db.record_skill_outcome(&skill_id, success)?;
 
-    if ctx.robot_mode {
+    if ctx.output_format != OutputFormat::Human {
         let payload = serde_json::json!({
             "status": "ok",
             "skill_id": skill_id,

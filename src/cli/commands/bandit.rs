@@ -3,6 +3,7 @@ use std::path::PathBuf;
 use clap::{Args, Subcommand};
 
 use crate::app::AppContext;
+use crate::cli::output::OutputFormat;
 use crate::cli::output::{HumanLayout, emit_json};
 use crate::error::Result;
 use crate::suggestions::bandit::{SignalBandit, SuggestionContext};
@@ -48,7 +49,7 @@ fn stats(ctx: &AppContext, args: &StatsArgs) -> Result<()> {
     let bandit = SignalBandit::load(&path)?;
     let weights = bandit.estimated_weights(&SuggestionContext::default());
 
-    if ctx.robot_mode {
+    if ctx.output_format != OutputFormat::Human {
         let arms: Vec<_> = bandit
             .arms
             .values()
@@ -136,7 +137,7 @@ fn reset(ctx: &AppContext, args: &ResetArgs) -> Result<()> {
     let bandit = SignalBandit::new();
     bandit.save(&path)?;
 
-    if ctx.robot_mode {
+    if ctx.output_format != OutputFormat::Human {
         let payload = serde_json::json!({
             "status": "ok",
             "reset": true,

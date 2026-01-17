@@ -1,6 +1,7 @@
 use clap::{Args, Subcommand};
 
 use crate::app::AppContext;
+use crate::cli::output::OutputFormat;
 use crate::cli::output::{HumanLayout, emit_human, emit_json};
 use crate::error::{MsError, Result};
 use crate::sync::{
@@ -61,7 +62,7 @@ fn list(ctx: &AppContext) -> Result<()> {
         .collect();
     conflicts.sort();
 
-    if ctx.robot_mode {
+    if ctx.output_format != OutputFormat::Human {
         emit_json(&serde_json::json!({
             "status": "ok",
             "conflicts": conflicts,
@@ -115,7 +116,7 @@ fn resolve(ctx: &AppContext, args: &ConflictsResolveArgs) -> Result<()> {
         }
     }
 
-    if ctx.robot_mode {
+    if ctx.output_format != OutputFormat::Human {
         emit_json(&serde_json::json!({
             "status": "ok",
             "skill": args.skill,

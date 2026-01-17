@@ -7,6 +7,7 @@ use clap::{Args, Subcommand};
 use serde::{Deserialize, Serialize};
 
 use crate::app::AppContext;
+use crate::cli::output::OutputFormat;
 use crate::error::{MsError, Result};
 use crate::storage::tx::GlobalLock;
 
@@ -182,7 +183,7 @@ fn run_create(ctx: &AppContext, args: &BackupCreateArgs) -> Result<()> {
     std::fs::write(&manifest_path, manifest_json)
         .map_err(|err| MsError::Config(format!("write {}: {err}", manifest_path.display())))?;
 
-    if ctx.robot_mode {
+    if ctx.output_format != OutputFormat::Human {
         return crate::cli::output::emit_json(&manifest);
     }
 
@@ -196,7 +197,7 @@ fn run_create(ctx: &AppContext, args: &BackupCreateArgs) -> Result<()> {
 fn run_list(ctx: &AppContext, args: &BackupListArgs) -> Result<()> {
     let backup_root = backup_root(ctx);
     if !backup_root.exists() {
-        if ctx.robot_mode {
+        if ctx.output_format != OutputFormat::Human {
             return crate::cli::output::emit_json(&serde_json::json!({
                 "status": "ok",
                 "count": 0,
@@ -235,7 +236,7 @@ fn run_list(ctx: &AppContext, args: &BackupListArgs) -> Result<()> {
         });
     }
 
-    if ctx.robot_mode {
+    if ctx.output_format != OutputFormat::Human {
         return crate::cli::output::emit_json(&serde_json::json!({
             "status": "ok",
             "count": backups.len(),
@@ -330,7 +331,7 @@ fn run_restore(ctx: &AppContext, args: &BackupRestoreArgs) -> Result<()> {
         restored += 1;
     }
 
-    if ctx.robot_mode {
+    if ctx.output_format != OutputFormat::Human {
         return crate::cli::output::emit_json(&serde_json::json!({
             "status": "ok",
             "restored": manifest.id,

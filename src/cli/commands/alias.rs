@@ -8,6 +8,7 @@ use clap::{Args, Subcommand};
 use colored::Colorize;
 
 use crate::app::AppContext;
+use crate::cli::output::OutputFormat;
 use crate::error::{MsError, Result};
 
 #[derive(Args, Debug)]
@@ -73,7 +74,7 @@ pub fn run(ctx: &AppContext, args: &AliasArgs) -> Result<()> {
         Some(AliasCommand::List { skill }) => list_aliases(ctx, skill.as_deref()),
         None => {
             // No subcommand - show help
-            if ctx.robot_mode {
+            if ctx.output_format != OutputFormat::Human {
                 println!(
                     "{}",
                     serde_json::json!({
@@ -130,7 +131,7 @@ fn add_alias(ctx: &AppContext, alias: &str, target: &str, kind: &str) -> Result<
     let created_at = chrono::Utc::now().to_rfc3339();
     ctx.db.upsert_alias(alias, target, kind, &created_at)?;
 
-    if ctx.robot_mode {
+    if ctx.output_format != OutputFormat::Human {
         println!(
             "{}",
             serde_json::json!({
@@ -156,7 +157,7 @@ fn add_alias(ctx: &AppContext, alias: &str, target: &str, kind: &str) -> Result<
 fn remove_alias(ctx: &AppContext, alias: &str) -> Result<()> {
     let removed = ctx.db.delete_alias(alias)?;
 
-    if ctx.robot_mode {
+    if ctx.output_format != OutputFormat::Human {
         println!(
             "{}",
             serde_json::json!({
@@ -177,7 +178,7 @@ fn remove_alias(ctx: &AppContext, alias: &str) -> Result<()> {
 fn resolve_alias(ctx: &AppContext, alias: &str) -> Result<()> {
     let resolution = ctx.db.resolve_alias(alias)?;
 
-    if ctx.robot_mode {
+    if ctx.output_format != OutputFormat::Human {
         if let Some(ref res) = resolution {
             println!(
                 "{}",
@@ -219,7 +220,7 @@ fn resolve_alias(ctx: &AppContext, alias: &str) -> Result<()> {
 fn list_aliases(ctx: &AppContext, skill_id: Option<&str>) -> Result<()> {
     let aliases = ctx.db.list_aliases(skill_id)?;
 
-    if ctx.robot_mode {
+    if ctx.output_format != OutputFormat::Human {
         let output: Vec<serde_json::Value> = aliases
             .iter()
             .map(|a| {

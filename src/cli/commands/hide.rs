@@ -7,6 +7,7 @@ use clap::{Args, Subcommand};
 use colored::Colorize;
 
 use crate::app::AppContext;
+use crate::cli::output::OutputFormat;
 use crate::error::{MsError, Result};
 
 #[derive(Args, Debug)]
@@ -51,7 +52,7 @@ pub fn run(ctx: &AppContext, args: &HideArgs) -> Result<()> {
         Some(HideCommand::List { limit, offset }) => list_hidden(ctx, *limit, *offset),
         None => {
             // No subcommand and no positional - show help
-            if ctx.robot_mode {
+            if ctx.output_format != OutputFormat::Human {
                 println!(
                     "{}",
                     serde_json::json!({
@@ -96,7 +97,7 @@ fn add_hidden(ctx: &AppContext, skill: &str) -> Result<()> {
 
     // Check if already hidden
     if ctx.db.has_user_preference(&skill_id, "hidden")? {
-        if ctx.robot_mode {
+        if ctx.output_format != OutputFormat::Human {
             println!(
                 "{}",
                 serde_json::json!({
@@ -117,7 +118,7 @@ fn add_hidden(ctx: &AppContext, skill: &str) -> Result<()> {
 
     let record = ctx.db.set_user_preference(&skill_id, "hidden")?;
 
-    if ctx.robot_mode {
+    if ctx.output_format != OutputFormat::Human {
         println!(
             "{}",
             serde_json::json!({
@@ -150,7 +151,7 @@ fn add_hidden(ctx: &AppContext, skill: &str) -> Result<()> {
 pub fn list_hidden(ctx: &AppContext, limit: usize, offset: usize) -> Result<()> {
     let prefs = ctx.db.list_user_preferences("hidden", limit, offset)?;
 
-    if ctx.robot_mode {
+    if ctx.output_format != OutputFormat::Human {
         let output: Vec<serde_json::Value> = prefs
             .iter()
             .map(|p| {

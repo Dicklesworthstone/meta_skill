@@ -1,6 +1,7 @@
 use clap::{Args, Subcommand};
 
 use crate::app::AppContext;
+use crate::cli::output::OutputFormat;
 use crate::cli::output::{HumanLayout, emit_human, emit_json};
 use crate::error::Result;
 use crate::sync::{MachineIdentity, SyncConfig};
@@ -38,7 +39,7 @@ fn info(ctx: &AppContext) -> Result<()> {
         config.machine.description,
     )?;
 
-    if ctx.robot_mode {
+    if ctx.output_format != OutputFormat::Human {
         emit_json(&serde_json::json!({
             "status": "ok",
             "machine": machine,
@@ -80,7 +81,7 @@ fn rename(ctx: &AppContext, args: &MachineRenameArgs) -> Result<()> {
     machine.rename(args.name.clone());
     machine.save()?;
 
-    if ctx.robot_mode {
+    if ctx.output_format != OutputFormat::Human {
         emit_json(&serde_json::json!({
             "status": "ok",
             "name": machine.machine_name,

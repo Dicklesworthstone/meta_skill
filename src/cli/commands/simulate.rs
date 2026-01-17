@@ -5,6 +5,7 @@ use std::path::PathBuf;
 use clap::Args;
 
 use crate::app::AppContext;
+use crate::cli::output::OutputFormat;
 use crate::cli::output::{HumanLayout, emit_human, emit_json};
 use crate::error::{MsError, Result};
 use crate::simulation::{ElementStatus, SimulationConfig, SimulationEngine, SimulationReport};
@@ -72,7 +73,7 @@ pub fn run(ctx: &AppContext, args: &SimulateArgs) -> Result<()> {
         })?;
     }
 
-    if ctx.robot_mode {
+    if ctx.output_format != OutputFormat::Human {
         return emit_json(&report);
     }
 

@@ -5,6 +5,7 @@ use std::path::PathBuf;
 use clap::{Args, Subcommand};
 
 use crate::app::AppContext;
+use crate::cli::output::OutputFormat;
 use crate::cli::output::{HumanLayout, emit_json};
 use crate::error::{MsError, Result};
 use crate::suggestions::bandit::{ContextualBandit, ContextFeatures, SkillFeedback};
@@ -92,7 +93,7 @@ fn run_add(ctx: &AppContext, args: &FeedbackAddArgs) -> Result<()> {
         eprintln!("Warning: Failed to update bandit: {e}");
     }
 
-    if ctx.robot_mode {
+    if ctx.output_format != OutputFormat::Human {
         let payload = serde_json::json!({
             "status": "ok",
             "record": record,
@@ -128,7 +129,7 @@ fn run_list(ctx: &AppContext, args: &FeedbackListArgs) -> Result<()> {
         .db
         .list_skill_feedback(skill_id.as_deref(), args.limit, args.offset)?;
 
-    if ctx.robot_mode {
+    if ctx.output_format != OutputFormat::Human {
         let payload = serde_json::json!({
             "status": "ok",
             "records": records,

@@ -5,6 +5,7 @@ use std::path::PathBuf;
 use clap::Args;
 
 use crate::app::AppContext;
+use crate::cli::output::OutputFormat;
 use crate::cli::output;
 use crate::error::{MsError, Result};
 use crate::quality::ubs::UbsClient;
@@ -35,7 +36,7 @@ pub fn run(ctx: &AppContext, args: &PreCommitArgs) -> Result<()> {
         client.check_staged(&repo)?
     };
 
-    if ctx.robot_mode {
+    if ctx.output_format != OutputFormat::Human {
         let report = PreCommitReport {
             exit_code: result.exit_code,
             findings: result.findings.len(),

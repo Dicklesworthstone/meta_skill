@@ -6,6 +6,7 @@ use clap::Args;
 use colored::Colorize;
 
 use crate::app::AppContext;
+use crate::cli::output::OutputFormat;
 use crate::error::{MsError, Result};
 
 #[derive(Args, Debug)]
@@ -19,7 +20,7 @@ pub fn run(ctx: &AppContext, args: &UnhideArgs) -> Result<()> {
 
     let removed = ctx.db.remove_user_preference(&skill_id, "hidden")?;
 
-    if ctx.robot_mode {
+    if ctx.output_format != OutputFormat::Human {
         println!(
             "{}",
             serde_json::json!({

@@ -5,6 +5,7 @@ use std::collections::HashMap;
 use clap::{Args, Subcommand};
 
 use crate::app::AppContext;
+use crate::cli::output::OutputFormat;
 use crate::cli::output::{HumanLayout, emit_human, emit_robot, robot_ok};
 use crate::core::pack_contracts::{
     add_custom_contract, builtin_contracts, custom_contracts_path, load_custom_contracts,
@@ -100,7 +101,7 @@ fn create_contract(ctx: &AppContext, args: &CreateArgs) -> Result<()> {
     let path = custom_contracts_path(&ctx.ms_root);
     add_custom_contract(&path, contract.clone())?;
 
-    if ctx.robot_mode {
+    if ctx.output_format != OutputFormat::Human {
         emit_robot(&robot_ok(serde_json::json!({
             "created": contract,
             "path": path.display().to_string(),
@@ -137,7 +138,7 @@ fn list_contracts(ctx: &AppContext, args: &ListArgs) -> Result<()> {
     builtins.sort_by(|a, b| a.id.cmp(&b.id));
     customs.sort_by(|a, b| a.id.cmp(&b.id));
 
-    if ctx.robot_mode {
+    if ctx.output_format != OutputFormat::Human {
         emit_robot(&robot_ok(serde_json::json!({
             "builtins": builtins,
             "custom": customs,

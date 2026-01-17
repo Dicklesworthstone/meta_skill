@@ -4,6 +4,7 @@ use clap::Args;
 use colored::Colorize;
 
 use crate::app::AppContext;
+use crate::cli::output::OutputFormat;
 use crate::cli::output::{HumanLayout, emit_human, emit_json};
 use crate::error::Result;
 use crate::sync::{MachineIdentity, SyncConfig, SyncEngine, SyncOptions, SyncState};
@@ -76,7 +77,7 @@ pub fn run(ctx: &AppContext, args: &SyncArgs) -> Result<()> {
         && ctx.config.ru.auto_index
         && reports.iter().any(|r| !r.cloned.is_empty() || !r.pulled.is_empty());
 
-    if ctx.robot_mode {
+    if ctx.output_format != OutputFormat::Human {
         let mut payload = serde_json::json!({
             "status": "ok",
             "reports": reports,
@@ -161,7 +162,7 @@ fn status(ctx: &AppContext, _args: &SyncArgs) -> Result<()> {
             .or_insert(0usize) += 1;
     }
 
-    if ctx.robot_mode {
+    if ctx.output_format != OutputFormat::Human {
         let payload = serde_json::json!({
             "status": "ok",
             "machine": {

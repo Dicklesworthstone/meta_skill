@@ -8,6 +8,7 @@ use semver::Version;
 use serde::Serialize;
 
 use crate::app::AppContext;
+use crate::cli::output::OutputFormat;
 use crate::bundler::github::{GitHubConfig, download_bundle, download_url, publish_bundle};
 use crate::bundler::install::InstallReport;
 use crate::bundler::local_safety::{
@@ -360,7 +361,7 @@ fn run_create(ctx: &AppContext, args: &BundleCreateArgs) -> Result<()> {
         let signature = signer.sign(checksum.as_bytes(), &signer_name);
         package.manifest.signatures.push(signature);
 
-        if !ctx.robot_mode {
+        if ctx.output_format == OutputFormat::Human {
             eprintln!("Signed bundle with key: {}", key_path.display());
         }
     }
@@ -397,7 +398,7 @@ fn run_create(ctx: &AppContext, args: &BundleCreateArgs) -> Result<()> {
         manifest_path = Some(path);
     }
 
-    if ctx.robot_mode {
+    if ctx.output_format != OutputFormat::Human {
         let report = BundleCreateReport {
             id: bundle_id,
             output: output.display().to_string(),
@@ -504,7 +505,7 @@ fn run_install(ctx: &AppContext, args: &BundleInstallArgs) -> Result<()> {
         crate::bundler::install_with_options(&package, ctx.git.root(), &only, &options)?
     } else if package.manifest.signatures.is_empty() {
         // Unsigned bundle: allow but warn (development/testing scenario)
-        if !ctx.robot_mode {
+        if ctx.output_format == OutputFormat::Human {
             eprintln!(
                 "Warning: Installing unsigned bundle '{}'. \
                  Use signed bundles for production deployments.",
@@ -537,7 +538,7 @@ fn run_install(ctx: &AppContext, args: &BundleInstallArgs) -> Result<()> {
     };
     registry.register(installed)?;
 
-    if ctx.robot_mode {
+    if ctx.output_format != OutputFormat::Human {
         return emit_json(&report);
     }
 
@@ -568,7 +569,7 @@ fn run_remove(ctx: &AppContext, args: &BundleRemoveArgs) -> Result<()> {
         )));
     }
 
-    if !args.force && !ctx.robot_mode {
+    if !args.force && ctx.output_format == OutputFormat::Human {
         eprintln!("About to remove bundle: {}", args.bundle_id);
         if let Some(ref inst) = installed {
             eprintln!("Version: {}", inst.version);
@@ -609,7 +610,7 @@ fn run_remove(ctx: &AppContext, args: &BundleRemoveArgs) -> Result<()> {
         std::fs::remove_file(&bundle_path)?;
     }
 
-    if ctx.robot_mode {
+    if ctx.output_format != OutputFormat::Human {
         return emit_json(&serde_json::json!({
             "removed": args.bundle_id,
             "skills_removed": removed_skills,
@@ -676,7 +677,7 @@ fn run_update(ctx: &AppContext, args: &BundleUpdateArgs) -> Result<()> {
     };
 
     if targets.is_empty() {
-        if ctx.robot_mode {
+        if ctx.output_format != OutputFormat::Human {
             return emit_json(&BundleUpdateSummary {
                 status: "ok".to_string(),
                 updates: Vec::new(),
@@ -710,7 +711,7 @@ fn run_update(ctx: &AppContext, args: &BundleUpdateArgs) -> Result<()> {
         updates.push(item);
     }
 
-    if ctx.robot_mode {
+    if ctx.output_format != OutputFormat::Human {
         return emit_json(&BundleUpdateSummary {
             status: "ok".to_string(),
             updates,
@@ -772,7 +773,7 @@ fn verify_bundle(ctx: &AppContext, args: &BundleUpdateArgs, package: &BundlePack
     }
 
     if package.manifest.signatures.is_empty() {
-        if !ctx.robot_mode {
+        if ctx.output_format == OutputFormat::Human {
             eprintln!(
                 "Warning: Updating with unsigned bundle '{}'. Use signed bundles for production.",
                 package.manifest.bundle.id
@@ -861,7 +862,7 @@ fn apply_bundle_update(
                 }
                 Some(report)
             } else {
-                if !ctx.robot_mode {
+                if ctx.output_format == OutputFormat::Human {
                     eprintln!(
                         "Warning: bundle metadata missing for '{}'; update will overwrite without modification detection.",
                         skill.name
@@ -1144,7 +1145,7 @@ fn run_publish(ctx: &AppContext, args: &BundlePublishArgs) -> Result<()> {
     };
     let result = publish_bundle(std::path::Path::new(&args.path), &config)?;
 
-    if ctx.robot_mode {
+    if ctx.output_format != OutputFormat::Human {
         return emit_json(&result);
     }
 
@@ -1157,7 +1158,7 @@ fn run_publish(ctx: &AppContext, args: &BundlePublishArgs) -> Result<()> {
 fn run_conflicts(ctx: &AppContext, args: &BundleConflictsArgs) -> Result<()> {
     let skills_dir = ctx.git.root().join("skills");
     if !skills_dir.exists() {
-        if ctx.robot_mode {
+        if ctx.output_format != OutputFormat::Human {
             return emit_json(&ConflictsReport {
                 skills: vec![],
                 total_modified: 0,
@@ -1228,7 +1229,7 @@ fn run_conflicts(ctx: &AppContext, args: &BundleConflictsArgs) -> Result<()> {
         .count();
     let total_conflicts = reports.iter().map(|r| r.summary.conflict).sum();
 
-    if ctx.robot_mode {
+    if ctx.output_format != OutputFormat::Human {
         return emit_json(&ConflictsReport {
             skills: reports,
             total_modified,
@@ -1279,7 +1280,7 @@ fn run_list(ctx: &AppContext) -> Result<()> {
     let registry = BundleRegistry::open(ctx.git.root())?;
     let installed: Vec<_> = registry.list().collect();
 
-    if ctx.robot_mode {
+    if ctx.output_format != OutputFormat::Human {
         let bundles: Vec<_> = installed
             .iter()
             .map(|b| BundleListEntry {
@@ -1339,7 +1340,7 @@ fn run_show(ctx: &AppContext, args: &BundleShowArgs) -> Result<()> {
     let package = crate::bundler::package::BundlePackage::from_bytes(&bytes)?;
     let manifest = &package.manifest;
 
-    if ctx.robot_mode {
+    if ctx.output_format != OutputFormat::Human {
         return emit_json(&BundleShowReport {
             id: manifest.bundle.id.clone(),
             name: manifest.bundle.name.clone(),

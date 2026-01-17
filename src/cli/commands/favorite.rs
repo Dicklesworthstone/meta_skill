@@ -7,6 +7,7 @@ use clap::{Args, Subcommand};
 use colored::Colorize;
 
 use crate::app::AppContext;
+use crate::cli::output::OutputFormat;
 use crate::error::{MsError, Result};
 
 #[derive(Args, Debug)]
@@ -58,7 +59,7 @@ pub fn run(ctx: &AppContext, args: &FavoriteArgs) -> Result<()> {
         Some(FavoriteCommand::List { limit, offset }) => list_favorites(ctx, *limit, *offset),
         None => {
             // No subcommand and no positional - show help
-            if ctx.robot_mode {
+            if ctx.output_format != OutputFormat::Human {
                 println!(
                     "{}",
                     serde_json::json!({
@@ -101,7 +102,7 @@ fn add_favorite(ctx: &AppContext, skill: &str) -> Result<()> {
 
     // Check if already a favorite
     if ctx.db.has_user_preference(&skill_id, "favorite")? {
-        if ctx.robot_mode {
+        if ctx.output_format != OutputFormat::Human {
             println!(
                 "{}",
                 serde_json::json!({
@@ -122,7 +123,7 @@ fn add_favorite(ctx: &AppContext, skill: &str) -> Result<()> {
 
     let record = ctx.db.set_user_preference(&skill_id, "favorite")?;
 
-    if ctx.robot_mode {
+    if ctx.output_format != OutputFormat::Human {
         println!(
             "{}",
             serde_json::json!({
@@ -153,7 +154,7 @@ fn remove_favorite(ctx: &AppContext, skill: &str) -> Result<()> {
 
     let removed = ctx.db.remove_user_preference(&skill_id, "favorite")?;
 
-    if ctx.robot_mode {
+    if ctx.output_format != OutputFormat::Human {
         println!(
             "{}",
             serde_json::json!({
@@ -182,7 +183,7 @@ fn remove_favorite(ctx: &AppContext, skill: &str) -> Result<()> {
 fn list_favorites(ctx: &AppContext, limit: usize, offset: usize) -> Result<()> {
     let prefs = ctx.db.list_user_preferences("favorite", limit, offset)?;
 
-    if ctx.robot_mode {
+    if ctx.output_format != OutputFormat::Human {
         let output: Vec<serde_json::Value> = prefs
             .iter()
             .map(|p| {

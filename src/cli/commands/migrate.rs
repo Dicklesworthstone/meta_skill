@@ -3,6 +3,7 @@
 use clap::Args;
 
 use crate::app::AppContext;
+use crate::cli::output::OutputFormat;
 use crate::cli::output::{HumanLayout, emit_json};
 use crate::core::{SkillLayer, migrate_spec};
 use crate::error::{MsError, Result};
@@ -57,7 +58,7 @@ pub fn run(ctx: &AppContext, args: &MigrateArgs) -> Result<()> {
         });
     }
 
-    if ctx.robot_mode {
+    if ctx.output_format != OutputFormat::Human {
         let payload = serde_json::json!({
             "status": "ok",
             "count": items.len(),

@@ -7,6 +7,7 @@ use clap::{Args, Subcommand};
 use colored::Colorize;
 
 use crate::app::AppContext;
+use crate::cli::output::OutputFormat;
 use crate::cass::CassClient;
 use crate::dedup::{
     CaseStyle, CodePattern, CommentStyle, NamingConvention, Personalizer, PersonalizedSkill,
@@ -90,7 +91,7 @@ fn run_skill(ctx: &AppContext, args: &SkillArgs) -> Result<()> {
     let personalizer = Personalizer::new(style);
 
     if !personalizer.should_personalize(&skill) {
-        if ctx.robot_mode {
+        if ctx.output_format != OutputFormat::Human {
             let output = serde_json::json!({
                 "status": "skipped",
                 "skill_id": skill.id,
@@ -109,7 +110,7 @@ fn run_skill(ctx: &AppContext, args: &SkillArgs) -> Result<()> {
 
     let personalized = personalizer.personalize(&skill);
 
-    if ctx.robot_mode {
+    if ctx.output_format != OutputFormat::Human {
         output_personalized_robot(&personalized)?;
     } else {
         output_personalized_human(&personalized, args.output.as_deref())?;
@@ -123,7 +124,7 @@ fn run_extract(ctx: &AppContext, args: &ExtractArgs) -> Result<()> {
     let cass = CassClient::new();
 
     if !cass.is_available() {
-        if ctx.robot_mode {
+        if ctx.output_format != OutputFormat::Human {
             let output = serde_json::json!({
                 "status": "error",
                 "error": "CASS server is not available"
@@ -136,7 +137,7 @@ fn run_extract(ctx: &AppContext, args: &ExtractArgs) -> Result<()> {
         return Ok(());
     }
 
-    if !ctx.robot_mode {
+    if ctx.output_format == OutputFormat::Human {
         println!("{}", "Extracting style profile from CASS sessions...".bold());
         println!();
     }
@@ -146,7 +147,7 @@ fn run_extract(ctx: &AppContext, args: &ExtractArgs) -> Result<()> {
     let sessions = cass.search(query, args.sessions)?;
 
     if sessions.is_empty() {
-        if ctx.robot_mode {
+        if ctx.output_format != OutputFormat::Human {
             let output = serde_json::json!({
                 "status": "error",
                 "error": "no sessions found"
@@ -169,7 +170,7 @@ fn run_extract(ctx: &AppContext, args: &ExtractArgs) -> Result<()> {
         config_dir.join("style.json").to_string_lossy().to_string()
     });
 
-    if ctx.robot_mode {
+    if ctx.output_format != OutputFormat::Human {
         let output = serde_json::json!({
             "status": "ok",
             "sessions_analyzed": sessions.len(),
@@ -201,7 +202,7 @@ fn run_extract(ctx: &AppContext, args: &ExtractArgs) -> Result<()> {
 fn run_show(ctx: &AppContext, args: &ShowArgs) -> Result<()> {
     let style = load_style_profile(ctx, args.style.as_deref())?;
 
-    if ctx.robot_mode {
+    if ctx.output_format != OutputFormat::Human {
         let output = serde_json::json!({
             "status": "ok",
             "style": style,
@@ -246,7 +247,7 @@ fn load_style_profile(ctx: &AppContext, path: Option<&str>) -> Result<StyleProfi
     }
 
     // Return default style if no profile exists
-    if !ctx.robot_mode {
+    if ctx.output_format == OutputFormat::Human {
         eprintln!(
             "{} No style profile found, using defaults",
             "⚠".yellow()

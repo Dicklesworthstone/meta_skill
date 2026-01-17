@@ -3,6 +3,7 @@
 use clap::{Args, Subcommand};
 
 use crate::app::AppContext;
+use crate::cli::output::OutputFormat;
 use crate::cm::CmClient;
 use crate::error::{MsError, Result};
 use crate::security::SafetyGate;
@@ -43,7 +44,7 @@ pub enum CmCommand {
 
 pub fn run(ctx: &AppContext, args: &CmArgs) -> Result<()> {
     if !ctx.config.cm.enabled {
-        if ctx.robot_mode {
+        if ctx.output_format != OutputFormat::Human {
             println!(
                 "{}",
                 serde_json::json!({
@@ -71,7 +72,7 @@ pub fn run(ctx: &AppContext, args: &CmArgs) -> Result<()> {
     match &args.command {
         CmCommand::Context { task } => {
             let context = client.context(task)?;
-            if ctx.robot_mode {
+            if ctx.output_format != OutputFormat::Human {
                 println!("{}", serde_json::to_string(&context).unwrap_or_default());
             } else {
                 println!("CM context for: {task}");
@@ -91,7 +92,7 @@ pub fn run(ctx: &AppContext, args: &CmArgs) -> Result<()> {
             let rules = client.get_rules(category.as_deref())?;
             let rules: Vec<_> = rules.into_iter().take(*limit).collect();
 
-            if ctx.robot_mode {
+            if ctx.output_format != OutputFormat::Human {
                 println!(
                     "{}",
                     serde_json::json!({
@@ -117,7 +118,7 @@ pub fn run(ctx: &AppContext, args: &CmArgs) -> Result<()> {
         CmCommand::Similar { query, threshold } => {
             let matches = client.similar(query, Some(*threshold))?;
 
-            if ctx.robot_mode {
+            if ctx.output_format != OutputFormat::Human {
                 println!(
                     "{}",
                     serde_json::json!({
@@ -137,7 +138,7 @@ pub fn run(ctx: &AppContext, args: &CmArgs) -> Result<()> {
 
         CmCommand::Status => {
             let available = client.is_available();
-            if ctx.robot_mode {
+            if ctx.output_format != OutputFormat::Human {
                 println!(
                     "{}",
                     serde_json::json!({

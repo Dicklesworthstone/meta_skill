@@ -5,6 +5,7 @@ use clap::Args;
 use std::path::PathBuf;
 
 use crate::app::AppContext;
+use crate::cli::output::OutputFormat;
 use crate::cli::output;
 use crate::config::Config;
 use crate::error::Result;
@@ -30,7 +31,7 @@ pub fn run(ctx: &AppContext, args: &ConfigArgs) -> Result<()> {
     let ctx = ConfigContext {
         config: ctx.config.clone(),
         config_path: ctx.config_path.clone(),
-        robot_mode: ctx.robot_mode,
+        robot_mode: ctx.output_format != OutputFormat::Human,
     };
 
     if args.list || args.key.is_none() {

@@ -3,6 +3,7 @@ use std::path::PathBuf;
 use clap::{Args, Subcommand};
 
 use crate::app::AppContext;
+use crate::cli::output::OutputFormat;
 use crate::cli::output::{HumanLayout, emit_human, emit_json};
 use crate::error::{MsError, Result};
 use crate::sync::{RemoteAuth, RemoteConfig, RemoteType, SyncConfig, SyncDirection, validate_remote_name};
@@ -199,7 +200,7 @@ fn add(ctx: &AppContext, args: &RemoteAddArgs) -> Result<()> {
     config.upsert_remote(remote.clone());
     config.save()?;
 
-    if ctx.robot_mode {
+    if ctx.output_format != OutputFormat::Human {
         let payload = serde_json::json!({
             "status": "ok",
             "remote": remote,
@@ -224,7 +225,7 @@ fn add(ctx: &AppContext, args: &RemoteAddArgs) -> Result<()> {
 
 fn list(ctx: &AppContext, _args: &RemoteListArgs) -> Result<()> {
     let config = SyncConfig::load()?;
-    if ctx.robot_mode {
+    if ctx.output_format != OutputFormat::Human {
         let payload = serde_json::json!({
             "status": "ok",
             "remotes": config.remotes,
@@ -269,7 +270,7 @@ fn remove(ctx: &AppContext, args: &RemoteRemoveArgs) -> Result<()> {
     }
     config.save()?;
 
-    if ctx.robot_mode {
+    if ctx.output_format != OutputFormat::Human {
         emit_json(&serde_json::json!({
             "status": "ok",
             "removed": args.name,
@@ -291,7 +292,7 @@ fn toggle(ctx: &AppContext, args: &RemoteToggleArgs, enabled: bool) -> Result<()
     remote.enabled = enabled;
     config.save()?;
 
-    if ctx.robot_mode {
+    if ctx.output_format != OutputFormat::Human {
         emit_json(&serde_json::json!({
             "status": "ok",
             "name": args.name,
@@ -352,7 +353,7 @@ fn set_url(ctx: &AppContext, args: &RemoteSetUrlArgs) -> Result<()> {
     }
     config.save()?;
 
-    if ctx.robot_mode {
+    if ctx.output_format != OutputFormat::Human {
         emit_json(&serde_json::json!({
             "status": "ok",
             "name": args.name,

@@ -22,6 +22,7 @@ use std::time::{Duration, Instant};
 use serde::{Deserialize, Serialize};
 
 use crate::app::AppContext;
+use crate::cli::output::OutputFormat;
 use crate::beads::{BeadsClient, IssueStatus, UpdateIssueRequest};
 use crate::cass::{
     CassClient, QualityScorer,
@@ -740,7 +741,7 @@ pub fn run(ctx: &AppContext, args: &BuildArgs) -> Result<()> {
 
     // Warn about risky flags
     if (args.no_redact || args.no_injection_filter) && !args.auto && !args.guided
-        && !ctx.robot_mode {
+        && ctx.output_format == OutputFormat::Human {
             eprintln!(
                 "{} Using --no-redact or --no-injection-filter bypasses safety filters.",
                 "Warning:".yellow()
@@ -766,7 +767,7 @@ pub fn run(ctx: &AppContext, args: &BuildArgs) -> Result<()> {
 
         match CmBuildContext::fetch(&cm_client, topic) {
             Ok(Some(cm_ctx)) => {
-                if !ctx.robot_mode {
+                if ctx.output_format == OutputFormat::Human {
                     if !cm_ctx.seed_rules.is_empty() {
                         eprintln!(
                             "{} Loaded {} CM rules as seeds",
@@ -785,7 +786,7 @@ pub fn run(ctx: &AppContext, args: &BuildArgs) -> Result<()> {
                 Some(cm_ctx)
             }
             Ok(None) => {
-                if !ctx.robot_mode {
+                if ctx.output_format == OutputFormat::Human {
                     eprintln!(
                         "{} CM not available, proceeding without CM context",
                         "Warning:".yellow()
@@ -794,7 +795,7 @@ pub fn run(ctx: &AppContext, args: &BuildArgs) -> Result<()> {
                 None
             }
             Err(e) => {
-                if !ctx.robot_mode {
+                if ctx.output_format == OutputFormat::Human {
                     eprintln!("{} Failed to fetch CM context: {e}", "Warning:".yellow());
                 }
                 None
@@ -874,7 +875,7 @@ fn run_guided(
 
     // Show CM suggestions if available
     if let Some(cm_ctx) = cm_context {
-        if !cm_ctx.suggested_queries.is_empty() && !ctx.robot_mode {
+        if !cm_ctx.suggested_queries.is_empty() && ctx.output_format == OutputFormat::Human {
             eprintln!("\n{} CM suggested CASS queries:", "Tip:".cyan());
             for q in &cm_ctx.suggested_queries {
                 eprintln!("   - {q}");
@@ -891,7 +892,7 @@ fn run_guided(
     };
     let quality_scorer = QualityScorer::with_defaults();
 
-    if ctx.robot_mode {
+    if ctx.output_format != OutputFormat::Human {
         // Robot mode: output checkpoint ID and wait for commands
         let output = json!({
             "status": "wizard_started",
@@ -1014,7 +1015,7 @@ fn run_auto(
         session = session.with_checkpoint_interval(interval);
     }
 
-    if ctx.robot_mode {
+    if ctx.output_format != OutputFormat::Human {
         let output = json!({
             "status": "auto_build_started",
             "session_id": session.session_id,
@@ -1061,7 +1062,7 @@ fn run_auto(
     // =========================================================================
     // Phase 1: Search CASS for sessions
     // =========================================================================
-    if !ctx.robot_mode {
+    if ctx.output_format == OutputFormat::Human {
         println!("\n{} Searching CASS...", "Phase 1:".cyan());
     }
 
@@ -1086,14 +1087,14 @@ fn run_auto(
         return output_no_sessions(ctx, &session, &query);
     }
 
-    if !ctx.robot_mode {
+    if ctx.output_format == OutputFormat::Human {
         println!("  Found {} potential sessions", session_matches.len());
     }
 
     // Save checkpoint if interval elapsed
     if session.should_checkpoint() {
         session.save_checkpoint(&ctx.ms_root)?;
-        if !ctx.robot_mode {
+        if ctx.output_format == OutputFormat::Human {
             println!("  {} Checkpoint saved", "📌".cyan());
         }
     }
@@ -1101,7 +1102,7 @@ fn run_auto(
     // =========================================================================
     // Phase 2: Quality filtering
     // =========================================================================
-    if !ctx.robot_mode {
+    if ctx.output_format == OutputFormat::Human {
         println!("\n{} Quality filtering...", "Phase 2:".cyan());
     }
 
@@ -1137,7 +1138,7 @@ fn run_auto(
                 }
             }
             Err(e) => {
-                if !ctx.robot_mode {
+                if ctx.output_format == OutputFormat::Human {
                     eprintln!(
                         "  Warning: Failed to fetch session {}: {}",
                         session_match.session_id, e
@@ -1171,7 +1172,7 @@ fn run_auto(
         );
     }
 
-    if !ctx.robot_mode {
+    if ctx.output_format == OutputFormat::Human {
         println!(
             "  {} sessions passed quality threshold (min: {:.0}%)",
             quality_sessions.len(),
@@ -1185,7 +1186,7 @@ fn run_auto(
     // Save checkpoint if interval elapsed
     if session.should_checkpoint() {
         session.save_checkpoint(&ctx.ms_root)?;
-        if !ctx.robot_mode {
+        if ctx.output_format == OutputFormat::Human {
             println!("  {} Checkpoint saved", "📌".cyan());
         }
     }
@@ -1193,7 +1194,7 @@ fn run_auto(
     // =========================================================================
     // Phase 3: Extract patterns
     // =========================================================================
-    if !ctx.robot_mode {
+    if ctx.output_format == OutputFormat::Human {
         println!("\n{} Extracting patterns...", "Phase 3:".cyan());
     }
 
@@ -1212,14 +1213,14 @@ fn run_auto(
 
         match extract_from_session(cass_session) {
             Ok(patterns) => {
-                if !ctx.robot_mode && !patterns.is_empty() {
+                if ctx.output_format == OutputFormat::Human && !patterns.is_empty() {
                     println!("  {} patterns from {}", patterns.len(), cass_session.id);
                 }
                 session.state.patterns_extracted += patterns.len();
                 all_patterns.extend(patterns);
             }
             Err(e) => {
-                if !ctx.robot_mode {
+                if ctx.output_format == OutputFormat::Human {
                     eprintln!(
                         "  Warning: Failed to extract from {}: {}",
                         cass_session.id, e
@@ -1246,14 +1247,14 @@ fn run_auto(
         return output_no_patterns(ctx, &session, &query, quality_sessions.len());
     }
 
-    if !ctx.robot_mode {
+    if ctx.output_format == OutputFormat::Human {
         println!("  Total: {} patterns extracted", all_patterns.len());
     }
 
     // =========================================================================
     // Phase 4: Filter patterns
     // =========================================================================
-    if !ctx.robot_mode {
+    if ctx.output_format == OutputFormat::Human {
         println!("\n{} Filtering by confidence...", "Phase 4:".cyan());
     }
 
@@ -1271,7 +1272,7 @@ fn run_auto(
 
     session.phase_progress = 0.5;
 
-    if !ctx.robot_mode {
+    if ctx.output_format == OutputFormat::Human {
         println!(
             "  {} patterns above confidence threshold ({:.0}%)",
             high_confidence_patterns.len(),
@@ -1294,7 +1295,7 @@ fn run_auto(
     session.phase_progress = 1.0;
     session.advance_phase(); // -> Synthesize
 
-    if !ctx.robot_mode && filtered_patterns.len() < pre_taint_count {
+    if ctx.output_format == OutputFormat::Human && filtered_patterns.len() < pre_taint_count {
         println!(
             "  {} patterns after taint filtering",
             filtered_patterns.len()
@@ -1312,7 +1313,7 @@ fn run_auto(
     // =========================================================================
     // Phase 5: Synthesize (write outputs)
     // =========================================================================
-    if !ctx.robot_mode {
+    if ctx.output_format == OutputFormat::Human {
         println!("\n{} Writing outputs...", "Phase 5:".cyan());
     }
 
@@ -1330,7 +1331,7 @@ fn run_auto(
 
     session.phase_progress = 0.5;
 
-    if !ctx.robot_mode {
+    if ctx.output_format == OutputFormat::Human {
         println!("  Patterns: {}", patterns_path.display());
     }
 
@@ -1364,20 +1365,20 @@ fn run_auto(
     session.phase_progress = 1.0;
     session.advance_phase(); // -> Complete
 
-    if !ctx.robot_mode {
+    if ctx.output_format == OutputFormat::Human {
         println!("  Manifest: {}", manifest_path.display());
     }
 
     // Output spec JSON if requested
     if let Some(spec_path) = &args.output_spec {
         fs::write(spec_path, &patterns_json)?;
-        if !ctx.robot_mode {
+        if ctx.output_format == OutputFormat::Human {
             println!("  Spec: {}", spec_path.display());
         }
     }
 
     // Final summary
-    if ctx.robot_mode {
+    if ctx.output_format != OutputFormat::Human {
         let output = json!({
             "status": "complete",
             "session_id": session.session_id,
@@ -1415,7 +1416,7 @@ fn output_timeout(
     // Save final checkpoint before exiting
     session.save_checkpoint(&ctx.ms_root)?;
 
-    if ctx.robot_mode {
+    if ctx.output_format != OutputFormat::Human {
         let output = json!({
             "status": "timeout",
             "session_id": session.session_id,
@@ -1441,7 +1442,7 @@ fn output_timeout(
 
 /// Output helper for no sessions found.
 fn output_no_sessions(ctx: &AppContext, session: &BuildSession, query: &str) -> Result<()> {
-    if ctx.robot_mode {
+    if ctx.output_format != OutputFormat::Human {
         let output = json!({
             "status": "no_sessions",
             "session_id": session.session_id,
@@ -1467,7 +1468,7 @@ fn output_no_quality(
     skipped: &[(String, f32)],
     min_quality: f32,
 ) -> Result<()> {
-    if ctx.robot_mode {
+    if ctx.output_format != OutputFormat::Human {
         let output = json!({
             "status": "no_quality_sessions",
             "session_id": session.session_id,
@@ -1500,7 +1501,7 @@ fn output_no_patterns(
     query: &str,
     sessions_processed: usize,
 ) -> Result<()> {
-    if ctx.robot_mode {
+    if ctx.output_format != OutputFormat::Human {
         let output = json!({
             "status": "no_patterns",
             "session_id": session.session_id,
@@ -1517,7 +1518,7 @@ fn output_no_patterns(
 
 /// Output helper for quality gate failure.
 fn output_gate_fail(ctx: &AppContext, session: &BuildSession, error: &str) -> Result<()> {
-    if ctx.robot_mode {
+    if ctx.output_format != OutputFormat::Human {
         let output = json!({
             "status": "quality_gate_failed",
             "session_id": session.session_id,
@@ -1552,7 +1553,7 @@ fn run_interactive_build(
     cm_context: Option<&CmBuildContext>,
     tracker: Option<BeadsTracker>,
 ) -> Result<()> {
-    if ctx.robot_mode {
+    if ctx.output_format != OutputFormat::Human {
         let output = json!({
             "error": true,
             "code": "interactive_required",
@@ -1605,7 +1606,7 @@ fn run_resume(
 
     // Try to load checkpoint
     let checkpoint = if let Some(cp) = Checkpoint::load(&ctx.ms_root, session_id)? { cp } else {
-        if ctx.robot_mode {
+        if ctx.output_format != OutputFormat::Human {
             let output = json!({
                 "error": true,
                 "code": "checkpoint_not_found",
@@ -1627,7 +1628,7 @@ fn run_resume(
 
     // Validate checkpoint is for a build operation
     if checkpoint.operation_type != "build" && checkpoint.operation_type != "wizard" {
-        if ctx.robot_mode {
+        if ctx.output_format != OutputFormat::Human {
             let output = json!({
                 "error": true,
                 "code": "invalid_checkpoint_type",
@@ -1648,7 +1649,7 @@ fn run_resume(
     }
 
     // Display checkpoint info
-    if ctx.robot_mode {
+    if ctx.output_format != OutputFormat::Human {
         let output = json!({
             "status": "resuming",
             "session_id": session_id,
@@ -1697,7 +1698,7 @@ fn run_resume(
                     )
                 });
 
-            if !ctx.robot_mode {
+            if ctx.output_format == OutputFormat::Human {
                 println!(
                     "\n{} Checkpoint indicates Brenner wizard session",
                     "Info:".cyan()
@@ -1713,7 +1714,7 @@ fn run_resume(
         "auto_build" | "pattern_filtering" | "synthesis" => {
             // Auto build phases - can resume from checkpoint state
             if let Some(query) = checkpoint.get_state("query") {
-                if !ctx.robot_mode {
+                if ctx.output_format == OutputFormat::Human {
                     println!("\n{} Auto build checkpoint found", "Info:".cyan());
                     println!("  Restarting auto build from beginning...");
                 }
@@ -1732,7 +1733,7 @@ fn run_resume(
             }
         }
         _ => {
-            if !ctx.robot_mode {
+            if ctx.output_format == OutputFormat::Human {
                 println!(
                     "\n{} Unknown checkpoint phase: {}",
                     "Warning:".yellow(),
@@ -1759,7 +1760,7 @@ fn run_resolve_uncertainties(ctx: &AppContext, args: &BuildArgs) -> Result<()> {
 
     // If no pending items, we're done
     if counts.pending == 0 && counts.in_progress == 0 {
-        if ctx.robot_mode {
+        if ctx.output_format != OutputFormat::Human {
             let output = json!({
                 "status": "no_pending",
                 "message": "No pending uncertainties to resolve",
@@ -1793,7 +1794,7 @@ fn run_resolve_uncertainties(ctx: &AppContext, args: &BuildArgs) -> Result<()> {
     // Display status (only when there are pending items)
     // In robot mode with --auto, we skip the initial status output since
     // we'll output a comprehensive result after resolution completes.
-    if ctx.robot_mode && !args.auto {
+    if ctx.output_format != OutputFormat::Human && !args.auto {
         let output = json!({
             "status": "uncertainty_queue",
             "counts": {
@@ -1809,7 +1810,7 @@ fn run_resolve_uncertainties(ctx: &AppContext, args: &BuildArgs) -> Result<()> {
             "path": uncertainties_path.display().to_string(),
         });
         println!("{}", serde_json::to_string_pretty(&output)?);
-    } else if !ctx.robot_mode {
+    } else if ctx.output_format == OutputFormat::Human {
         println!("{}", "Uncertainty Queue Status".bold());
         println!();
         println!(
@@ -1837,7 +1838,7 @@ fn run_resolve_uncertainties(ctx: &AppContext, args: &BuildArgs) -> Result<()> {
         .filter(|i| matches!(i.status, UncertaintyStatus::Pending))
         .collect();
 
-    if !ctx.robot_mode && !pending_items.is_empty() {
+    if ctx.output_format == OutputFormat::Human && !pending_items.is_empty() {
         println!("{}", "Pending Uncertainties:".bold());
         for (i, item) in pending_items.iter().take(10).enumerate() {
             let reason_str = format_uncertainty_reason(&item.reason);
@@ -1864,7 +1865,7 @@ fn run_resolve_uncertainties(ctx: &AppContext, args: &BuildArgs) -> Result<()> {
 
     // Auto-resolution flow
     if args.auto && !pending_items.is_empty() {
-        if !ctx.robot_mode {
+        if ctx.output_format == OutputFormat::Human {
             println!("\n{} Running auto-resolution...", "Step:".cyan());
         }
 
@@ -1909,7 +1910,7 @@ fn run_resolve_uncertainties(ctx: &AppContext, args: &BuildArgs) -> Result<()> {
 
                         new_sessions.extend(session_ids);
 
-                        if !ctx.robot_mode {
+                        if ctx.output_format == OutputFormat::Human {
                             println!(
                                 "    Query '{}': {} sessions found",
                                 query.query.chars().take(40).collect::<String>(),
@@ -1921,7 +1922,7 @@ fn run_resolve_uncertainties(ctx: &AppContext, args: &BuildArgs) -> Result<()> {
                         }
                     }
                     Err(e) => {
-                        if !ctx.robot_mode {
+                        if ctx.output_format == OutputFormat::Human {
                             eprintln!("    Query failed: {e}");
                         }
                     }
@@ -1939,7 +1940,7 @@ fn run_resolve_uncertainties(ctx: &AppContext, args: &BuildArgs) -> Result<()> {
                         resolved_at: chrono::Utc::now(),
                     };
                     resolved_count += 1;
-                    if !ctx.robot_mode {
+                    if ctx.output_format == OutputFormat::Human {
                         println!(
                             "  {} Resolved: {}",
                             "✓".green(),
@@ -1952,7 +1953,7 @@ fn run_resolve_uncertainties(ctx: &AppContext, args: &BuildArgs) -> Result<()> {
                 }
                 crate::cass::ResolutionResult::NeedsMoreEvidence { .. } => {
                     // Keep in pending state for next round
-                    if !ctx.robot_mode {
+                    if ctx.output_format == OutputFormat::Human {
                         println!(
                             "  {} Needs more evidence: {}",
                             "…".yellow(),
@@ -1969,7 +1970,7 @@ fn run_resolve_uncertainties(ctx: &AppContext, args: &BuildArgs) -> Result<()> {
                         escalated_at: chrono::Utc::now(),
                     };
                     escalated_count += 1;
-                    if !ctx.robot_mode {
+                    if ctx.output_format == OutputFormat::Human {
                         println!(
                             "  {} Escalated: {} - {}",
                             "👤".yellow(),
@@ -1987,7 +1988,7 @@ fn run_resolve_uncertainties(ctx: &AppContext, args: &BuildArgs) -> Result<()> {
                         rejected_at: chrono::Utc::now(),
                     };
                     rejected_count += 1;
-                    if !ctx.robot_mode {
+                    if ctx.output_format == OutputFormat::Human {
                         println!(
                             "  {} Rejected: {} - {}",
                             "✗".red(),
@@ -2011,7 +2012,7 @@ fn run_resolve_uncertainties(ctx: &AppContext, args: &BuildArgs) -> Result<()> {
         save_uncertainties(&uncertainties_path, &updated_items)?;
 
         // Summary
-        if ctx.robot_mode {
+        if ctx.output_format != OutputFormat::Human {
             // Recount after updates
             let final_counts = count_uncertainties(&updated_items);
             let output = json!({
@@ -2049,7 +2050,7 @@ fn run_resolve_uncertainties(ctx: &AppContext, args: &BuildArgs) -> Result<()> {
         }
     } else if args.auto && pending_items.is_empty() {
         // Auto-resolution requested but no pending items (e.g., only in_progress)
-        if ctx.robot_mode {
+        if ctx.output_format != OutputFormat::Human {
             let output = json!({
                 "status": "no_pending_for_auto",
                 "message": "Auto-resolution requested but no pending items to process",
@@ -2069,7 +2070,7 @@ fn run_resolve_uncertainties(ctx: &AppContext, args: &BuildArgs) -> Result<()> {
             println!("{} No pending items to auto-resolve", "Info:".cyan());
             println!("  {} items are in-progress", counts.in_progress);
         }
-    } else if !ctx.robot_mode {
+    } else if ctx.output_format == OutputFormat::Human {
         // Interactive mode hint (non-auto, non-robot)
         println!("{}", "Options:".bold());
         println!("  Run with --auto to attempt automatic resolution");

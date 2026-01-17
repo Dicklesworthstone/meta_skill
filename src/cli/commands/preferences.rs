@@ -3,6 +3,7 @@
 use clap::{Args, Subcommand};
 
 use crate::app::AppContext;
+use crate::cli::output::OutputFormat;
 use crate::cli::output::{HumanLayout, emit_json};
 use crate::error::{MsError, Result};
 
@@ -85,7 +86,7 @@ fn run_favorite(ctx: &AppContext, args: &FavoriteArgs) -> Result<()> {
 
     if args.remove {
         let removed = ctx.db.remove_user_preference(&skill_id, "favorite")?;
-        if ctx.robot_mode {
+        if ctx.output_format != OutputFormat::Human {
             return emit_json(&serde_json::json!({
                 "status": "ok",
                 "action": "unfavorite",
@@ -100,7 +101,7 @@ fn run_favorite(ctx: &AppContext, args: &FavoriteArgs) -> Result<()> {
         }
     } else {
         let record = ctx.db.set_user_preference(&skill_id, "favorite")?;
-        if ctx.robot_mode {
+        if ctx.output_format != OutputFormat::Human {
             return emit_json(&serde_json::json!({
                 "status": "ok",
                 "action": "favorite",
@@ -122,7 +123,7 @@ fn run_hide(ctx: &AppContext, args: &HideArgs) -> Result<()> {
 
     let record = ctx.db.set_user_preference(&skill_id, "hidden")?;
 
-    if ctx.robot_mode {
+    if ctx.output_format != OutputFormat::Human {
         return emit_json(&serde_json::json!({
             "status": "ok",
             "action": "hide",
@@ -144,7 +145,7 @@ fn run_unhide(ctx: &AppContext, args: &UnhideArgs) -> Result<()> {
 
     let removed = ctx.db.remove_user_preference(&skill_id, "hidden")?;
 
-    if ctx.robot_mode {
+    if ctx.output_format != OutputFormat::Human {
         return emit_json(&serde_json::json!({
             "status": "ok",
             "action": "unhide",
@@ -164,7 +165,7 @@ fn run_unhide(ctx: &AppContext, args: &UnhideArgs) -> Result<()> {
 fn run_list_favorites(ctx: &AppContext, args: &ListFavoritesArgs) -> Result<()> {
     let records = ctx.db.list_user_preferences("favorite", args.limit, args.offset)?;
 
-    if ctx.robot_mode {
+    if ctx.output_format != OutputFormat::Human {
         return emit_json(&serde_json::json!({
             "status": "ok",
             "favorites": records,
@@ -188,7 +189,7 @@ fn run_list_favorites(ctx: &AppContext, args: &ListFavoritesArgs) -> Result<()> 
 fn run_list_hidden(ctx: &AppContext, args: &ListHiddenArgs) -> Result<()> {
     let records = ctx.db.list_user_preferences("hidden", args.limit, args.offset)?;
 
-    if ctx.robot_mode {
+    if ctx.output_format != OutputFormat::Human {
         return emit_json(&serde_json::json!({
             "status": "ok",
             "hidden": records,

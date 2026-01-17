@@ -14,6 +14,7 @@ use std::path::PathBuf;
 use which::which;
 
 use crate::app::AppContext;
+use crate::cli::output::OutputFormat;
 use crate::beads::{BeadsClient, CreateIssueRequest, IssueType, Priority};
 use crate::core::spec_lens::{compile_markdown, parse_markdown};
 use crate::error::{MsError, Result};
@@ -254,7 +255,7 @@ fn run_analyze(ctx: &AppContext, args: &AnalyzeArgs) -> Result<()> {
     let similarity_pairs = analysis.similarity_pairs;
     let toolchain_mismatch = analysis.toolchain_mismatch;
 
-    if ctx.robot_mode {
+    if ctx.output_format != OutputFormat::Human {
         let output = json!({
             "status": "analysis",
             "window_days": args.days,
@@ -481,7 +482,7 @@ fn run_proposals(ctx: &AppContext, args: &AnalyzeArgs, dry_run: bool) -> Result<
         )?;
     }
 
-    if ctx.robot_mode {
+    if ctx.output_format != OutputFormat::Human {
         let mut output = json!({
             "status": "proposals_ready",
             "window_days": args.days,
@@ -600,7 +601,7 @@ fn run_proposals(ctx: &AppContext, args: &AnalyzeArgs, dry_run: bool) -> Result<
 }
 
 fn run_review(ctx: &AppContext, args: &ReviewArgs, dry_run: bool) -> Result<()> {
-    if ctx.robot_mode || args.no_prompt {
+    if ctx.output_format != OutputFormat::Human || args.no_prompt {
         return run_proposals(ctx, &args.analyze, true);
     }
 
@@ -715,7 +716,7 @@ fn run_apply(ctx: &AppContext, args: &ApplyArgs, dry_run: bool) -> Result<()> {
         )?,
     };
 
-    if ctx.robot_mode {
+    if ctx.output_format != OutputFormat::Human {
         let payload = json!({
             "status": "ok",
             "action": outcome.action,
@@ -1546,7 +1547,7 @@ fn run_list(ctx: &AppContext, args: &PruneArgs) -> Result<()> {
         manager.list()?
     };
 
-    if ctx.robot_mode {
+    if ctx.output_format != OutputFormat::Human {
         let output = json!({
             "tombstones": records,
             "count": records.len(),
@@ -1620,7 +1621,7 @@ fn run_purge(ctx: &AppContext, args: &PurgeArgs) -> Result<()> {
     };
 
     if to_purge.is_empty() {
-        if ctx.robot_mode {
+        if ctx.output_format != OutputFormat::Human {
             let output = json!({
                 "error": true,
                 "code": "not_found",
@@ -1635,7 +1636,7 @@ fn run_purge(ctx: &AppContext, args: &PurgeArgs) -> Result<()> {
 
     // Require approval for purge
     if !args.approve {
-        if ctx.robot_mode {
+        if ctx.output_format != OutputFormat::Human {
             let output = json!({
                 "error": true,
                 "code": "approval_required",
@@ -1686,14 +1687,14 @@ fn run_purge(ctx: &AppContext, args: &PurgeArgs) -> Result<()> {
                 results.push(result);
             }
             Err(e) => {
-                if !ctx.robot_mode {
+                if ctx.output_format == OutputFormat::Human {
                     println!("{} Failed to purge {}: {}", "✗".red(), record.id, e);
                 }
             }
         }
     }
 
-    if ctx.robot_mode {
+    if ctx.output_format != OutputFormat::Human {
         let output = json!({
             "purged": results,
             "count": results.len(),
@@ -1719,7 +1720,7 @@ fn run_restore(ctx: &AppContext, args: &RestoreArgs) -> Result<()> {
         .collect();
 
     if matching.is_empty() {
-        if ctx.robot_mode {
+        if ctx.output_format != OutputFormat::Human {
             let output = json!({
                 "error": true,
                 "code": "not_found",
@@ -1733,7 +1734,7 @@ fn run_restore(ctx: &AppContext, args: &RestoreArgs) -> Result<()> {
     }
 
     if matching.len() > 1 {
-        if ctx.robot_mode {
+        if ctx.output_format != OutputFormat::Human {
             let output = json!({
                 "error": true,
                 "code": "ambiguous",
@@ -1753,7 +1754,7 @@ fn run_restore(ctx: &AppContext, args: &RestoreArgs) -> Result<()> {
     let record = matching[0];
     let result = manager.restore(&record.id)?;
 
-    if ctx.robot_mode {
+    if ctx.output_format != OutputFormat::Human {
         let output = json!({
             "restored": result,
         });
@@ -1789,7 +1790,7 @@ fn run_stats(ctx: &AppContext) -> Result<()> {
         .filter(|r| (now - r.tombstoned_at).num_days() > 30)
         .count();
 
-    if ctx.robot_mode {
+    if ctx.output_format != OutputFormat::Human {
         let output = json!({
             "count": records.len(),
             "files": file_count,

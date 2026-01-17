@@ -5,6 +5,7 @@ use serde::Serialize;
 use std::path::PathBuf;
 
 use crate::app::AppContext;
+use crate::cli::output::OutputFormat;
 use crate::cli::output::emit_json;
 use crate::error::{MsError, Result};
 use crate::security::acip::prompt_version;
@@ -278,7 +279,7 @@ fn quarantine(ctx: &AppContext, args: &QuarantineArgs) -> Result<()> {
         }
         QuarantineCommand::Show { id } => {
             let record = ctx.db.get_quarantine_record(id)?;
-            if ctx.robot_mode {
+            if ctx.output_format != OutputFormat::Human {
                 emit_output(ctx, &record)
             } else {
                 match record {
@@ -408,7 +409,7 @@ fn hash_content(content: &str) -> String {
 }
 
 fn emit_output<T: Serialize>(ctx: &AppContext, payload: &T) -> Result<()> {
-    if ctx.robot_mode {
+    if ctx.output_format != OutputFormat::Human {
         emit_json(payload)
     } else {
         let pretty = serde_json::to_string_pretty(payload)

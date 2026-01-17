@@ -6,6 +6,7 @@ use clap::{Args, Subcommand};
 use colored::Colorize;
 
 use crate::app::AppContext;
+use crate::cli::output::OutputFormat;
 use crate::dedup::{DedupConfig, DeduplicationAction, DeduplicationEngine, DuplicatePair};
 use crate::error::Result;
 use crate::search::embeddings::build_embedder;
@@ -91,7 +92,7 @@ fn run_scan(ctx: &AppContext, args: &ScanArgs) -> Result<()> {
 
     let engine = DeduplicationEngine::new(config, embedder.as_ref());
 
-    if ctx.robot_mode {
+    if ctx.output_format != OutputFormat::Human {
         run_scan_robot(ctx, args, db, &engine)
     } else {
         run_scan_human(ctx, args, db, &engine)
@@ -245,7 +246,7 @@ fn run_review(ctx: &AppContext, args: &ReviewArgs) -> Result<()> {
         crate::error::MsError::SkillNotFound(format!("skill not found: {}", args.skill_b))
     })?;
 
-    if ctx.robot_mode {
+    if ctx.output_format != OutputFormat::Human {
         let output = serde_json::json!({
             "status": "ok",
             "skill_a": {
@@ -330,7 +331,7 @@ fn run_merge(ctx: &AppContext, args: &MergeArgs) -> Result<()> {
         ctx.search.commit()?;
     }
 
-    if ctx.robot_mode {
+    if ctx.output_format != OutputFormat::Human {
         let output = serde_json::json!({
             "status": "ok",
             "action": "merge",
@@ -377,7 +378,7 @@ fn run_alias(ctx: &AppContext, args: &AliasArgs) -> Result<()> {
     let created_at = chrono::Utc::now().to_rfc3339();
     db.upsert_alias(&args.alias, &canonical.id, "dedup_alias", &created_at)?;
 
-    if ctx.robot_mode {
+    if ctx.output_format != OutputFormat::Human {
         let output = serde_json::json!({
             "status": "ok",
             "action": "alias",

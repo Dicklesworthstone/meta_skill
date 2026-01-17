@@ -4,6 +4,7 @@ use clap::Args;
 use serde::Serialize;
 
 use crate::app::AppContext;
+use crate::cli::output::OutputFormat;
 use crate::cli::commands::resolve_skill_markdown;
 use crate::cli::output::{HumanLayout, emit_human, emit_json};
 use crate::core::spec_lens::parse_markdown;
@@ -38,7 +39,7 @@ pub fn run(ctx: &AppContext, args: &ValidateArgs) -> Result<()> {
         None
     };
 
-    if ctx.robot_mode {
+    if ctx.output_format != OutputFormat::Human {
         let report = build_report(&args.skill, &skill_md, &warnings, ubs_result.as_ref());
         return emit_json(&report);
     }

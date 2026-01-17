@@ -6,6 +6,7 @@ use std::path::{Path, PathBuf};
 use clap::Args;
 use colored::Colorize;
 
+use crate::cli::output::OutputFormat;
 use crate::error::{MsError, Result};
 use crate::search::SearchIndex;
 use crate::storage::{Database, GitArchive};
@@ -22,7 +23,7 @@ pub struct InitArgs {
 }
 
 pub fn run(ctx: &crate::app::AppContext, args: &InitArgs) -> Result<()> {
-    run_with_robot(ctx.robot_mode, args)
+    run_with_robot(ctx.output_format != OutputFormat::Human, args)
 }
 
 pub fn run_without_context(robot_mode: bool, args: &InitArgs) -> Result<()> {

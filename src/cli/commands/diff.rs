@@ -3,6 +3,7 @@
 use clap::Args;
 
 use crate::app::AppContext;
+use crate::cli::output::OutputFormat;
 use crate::cli::commands::resolve_skill_markdown;
 use crate::cli::output;
 use crate::core::SkillSpec;
@@ -43,7 +44,7 @@ pub fn run(_ctx: &AppContext, _args: &DiffArgs) -> Result<()> {
     let diffs = diff_specs(&spec_a, &spec_b, args.structure_only);
     let same = diffs.is_empty();
 
-    if ctx.robot_mode || args.format == "json" {
+    if ctx.output_format != OutputFormat::Human || args.format == "json" {
         let payload = DiffReport {
             skill_a: path_a.display().to_string(),
             skill_b: path_b.display().to_string(),

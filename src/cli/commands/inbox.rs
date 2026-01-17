@@ -4,6 +4,7 @@ use clap::Args;
 
 use crate::agent_mail::{AgentMailClient, InboxMessage};
 use crate::app::AppContext;
+use crate::cli::output::OutputFormat;
 use crate::cli::output::{HumanLayout, emit_human, emit_robot, robot_ok};
 use crate::error::Result;
 
@@ -31,7 +32,7 @@ pub fn run(ctx: &AppContext, args: &InboxArgs) -> Result<()> {
 
     if let Some(id) = args.ack {
         client.acknowledge(id)?;
-        if ctx.robot_mode {
+        if ctx.output_format != OutputFormat::Human {
             emit_robot(&robot_ok(serde_json::json!({
                 "acknowledged": [id],
             })))?;
@@ -51,7 +52,7 @@ pub fn run(ctx: &AppContext, args: &InboxArgs) -> Result<()> {
         }
     }
 
-    if ctx.robot_mode {
+    if ctx.output_format != OutputFormat::Human {
         emit_robot(&robot_ok(serde_json::json!({
             "agent": client.agent_name(),
             "project": client.project_key(),

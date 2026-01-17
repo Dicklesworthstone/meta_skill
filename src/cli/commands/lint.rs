@@ -10,6 +10,7 @@ use console::style;
 use serde::Serialize;
 
 use crate::app::AppContext;
+use crate::cli::output::OutputFormat;
 use crate::cli::commands::{discover_skill_markdowns, resolve_skill_markdown};
 use crate::cli::output::{emit_human, emit_json, HumanLayout};
 use crate::core::spec_lens::parse_markdown;
@@ -212,7 +213,7 @@ fn explain_rule(ctx: &AppContext, rule_id: &str) -> Result<()> {
         .find(|r| r.id() == rule_id)
         .ok_or_else(|| MsError::NotFound(format!("Rule '{rule_id}' not found")))?;
 
-    if ctx.robot_mode {
+    if ctx.output_format != OutputFormat::Human {
         let info = RuleInfo {
             id: rule.id().to_string(),
             name: rule.name().to_string(),
@@ -246,7 +247,7 @@ fn list_rules(ctx: &AppContext) -> Result<()> {
 
     let rules = engine.list_rules();
 
-    if ctx.robot_mode {
+    if ctx.output_format != OutputFormat::Human {
         let infos: Vec<RuleInfo> = rules
             .iter()
             .map(|r| RuleInfo {

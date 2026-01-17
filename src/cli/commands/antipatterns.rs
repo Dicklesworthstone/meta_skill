@@ -10,6 +10,7 @@ use crate::antipatterns::{
     AntiPattern, AntiPatternSeverity, DefaultDetector, format_anti_patterns, mine_anti_patterns,
 };
 use crate::app::AppContext;
+use crate::cli::output::OutputFormat;
 use crate::cass::CassClient;
 use crate::error::{MsError, Result};
 
@@ -114,7 +115,7 @@ fn run_mine(ctx: &AppContext, args: &MineArgs) -> Result<()> {
         match cass.get_session(session_id) {
             Ok(session) => sessions.push(session),
             Err(e) => {
-                if !ctx.robot_mode {
+                if ctx.output_format == OutputFormat::Human {
                     eprintln!(
                         "{}: failed to load {}: {}",
                         "warning".yellow(),
@@ -143,7 +144,7 @@ fn run_mine(ctx: &AppContext, args: &MineArgs) -> Result<()> {
         .collect();
 
     // Output
-    if ctx.robot_mode || args.format == "json" {
+    if ctx.output_format != OutputFormat::Human || args.format == "json" {
         output_mine_robot(&filtered)
     } else {
         output_mine_human(&filtered)
@@ -153,7 +154,7 @@ fn run_mine(ctx: &AppContext, args: &MineArgs) -> Result<()> {
 fn run_show(ctx: &AppContext, args: &ShowArgs) -> Result<()> {
     // For now, we don't have persistent storage, so show is a placeholder
     // In a full implementation, this would query the database
-    if ctx.robot_mode {
+    if ctx.output_format != OutputFormat::Human {
         let output = serde_json::json!({
             "status": "error",
             "message": "anti-pattern storage not yet implemented"
@@ -172,7 +173,7 @@ fn run_show(ctx: &AppContext, args: &ShowArgs) -> Result<()> {
 
 fn run_list(ctx: &AppContext, args: &ListArgs) -> Result<()> {
     // Placeholder - would query database in full implementation
-    if ctx.robot_mode {
+    if ctx.output_format != OutputFormat::Human {
         let output = serde_json::json!({
             "status": "ok",
             "count": 0,

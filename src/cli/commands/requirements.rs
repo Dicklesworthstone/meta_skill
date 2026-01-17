@@ -11,6 +11,7 @@ use colored::Colorize;
 use which::which;
 
 use crate::app::AppContext;
+use crate::cli::output::OutputFormat;
 use crate::error::Result;
 
 #[derive(Args, Debug)]
@@ -84,7 +85,7 @@ impl RequirementCheck {
 pub fn run(ctx: &AppContext, args: &RequirementsArgs) -> Result<()> {
     if let Some(_skill) = &args.skill {
         // TODO: Implement skill-specific requirements check (read from SKILL.md)
-        if !ctx.robot_mode {
+        if ctx.output_format == OutputFormat::Human {
             println!("Skill-specific requirements not yet implemented.");
         }
         return Ok(());
@@ -102,7 +103,7 @@ pub fn run(ctx: &AppContext, args: &RequirementsArgs) -> Result<()> {
         check.check();
     }
 
-    if ctx.robot_mode || args.format == "json" {
+    if ctx.output_format != OutputFormat::Human || args.format == "json" {
         println!("{}", serde_json::to_string_pretty(&checks)?);
         return Ok(());
     }

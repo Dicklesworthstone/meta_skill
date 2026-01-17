@@ -6,6 +6,7 @@ use clap::Args;
 use colored::Colorize;
 
 use crate::app::AppContext;
+use crate::cli::output::OutputFormat;
 use crate::error::Result;
 use crate::search::embeddings::build_embedder;
 
@@ -34,7 +35,7 @@ pub fn run(ctx: &AppContext, args: &EmbedArgs) -> Result<()> {
         config.embedding_backend = backend.clone();
     }
 
-    if ctx.robot_mode {
+    if ctx.output_format != OutputFormat::Human {
         run_robot(ctx, args, &config)
     } else {
         run_human(ctx, args, &config)

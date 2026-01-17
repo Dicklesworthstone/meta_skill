@@ -6,8 +6,11 @@ use std::path::PathBuf;
 
 use clap::{Parser, Subcommand};
 
+pub use output::OutputFormat;
+
 pub mod colors;
 pub mod commands;
+pub mod formatters;
 pub mod output;
 pub mod progress;
 
@@ -18,8 +21,13 @@ pub mod progress;
 #[command(propagate_version = true)]
 pub struct Cli {
     /// Enable robot mode (JSON output to stdout, logs to stderr)
+    /// Deprecated: use --output-format=json instead
     #[arg(long, global = true)]
     pub robot: bool,
+
+    /// Output format (human, json, jsonl, plain, tsv)
+    #[arg(long, short = 'O', global = true, value_enum)]
+    pub output_format: Option<OutputFormat>,
 
     /// Increase verbosity (-v, -vv, -vvv)
     #[arg(short, long, action = clap::ArgAction::Count, global = true)]
@@ -35,6 +43,14 @@ pub struct Cli {
 
     #[command(subcommand)]
     pub command: Commands,
+}
+
+impl Cli {
+    /// Get the effective output format, considering --robot flag for backward compatibility
+    #[must_use]
+    pub fn output_format(&self) -> OutputFormat {
+        OutputFormat::from_args(self.robot, self.output_format)
+    }
 }
 
 /// Available commands

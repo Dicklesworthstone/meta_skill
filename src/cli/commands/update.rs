@@ -4,6 +4,7 @@ use clap::Args;
 use semver::Version;
 
 use crate::app::AppContext;
+use crate::cli::output::OutputFormat;
 use crate::error::{MsError, Result};
 use crate::updater::{
     UpdateChannel, UpdateCheckResponse, UpdateChecker, UpdateDownloader, UpdateInstallResponse,
@@ -50,7 +51,7 @@ pub fn run(ctx: &AppContext, args: &UpdateArgs) -> Result<()> {
 
     let checker = UpdateChecker::new(current_version, channel, DEFAULT_REPO.to_string());
 
-    if ctx.robot_mode {
+    if ctx.output_format != OutputFormat::Human {
         run_robot(args, &checker, target_version.as_ref())?;
     } else {
         run_interactive(args, &checker, target_version.as_ref())?;

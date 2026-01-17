@@ -5,6 +5,7 @@ use colored::Colorize;
 use serde_json::json;
 
 use crate::app::AppContext;
+use crate::cli::output::OutputFormat;
 use crate::core::safety::SafetyTier;
 use crate::error::Result;
 use crate::security::SafetyGate;
@@ -69,7 +70,7 @@ fn run_status(ctx: &AppContext) -> Result<()> {
     let gate = SafetyGate::from_context(ctx);
     let status = gate.status();
 
-    if ctx.robot_mode {
+    if ctx.output_format != OutputFormat::Human {
         let output = json!({
             "dcg_available": status.dcg_version.is_some(),
             "dcg_version": status.dcg_version,
@@ -133,7 +134,7 @@ fn run_log(ctx: &AppContext, args: &LogArgs) -> Result<()> {
         })
         .collect();
 
-    if ctx.robot_mode {
+    if ctx.output_format != OutputFormat::Human {
         let output = json!({
             "events": events,
             "count": events.len(),
@@ -197,7 +198,7 @@ fn run_check(ctx: &AppContext, args: &CheckArgs) -> Result<()> {
     // Get DCG decision without logging
     let status = gate.status();
     if status.dcg_version.is_none() {
-        if ctx.robot_mode {
+        if ctx.output_format != OutputFormat::Human {
             let output = json!({
                 "error": true,
                 "code": "dcg_unavailable",
@@ -222,7 +223,7 @@ fn run_check(ctx: &AppContext, args: &CheckArgs) -> Result<()> {
     let decision = match guard.evaluate_command(&args.command) {
         Ok(d) => d,
         Err(e) => {
-            if ctx.robot_mode {
+            if ctx.output_format != OutputFormat::Human {
                 let output = json!({
                     "error": true,
                     "code": "dcg_error",
@@ -241,7 +242,7 @@ fn run_check(ctx: &AppContext, args: &CheckArgs) -> Result<()> {
         && ctx.config.safety.require_verbatim_approval
         && decision.tier >= SafetyTier::Danger;
 
-    if ctx.robot_mode {
+    if ctx.output_format != OutputFormat::Human {
         let output = json!({
             "command": args.command,
             "allowed": decision.allowed,

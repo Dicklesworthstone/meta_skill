@@ -10,6 +10,7 @@ use rand_distr::Beta;
 use serde::{Deserialize, Serialize};
 
 use crate::app::AppContext;
+use crate::cli::output::OutputFormat;
 use crate::cli::commands::load::{
     CliPackContract, CliPackMode, DepsMode, LoadArgs, build_robot_payload, load_skill,
     output_human as output_load_human,
@@ -257,7 +258,7 @@ fn run_create(ctx: &AppContext, args: &ExperimentCreateArgs) -> Result<()> {
         &args.status,
     )?;
 
-    if ctx.robot_mode {
+    if ctx.output_format != OutputFormat::Human {
         let payload = serde_json::json!({
             "status": "ok",
             "experiment": record,
@@ -289,7 +290,7 @@ fn run_list(ctx: &AppContext, args: &ExperimentListArgs) -> Result<()> {
         .db
         .list_skill_experiments(skill_id.as_deref(), args.limit, args.offset)?;
 
-    if ctx.robot_mode {
+    if ctx.output_format != OutputFormat::Human {
         let payload = serde_json::json!({
             "status": "ok",
             "count": records.len(),
@@ -340,7 +341,7 @@ fn run_status(ctx: &AppContext, args: &ExperimentStatusArgs) -> Result<()> {
     let stats = compute_variant_stats(&variants, &events, &metric);
     let analysis = compute_experiment_analysis(&stats);
 
-    if ctx.robot_mode {
+    if ctx.output_format != OutputFormat::Human {
         let payload = serde_json::json!({
             "status": "ok",
             "experiment": record,
@@ -415,7 +416,7 @@ fn run_assign(ctx: &AppContext, args: &ExperimentAssignArgs) -> Result<()> {
         args.session.as_deref(),
     )?;
 
-    if ctx.robot_mode {
+    if ctx.output_format != OutputFormat::Human {
         let payload = serde_json::json!({
             "status": "ok",
             "experiment_id": record.id,
@@ -475,7 +476,7 @@ fn run_load(ctx: &AppContext, args: &ExperimentLoadArgs) -> Result<()> {
         args.session.as_deref(),
     )?;
 
-    if ctx.robot_mode {
+    if ctx.output_format != OutputFormat::Human {
         let mut payload = build_robot_payload(&load_result, &load_args);
         if let Some(data) = payload.as_object_mut() {
             data.insert(
@@ -525,7 +526,7 @@ fn run_record(ctx: &AppContext, args: &ExperimentRecordArgs) -> Result<()> {
         args.session.as_deref(),
     )?;
 
-    if ctx.robot_mode {
+    if ctx.output_format != OutputFormat::Human {
         let payload = serde_json::json!({
             "status": "ok",
             "event": event,
@@ -569,7 +570,7 @@ fn run_conclude(ctx: &AppContext, args: &ExperimentConcludeArgs) -> Result<()> {
         None,
     )?;
 
-    if ctx.robot_mode {
+    if ctx.output_format != OutputFormat::Human {
         let payload = serde_json::json!({
             "status": "ok",
             "experiment_id": record.id,

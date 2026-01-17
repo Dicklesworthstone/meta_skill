@@ -11,6 +11,7 @@ use colored::Colorize;
 use serde::Serialize;
 
 use crate::app::AppContext;
+use crate::cli::output::OutputFormat;
 use crate::cass::CassClient;
 use crate::cass::mining::{ExtractedPattern, PatternType, extract_from_session};
 use crate::cli::output::{HumanLayout, emit_json};
@@ -155,7 +156,7 @@ fn run_summary(ctx: &AppContext, args: &CrossProjectSummaryArgs) -> Result<()> {
 
     let matches = cass.search(&args.query, args.limit)?;
     if matches.is_empty() {
-        if ctx.robot_mode {
+        if ctx.output_format != OutputFormat::Human {
             let report = CrossProjectReport {
                 query: args.query.clone(),
                 total_sessions: 0,
@@ -220,7 +221,7 @@ fn run_summary(ctx: &AppContext, args: &CrossProjectSummaryArgs) -> Result<()> {
         projects,
     };
 
-    if ctx.robot_mode {
+    if ctx.output_format != OutputFormat::Human {
         return emit_json(&report);
     }
 
@@ -273,7 +274,7 @@ fn run_patterns(ctx: &AppContext, args: &CrossProjectPatternsArgs) -> Result<()>
         patterns,
     };
 
-    if ctx.robot_mode {
+    if ctx.output_format != OutputFormat::Human {
         return emit_json(&report);
     }
 
@@ -364,7 +365,7 @@ fn run_gaps(ctx: &AppContext, args: &CrossProjectGapsArgs) -> Result<()> {
         gaps,
     };
 
-    if ctx.robot_mode {
+    if ctx.output_format != OutputFormat::Human {
         return emit_json(&report);
     }
 
@@ -478,7 +479,7 @@ fn collect_pattern_aggregates(
         let session = match cass.get_session(&m.session_id) {
             Ok(session) => session,
             Err(err) => {
-                if !ctx.robot_mode {
+                if ctx.output_format == OutputFormat::Human {
                     eprintln!(
                         "{}: failed to load {}: {}",
                         "warning".yellow(),

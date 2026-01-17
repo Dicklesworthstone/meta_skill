@@ -10,6 +10,7 @@ use indicatif::{ProgressBar, ProgressStyle};
 use walkdir::WalkDir;
 
 use crate::app::AppContext;
+use crate::cli::output::OutputFormat;
 use crate::core::{GitSkillRepository, ResolutionCache, SkillLayer, spec_lens::parse_markdown};
 use crate::error::{MsError, Result};
 use crate::storage::{SkillRecord, TxManager};
@@ -69,7 +70,7 @@ pub fn run(ctx: &AppContext, args: &IndexArgs) -> Result<()> {
     let roots = collect_index_paths(ctx, args)?;
 
     if roots.is_empty() {
-        if ctx.robot_mode {
+        if ctx.output_format != OutputFormat::Human {
             println!(
                 "{}",
                 serde_json::json!({
@@ -87,7 +88,7 @@ pub fn run(ctx: &AppContext, args: &IndexArgs) -> Result<()> {
         return Ok(());
     }
 
-    if ctx.robot_mode {
+    if ctx.output_format != OutputFormat::Human {
         index_robot(ctx, &roots, args)
     } else {
         index_human(ctx, &roots, args)
@@ -150,7 +151,7 @@ fn collect_ru_paths(ctx: &AppContext) -> Result<Vec<SkillRoot>> {
     let mut ru_client = RuClient::new();
 
     if !ru_client.is_available() {
-        if ctx.robot_mode {
+        if ctx.output_format != OutputFormat::Human {
             // Return empty list with no error for robot mode
             return Ok(Vec::new());
         }

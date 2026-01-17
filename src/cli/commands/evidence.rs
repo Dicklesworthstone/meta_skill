@@ -7,6 +7,7 @@ use clap::{Args, Subcommand};
 use colored::Colorize;
 
 use crate::app::AppContext;
+use crate::cli::output::OutputFormat;
 use crate::core::{EvidenceLevel, EvidenceRef};
 use crate::error::{MsError, Result};
 use crate::utils::format::truncate_string;
@@ -88,7 +89,7 @@ fn run_show(ctx: &AppContext, args: &ShowEvidenceArgs) -> Result<()> {
     if let Some(ref rule_id) = args.rule {
         // Show evidence for specific rule
         let evidence = ctx.db.get_rule_evidence(&args.skill_id, rule_id)?;
-        if ctx.robot_mode {
+        if ctx.output_format != OutputFormat::Human {
             show_rule_evidence_robot(&skill.id, rule_id, &evidence)
         } else {
             show_rule_evidence_human(&skill.id, rule_id, &evidence, args.excerpts)
@@ -96,7 +97,7 @@ fn run_show(ctx: &AppContext, args: &ShowEvidenceArgs) -> Result<()> {
     } else {
         // Show all evidence for skill
         let index = ctx.db.get_evidence(&args.skill_id)?;
-        if ctx.robot_mode {
+        if ctx.output_format != OutputFormat::Human {
             show_evidence_index_robot(&skill.id, &index)
         } else {
             show_evidence_index_human(&skill.id, &skill.name, &index, args.excerpts)
@@ -118,7 +119,7 @@ fn run_list(ctx: &AppContext, args: &ListEvidenceArgs) -> Result<()> {
         all_evidence.into_iter().take(args.limit).collect()
     };
 
-    if ctx.robot_mode {
+    if ctx.output_format != OutputFormat::Human {
         list_evidence_robot(&filtered)
     } else {
         list_evidence_human(&filtered)
@@ -150,7 +151,7 @@ fn run_export(ctx: &AppContext, args: &ExportEvidenceArgs) -> Result<()> {
 
     if let Some(ref path) = args.output {
         std::fs::write(path, &output)?;
-        if !ctx.robot_mode {
+        if ctx.output_format == OutputFormat::Human {
             println!("Exported to: {path}");
         }
     } else {

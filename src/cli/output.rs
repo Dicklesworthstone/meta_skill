@@ -1,13 +1,58 @@
 use chrono::{DateTime, Utc};
+use clap::ValueEnum;
 use console::style;
 use serde::Serialize;
 
 use crate::error::{MsError, Result};
 
+/// Legacy output mode (Human/Robot)
 #[derive(Debug, Clone, Copy)]
 pub enum OutputMode {
     Human,
     Robot,
+}
+
+/// Output format for CLI commands
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum, Default)]
+pub enum OutputFormat {
+    /// Human-readable formatted output with colors (default)
+    #[default]
+    Human,
+    /// Pretty-printed JSON
+    Json,
+    /// Newline-delimited JSON (one object per line)
+    Jsonl,
+    /// Plain text without colors or formatting
+    Plain,
+    /// Tab-separated values (for shell scripting)
+    Tsv,
+}
+
+impl OutputFormat {
+    /// Determine format from CLI args (robot flag overrides explicit format for backward compat)
+    #[must_use]
+    pub fn from_args(robot: bool, format: Option<OutputFormat>) -> Self {
+        if robot {
+            OutputFormat::Json
+        } else {
+            format.unwrap_or_default()
+        }
+    }
+
+    /// Check if this format should use colors
+    #[must_use]
+    pub const fn use_colors(&self) -> bool {
+        matches!(self, OutputFormat::Human)
+    }
+
+    /// Check if this format is machine-readable
+    #[must_use]
+    pub const fn is_machine_readable(&self) -> bool {
+        matches!(
+            self,
+            OutputFormat::Json | OutputFormat::Jsonl | OutputFormat::Tsv
+        )
+    }
 }
 
 #[derive(Serialize)]
@@ -129,4 +174,114 @@ impl HumanLayout {
 
 pub fn emit_human(layout: HumanLayout) {
     println!("{}", layout.build());
+}
+
+/// Trait for types that can format themselves for different output modes
+pub trait Formattable {
+    /// Format this value for the given output format
+    fn format(&self, fmt: OutputFormat) -> String;
+}
+
+/// Emit a formattable value to stdout
+pub fn emit<T: Formattable>(value: &T, format: OutputFormat) {
+    println!("{}", value.format(format));
+}
+
+/// Emit a JSON-serializable value with format-aware output
+pub fn emit_formatted<T: Serialize>(
+    value: &T,
+    format: OutputFormat,
+    human_fn: impl FnOnce(&T) -> String,
+    plain_fn: impl FnOnce(&T) -> String,
+    tsv_fn: impl FnOnce(&T) -> String,
+) -> Result<()> {
+    match format {
+        OutputFormat::Human => println!("{}", human_fn(value)),
+        OutputFormat::Json => {
+            let json = serde_json::to_string_pretty(value)
+                .map_err(|e| MsError::Config(format!("serialize output: {e}")))?;
+            println!("{json}");
+        }
+        OutputFormat::Jsonl => {
+            let json = serde_json::to_string(value)
+                .map_err(|e| MsError::Config(format!("serialize output: {e}")))?;
+            println!("{json}");
+        }
+        OutputFormat::Plain => println!("{}", plain_fn(value)),
+        OutputFormat::Tsv => println!("{}", tsv_fn(value)),
+    }
+    Ok(())
+}
+
+/// Emit a slice of items in JSONL format (one JSON object per line)
+pub fn emit_jsonl<T: Serialize>(items: &[T]) -> Result<()> {
+    for item in items {
+        let json = serde_json::to_string(item)
+            .map_err(|e| MsError::Config(format!("serialize output: {e}")))?;
+        println!("{json}");
+    }
+    Ok(())
+}
+
+/// Emit TSV output with headers
+pub fn emit_tsv<T, F>(headers: &[&str], items: &[T], row_fn: F)
+where
+    F: Fn(&T) -> Vec<String>,
+{
+    println!("{}", headers.join("\t"));
+    for item in items {
+        println!("{}", row_fn(item).join("\t"));
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn output_format_from_args_robot_overrides() {
+        // Robot flag overrides explicit format
+        assert_eq!(
+            OutputFormat::from_args(true, Some(OutputFormat::Plain)),
+            OutputFormat::Json
+        );
+    }
+
+    #[test]
+    fn output_format_from_args_uses_explicit() {
+        // Explicit format when no robot flag
+        assert_eq!(
+            OutputFormat::from_args(false, Some(OutputFormat::Jsonl)),
+            OutputFormat::Jsonl
+        );
+    }
+
+    #[test]
+    fn output_format_from_args_defaults_to_human() {
+        // Default when neither specified
+        assert_eq!(OutputFormat::from_args(false, None), OutputFormat::Human);
+    }
+
+    #[test]
+    fn output_format_use_colors() {
+        assert!(OutputFormat::Human.use_colors());
+        assert!(!OutputFormat::Json.use_colors());
+        assert!(!OutputFormat::Jsonl.use_colors());
+        assert!(!OutputFormat::Plain.use_colors());
+        assert!(!OutputFormat::Tsv.use_colors());
+    }
+
+    #[test]
+    fn output_format_is_machine_readable() {
+        assert!(!OutputFormat::Human.is_machine_readable());
+        assert!(OutputFormat::Json.is_machine_readable());
+        assert!(OutputFormat::Jsonl.is_machine_readable());
+        assert!(!OutputFormat::Plain.is_machine_readable());
+        assert!(OutputFormat::Tsv.is_machine_readable());
+    }
+
+    #[test]
+    fn output_format_default_is_human() {
+        assert_eq!(OutputFormat::default(), OutputFormat::Human);
+    }
 }

@@ -4,6 +4,7 @@ use clap::Args;
 use colored::Colorize;
 
 use crate::app::AppContext;
+use crate::cli::output::OutputFormat;
 use crate::cli::output::{HumanLayout, emit_json};
 use crate::error::{MsError, Result};
 
@@ -22,7 +23,7 @@ pub fn run(ctx: &AppContext, args: &ShellArgs) -> Result<()> {
     let shell = resolve_shell(args.shell.as_deref())?;
     let snippet = build_snippet(&shell, args.interval_seconds);
 
-    if ctx.robot_mode {
+    if ctx.output_format != OutputFormat::Human {
         let payload = serde_json::json!({
             "status": "ok",
             "shell": shell,

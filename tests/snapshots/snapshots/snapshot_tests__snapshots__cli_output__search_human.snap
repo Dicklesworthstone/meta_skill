@@ -4,6 +4,5 @@ expression: sanitized
 ---
 1 results for 'rust' (hybrid search):
 
-1.   Rust Error Handling project
-     rust-error-handling (score: 0.008, quality: 0.49)
-     Use Result<T, E> for recoverable errors and panic! for unrecoverable ones.
+1. Rust Error Handling [0.01] project 
+   Use Result<T, E> for recoverable errors and panic! for unrecoverable ones.
