@@ -1,8 +1,9 @@
 mod agent_detection_tests;
 mod auto_load_tests;
-mod cli_tests;
 mod backup_tests;
+mod cli_tests;
 mod composition_tests;
+mod context_detection_tests;
 mod db_state_tests;
 mod error_handling_tests;
 mod fixture;
