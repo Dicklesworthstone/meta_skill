@@ -39,7 +39,7 @@ pub use detectors::{
     AiderDetector, ClaudeCodeDetector, ClineDetector, CodexDetector, ContinueDetector,
     CursorDetector, GeminiCliDetector, OpenCodeDetector, WindsurfDetector,
 };
-pub use service::AgentDetectionService;
+pub use service::{AgentDetectionService, DetectionSummary};
 
 /// Supported AI coding agents.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]

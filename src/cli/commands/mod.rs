@@ -59,6 +59,7 @@ pub mod requirements;
 pub mod safety;
 pub mod search;
 pub mod security;
+pub mod setup;
 pub mod shell;
 pub mod show;
 pub mod simulate;
@@ -118,6 +119,7 @@ pub fn run(ctx: &AppContext, command: &Commands) -> Result<()> {
         Commands::Prune(args) => prune::run(ctx, args),
         Commands::Config(args) => config::run(ctx, args),
         Commands::Security(args) => security::run(ctx, args),
+        Commands::Setup(args) => setup::run(ctx, args),
         Commands::Shell(args) => shell::run(ctx, args),
         Commands::Safety(args) => safety::run(ctx, args),
         Commands::Validate(args) => validate::run(ctx, args),

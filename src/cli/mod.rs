@@ -191,6 +191,9 @@ pub enum Commands {
     /// Security and prompt-injection defenses
     Security(commands::security::SecurityArgs),
 
+    /// Setup ms integration for AI coding agents
+    Setup(commands::setup::SetupArgs),
+
     /// Shell integration hooks
     Shell(commands::shell::ShellArgs),
 
