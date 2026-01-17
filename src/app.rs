@@ -1,6 +1,7 @@
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
+use crate::cli::OutputFormat;
 use crate::config::Config;
 use crate::error::{MsError, Result};
 use crate::search::SearchIndex;
@@ -13,7 +14,9 @@ pub struct AppContext {
     pub db: Arc<Database>,
     pub git: Arc<GitArchive>,
     pub search: Arc<SearchIndex>,
+    /// Deprecated: use output_format instead
     pub robot_mode: bool,
+    pub output_format: OutputFormat,
     pub verbosity: u8,
 }
 
@@ -34,6 +37,7 @@ impl AppContext {
             git: Arc::new(GitArchive::open(ms_root.join("archive"))?),
             search: Arc::new(SearchIndex::open(ms_root.join("index"))?),
             robot_mode: cli.robot,
+            output_format: cli.output_format(),
             verbosity: cli.verbose,
         })
     }

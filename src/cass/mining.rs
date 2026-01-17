@@ -464,8 +464,8 @@ fn is_command_match(cmd: &str, target: &str) -> bool {
     if cmd.starts_with(&format!("{target} ")) {
         return true;
     }
-    // Check if it appears as a distinct word
-    cmd.split_whitespace().any(|part| part == target)
+    // Check if it appears as a distinct word using tokenization
+    tokenize_command(cmd).iter().any(|part| part == target)
 }
 
 /// Compute confidence score for a segment
@@ -1419,27 +1419,93 @@ fn extract_code_blocks(content: &str) -> Vec<(String, String)> {
     let mut in_block = false;
     let mut current_lang = String::new();
     let mut current_code = String::new();
+    let mut current_fence = String::new();
 
     for line in content.lines() {
-        if line.starts_with("```") {
-            if in_block {
-                // End of block
-                blocks.push((current_lang.clone(), current_code.trim().to_string()));
-                current_lang.clear();
+        let trimmed_start = line.trim_start();
+        
+        if !in_block {
+            if let Some((fence, lang)) = parse_opening_fence(trimmed_start) {
+                current_fence = fence;
+                current_lang = lang;
                 current_code.clear();
-                in_block = false;
-            } else {
-                // Start of block
-                current_lang = line.trim_start_matches('`').trim().to_string();
                 in_block = true;
             }
-        } else if in_block {
+        } else {
+            // Check for closing fence
+            if trimmed_start.starts_with(&current_fence) {
+                let fence_char = current_fence.chars().next().unwrap_or('`');
+                let closing_len = trimmed_start.chars().take_while(|&c| c == fence_char).count();
+                
+                // Closing fence must be at least as long as opening fence
+                if closing_len >= current_fence.len() {
+                    // Rest of the line must be empty (or whitespace)
+                    let rest = &trimmed_start[closing_len..];
+                    if rest.trim().is_empty() {
+                        blocks.push((current_lang.clone(), current_code.trim().to_string()));
+                        in_block = false;
+                        continue;
+                    }
+                }
+            }
             current_code.push_str(line);
             current_code.push('\n');
         }
     }
 
     blocks
+}
+
+fn parse_opening_fence(s: &str) -> Option<(String, String)> {
+    if s.starts_with("```") {
+        let len = s.chars().take_while(|&c| c == '`').count();
+        let fence = s[..len].to_string();
+        let lang = s[len..].trim().to_string();
+        Some((fence, lang))
+    } else if s.starts_with("~~~") {
+        let len = s.chars().take_while(|&c| c == '~').count();
+        let fence = s[..len].to_string();
+        let lang = s[len..].trim().to_string();
+        Some((fence, lang))
+    } else {
+        None
+    }
+}
+
+/// Tokenize a shell command string, respecting quotes and escapes.
+fn tokenize_command(cmd: &str) -> Vec<String> {
+    let mut args = Vec::new();
+    let mut current = String::new();
+    let mut in_quote = None; // None, Some('\''), Some('"')
+    let mut escape = false;
+
+    for c in cmd.chars() {
+        if escape {
+            current.push(c);
+            escape = false;
+        } else if c == '\\' {
+            escape = true;
+        } else if let Some(q) = in_quote {
+            if c == q && !escape {
+                in_quote = None;
+            } else {
+                current.push(c);
+            }
+        } else if c == '"' || c == '\'' {
+            in_quote = Some(c);
+        } else if c.is_whitespace() {
+            if !current.is_empty() {
+                args.push(current.clone());
+                current.clear();
+            }
+        } else {
+            current.push(c);
+        }
+    }
+    if !current.is_empty() {
+        args.push(current);
+    }
+    args
 }
 
 /// Convert extracted pattern to IR
@@ -1450,13 +1516,13 @@ pub fn pattern_to_ir(pattern: &ExtractedPattern) -> PatternIR {
             commands: commands
                 .iter()
                 .map(|cmd| {
-                    let parts: Vec<&str> = cmd.split_whitespace().collect();
+                    let parts = tokenize_command(cmd);
                     // Handle env vars (VAR=val) at the start
                     let mut start_idx = 0;
                     let mut env_vars = Vec::new();
                     
                     while start_idx < parts.len() {
-                        let part = parts[start_idx];
+                        let part = &parts[start_idx];
                         if part.contains('=') && !part.starts_with('-') {
                             let mut split = part.splitn(2, '=');
                             if let (Some(key), Some(val)) = (split.next(), split.next()) {
@@ -1469,13 +1535,13 @@ pub fn pattern_to_ir(pattern: &ExtractedPattern) -> PatternIR {
                     }
 
                     let executable = if start_idx < parts.len() {
-                        parts[start_idx].to_string()
+                        parts[start_idx].clone()
                     } else {
                         "".to_string()
                     };
 
                     let args = if start_idx + 1 < parts.len() {
-                        parts[start_idx + 1..].iter().map(std::string::ToString::to_string).collect()
+                        parts[start_idx + 1..].to_vec()
                     } else {
                         vec![]
                     };
@@ -2003,6 +2069,23 @@ And more text.
 
         // Fixed behavior: returns false because content (normalized) is different
         assert!(!patterns_are_similar(&p1, &p2));
+    }
+
+    #[test]
+    fn test_tokenize_command() {
+        let cmd = r#"git commit -m "fix bug" --author='Jane Doe'"#;
+        let tokens = tokenize_command(cmd);
+        assert_eq!(tokens.len(), 5);
+        assert_eq!(tokens[0], "git");
+        assert_eq!(tokens[1], "commit");
+        assert_eq!(tokens[2], "-m");
+        assert_eq!(tokens[3], "fix bug");
+        assert_eq!(tokens[4], "--author=Jane Doe");
+        
+        let escaped = r#"echo "escaped \" quote""#;
+        let tokens = tokenize_command(escaped);
+        assert_eq!(tokens.len(), 2);
+        assert_eq!(tokens[1], "escaped \" quote");
     }
 
     #[test]

@@ -10,7 +10,7 @@ use rusqlite::{params, Connection};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
-use crate::core::resolution::ResolvedSkillSpec;
+use crate::core::resolution::{ResolutionWarning, ResolvedSkillSpec};
 use crate::core::skill::SkillSpec;
 use crate::error::{MsError, Result};
 
@@ -26,6 +26,8 @@ pub struct CachedResolvedSkill {
     pub inheritance_chain: Vec<String>,
     /// Skill IDs that were included into this skill
     pub included_from: Vec<String>,
+    /// Warnings encountered during resolution
+    pub warnings: Vec<ResolutionWarning>,
     /// Content hash of the cached entry
     pub cache_key_hash: String,
     /// Hashes of all dependency skills at cache time
@@ -33,13 +35,13 @@ pub struct CachedResolvedSkill {
 }
 
 impl CachedResolvedSkill {
-    /// Convert to a ResolvedSkillSpec (warnings are not cached)
+    /// Convert to a ResolvedSkillSpec
     pub fn to_resolved_spec(&self) -> ResolvedSkillSpec {
         ResolvedSkillSpec {
             spec: self.spec.clone(),
             inheritance_chain: self.inheritance_chain.clone(),
             included_from: self.included_from.clone(),
-            warnings: Vec::new(), // Warnings are not cached
+            warnings: self.warnings.clone(),
         }
     }
 }
@@ -313,7 +315,7 @@ impl ResolutionCache {
         // Load cached entries into memory
         let mut stmt = conn.prepare(
             "SELECT skill_id, resolved_json, cache_key_hash, inheritance_chain, \
-             included_from, dependency_hashes FROM resolved_skill_cache",
+             included_from, dependency_hashes, warnings_json FROM resolved_skill_cache",
         )?;
 
         let rows = stmt.query_map([], |row| {
@@ -324,12 +326,13 @@ impl ResolutionCache {
                 row.get::<_, String>(3)?,
                 row.get::<_, String>(4)?,
                 row.get::<_, String>(5)?,
+                row.get::<_, String>(6)?,
             ))
         })?;
 
         let mut memory = self.memory.write();
         for row in rows {
-            let (skill_id, resolved_json, cache_key_hash, chain_json, included_json, dep_hashes_json) = row?;
+            let (skill_id, resolved_json, cache_key_hash, chain_json, included_json, dep_hashes_json, warnings_json) = row?;
 
             let spec: SkillSpec = serde_json::from_str(&resolved_json)
                 .map_err(|e| MsError::Serialization(format!("failed to parse cached spec: {e}")))?;
@@ -339,11 +342,14 @@ impl ResolutionCache {
                 .map_err(|e| MsError::Serialization(format!("failed to parse included_from: {e}")))?;
             let dependency_hashes: HashMap<String, String> = serde_json::from_str(&dep_hashes_json)
                 .map_err(|e| MsError::Serialization(format!("failed to parse dependency hashes: {e}")))?;
+            let warnings: Vec<ResolutionWarning> = serde_json::from_str(&warnings_json)
+                .map_err(|e| MsError::Serialization(format!("failed to parse warnings: {e}")))?;
 
             let entry = CachedResolvedSkill {
                 spec,
                 inheritance_chain,
                 included_from,
+                warnings,
                 cache_key_hash,
                 dependency_hashes,
             };
@@ -387,7 +393,7 @@ impl ResolutionCache {
         // Check SQLite
         let mut stmt = conn.prepare(
             "SELECT resolved_json, cache_key_hash, inheritance_chain, \
-             included_from, dependency_hashes FROM resolved_skill_cache WHERE skill_id = ?",
+             included_from, dependency_hashes, warnings_json FROM resolved_skill_cache WHERE skill_id = ?",
         )?;
 
         let result = stmt.query_row([skill_id], |row| {
@@ -397,11 +403,12 @@ impl ResolutionCache {
                 row.get::<_, String>(2)?,
                 row.get::<_, String>(3)?,
                 row.get::<_, String>(4)?,
+                row.get::<_, String>(5)?,
             ))
         });
 
         match result {
-            Ok((resolved_json, cache_key_hash, chain_json, included_json, dep_hashes_json)) => {
+            Ok((resolved_json, cache_key_hash, chain_json, included_json, dep_hashes_json, warnings_json)) => {
                 let spec: SkillSpec = serde_json::from_str(&resolved_json)
                     .map_err(|e| MsError::Serialization(format!("failed to parse cached spec: {e}")))?;
                 let inheritance_chain: Vec<String> = serde_json::from_str(&chain_json)
@@ -410,6 +417,8 @@ impl ResolutionCache {
                     .map_err(|e| MsError::Serialization(format!("failed to parse included_from: {e}")))?;
                 let dependency_hashes: HashMap<String, String> = serde_json::from_str(&dep_hashes_json)
                     .map_err(|e| MsError::Serialization(format!("failed to parse dependency hashes: {e}")))?;
+                let warnings: Vec<ResolutionWarning> = serde_json::from_str(&warnings_json)
+                    .map_err(|e| MsError::Serialization(format!("failed to parse warnings: {e}")))?;
 
                 // Validate dependency hashes
                 if dependency_hashes != *current_dependency_hashes {
@@ -420,6 +429,7 @@ impl ResolutionCache {
                     spec,
                     inheritance_chain,
                     included_from,
+                    warnings,
                     cache_key_hash,
                     dependency_hashes,
                 };
@@ -442,6 +452,7 @@ impl ResolutionCache {
             spec: resolved.spec.clone(),
             inheritance_chain: resolved.inheritance_chain.clone(),
             included_from: resolved.included_from.clone(),
+            warnings: resolved.warnings.clone(),
             cache_key_hash: cache_key.hash(),
             dependency_hashes,
         };
@@ -463,6 +474,7 @@ impl ResolutionCache {
             spec: resolved.spec.clone(),
             inheritance_chain: resolved.inheritance_chain.clone(),
             included_from: resolved.included_from.clone(),
+            warnings: resolved.warnings.clone(),
             cache_key_hash: cache_key.hash(),
             dependency_hashes: dependency_hashes.clone(),
         };
@@ -475,11 +487,12 @@ impl ResolutionCache {
         let chain_json = serde_json::to_string(&resolved.inheritance_chain)?;
         let included_json = serde_json::to_string(&resolved.included_from)?;
         let dep_hashes_json = serde_json::to_string(&dependency_hashes)?;
+        let warnings_json = serde_json::to_string(&resolved.warnings)?;
 
         conn.execute(
             "INSERT OR REPLACE INTO resolved_skill_cache \
-             (skill_id, resolved_json, cache_key_hash, inheritance_chain, included_from, dependency_hashes) \
-             VALUES (?, ?, ?, ?, ?, ?)",
+             (skill_id, resolved_json, cache_key_hash, inheritance_chain, included_from, dependency_hashes, warnings_json) \
+             VALUES (?, ?, ?, ?, ?, ?, ?)",
             params![
                 skill_id,
                 resolved_json,
@@ -487,6 +500,7 @@ impl ResolutionCache {
                 chain_json,
                 included_json,
                 dep_hashes_json,
+                warnings_json,
             ],
         )?;
 
@@ -706,6 +720,7 @@ mod tests {
             spec: resolved.spec.clone(),
             inheritance_chain: resolved.inheritance_chain.clone(),
             included_from: resolved.included_from.clone(),
+            warnings: vec![],
             cache_key_hash: "hash1".to_string(),
             dependency_hashes: HashMap::new(),
         };
@@ -727,6 +742,7 @@ mod tests {
                 spec: resolved.spec.clone(),
                 inheritance_chain: resolved.inheritance_chain.clone(),
                 included_from: resolved.included_from.clone(),
+                warnings: vec![],
                 cache_key_hash: format!("hash{}", i),
                 dependency_hashes: HashMap::new(),
             };
@@ -751,6 +767,7 @@ mod tests {
                 spec: resolved.spec.clone(),
                 inheritance_chain: resolved.inheritance_chain.clone(),
                 included_from: resolved.included_from.clone(),
+                warnings: vec![],
                 cache_key_hash: format!("hash{}", i),
                 dependency_hashes: HashMap::new(),
             };
@@ -766,6 +783,7 @@ mod tests {
             spec: resolved.spec.clone(),
             inheritance_chain: resolved.inheritance_chain.clone(),
             included_from: resolved.included_from.clone(),
+            warnings: vec![],
             cache_key_hash: "hash3".to_string(),
             dependency_hashes: HashMap::new(),
         };
@@ -785,6 +803,7 @@ mod tests {
             spec: resolved.spec.clone(),
             inheritance_chain: resolved.inheritance_chain.clone(),
             included_from: resolved.included_from.clone(),
+            warnings: vec![],
             cache_key_hash: "hash1".to_string(),
             dependency_hashes: HashMap::new(),
         };
@@ -921,6 +940,7 @@ mod tests {
             spec: SkillSpec::new("skill1", "Skill 1"),
             inheritance_chain: vec!["parent".to_string(), "skill1".to_string()],
             included_from: vec!["helper".to_string()],
+            warnings: vec![],
             cache_key_hash: "hash".to_string(),
             dependency_hashes: HashMap::new(),
         };

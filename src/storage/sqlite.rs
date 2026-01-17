@@ -58,6 +58,15 @@ pub struct EmbeddingRecord {
     pub computed_at: String,
 }
 
+#[derive(Debug, Clone, PartialEq)]
+pub struct SkillSearchCandidate {
+    pub id: String,
+    pub source_layer: String,
+    pub metadata_json: String,
+    pub quality_score: f64,
+    pub is_deprecated: bool,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AliasResolution {
     pub canonical_id: String,
@@ -446,21 +455,47 @@ impl Database {
         Ok(aliases)
     }
 
-    pub fn search_fts(&self, query: &str, limit: usize) -> Result<Vec<String>> {
+    pub fn search_fts(&self, query: &str, limit: usize) -> Result<Vec<SkillSearchCandidate>> {
         let mut stmt = self.conn.prepare(
-            "SELECT s.id
+            "SELECT s.id, s.source_layer, s.metadata_json, s.quality_score, s.is_deprecated
              FROM skills_fts f
              JOIN skills s ON s.rowid = f.rowid
              WHERE skills_fts MATCH ?
              ORDER BY bm25(skills_fts)
              LIMIT ?",
         )?;
-        let rows = stmt.query_map(params![query, limit as i64], |row| row.get(0))?;
-        let mut ids = Vec::new();
+        let rows = stmt.query_map(params![query, limit as i64], |row| {
+            Ok(SkillSearchCandidate {
+                id: row.get(0)?,
+                source_layer: row.get(1)?,
+                metadata_json: row.get(2)?,
+                quality_score: row.get(3)?,
+                is_deprecated: row.get::<_, i64>(4)? != 0,
+            })
+        })?;
+        let mut candidates = Vec::new();
         for row in rows {
-            ids.push(row?);
+            candidates.push(row?);
         }
-        Ok(ids)
+        Ok(candidates)
+    }
+
+    pub fn get_skill_candidate(&self, id: &str) -> Result<Option<SkillSearchCandidate>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT id, source_layer, metadata_json, quality_score, is_deprecated
+             FROM skills WHERE id = ?",
+        )?;
+        let mut rows = stmt.query([id])?;
+        if let Some(row) = rows.next()? {
+            return Ok(Some(SkillSearchCandidate {
+                id: row.get(0)?,
+                source_layer: row.get(1)?,
+                metadata_json: row.get(2)?,
+                quality_score: row.get(3)?,
+                is_deprecated: row.get::<_, i64>(4)? != 0,
+            }));
+        }
+        Ok(None)
     }
 
     pub fn upsert_embedding(&self, record: &EmbeddingRecord) -> Result<()> {
@@ -770,12 +805,12 @@ impl Database {
 
     /// Check if a transaction exists in `tx_log`
     pub fn tx_exists(&self, tx_id: &str) -> Result<bool> {
-        let exists: bool = self.conn.query_row(
+        let exists: i32 = self.conn.query_row(
             "SELECT EXISTS(SELECT 1 FROM tx_log WHERE id = ?)",
             [tx_id],
             |row| row.get(0),
         )?;
-        Ok(exists)
+        Ok(exists == 1)
     }
 
     /// List incomplete transactions (not in Complete phase)
@@ -845,21 +880,7 @@ impl Database {
         token_count: i64,
     ) -> Result<()> {
         self.conn.execute(
-            "INSERT INTO skills
-             (id, name, description, version, author, source_path, source_layer,
-              content_hash, body, metadata_json, assets_json, token_count, quality_score,
-              indexed_at, modified_at)
-             VALUES (?, ?, ?, ?, ?, 'pending', ?, 'pending', '', ?, '{}', ?, 0.0,
-                     datetime('now'), datetime('now'))
-             ON CONFLICT(id) DO UPDATE SET
-                name=excluded.name,
-                description=excluded.description,
-                version=excluded.version,
-                author=excluded.author,
-                source_layer=excluded.source_layer,
-                metadata_json=excluded.metadata_json,
-                token_count=excluded.token_count,
-                modified_at=excluded.modified_at",
+            "INSERT INTO skills (id, name, description, version, author, source_path, source_layer, content_hash, body, metadata_json, assets_json, token_count, quality_score, indexed_at, modified_at) VALUES (?, ?, ?, ?, ?, 'pending', ?, 'pending', '', ?, '{}', ?, 0.0, datetime('now'), datetime('now')) ON CONFLICT(id) DO UPDATE SET name=excluded.name, description=excluded.description, version=excluded.version, author=excluded.author, source_layer=excluded.source_layer, metadata_json=excluded.metadata_json, token_count=excluded.token_count, modified_at=excluded.modified_at",
             params![
                 skill.metadata.id,
                 skill.metadata.name,
@@ -1727,7 +1748,10 @@ mod tests {
 
         db.upsert_skill(&record).unwrap();
         let results = db.search_fts("error", 10).unwrap();
-        assert!(results.contains(&"rust-errors".to_string()));
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].id, "rust-errors");
+        assert_eq!(results[0].quality_score, 0.9);
+        assert!(!results[0].is_deprecated);
     }
 
     #[test]
@@ -1986,11 +2010,7 @@ mod tests {
             },
         ];
 
-        let coverage = EvidenceCoverage {
-            total_rules: 5,
-            rules_with_evidence: 1,
-            avg_confidence: 0.785,
-        };
+        let coverage = EvidenceCoverage::default();
 
         // Upsert evidence for rule-1
         db.upsert_evidence("test-skill", "rule-1", &evidence, &coverage)
@@ -2058,13 +2078,8 @@ mod tests {
                 level: EvidenceLevel::Pointer,
                 confidence: 0.7 + (i as f32 * 0.05),
             }];
-            db.upsert_evidence(
-                "multi-rule-skill",
-                &format!("rule-{}", i),
-                &evidence,
-                &coverage,
-            )
-            .unwrap();
+            db.upsert_evidence("multi-rule-skill", &format!("rule-{}", i), &evidence, &coverage)
+                .unwrap();
         }
 
         // List all evidence
@@ -2118,8 +2133,6 @@ mod tests {
         };
         db.upsert_skill(&skill).unwrap();
 
-        let coverage = EvidenceCoverage::default();
-
         // Initial evidence
         let evidence_v1 = vec![EvidenceRef {
             session_id: "sess-v1".to_string(),
@@ -2129,6 +2142,7 @@ mod tests {
             level: EvidenceLevel::Pointer,
             confidence: 0.6,
         }];
+        let coverage = EvidenceCoverage::default();
         db.upsert_evidence("update-skill", "rule-1", &evidence_v1, &coverage)
             .unwrap();
 

@@ -4,7 +4,7 @@ use rusqlite::Connection;
 
 use crate::error::{MsError, Result};
 
-const MIGRATIONS: [&str; 11] = [
+const MIGRATIONS: [&str; 12] = [
     include_str!("../../migrations/001_initial_schema.sql"),
     include_str!("../../migrations/002_add_fts.sql"),
     include_str!("../../migrations/003_add_vectors.sql"),
@@ -16,6 +16,7 @@ const MIGRATIONS: [&str; 11] = [
     include_str!("../../migrations/009_add_skill_feedback.sql"),
     include_str!("../../migrations/010_add_resolution_cache.sql"),
     include_str!("../../migrations/011_add_user_preferences.sql"),
+    include_str!("../../migrations/012_add_resolution_warnings.sql"),
 ];
 
 pub const SCHEMA_VERSION: u32 = MIGRATIONS.len() as u32;
@@ -65,8 +66,8 @@ mod tests {
     }
 
     #[test]
-    fn schema_version_is_11() {
-        assert_eq!(SCHEMA_VERSION, 11);
+    fn schema_version_is_12() {
+        assert_eq!(SCHEMA_VERSION, 12);
     }
 
     // =========================================================================

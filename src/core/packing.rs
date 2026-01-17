@@ -254,6 +254,17 @@ impl ConstrainedPacker {
             }
         }
 
+        // Final greedy fill to utilize any remaining budget
+        fill_from_candidates(
+            slices,
+            &mut selected,
+            &mut selected_ids,
+            constraints,
+            mode,
+            max_per_group,
+            &excluded_groups,
+        );
+
         let coverage_satisfied = check_coverage(&selected, &required_coverage);
         let total_tokens = constraints.budget.saturating_sub(remaining);
 
@@ -614,6 +625,56 @@ fn try_improve(
     }
 
     false
+}
+
+fn fill_from_candidates(
+    slices: &[SkillSlice],
+    selected: &mut Vec<SkillSlice>,
+    selected_ids: &mut HashSet<String>,
+    constraints: &PackConstraints,
+    mode: PackMode,
+    max_per_group: usize,
+    excluded: &HashSet<String>,
+) {
+    let mut group_counts = count_groups(selected);
+    let used_tokens: usize = selected.iter().map(|s| s.token_estimate).sum();
+    let mut remaining = constraints.budget.saturating_sub(used_tokens);
+
+    // Candidates are anything not yet selected, not excluded, and dependencies satisfied
+    let candidates: Vec<&SkillSlice> = slices
+        .iter()
+        .filter(|slice| !selected_ids.contains(&slice.id))
+        .filter(|slice| !is_excluded(slice, excluded))
+        .collect();
+
+    if candidates.is_empty() {
+        return;
+    }
+
+    let ranked = rank_by_density(
+        &candidates,
+        &group_counts,
+        &constraints.recent_slice_ids,
+        mode,
+        constraints.contract.as_ref(),
+    );
+
+    for slice in ranked {
+        if slice.token_estimate > remaining {
+            continue;
+        }
+        if !deps_satisfied(slice, selected_ids) {
+            continue;
+        }
+        if !can_add_slice(slice, excluded, &group_counts, max_per_group) {
+            continue;
+        }
+
+        selected_ids.insert(slice.id.clone());
+        selected.push(slice.clone());
+        remaining -= slice.token_estimate;
+        add_group_count(&mut group_counts, slice);
+    }
 }
 
 fn collect_mandatory_ids(slices: &[SkillSlice], constraints: &PackConstraints) -> HashSet<String> {

@@ -253,6 +253,29 @@ fn ensure_safe_id(id: &str) -> Result<()> {
             "skill id contains invalid characters (allowed: a-z, A-Z, 0-9, -, _, .): {id}"
         )));
     }
+
+    // Block Windows reserved names (CON, PRN, AUX, NUL, COM1-9, LPT1-9)
+    // to ensure portability and safety on shared filesystems.
+    let upper = id.to_ascii_uppercase();
+    let stem = upper.split('.').next().unwrap_or("");
+    match stem {
+        "CON" | "PRN" | "AUX" | "NUL" => {
+            return Err(MsError::ValidationFailed(format!(
+                "skill id '{id}' is a reserved filename on Windows"
+            )));
+        }
+        _ => {
+            if (stem.starts_with("COM") || stem.starts_with("LPT"))
+                && stem.len() == 4
+                && stem.chars().nth(3).is_some_and(|c| c.is_ascii_digit() && c != '0')
+            {
+                return Err(MsError::ValidationFailed(format!(
+                    "skill id '{id}' is a reserved filename on Windows"
+                )));
+            }
+        }
+    }
+
     Ok(())
 }
 

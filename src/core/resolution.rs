@@ -6,6 +6,8 @@
 
 use std::collections::{HashMap, HashSet};
 
+use serde::{Deserialize, Serialize};
+
 use crate::core::skill::{BlockType, IncludePosition, IncludeTarget, SkillBlock, SkillInclude, SkillSection, SkillSpec};
 use crate::error::{MsError, Result};
 
@@ -83,7 +85,7 @@ pub struct ResolvedSkillSpec {
 }
 
 /// Warnings that can occur during resolution
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum ResolutionWarning {
     /// Inheritance depth exceeds recommended maximum
     DeepInheritance {

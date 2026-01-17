@@ -147,6 +147,14 @@ pub(crate) fn collect_files_for_bundle(
                 MsError::Config(format!("read dir entry {}: {err}", dir.display()))
             })?;
             let path = entry.path();
+            let file_name = entry.file_name();
+            let name_str = file_name.to_string_lossy();
+
+            // Skip hidden VCS directories/files
+            if name_str == ".git" || name_str == ".svn" || name_str == ".hg" || name_str == ".DS_Store" {
+                continue;
+            }
+
             let file_type = entry.file_type().map_err(|err| {
                 MsError::Config(format!("get file type {}: {err}", path.display()))
             })?;
