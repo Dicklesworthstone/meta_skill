@@ -86,6 +86,9 @@ pub enum Commands {
     /// List all indexed skills
     List(commands::list::ListArgs),
 
+    /// Interactively browse and search skills (TUI)
+    Browse(commands::browse::BrowseArgs),
+
     /// Check Agent Mail inbox
     Inbox(commands::inbox::InboxArgs),
 

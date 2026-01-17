@@ -17,6 +17,7 @@ pub mod alias;
 pub mod antipatterns;
 pub mod bandit;
 pub mod backup;
+pub mod browse;
 pub mod build;
 pub mod bundle;
 pub mod cm;
@@ -114,6 +115,7 @@ pub fn run(ctx: &AppContext, command: &Commands) -> Result<()> {
         Commands::Update(args) => update::run(ctx, args),
         Commands::Bandit(args) => bandit::run(ctx, args),
         Commands::Backup(args) => backup::run(ctx, args),
+        Commands::Browse(args) => browse::run(ctx, args),
         Commands::Doctor(args) => doctor::run(ctx, args),
         Commands::PreCommit(args) => pre_commit::run(ctx, args),
         Commands::Prune(args) => prune::run(ctx, args),
