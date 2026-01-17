@@ -161,3 +161,39 @@ jobs:
             Download `ms-x86_64-pc-windows-msvc.zip` and extract to your PATH.
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  # Trigger Homebrew tap update
+  update-homebrew:
+    name: Trigger Homebrew Tap Update
+    needs: release
+    runs-on: ubuntu-latest
+    if: success()
+
+    steps:
+      - name: Determine version
+        id: version
+        run: |
+          if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
+            echo "version=${{ github.event.inputs.version }}" >> $GITHUB_OUTPUT
+          else
+            echo "version=${GITHUB_REF#refs/tags/v}" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Trigger Homebrew tap update
+        uses: peter-evans/repository-dispatch@v3
+        with:
+          token: ${{ secrets.TAP_UPDATE_TOKEN }}
+          repository: Dicklesworthstone/homebrew-tap
+          event-type: release
+          client-payload: '{"version": "${{ steps.version.outputs.version }}"}'
+
+      - name: Summary
+        run: |
+          echo "## Homebrew Tap Update Triggered" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "A repository dispatch event has been sent to update the Homebrew tap formula." >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "- **Version**: ${{ steps.version.outputs.version }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Target**: Dicklesworthstone/homebrew-tap" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "Check the [homebrew-tap repository](https://github.com/Dicklesworthstone/homebrew-tap/actions) for the update PR." >> $GITHUB_STEP_SUMMARY

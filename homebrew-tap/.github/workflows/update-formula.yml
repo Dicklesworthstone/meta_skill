@@ -1,0 +1,188 @@
+# update-formula.yml - Auto-update ms formula on new releases
+#
+# This workflow is triggered by:
+# 1. Repository dispatch from meta_skill release workflow
+# 2. Manual workflow dispatch with version input
+#
+# It updates the formula with new version and SHA256 hashes,
+# then creates a PR for review.
+
+name: Update Formula
+
+on:
+  repository_dispatch:
+    types: [release]
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Version to update to (without v prefix)"
+        required: true
+        type: string
+
+permissions:
+  contents: write
+  pull-requests: write
+
+env:
+  FORMULA_PATH: Formula/ms.rb
+  RELEASE_REPO: Dicklesworthstone/meta_skill
+
+jobs:
+  update:
+    name: Update Formula
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout tap repository
+        uses: actions/checkout@v4
+
+      - name: Determine version
+        id: version
+        run: |
+          if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
+            VERSION="${{ github.event.inputs.version }}"
+          else
+            VERSION="${{ github.event.client_payload.version }}"
+          fi
+          # Strip v prefix if present
+          VERSION="${VERSION#v}"
+          echo "version=${VERSION}" >> $GITHUB_OUTPUT
+          echo "Updating to version: ${VERSION}"
+
+      - name: Fetch release checksums
+        id: checksums
+        run: |
+          VERSION="${{ steps.version.outputs.version }}"
+          CHECKSUMS_URL="https://github.com/${RELEASE_REPO}/releases/download/v${VERSION}/SHA256SUMS.txt"
+
+          echo "Fetching checksums from: ${CHECKSUMS_URL}"
+          curl -sL "$CHECKSUMS_URL" -o checksums.txt
+
+          if [[ ! -s checksums.txt ]]; then
+            echo "Error: Failed to fetch checksums or file is empty"
+            exit 1
+          fi
+
+          echo "Checksums file contents:"
+          cat checksums.txt
+          echo ""
+
+          # Extract SHA256 for each platform
+          # Format: <sha256>  <filename>
+          SHA_MACOS_ARM64=$(grep "aarch64-apple-darwin.tar.gz" checksums.txt | awk '{print $1}')
+          SHA_MACOS_X64=$(grep "x86_64-apple-darwin.tar.gz" checksums.txt | awk '{print $1}')
+          SHA_LINUX_ARM64=$(grep "aarch64-unknown-linux-gnu.tar.gz" checksums.txt | awk '{print $1}')
+          SHA_LINUX_X64=$(grep "x86_64-unknown-linux-gnu.tar.gz" checksums.txt | awk '{print $1}')
+
+          # Validate we got all checksums
+          for name in MACOS_ARM64 MACOS_X64 LINUX_ARM64 LINUX_X64; do
+            var="SHA_${name}"
+            value="${!var}"
+            if [[ -z "$value" || ${#value} -ne 64 ]]; then
+              echo "Error: Invalid or missing checksum for ${name}"
+              exit 1
+            fi
+            echo "SHA256 for ${name}: ${value}"
+          done
+
+          echo "sha_macos_arm64=${SHA_MACOS_ARM64}" >> $GITHUB_OUTPUT
+          echo "sha_macos_x64=${SHA_MACOS_X64}" >> $GITHUB_OUTPUT
+          echo "sha_linux_arm64=${SHA_LINUX_ARM64}" >> $GITHUB_OUTPUT
+          echo "sha_linux_x64=${SHA_LINUX_X64}" >> $GITHUB_OUTPUT
+
+      - name: Update formula
+        run: |
+          VERSION="${{ steps.version.outputs.version }}"
+
+          echo "Updating formula to version ${VERSION}..."
+
+          # Update version
+          sed -i "s/version \".*\"/version \"${VERSION}\"/" "$FORMULA_PATH"
+
+          # Update SHA256 hashes
+          # macOS ARM64
+          sed -i "s/sha256 \"PLACEHOLDER_SHA256_MACOS_ARM64\"/sha256 \"${{ steps.checksums.outputs.sha_macos_arm64 }}\"/" "$FORMULA_PATH"
+          sed -i "/aarch64-apple-darwin/,/sha256/{s/sha256 \"[a-f0-9]\{64\}\"/sha256 \"${{ steps.checksums.outputs.sha_macos_arm64 }}\"/}" "$FORMULA_PATH"
+
+          # macOS x64
+          sed -i "s/sha256 \"PLACEHOLDER_SHA256_MACOS_X64\"/sha256 \"${{ steps.checksums.outputs.sha_macos_x64 }}\"/" "$FORMULA_PATH"
+          sed -i "/x86_64-apple-darwin/,/sha256/{s/sha256 \"[a-f0-9]\{64\}\"/sha256 \"${{ steps.checksums.outputs.sha_macos_x64 }}\"/}" "$FORMULA_PATH"
+
+          # Linux ARM64
+          sed -i "s/sha256 \"PLACEHOLDER_SHA256_LINUX_ARM64\"/sha256 \"${{ steps.checksums.outputs.sha_linux_arm64 }}\"/" "$FORMULA_PATH"
+          sed -i "/aarch64-unknown-linux-gnu/,/sha256/{s/sha256 \"[a-f0-9]\{64\}\"/sha256 \"${{ steps.checksums.outputs.sha_linux_arm64 }}\"/}" "$FORMULA_PATH"
+
+          # Linux x64
+          sed -i "s/sha256 \"PLACEHOLDER_SHA256_LINUX_X64\"/sha256 \"${{ steps.checksums.outputs.sha_linux_x64 }}\"/" "$FORMULA_PATH"
+          sed -i "/x86_64-unknown-linux-gnu/,/sha256/{s/sha256 \"[a-f0-9]\{64\}\"/sha256 \"${{ steps.checksums.outputs.sha_linux_x64 }}\"/}" "$FORMULA_PATH"
+
+          echo "Formula updated. Changes:"
+          git diff "$FORMULA_PATH"
+
+      - name: Validate formula
+        run: |
+          # Basic validation - check formula is valid Ruby
+          ruby -c "$FORMULA_PATH"
+
+          # Check version was updated
+          if ! grep -q "version \"${{ steps.version.outputs.version }}\"" "$FORMULA_PATH"; then
+            echo "Error: Version not updated in formula"
+            exit 1
+          fi
+
+          # Check at least one SHA was updated (not placeholder)
+          if grep -q "PLACEHOLDER_SHA256" "$FORMULA_PATH"; then
+            echo "Error: Placeholder SHA256 still present"
+            exit 1
+          fi
+
+          echo "Formula validation passed"
+
+      - name: Create Pull Request
+        uses: peter-evans/create-pull-request@v5
+        with:
+          commit-message: "Update ms to v${{ steps.version.outputs.version }}"
+          title: "Update ms to v${{ steps.version.outputs.version }}"
+          body: |
+            Automated update of ms formula to version ${{ steps.version.outputs.version }}.
+
+            ## Changes
+            - Updated version to `${{ steps.version.outputs.version }}`
+            - Updated SHA256 checksums for all platforms
+
+            ## Checksums
+            | Platform | SHA256 |
+            |----------|--------|
+            | macOS ARM64 | `${{ steps.checksums.outputs.sha_macos_arm64 }}` |
+            | macOS x64 | `${{ steps.checksums.outputs.sha_macos_x64 }}` |
+            | Linux ARM64 | `${{ steps.checksums.outputs.sha_linux_arm64 }}` |
+            | Linux x64 | `${{ steps.checksums.outputs.sha_linux_x64 }}` |
+
+            ## Testing
+            After merging, test with:
+            ```bash
+            brew update
+            brew upgrade dicklesworthstone/tap/ms
+            ms --version
+            ```
+
+            ---
+            *This PR was automatically created by the update-formula workflow.*
+          branch: "update-v${{ steps.version.outputs.version }}"
+          base: main
+          delete-branch: true
+
+      - name: Summary
+        run: |
+          echo "## Formula Update Summary" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "- **Version**: ${{ steps.version.outputs.version }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **PR Branch**: update-v${{ steps.version.outputs.version }}" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### Checksums" >> $GITHUB_STEP_SUMMARY
+          echo "| Platform | SHA256 |" >> $GITHUB_STEP_SUMMARY
+          echo "|----------|--------|" >> $GITHUB_STEP_SUMMARY
+          echo "| macOS ARM64 | \`${{ steps.checksums.outputs.sha_macos_arm64 }}\` |" >> $GITHUB_STEP_SUMMARY
+          echo "| macOS x64 | \`${{ steps.checksums.outputs.sha_macos_x64 }}\` |" >> $GITHUB_STEP_SUMMARY
+          echo "| Linux ARM64 | \`${{ steps.checksums.outputs.sha_linux_arm64 }}\` |" >> $GITHUB_STEP_SUMMARY
+          echo "| Linux x64 | \`${{ steps.checksums.outputs.sha_linux_x64 }}\` |" >> $GITHUB_STEP_SUMMARY
