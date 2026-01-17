@@ -1,0 +1,220 @@
+# update.yml - Auto-update ms manifest on new releases
+#
+# This workflow is triggered by:
+# 1. Repository dispatch from meta_skill release workflow
+# 2. Scheduled check every 6 hours
+# 3. Manual workflow dispatch
+#
+# It updates the manifest with new version and SHA256 hash,
+# then creates a PR for review.
+
+name: Update Manifests
+
+on:
+  schedule:
+    - cron: "0 */6 * * *"  # Every 6 hours
+  repository_dispatch:
+    types: [release]
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Version to update to (without v prefix)"
+        required: false
+        type: string
+
+permissions:
+  contents: write
+  pull-requests: write
+
+env:
+  RELEASE_REPO: Dicklesworthstone/meta_skill
+
+jobs:
+  update:
+    name: Update Manifest
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Determine version
+        id: version
+        shell: pwsh
+        run: |
+          $version = ""
+
+          if ("${{ github.event_name }}" -eq "workflow_dispatch" -and "${{ github.event.inputs.version }}") {
+              $version = "${{ github.event.inputs.version }}"
+          } elseif ("${{ github.event_name }}" -eq "repository_dispatch") {
+              $version = "${{ github.event.client_payload.version }}"
+          } else {
+              # Fetch latest release from GitHub API
+              $release = Invoke-RestMethod "https://api.github.com/repos/${{ env.RELEASE_REPO }}/releases/latest"
+              $version = $release.tag_name -replace "^v", ""
+          }
+
+          # Strip v prefix if present
+          $version = $version -replace "^v", ""
+
+          Write-Host "Version to update to: $version"
+          "version=$version" >> $env:GITHUB_OUTPUT
+
+      - name: Check current version
+        id: check
+        shell: pwsh
+        run: |
+          $manifest = Get-Content bucket/ms.json | ConvertFrom-Json
+          $currentVersion = $manifest.version
+          $newVersion = "${{ steps.version.outputs.version }}"
+
+          Write-Host "Current version: $currentVersion"
+          Write-Host "New version: $newVersion"
+
+          if ($currentVersion -eq $newVersion) {
+              Write-Host "Already at latest version"
+              "needs_update=false" >> $env:GITHUB_OUTPUT
+          } else {
+              Write-Host "Update needed"
+              "needs_update=true" >> $env:GITHUB_OUTPUT
+          }
+
+      - name: Fetch checksums
+        if: steps.check.outputs.needs_update == 'true'
+        id: checksums
+        shell: pwsh
+        run: |
+          $version = "${{ steps.version.outputs.version }}"
+          $checksumUrl = "https://github.com/${{ env.RELEASE_REPO }}/releases/download/v${version}/SHA256SUMS.txt"
+
+          Write-Host "Fetching checksums from: $checksumUrl"
+
+          try {
+              $checksums = Invoke-RestMethod $checksumUrl
+              Write-Host "Checksums file contents:"
+              Write-Host $checksums
+
+              # Parse Windows x64 checksum
+              # Format: <sha256>  <filename>
+              $lines = $checksums -split "`n"
+              $windowsLine = $lines | Where-Object { $_ -match "x86_64-pc-windows-msvc\.zip" }
+
+              if (-not $windowsLine) {
+                  throw "Windows x64 binary not found in checksums"
+              }
+
+              $sha256 = ($windowsLine -split "\s+")[0]
+
+              if ($sha256.Length -ne 64) {
+                  throw "Invalid SHA256 hash length: $($sha256.Length)"
+              }
+
+              Write-Host "SHA256 for Windows x64: $sha256"
+              "sha_windows_x64=$sha256" >> $env:GITHUB_OUTPUT
+
+          } catch {
+              Write-Host "Error fetching checksums: $($_.Exception.Message)"
+              exit 1
+          }
+
+      - name: Update manifest
+        if: steps.check.outputs.needs_update == 'true'
+        shell: pwsh
+        run: |
+          $version = "${{ steps.version.outputs.version }}"
+          $sha256 = "${{ steps.checksums.outputs.sha_windows_x64 }}"
+
+          $manifest = Get-Content bucket/ms.json | ConvertFrom-Json
+
+          # Update version
+          $manifest.version = $version
+
+          # Update URL and hash for 64-bit
+          $manifest.architecture."64bit".url = "https://github.com/${{ env.RELEASE_REPO }}/releases/download/v${version}/ms-x86_64-pc-windows-msvc.zip"
+          $manifest.architecture."64bit".hash = $sha256
+
+          # Write updated manifest with proper formatting
+          $manifest | ConvertTo-Json -Depth 10 | Set-Content bucket/ms.json -Encoding UTF8
+
+          Write-Host "Manifest updated successfully"
+          Write-Host "New content:"
+          Get-Content bucket/ms.json
+
+      - name: Validate updated manifest
+        if: steps.check.outputs.needs_update == 'true'
+        shell: pwsh
+        run: |
+          # Install Scoop
+          Set-ExecutionPolicy RemoteSigned -Scope CurrentUser -Force
+          Invoke-RestMethod get.scoop.sh | Invoke-Expression
+
+          # Add local bucket and validate
+          scoop bucket add local $PWD
+          scoop info ms
+
+          if ($LASTEXITCODE -ne 0) {
+              Write-Host "Manifest validation failed"
+              exit 1
+          }
+
+          Write-Host "Manifest validation passed"
+
+      - name: Create Pull Request
+        if: steps.check.outputs.needs_update == 'true'
+        uses: peter-evans/create-pull-request@v5
+        with:
+          commit-message: "Update ms to v${{ steps.version.outputs.version }}"
+          title: "Update ms to v${{ steps.version.outputs.version }}"
+          body: |
+            Automated update of ms manifest to version ${{ steps.version.outputs.version }}.
+
+            ## Changes
+            - Updated version to `${{ steps.version.outputs.version }}`
+            - Updated SHA256 hash for Windows x64
+
+            ## Checksum
+            | Platform | SHA256 |
+            |----------|--------|
+            | Windows x64 | `${{ steps.checksums.outputs.sha_windows_x64 }}` |
+
+            ## Testing
+            After merging, test with:
+            ```powershell
+            scoop update
+            scoop update ms
+            ms --version
+            ```
+
+            ---
+            *This PR was automatically created by the update workflow.*
+          branch: "update-v${{ steps.version.outputs.version }}"
+          base: main
+          delete-branch: true
+
+      - name: Summary
+        if: always()
+        shell: pwsh
+        run: |
+          $needsUpdate = "${{ steps.check.outputs.needs_update }}"
+
+          if ($needsUpdate -eq "true") {
+              @"
+          ## Manifest Update Summary
+
+          - **Version**: ${{ steps.version.outputs.version }}
+          - **PR Branch**: update-v${{ steps.version.outputs.version }}
+
+          ### Checksum
+          | Platform | SHA256 |
+          |----------|--------|
+          | Windows x64 | ``${{ steps.checksums.outputs.sha_windows_x64 }}`` |
+
+          "@ >> $env:GITHUB_STEP_SUMMARY
+          } else {
+              @"
+          ## Manifest Update Summary
+
+          No update needed - already at version ${{ steps.version.outputs.version }}.
+
+          "@ >> $env:GITHUB_STEP_SUMMARY
+          }

@@ -1,0 +1,86 @@
+# ci.yml - Validate Scoop manifests
+#
+# Runs on push/PR to validate manifest JSON syntax and structure.
+
+name: CI
+
+on:
+  push:
+    paths:
+      - "bucket/*.json"
+  pull_request:
+    paths:
+      - "bucket/*.json"
+
+jobs:
+  validate:
+    name: Validate Manifests
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install Scoop
+        run: |
+          Set-ExecutionPolicy RemoteSigned -Scope CurrentUser -Force
+          Invoke-RestMethod get.scoop.sh | Invoke-Expression
+
+      - name: Add local bucket
+        run: |
+          scoop bucket add local $PWD
+
+      - name: Validate manifests
+        run: |
+          $errors = @()
+          Get-ChildItem bucket/*.json | ForEach-Object {
+              $name = $_.BaseName
+              Write-Host "Validating $name..." -ForegroundColor Cyan
+
+              try {
+                  # Check JSON syntax
+                  $manifest = Get-Content $_.FullName | ConvertFrom-Json
+                  Write-Host "  JSON syntax: OK" -ForegroundColor Green
+
+                  # Check required fields
+                  $required = @('version', 'description', 'homepage', 'license', 'bin')
+                  foreach ($field in $required) {
+                      if (-not $manifest.$field) {
+                          throw "Missing required field: $field"
+                      }
+                  }
+                  Write-Host "  Required fields: OK" -ForegroundColor Green
+
+                  # Check Scoop can parse it
+                  $info = scoop info $name 2>&1
+                  if ($LASTEXITCODE -ne 0) {
+                      throw "Scoop info failed: $info"
+                  }
+                  Write-Host "  Scoop parsing: OK" -ForegroundColor Green
+
+              } catch {
+                  Write-Host "  ERROR: $($_.Exception.Message)" -ForegroundColor Red
+                  $errors += "$name`: $($_.Exception.Message)"
+              }
+          }
+
+          if ($errors.Count -gt 0) {
+              Write-Host "`nValidation failed with $($errors.Count) error(s):" -ForegroundColor Red
+              $errors | ForEach-Object { Write-Host "  - $_" -ForegroundColor Red }
+              exit 1
+          }
+
+          Write-Host "`nAll manifests validated successfully!" -ForegroundColor Green
+
+      - name: Summary
+        if: always()
+        run: |
+          $manifests = Get-ChildItem bucket/*.json | Select-Object -ExpandProperty BaseName
+          @"
+          ## Manifest Validation Results
+
+          | Manifest | Status |
+          |----------|--------|
+          $($manifests | ForEach-Object { "| $_ | $( if ($LASTEXITCODE -eq 0) { ':white_check_mark: Valid' } else { ':x: Invalid' }) |" } | Out-String)
+
+          "@ >> $env:GITHUB_STEP_SUMMARY

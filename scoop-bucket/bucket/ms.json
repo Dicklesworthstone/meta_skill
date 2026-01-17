@@ -1,0 +1,34 @@
+{
+    "$schema": "https://raw.githubusercontent.com/ScoopInstaller/Scoop/master/schema.json",
+    "version": "0.1.0",
+    "description": "Meta Skill - Local-first skill management platform for AI agents",
+    "homepage": "https://github.com/Dicklesworthstone/meta_skill",
+    "license": "MIT",
+    "architecture": {
+        "64bit": {
+            "url": "https://github.com/Dicklesworthstone/meta_skill/releases/download/v0.1.0/ms-x86_64-pc-windows-msvc.zip",
+            "hash": "PLACEHOLDER_SHA256_WINDOWS_X64"
+        }
+    },
+    "bin": "ms.exe",
+    "checkver": {
+        "github": "https://github.com/Dicklesworthstone/meta_skill"
+    },
+    "autoupdate": {
+        "architecture": {
+            "64bit": {
+                "url": "https://github.com/Dicklesworthstone/meta_skill/releases/download/v$version/ms-x86_64-pc-windows-msvc.zip",
+                "hash": {
+                    "url": "https://github.com/Dicklesworthstone/meta_skill/releases/download/v$version/SHA256SUMS.txt",
+                    "regex": "([a-fA-F0-9]{64})\\s+ms-x86_64-pc-windows-msvc\\.zip"
+                }
+            }
+        }
+    },
+    "post_install": "Write-Host 'Run ms init --global to set up global configuration' -ForegroundColor Cyan",
+    "notes": [
+        "Run 'ms init --global' to set up global configuration",
+        "Run 'ms doctor' to verify installation",
+        "For full documentation, see: https://github.com/Dicklesworthstone/meta_skill#readme"
+    ]
+}

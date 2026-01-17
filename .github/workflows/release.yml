@@ -197,3 +197,39 @@ jobs:
           echo "- **Target**: Dicklesworthstone/homebrew-tap" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "Check the [homebrew-tap repository](https://github.com/Dicklesworthstone/homebrew-tap/actions) for the update PR." >> $GITHUB_STEP_SUMMARY
+
+  # Trigger Scoop bucket update
+  update-scoop:
+    name: Trigger Scoop Bucket Update
+    needs: release
+    runs-on: ubuntu-latest
+    if: success()
+
+    steps:
+      - name: Determine version
+        id: version
+        run: |
+          if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
+            echo "version=${{ github.event.inputs.version }}" >> $GITHUB_OUTPUT
+          else
+            echo "version=${GITHUB_REF#refs/tags/v}" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Trigger Scoop bucket update
+        uses: peter-evans/repository-dispatch@v3
+        with:
+          token: ${{ secrets.BUCKET_UPDATE_TOKEN }}
+          repository: Dicklesworthstone/scoop-bucket
+          event-type: release
+          client-payload: '{"version": "${{ steps.version.outputs.version }}"}'
+
+      - name: Summary
+        run: |
+          echo "## Scoop Bucket Update Triggered" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "A repository dispatch event has been sent to update the Scoop bucket manifest." >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "- **Version**: ${{ steps.version.outputs.version }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Target**: Dicklesworthstone/scoop-bucket" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "Check the [scoop-bucket repository](https://github.com/Dicklesworthstone/scoop-bucket/actions) for the update PR." >> $GITHUB_STEP_SUMMARY
