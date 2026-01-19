@@ -12,41 +12,42 @@ Treat "never delete files without permission" as a hard invariant.
 
 ---
 
-## RULE 2 – BEADS/BD DATABASE SAFETY (ABSOLUTE)
+## RULE 2 – BEADS/BR DATABASE SAFETY (ABSOLUTE)
 
 **SQLite + WAL = DATA LOSS RISK.** The beads system uses SQLite with Write-Ahead Logging. Improper handling WILL destroy uncommitted data.
 
-### BEFORE Running Parallel Agents That Use `bd`
+**Note:** `br` (beads_rust) is non-invasive—it has NO daemon and NEVER executes git commands automatically. You must manually run `git add .beads/ && git commit` after `br sync --flush-only`.
 
-You MUST complete this checklist BEFORE launching any parallel agents/subagents that will run `bd update`, `bd create`, or any bd write operations:
+### BEFORE Running Parallel Agents That Use `br`
+
+You MUST complete this checklist BEFORE launching any parallel agents/subagents that will run `br update`, `br create`, or any br write operations:
 
 ```bash
-# 1. Check for stale bd processes (MUST be zero or only 1 daemon)
+# 1. Check for stale br processes
 lsof .beads/beads.db 2>/dev/null | wc -l
-# If more than 2 lines (header + 1 daemon), STOP. Ask user.
+# Should be 0 or 1. If more, wait for other agents to finish.
 
-# 2. Verify daemon health
-bd doctor 2>&1 | grep -E "(✖|FAIL|Error)"
+# 2. Run doctor checks
+br doctor 2>&1 | grep -E "(✖|FAIL|Error)"
 # If any failures, STOP. Ask user.
 
 # 3. Verify sync status
-bd sync --status 2>&1
-# Must show "no differences". If not, run `bd sync` first.
+br sync --status 2>&1
+# Check if DB and JSONL are in sync
 ```
 
 **If ANY check fails: STOP and ask the user. Do NOT proceed.**
 
 ### DURING Parallel Agent Work
 
-- **SYNC AFTER EACH BATCH**: Run `bd sync` after each agent completes, NOT at the end
-- **NEVER batch syncs**: If Agent 1 finishes, sync immediately. Don't wait for Agents 2-6.
-- **Monitor for failures**: If any `bd update` or `bd sync` fails, STOP ALL AGENTS
+- **FLUSH AFTER EACH BATCH**: Run `br sync --flush-only` after each agent completes
+- **COMMIT PERIODICALLY**: Run `git add .beads/ && git commit` to persist changes
+- **Monitor for failures**: If any `br` command fails, STOP ALL AGENTS
 
 ### FORBIDDEN ACTIONS (Will Destroy Data)
 
 1. **NEVER kill processes holding `.beads/beads.db`**
-   - `kill` on bd processes with open WAL = DATA LOSS
-   - The WAL contains uncommitted transactions that will be destroyed
+   - The WAL may contain uncommitted transactions
 
 2. **NEVER delete or modify these files manually:**
    - `.beads/beads.db`
@@ -55,21 +56,20 @@ bd sync --status 2>&1
 
 3. **NEVER run `rm .beads/beads.db*` to "fix" issues**
 
-### When `bd sync` or `bd export` Fails
+### When `br sync` Fails
 
 **STOP IMMEDIATELY. Ask the user.** Do not attempt to:
 - Kill processes
 - Delete database files
 - Delete WAL files
-- "Fix" the daemon yourself
 
-The correct response is: "bd sync is failing with [error]. I need your guidance before proceeding."
+The correct response is: "br sync is failing with [error]. I need your guidance before proceeding."
 
 ### Recovery After Disaster
 
 If data was lost, check these locations for recovery:
 - Agent output files: `/tmp/claude/-data-projects-*/tasks/*.output`
-- These contain the full command history including file contents that were passed to `bd update`
+- Git history: `.beads/issues.jsonl` is git-tracked and may have recoverable versions
 
 ---
 
@@ -248,7 +248,10 @@ Treat cass as a way to avoid re-solving problems other agents already handled.
 4. **PUSH TO REMOTE** - This is MANDATORY:
    ```bash
    git pull --rebase
-   bd sync
+   br sync --flush-only    # Export beads to JSONL (no git ops)
+   git add .beads/         # Stage beads changes
+   git add <other files>   # Stage code changes
+   git commit -m "..."     # Commit everything
    git push
    git status  # MUST show "up to date with origin"
    ```
@@ -419,7 +422,9 @@ ru list --paths            # Repo paths (stdout)
 
 ## Beads Workflow Integration
 
-This project uses [beads_viewer](https://github.com/Dicklesworthstone/beads_viewer) for issue tracking. Issues are stored in `.beads/` and tracked in git.
+This project uses [beads_rust](https://github.com/Dicklesworthstone/beads_rust) (`br`) for issue tracking. Issues are stored in `.beads/` and tracked in git.
+
+**Important:** `br` is non-invasive—it NEVER executes git commands. After `br sync --flush-only`, you must manually run `git add .beads/ && git commit`.
 
 ### Essential Commands
 
@@ -428,30 +433,30 @@ This project uses [beads_viewer](https://github.com/Dicklesworthstone/beads_view
 bv
 
 # CLI commands for agents (use these instead)
-bd ready              # Show issues ready to work (no blockers)
-bd list --status=open # All open issues
-bd show <id>          # Full issue details with dependencies
-bd create --title="..." --type=task --priority=2
-bd update <id> --status=in_progress
-bd close <id> --reason="Completed"
-bd close <id1> <id2>  # Close multiple issues at once
-bd sync               # Commit and push changes
+br ready              # Show issues ready to work (no blockers)
+br list --status=open # All open issues
+br show <id>          # Full issue details with dependencies
+br create --title="..." --type=task --priority=2
+br update <id> --status=in_progress
+br close <id> --reason="Completed"
+br close <id1> <id2>  # Close multiple issues at once
+br sync --flush-only  # Export to JSONL (NO git operations)
 ```
 
 ### Workflow Pattern
 
-1. **Start**: Run `bd ready` to find actionable work
-2. **Claim**: Use `bd update <id> --status=in_progress`
+1. **Start**: Run `br ready` to find actionable work
+2. **Claim**: Use `br update <id> --status=in_progress`
 3. **Work**: Implement the task
-4. **Complete**: Use `bd close <id>`
-5. **Sync**: Always run `bd sync` at session end
+4. **Complete**: Use `br close <id>`
+5. **Sync**: Run `br sync --flush-only` then manually commit
 
 ### Key Concepts
 
-- **Dependencies**: Issues can block other issues. `bd ready` shows only unblocked work.
+- **Dependencies**: Issues can block other issues. `br ready` shows only unblocked work.
 - **Priority**: P0=critical, P1=high, P2=medium, P3=low, P4=backlog (use numbers, not words)
 - **Types**: task, bug, feature, epic, question, docs
-- **Blocking**: `bd dep add <issue> <depends-on>` to add dependencies
+- **Blocking**: `br dep add <issue> <depends-on>` to add dependencies
 
 ### Session Protocol
 
@@ -460,46 +465,46 @@ bd sync               # Commit and push changes
 ```bash
 git status              # Check what changed
 git add <files>         # Stage code changes
-bd sync                 # Commit beads changes
-git commit -m "..."     # Commit code
-bd sync                 # Commit any new beads changes
+br sync --flush-only    # Export beads to JSONL
+git add .beads/         # Stage beads changes
+git commit -m "..."     # Commit everything together
 git push                # Push to remote
 ```
 
 ### Best Practices
 
-- Check `bd ready` at session start to find available work
+- Check `br ready` at session start to find available work
 - Update status as you work (in_progress → closed)
-- Create new issues with `bd create` when you discover tasks
+- Create new issues with `br create` when you discover tasks
 - Use descriptive titles and set appropriate priority/type
-- Always `bd sync` before ending session
+- Always `br sync --flush-only && git add .beads/` before ending session
 
 ### CRITICAL: Parallel Agent Safety
 
 **READ RULE 2 ABOVE BEFORE RUNNING PARALLEL AGENTS.**
 
-When running multiple agents that use `bd update`:
+When running multiple agents that use `br update`:
 
 1. **Pre-flight checks are MANDATORY** (see Rule 2 checklist)
-2. **Sync after EACH agent completes** - not at the end
-3. **If bd sync fails: STOP ALL WORK and ask user**
+2. **Flush and commit after EACH agent completes** - not at the end
+3. **If br sync fails: STOP ALL WORK and ask user**
 
 ```bash
-# WRONG - will lose data if sync fails at end
+# WRONG - may lose data if something fails at end
 for agent in 1 2 3 4 5 6; do
-  run_agent $agent  # Each does bd update
+  run_agent $agent  # Each does br update
 done
-bd sync  # If this fails, ALL work is lost
+br sync --flush-only  # If this fails, work not persisted to JSONL
 
-# RIGHT - sync after each batch
+# RIGHT - flush and commit after each batch
 run_agent 1
-bd sync  # Persist immediately
+br sync --flush-only && git add .beads/ && git commit -m "Agent 1 work"
 run_agent 2
-bd sync  # Persist immediately
+br sync --flush-only && git add .beads/ && git commit -m "Agent 2 work"
 # ... etc
 ```
 
-**The SQLite WAL can hold uncommitted data. If you kill processes or the daemon crashes before export, THAT DATA IS GONE FOREVER.**
+**The SQLite WAL can hold uncommitted data. Always flush to JSONL and commit to git to persist changes.**
 
 <!-- end-bv-agent-instructions -->
 
