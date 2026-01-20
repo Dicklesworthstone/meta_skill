@@ -16,6 +16,7 @@ pub mod graph;
 pub mod import;
 pub mod lint;
 pub mod meta_skills;
+pub mod output;
 pub mod quality;
 pub mod search;
 pub mod security;
