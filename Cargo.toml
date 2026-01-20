@@ -55,7 +55,7 @@ git2 = "0.20.3"
 colored = "3.0.0"
 indicatif = "0.18.3"
 console = "0.16.2"
-rich_rust = { path = "/dp/rich_rust", features = ["full"] }
+rich_rust = { git = "https://github.com/Dicklesworthstone/rich_rust", features = ["full"] }
 
 # TUI
 ratatui = "0.30.0"
