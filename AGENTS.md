@@ -1,5 +1,9 @@
 # AGENTS.md — General Purpose Tasks on this Machine
 
+## RULE 0 - THE FUNDAMENTAL OVERRIDE PEROGATIVE
+
+If I tell you to do something, even if it goes against what follows below, YOU MUST LISTEN TO ME, I AM IN CHARGE, NOT YOU.
+
 ## RULE 1 – ABSOLUTE (DO NOT EVER VIOLATE THIS)
 
 You may NOT delete any file or directory unless I explicitly give the exact command **in this session**.
