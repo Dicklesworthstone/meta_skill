@@ -1325,6 +1325,106 @@ impl E2EFixture {
         result
     }
 
+    /// Run ms CLI command with additional environment variables.
+    pub fn run_ms_with_env(&mut self, args: &[&str], env_vars: &[(&str, &str)]) -> CommandOutput {
+        let step_name = format!("ms {}", args.join(" "));
+        let start_offset = self.start_time.elapsed();
+        let start = Instant::now();
+
+        println!();
+        println!("[CMD] {} (env overrides: {})", step_name, env_vars.len());
+
+        let mut cmd = Command::new(env!("CARGO_BIN_EXE_ms"));
+        cmd.args(args)
+            .env("HOME", &self.root)
+            .env("MS_ROOT", &self.ms_root)
+            .env("MS_CONFIG", &self.config_path)
+            .current_dir(&self.root);
+
+        for (key, value) in env_vars {
+            cmd.env(key, value);
+        }
+
+        let output = cmd.output().expect("Failed to execute ms command");
+
+        let elapsed = start.elapsed();
+        let stdout = String::from_utf8_lossy(&output.stdout).to_string();
+        let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+        let exit_code = output.status.code().unwrap_or(-1);
+
+        let result = CommandOutput {
+            success: output.status.success(),
+            exit_code,
+            stdout: stdout.clone(),
+            stderr: stderr.clone(),
+            elapsed,
+        };
+
+        println!("[CMD] Exit: {} ({:?})", result.exit_code, elapsed);
+        if !stdout.is_empty() {
+            let preview = if stdout.len() > 500 {
+                format!("{}...", &stdout[..500])
+            } else {
+                stdout.clone()
+            };
+            println!("[STDOUT] {}", preview);
+        }
+        if !stderr.is_empty() {
+            println!("[STDERR] {}", stderr);
+        }
+
+        // Record timing
+        self.operation_timings.push(OperationTiming {
+            name: step_name.clone(),
+            category: "command".to_string(),
+            duration: elapsed,
+            start_offset,
+            step: self.step_count,
+        });
+
+        // Record step result
+        let summary = if result.success {
+            format!("OK ({})", truncate(&stdout, 50))
+        } else {
+            format!("FAIL: {}", truncate(&stderr, 100))
+        };
+
+        self.step_results.push(StepResult {
+            name: step_name.clone(),
+            success: result.success,
+            duration: elapsed,
+            output_summary: summary.clone(),
+            category: "command".to_string(),
+            exit_code: Some(exit_code),
+        });
+
+        if result.success {
+            self.last_success_step = Some(step_name.clone());
+        }
+
+        let level = if result.success {
+            LogLevel::Info
+        } else {
+            LogLevel::Error
+        };
+        self.emit_event(
+            level,
+            "command",
+            &step_name,
+            Some(serde_json::json!({
+                "exit_code": exit_code,
+                "success": result.success,
+                "duration_ms": elapsed.as_millis(),
+                "stdout_len": stdout.len(),
+                "stderr_len": stderr.len(),
+                "args": args,
+                "env_overrides": env_vars.len(),
+            })),
+        );
+
+        result
+    }
+
     /// Initialize ms in the test environment.
     pub fn init(&mut self) -> CommandOutput {
         self.run_ms(&["--robot", "init"])
