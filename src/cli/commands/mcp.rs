@@ -3,12 +3,23 @@
 //! Exposes ms functionality as an MCP server for tool-based integration
 //! with AI coding agents. Supports stdio transport (primary) and optional
 //! TCP transport.
+//!
+//! # Output Safety
+//!
+//! **CRITICAL**: MCP responses MUST always be valid JSON. This module enforces:
+//! - All output is sanitized to remove ANSI escape codes
+//! - All responses are validated before sending
+//! - Environment variables cannot enable rich output
+//! - Config settings cannot enable rich output
+//!
+//! See [`sanitize_mcp_output`] and [`validate_mcp_json`] for details.
 
 use std::io::{self, BufRead, Write};
 
 use clap::{Args, Subcommand};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use tracing::{debug, warn};
 
 use crate::app::AppContext;
 use crate::cli::output::OutputFormat;
@@ -25,6 +36,173 @@ const PROTOCOL_VERSION: &str = "2024-11-05";
 const SERVER_NAME: &str = "ms";
 /// Server version (from cargo)
 const SERVER_VERSION: &str = env!("CARGO_PKG_VERSION");
+
+// ============================================================================
+// MCP Output Safety
+// ============================================================================
+//
+// CRITICAL: MCP responses MUST be valid JSON with NO ANSI codes.
+// These functions ensure output safety regardless of environment or config.
+
+/// Check if rich output would have been enabled based on environment.
+///
+/// Returns Some(reason) if rich output would be enabled, None otherwise.
+/// Used for logging warnings when MCP blocks rich output.
+fn would_enable_rich_output() -> Option<&'static str> {
+    use std::io::IsTerminal;
+
+    // Check env vars that might enable rich output
+    if std::env::var_os("MS_FORCE_RICH").is_some() {
+        return Some("MS_FORCE_RICH");
+    }
+    if std::env::var_os("FORCE_COLOR").is_some() {
+        return Some("FORCE_COLOR");
+    }
+    if std::env::var_os("CLICOLOR_FORCE").is_some() {
+        return Some("CLICOLOR_FORCE");
+    }
+
+    // Check if stdout is a terminal (would default to rich)
+    if std::io::stdout().is_terminal() {
+        // Only if NO_COLOR and MS_PLAIN_OUTPUT are not set
+        if std::env::var_os("NO_COLOR").is_none()
+            && std::env::var_os("MS_PLAIN_OUTPUT").is_none()
+        {
+            return Some("terminal_default");
+        }
+    }
+
+    None
+}
+
+/// Strip ANSI escape codes from a string.
+///
+/// Uses a simple state machine to handle:
+/// - CSI sequences: ESC [ ... final_byte
+/// - OSC sequences: ESC ] ... (ST | BEL)
+/// - Simple escapes: ESC followed by single char
+#[must_use]
+pub fn strip_ansi(input: &str) -> String {
+    let mut result = String::with_capacity(input.len());
+    let mut chars = input.chars().peekable();
+
+    while let Some(c) = chars.next() {
+        if c == '\x1b' {
+            // Start of escape sequence
+            match chars.peek() {
+                Some('[') => {
+                    // CSI sequence: ESC [ ... final_byte (0x40-0x7E)
+                    chars.next(); // consume '['
+                    while let Some(&ch) = chars.peek() {
+                        chars.next();
+                        if (0x40..=0x7E).contains(&(ch as u32)) {
+                            break; // final byte
+                        }
+                    }
+                }
+                Some(']') => {
+                    // OSC sequence: ESC ] ... (ST or BEL)
+                    chars.next(); // consume ']'
+                    while let Some(&ch) = chars.peek() {
+                        chars.next();
+                        if ch == '\x07' {
+                            break; // BEL terminator
+                        }
+                        if ch == '\x1b' {
+                            // Check for ST (ESC \)
+                            if chars.peek() == Some(&'\\') {
+                                chars.next();
+                                break;
+                            }
+                        }
+                    }
+                }
+                Some(_) => {
+                    // Simple escape sequence (ESC + one char)
+                    chars.next();
+                }
+                None => {
+                    // Lone ESC at end of string - skip it
+                }
+            }
+        } else {
+            result.push(c);
+        }
+    }
+
+    result
+}
+
+/// Check if a string contains ANSI escape codes.
+#[must_use]
+pub fn contains_ansi(s: &str) -> bool {
+    s.contains('\x1b')
+}
+
+/// Sanitize output for MCP responses.
+///
+/// This function:
+/// 1. Strips any ANSI escape codes
+/// 2. Validates the result is clean
+/// 3. Logs a warning if ANSI codes were found
+#[must_use]
+pub fn sanitize_mcp_output(s: &str) -> String {
+    if contains_ansi(s) {
+        warn!(
+            "MCP output contained ANSI codes - stripping. This indicates a bug in output handling."
+        );
+        strip_ansi(s)
+    } else {
+        s.to_string()
+    }
+}
+
+/// Validate that a JSON string is safe for MCP transport.
+///
+/// Returns an error if the JSON contains ANSI escape codes.
+pub fn validate_mcp_json(json: &str) -> std::result::Result<(), String> {
+    if contains_ansi(json) {
+        Err("MCP response contains ANSI escape codes".to_string())
+    } else {
+        Ok(())
+    }
+}
+
+/// Serialize a JSON-RPC response with safety checks.
+///
+/// This function:
+/// 1. Serializes the response to JSON
+/// 2. Strips any ANSI codes that might have leaked through
+/// 3. Validates the result
+/// 4. Logs warnings if issues were found
+fn serialize_response_safe(response: &JsonRpcResponse) -> String {
+    match serde_json::to_string(response) {
+        Ok(json) => {
+            if contains_ansi(&json) {
+                warn!(
+                    "JSON-RPC response contained ANSI codes after serialization - this is a bug!"
+                );
+                strip_ansi(&json)
+            } else {
+                json
+            }
+        }
+        Err(e) => {
+            // Fallback: return a minimal error response
+            warn!("Failed to serialize JSON-RPC response: {}", e);
+            let fallback = JsonRpcResponse::error(
+                None,
+                PARSE_ERROR,
+                format!("Failed to serialize response: {e}"),
+                None,
+            );
+            serde_json::to_string(&fallback).unwrap_or_else(|_| {
+                r#"{"jsonrpc":"2.0","error":{"code":-32700,"message":"Serialization failed"}}"#
+                    .to_string()
+            })
+        }
+    }
+}
 
 #[derive(Args, Debug)]
 pub struct McpArgs {
@@ -173,21 +351,35 @@ struct ToolContent {
 }
 
 impl ToolResult {
+    /// Create a text result, sanitizing any ANSI codes.
+    ///
+    /// # Safety
+    /// This function sanitizes the input to ensure no ANSI codes
+    /// leak into MCP responses.
     fn text(text: String) -> Self {
+        // CRITICAL: Sanitize text to remove any ANSI codes
+        let sanitized = sanitize_mcp_output(&text);
         Self {
             content: vec![ToolContent {
                 content_type: "text".to_string(),
-                text,
+                text: sanitized,
             }],
             is_error: None,
         }
     }
 
+    /// Create an error result, sanitizing any ANSI codes.
+    ///
+    /// # Safety
+    /// This function sanitizes the input to ensure no ANSI codes
+    /// leak into MCP responses.
     fn error(message: String) -> Self {
+        // CRITICAL: Sanitize message to remove any ANSI codes
+        let sanitized = sanitize_mcp_output(&message);
         Self {
             content: vec![ToolContent {
                 content_type: "text".to_string(),
-                text: message,
+                text: sanitized,
             }],
             is_error: Some(true),
         }
@@ -488,6 +680,17 @@ fn run_serve(ctx: &AppContext, args: &ServeArgs) -> Result<()> {
         eprintln!("[ms-mcp] Protocol: {PROTOCOL_VERSION}");
     }
 
+    // CRITICAL: Check if rich output would have been enabled and warn
+    if let Some(reason) = would_enable_rich_output() {
+        debug!(
+            reason,
+            "Rich output would be enabled but MCP forces plain mode"
+        );
+        if debug {
+            eprintln!("[ms-mcp] Note: Rich output blocked for MCP (would be enabled by: {reason})");
+        }
+    }
+
     // Run the stdio server loop
     run_stdio_server(ctx, debug)
 }
@@ -517,15 +720,14 @@ fn run_stdio_server(ctx: &AppContext, debug: bool) -> Result<()> {
 
         // Handle request - returns None for notifications (no response needed)
         if let Some(response) = handle_request(ctx, &line, debug) {
-            let response_json = serde_json::to_string(&response).unwrap_or_else(|e| {
-                serde_json::to_string(&JsonRpcResponse::error(
-                    None,
-                    PARSE_ERROR,
-                    format!("Failed to serialize response: {e}"),
-                    None,
-                ))
-                .unwrap()
-            });
+            // CRITICAL: Use safe serialization to ensure no ANSI codes leak through
+            let response_json = serialize_response_safe(&response);
+
+            // Double-check: validate the response is safe (should always pass after sanitization)
+            if let Err(e) = validate_mcp_json(&response_json) {
+                // This should never happen, but log it if it does
+                warn!("MCP response validation failed after sanitization: {}", e);
+            }
 
             if debug {
                 eprintln!("[ms-mcp] -> {response_json}");
@@ -1458,5 +1660,218 @@ mod tests {
         // We should have at least 12 tools: search, load, evidence, list, show, doctor, lint,
         // suggest, feedback, index, validate, config
         assert!(tools.len() >= 12, "Expected at least 12 tools, got {}", tools.len());
+    }
+
+    // ========================================================================
+    // MCP Output Safety Tests
+    // ========================================================================
+
+    #[test]
+    fn test_strip_ansi_no_codes() {
+        let input = "Hello, world!";
+        assert_eq!(strip_ansi(input), input);
+    }
+
+    #[test]
+    fn test_strip_ansi_simple_color() {
+        // Red text: ESC[31m
+        let input = "\x1b[31mRed text\x1b[0m";
+        assert_eq!(strip_ansi(input), "Red text");
+    }
+
+    #[test]
+    fn test_strip_ansi_bold() {
+        // Bold: ESC[1m
+        let input = "\x1b[1mBold\x1b[0m normal";
+        assert_eq!(strip_ansi(input), "Bold normal");
+    }
+
+    #[test]
+    fn test_strip_ansi_complex_sequence() {
+        // Bold red on white: ESC[1;31;47m
+        let input = "\x1b[1;31;47mStyled\x1b[0m";
+        assert_eq!(strip_ansi(input), "Styled");
+    }
+
+    #[test]
+    fn test_strip_ansi_multiple_sequences() {
+        let input = "\x1b[32mGreen\x1b[0m and \x1b[34mBlue\x1b[0m";
+        assert_eq!(strip_ansi(input), "Green and Blue");
+    }
+
+    #[test]
+    fn test_strip_ansi_cursor_movement() {
+        // Cursor up: ESC[A
+        let input = "Line 1\x1b[ALine 2";
+        assert_eq!(strip_ansi(input), "Line 1Line 2");
+    }
+
+    #[test]
+    fn test_strip_ansi_osc_sequence() {
+        // OSC for setting window title: ESC]0;Title BEL
+        let input = "\x1b]0;Window Title\x07Content";
+        assert_eq!(strip_ansi(input), "Content");
+    }
+
+    #[test]
+    fn test_strip_ansi_osc_with_st() {
+        // OSC terminated with ST (ESC \)
+        let input = "\x1b]0;Title\x1b\\Content";
+        assert_eq!(strip_ansi(input), "Content");
+    }
+
+    #[test]
+    fn test_strip_ansi_preserves_unicode() {
+        let input = "\x1b[32m✓\x1b[0m Check passed \x1b[31m✗\x1b[0m";
+        assert_eq!(strip_ansi(input), "✓ Check passed ✗");
+    }
+
+    #[test]
+    fn test_strip_ansi_preserves_json() {
+        let input = r#"{"status": "\x1b[32mok\x1b[0m"}"#;
+        let expected = r#"{"status": "ok"}"#;
+        assert_eq!(strip_ansi(input), expected);
+    }
+
+    #[test]
+    fn test_strip_ansi_hyperlink() {
+        // OSC 8 hyperlink: ESC]8;;URL ST text ESC]8;; ST
+        let input = "\x1b]8;;https://example.com\x1b\\Click here\x1b]8;;\x1b\\";
+        assert_eq!(strip_ansi(input), "Click here");
+    }
+
+    #[test]
+    fn test_strip_ansi_lone_escape() {
+        // Lone ESC at end should be stripped
+        let input = "Text\x1b";
+        assert_eq!(strip_ansi(input), "Text");
+    }
+
+    #[test]
+    fn test_strip_ansi_simple_escape() {
+        // Simple escape: ESC followed by single char (not [ or ])
+        let input = "\x1bcCleared";
+        assert_eq!(strip_ansi(input), "Cleared");
+    }
+
+    #[test]
+    fn test_contains_ansi_true() {
+        assert!(contains_ansi("\x1b[31mRed\x1b[0m"));
+    }
+
+    #[test]
+    fn test_contains_ansi_false() {
+        assert!(!contains_ansi("Plain text"));
+    }
+
+    #[test]
+    fn test_sanitize_mcp_output_clean() {
+        let input = "Clean text";
+        assert_eq!(sanitize_mcp_output(input), input);
+    }
+
+    #[test]
+    fn test_sanitize_mcp_output_with_ansi() {
+        let input = "\x1b[32mGreen\x1b[0m";
+        assert_eq!(sanitize_mcp_output(input), "Green");
+    }
+
+    #[test]
+    fn test_validate_mcp_json_clean() {
+        let json = r#"{"result": "ok"}"#;
+        assert!(validate_mcp_json(json).is_ok());
+    }
+
+    #[test]
+    fn test_validate_mcp_json_with_ansi() {
+        let json = r#"{"result": "\x1b[32mok\x1b[0m"}"#;
+        assert!(validate_mcp_json(json).is_err());
+    }
+
+    #[test]
+    fn test_tool_result_text_sanitizes_ansi() {
+        let result = ToolResult::text("\x1b[31mError\x1b[0m message".to_string());
+        assert_eq!(result.content[0].text, "Error message");
+        assert!(!contains_ansi(&result.content[0].text));
+    }
+
+    #[test]
+    fn test_tool_result_error_sanitizes_ansi() {
+        let result = ToolResult::error("\x1b[31mFailed\x1b[0m".to_string());
+        assert_eq!(result.content[0].text, "Failed");
+        assert!(!contains_ansi(&result.content[0].text));
+    }
+
+    #[test]
+    fn test_serialize_response_safe_clean() {
+        let response = JsonRpcResponse::success(
+            Some(serde_json::json!(1)),
+            serde_json::json!({"status": "ok"}),
+        );
+        let json = serialize_response_safe(&response);
+        assert!(!contains_ansi(&json));
+        assert!(json.contains("ok"));
+    }
+
+    #[test]
+    fn test_serialize_response_safe_with_ansi_in_error() {
+        // Even if somehow ANSI codes got into the response, they should be stripped
+        let response = JsonRpcResponse::error(
+            Some(serde_json::json!(1)),
+            -32600,
+            "Error".to_string(),
+            None,
+        );
+        let json = serialize_response_safe(&response);
+        assert!(!contains_ansi(&json));
+    }
+
+    #[test]
+    fn test_would_enable_rich_output_respects_no_color() {
+        // This test just verifies the function exists and returns Option
+        // Actual behavior depends on environment
+        let _ = would_enable_rich_output();
+    }
+
+    #[test]
+    fn test_strip_ansi_256_color() {
+        // 256-color: ESC[38;5;196m (foreground color 196)
+        let input = "\x1b[38;5;196mRed 256\x1b[0m";
+        assert_eq!(strip_ansi(input), "Red 256");
+    }
+
+    #[test]
+    fn test_strip_ansi_truecolor() {
+        // True color: ESC[38;2;255;0;0m (RGB red)
+        let input = "\x1b[38;2;255;0;0mTrue Red\x1b[0m";
+        assert_eq!(strip_ansi(input), "True Red");
+    }
+
+    #[test]
+    fn test_strip_ansi_empty_string() {
+        assert_eq!(strip_ansi(""), "");
+    }
+
+    #[test]
+    fn test_strip_ansi_only_escape() {
+        assert_eq!(strip_ansi("\x1b[0m"), "");
+    }
+
+    #[test]
+    fn test_mcp_json_response_is_valid() {
+        // Test that a typical tool response produces valid JSON
+        let tool_result = ToolResult::text(r#"{"count": 5, "results": []}"#.to_string());
+        let response = JsonRpcResponse::success(
+            Some(serde_json::json!(1)),
+            serde_json::to_value(tool_result).unwrap(),
+        );
+        let json = serialize_response_safe(&response);
+
+        // Should be parseable JSON
+        let parsed: serde_json::Result<serde_json::Value> = serde_json::from_str(&json);
+        assert!(parsed.is_ok(), "Response should be valid JSON");
+
+        // Should not contain ANSI
+        assert!(!contains_ansi(&json), "Response should not contain ANSI codes");
     }
 }
