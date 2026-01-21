@@ -34,6 +34,7 @@
 //! output.key_value("Found", "42 skills");
 //! ```
 
+pub mod builders;
 pub mod detection;
 pub mod rich_output;
 pub mod theme;
@@ -57,4 +58,19 @@ pub use theme::{
     BoxChars, BoxStyle, ProgressChars, ProgressStyle, TerminalBackground,
     TerminalCapabilities, Theme, ThemeColors, ThemeError, ThemeIcons, ThemePreset,
     TreeChars, TreeGuides, detect_terminal_background, detect_terminal_capabilities,
+};
+
+// Re-export builder types and functions
+pub use builders::{
+    CheckResult, CheckStatus,
+    bulleted_list, bulleted_list_plain,
+    error_panel, error_panel_with_hint, error_panel_with_hint_and_width, error_panel_with_width,
+    key_value_plain, key_value_table,
+    numbered_list,
+    progress_line, progress_line_plain,
+    quality_bar, quality_bar_plain, quality_indicator,
+    search_results_table, search_results_table_with_id,
+    skill_detail_panel, skill_detail_panel_with_width, skill_panel, skill_panel_with_width,
+    status_tree, status_tree_with_title,
+    success_panel, success_panel_with_width, warning_panel, warning_panel_with_width,
 };
