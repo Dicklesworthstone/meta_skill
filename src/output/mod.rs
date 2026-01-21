@@ -40,6 +40,7 @@
 
 pub mod builders;
 pub mod detection;
+pub mod errors;
 pub mod plain_format;
 pub mod rich_output;
 pub mod theme;
@@ -80,6 +81,12 @@ pub use builders::{
 pub use plain_format::{
     JsonEnvelope, JsonError, JsonErrorDetail, JsonMeta, PlainCheckResult, PlainCheckResults,
     PlainDone, PlainError, PlainFormatter, PlainKeyValue, PlainProgress, PlainStatus,
+};
+
+// Re-export error display types
+pub use errors::{
+    ErrorChainDisplay, ErrorRenderer, WarningItem, WarningRenderer, error_to_json, error_to_plain,
+    render_error, render_structured_error, render_warning,
 };
 
 /// Plain format utilities for TSV escaping, score formatting, etc.
