@@ -39,12 +39,8 @@ use std::sync::Arc;
 use parking_lot::Mutex;
 use rich_rust::color::ColorSystem;
 use rich_rust::console::Console;
-use rich_rust::markdown::Markdown;
-use rich_rust::panel::Panel;
+use rich_rust::renderables::{Markdown, Panel, Syntax, Table, Tree};
 use rich_rust::style::Style;
-use rich_rust::syntax::Syntax;
-use rich_rust::table::Table;
-use rich_rust::tree::Tree;
 use serde::Serialize;
 use tracing::trace;
 
@@ -52,10 +48,7 @@ use crate::cli::output::OutputFormat;
 use crate::config::Config;
 
 use super::detection::{OutputDecision, OutputDetector};
-use super::theme::{
-    detect_terminal_capabilities, BoxStyle, TerminalCapabilities,
-    Theme,
-};
+use super::theme::{detect_terminal_capabilities, BoxStyle, Theme};
 
 // =============================================================================
 // Output Mode
@@ -163,10 +156,16 @@ pub struct RichOutput {
     use_unicode: bool,
 }
 
-// SAFETY: RichOutput contains no interior mutability that requires special handling.
-// All mutable operations go through stdout/stderr which are thread-safe.
-unsafe impl Send for RichOutput {}
-unsafe impl Sync for RichOutput {}
+// RichOutput is Send + Sync because all its fields are:
+// - OutputMode: Copy enum
+// - Theme: Send + Sync (contains Style values)
+// - usize: Copy primitive
+// - Option<ColorSystem>: ColorSystem is Copy
+// - bool: Copy primitive
+//
+// Note: We rely on automatic trait derivation rather than unsafe impl.
+// If compilation fails due to missing Send/Sync on a field type,
+// that would indicate a real thread-safety issue to investigate.
 
 impl RichOutput {
     // =========================================================================
@@ -447,8 +446,8 @@ impl RichOutput {
             let console = Console::new();
             console.print_renderable(table);
         } else {
-            // Render table as plain text
-            println!("{}", table.render_plain());
+            // Render table as plain text with terminal width
+            println!("{}", table.render_plain(self.width));
         }
     }
 
@@ -459,7 +458,7 @@ impl RichOutput {
         trace!(mode = ?self.mode, title = ?title, "print_panel");
 
         if self.is_rich() {
-            let mut panel = Panel::new(content);
+            let mut panel = Panel::from_text(content);
             if let Some(t) = title {
                 panel = panel.title(t);
             }
@@ -511,8 +510,8 @@ impl RichOutput {
             let console = Console::new();
             console.print_renderable(tree);
         } else {
-            // Render tree as plain indented text
-            println!("{}", tree.render_plain(&self.theme.tree_guides.chars()));
+            // Render tree as plain indented text (tree.render_plain() uses internal guides)
+            println!("{}", tree.render_plain());
         }
     }
 
@@ -1075,37 +1074,6 @@ fn strip_markup(text: &str) -> String {
     }
 
     result
-}
-
-// =============================================================================
-// Extension Traits for rich_rust types
-// =============================================================================
-
-/// Extension trait for Table to support plain rendering.
-pub trait TableExt {
-    /// Render the table as plain text.
-    fn render_plain(&self) -> String;
-}
-
-impl TableExt for Table {
-    fn render_plain(&self) -> String {
-        // Delegate to rich_rust's plain rendering or implement simple version
-        // For now, use the default string representation
-        format!("{self:?}")
-    }
-}
-
-/// Extension trait for Tree to support plain rendering.
-pub trait TreeExt {
-    /// Render the tree as plain indented text.
-    fn render_plain(&self, chars: &super::theme::TreeChars) -> String;
-}
-
-impl TreeExt for Tree {
-    fn render_plain(&self, _chars: &super::theme::TreeChars) -> String {
-        // Delegate to rich_rust's plain rendering or implement simple version
-        format!("{self:?}")
-    }
 }
 
 // =============================================================================
