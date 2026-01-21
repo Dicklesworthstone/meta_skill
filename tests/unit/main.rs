@@ -11,3 +11,4 @@ mod perf_target_tests;
 mod quality_tests;
 mod skill_spec_tests;
 mod template_tests;
+mod theme_tests;
