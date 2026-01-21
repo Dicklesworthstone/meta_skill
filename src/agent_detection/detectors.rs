@@ -52,7 +52,10 @@ fn get_version_from_command(binary: &str, args: &[&str]) -> Option<String> {
 fn extract_version(s: &str) -> Option<String> {
     // Match patterns like "v1.2.3", "1.2.3", "version 1.2.3"
     let s = s.to_lowercase();
-    let s = s.trim_start_matches("version").trim_start_matches("v").trim();
+    let s = s
+        .trim_start_matches("version")
+        .trim_start_matches("v")
+        .trim();
 
     // Find the start of a version number (digit)
     let start = s.find(|c: char| c.is_ascii_digit())?;
@@ -156,10 +159,7 @@ impl AgentDetector for ClaudeCodeDetector {
     }
 
     fn get_integration_paths(&self) -> Vec<PathBuf> {
-        vec![
-            PathBuf::from("SKILL.md"),
-            PathBuf::from(".claude/SKILL.md"),
-        ]
+        vec![PathBuf::from("SKILL.md"), PathBuf::from(".claude/SKILL.md")]
     }
 }
 
@@ -483,8 +483,7 @@ impl AgentDetector for ClineDetector {
 
     fn get_config_path(&self) -> Option<PathBuf> {
         // Cline uses VSCode settings
-        self.home_dir()
-            .map(|h| h.join(".vscode/settings.json"))
+        self.home_dir().map(|h| h.join(".vscode/settings.json"))
     }
 
     fn get_integration_paths(&self) -> Vec<PathBuf> {
@@ -834,11 +833,7 @@ mod tests {
         let temp = TempDir::new().unwrap();
         let config_dir = temp.path().join(".claude");
         std::fs::create_dir_all(&config_dir).unwrap();
-        std::fs::write(
-            config_dir.join("config.json"),
-            r#"{"version": "1.2.3"}"#,
-        )
-        .unwrap();
+        std::fs::write(config_dir.join("config.json"), r#"{"version": "1.2.3"}"#).unwrap();
 
         let detector = ClaudeCodeDetector::with_home(temp.path());
         let result = detector.detect();
@@ -937,11 +932,7 @@ mod tests {
         std::fs::create_dir_all(&config_dir).unwrap();
 
         // Config without ms integration
-        std::fs::write(
-            config_dir.join("config.json"),
-            r#"{"version": "1.0.0"}"#,
-        )
-        .unwrap();
+        std::fs::write(config_dir.join("config.json"), r#"{"version": "1.0.0"}"#).unwrap();
 
         let status = check_ms_integration(&config_dir.join("config.json"));
         assert_eq!(status, IntegrationStatus::NotConfigured);

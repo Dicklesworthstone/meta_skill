@@ -26,8 +26,8 @@ use std::collections::HashSet;
 use std::env;
 use std::path::PathBuf;
 use std::process::Command;
-use std::time::{Duration, Instant};
 use std::sync::OnceLock;
+use std::time::{Duration, Instant};
 
 // =============================================================================
 // Inline Test Utilities (avoid unsafe env manipulation)
@@ -232,8 +232,8 @@ const IDE_ENV_VARS: &[(&str, &str)] = &[
 
 /// Known box drawing characters to check for.
 const BOX_CHARS: &[char] = &[
-    '─', '│', '┌', '┐', '└', '┘', '├', '┤', '┬', '┴', '┼',
-    '╭', '╮', '╯', '╰', '═', '║', '╔', '╗', '╚', '╝',
+    '─', '│', '┌', '┐', '└', '┘', '├', '┤', '┬', '┴', '┼', '╭', '╮', '╯', '╰', '═', '║', '╔', '╗',
+    '╚', '╝',
 ];
 
 /// Known fancy Unicode characters to check for.
@@ -418,10 +418,7 @@ fn test_robot_flag_plain_output() {
 /// Test --robot flag overrides rich environment.
 #[test]
 fn test_robot_overrides_force_rich() {
-    let result = run_ms_with_env(
-        &["--robot", "--version"],
-        &[("MS_FORCE_RICH", "1")],
-    );
+    let result = run_ms_with_env(&["--robot", "--version"], &[("MS_FORCE_RICH", "1")]);
 
     if result.success {
         // --robot should win over MS_FORCE_RICH
@@ -476,7 +473,11 @@ fn test_json_format_is_valid() {
     // If command produces output, it should be valid JSON
     if result.success && !result.stdout.trim().is_empty() {
         let json = result.try_json();
-        assert!(json.is_some(), "JSON output should be valid JSON:\n{}", result.stdout);
+        assert!(
+            json.is_some(),
+            "JSON output should be valid JSON:\n{}",
+            result.stdout
+        );
     }
 }
 
@@ -518,11 +519,7 @@ fn test_error_output_plain_in_agent_mode() {
 fn test_multiple_agent_indicators() {
     let result = run_ms_with_env(
         &["--version"],
-        &[
-            ("CLAUDE_CODE", "1"),
-            ("CI", "true"),
-            ("NO_COLOR", "1"),
-        ],
+        &[("CLAUDE_CODE", "1"), ("CI", "true"), ("NO_COLOR", "1")],
     );
 
     if result.success {
@@ -533,10 +530,7 @@ fn test_multiple_agent_indicators() {
 /// Test agent mode with plain flag.
 #[test]
 fn test_agent_with_plain_flag() {
-    let result = run_ms_with_env(
-        &["--plain", "--version"],
-        &[("CLAUDE_CODE", "1")],
-    );
+    let result = run_ms_with_env(&["--plain", "--version"], &[("CLAUDE_CODE", "1")]);
 
     if result.success {
         assert_agent_safe_output(&result.stdout, "--plain with CLAUDE_CODE=1");

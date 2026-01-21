@@ -3,9 +3,9 @@
 use clap::Args;
 
 use crate::app::AppContext;
-use crate::cli::output::OutputFormat;
 use crate::cli::commands::resolve_skill_markdown;
 use crate::cli::output;
+use crate::cli::output::OutputFormat;
 use crate::core::SkillSpec;
 use crate::core::spec_lens::parse_markdown;
 use crate::error::Result;

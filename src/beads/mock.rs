@@ -81,9 +81,7 @@ impl BeadsErrorKind {
             Self::Unavailable => MsError::BeadsUnavailable(format!("mock error: {context}")),
             Self::NotFound => MsError::NotFound(format!("mock error: {context}")),
             Self::ValidationFailed => MsError::ValidationFailed(format!("mock error: {context}")),
-            Self::TransactionFailed => {
-                MsError::TransactionFailed(format!("mock error: {context}"))
-            }
+            Self::TransactionFailed => MsError::TransactionFailed(format!("mock error: {context}")),
             Self::Custom(msg) => MsError::BeadsUnavailable(msg.clone()),
         }
     }
@@ -126,7 +124,7 @@ pub struct MockBeadsClient {
 
 impl MockBeadsClient {
     /// Create a new mock that reports as available.
-    #[must_use] 
+    #[must_use]
     pub fn new() -> Self {
         Self {
             available: true,
@@ -138,7 +136,7 @@ impl MockBeadsClient {
     }
 
     /// Create a mock that reports as unavailable.
-    #[must_use] 
+    #[must_use]
     pub fn unavailable() -> Self {
         Self {
             available: false,
@@ -406,7 +404,7 @@ impl BeadsOperations for MockBeadsClient {
 }
 
 /// Helper to create a test issue with minimal fields.
-#[must_use] 
+#[must_use]
 pub fn test_issue(id: &str, title: &str) -> Issue {
     Issue {
         id: id.to_string(),

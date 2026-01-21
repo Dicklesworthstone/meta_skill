@@ -59,11 +59,7 @@ pub fn run(ctx: &AppContext, args: &SimulateArgs) -> Result<()> {
     }
 
     let engine = SimulationEngine::new(ctx);
-    let report = engine.simulate(
-        &args.skill,
-        args.with_fixtures.as_deref(),
-        config,
-    )?;
+    let report = engine.simulate(&args.skill, args.with_fixtures.as_deref(), config)?;
 
     if let Some(path) = &args.record_transcript {
         let payload = serde_json::to_string_pretty(&report)
@@ -84,7 +80,10 @@ pub fn run(ctx: &AppContext, args: &SimulateArgs) -> Result<()> {
 fn render_human(report: &SimulationReport) {
     let mut layout = HumanLayout::new();
     layout.title("Simulation");
-    layout.kv("Skill", &format!("{} ({})", report.skill_name, report.skill_id));
+    layout.kv(
+        "Skill",
+        &format!("{} ({})", report.skill_name, report.skill_id),
+    );
     layout.kv("Started", &report.started_at);
     layout.kv("Duration", &format!("{}ms", report.duration_ms));
     layout.blank();
@@ -157,9 +156,7 @@ fn parse_duration(raw: &str) -> Option<std::time::Duration> {
     if trimmed.is_empty() {
         return None;
     }
-    let (value, suffix) = trimmed
-        .chars()
-        .partition::<String, _>(char::is_ascii_digit);
+    let (value, suffix) = trimmed.chars().partition::<String, _>(char::is_ascii_digit);
     let value: u64 = value.parse().ok()?;
     match suffix.as_str() {
         "ms" => Some(std::time::Duration::from_millis(value)),

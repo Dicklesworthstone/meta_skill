@@ -76,8 +76,7 @@ impl ValidationRule for RequiredMetadataRule {
 
     fn fix(&self, skill: &mut SkillSpec, diagnostic: &Diagnostic) -> Result<()> {
         if diagnostic.message.contains("description") {
-            skill.metadata.description =
-                format!("TODO: Add description for {}", skill.metadata.id);
+            skill.metadata.description = format!("TODO: Add description for {}", skill.metadata.id);
             Ok(())
         } else {
             Err(crate::error::MsError::NotImplemented(
@@ -115,20 +114,24 @@ impl ValidationRule for ValidVersionRule {
         let version = &ctx.skill.metadata.version;
 
         if version.is_empty() {
-            return vec![Diagnostic::warning(self.id(), "Skill should have a version")
-                .with_suggestion("Add 'version: 1.0.0' to the metadata")
-                .with_category(RuleCategory::Structure)];
+            return vec![
+                Diagnostic::warning(self.id(), "Skill should have a version")
+                    .with_suggestion("Add 'version: 1.0.0' to the metadata")
+                    .with_category(RuleCategory::Structure),
+            ];
         }
 
         // Simple semver check: X.Y.Z pattern
         let parts: Vec<&str> = version.split('.').collect();
         if parts.len() != 3 || !parts.iter().all(|p| p.parse::<u32>().is_ok()) {
-            return vec![Diagnostic::warning(
-                self.id(),
-                format!("Version '{version}' is not valid semver (expected X.Y.Z)"),
-            )
-            .with_suggestion("Use semantic versioning like '1.0.0' or '2.1.3'")
-            .with_category(RuleCategory::Structure)];
+            return vec![
+                Diagnostic::warning(
+                    self.id(),
+                    format!("Version '{version}' is not valid semver (expected X.Y.Z)"),
+                )
+                .with_suggestion("Use semantic versioning like '1.0.0' or '2.1.3'")
+                .with_category(RuleCategory::Structure),
+            ];
         }
 
         vec![]
@@ -166,12 +169,9 @@ impl ValidationRule for UniqueSectionIdsRule {
         for section in &ctx.skill.sections {
             if !seen_ids.insert(&section.id) {
                 diagnostics.push(
-                    Diagnostic::error(
-                        self.id(),
-                        format!("Duplicate section ID: '{}'", section.id),
-                    )
-                    .with_suggestion("Each section must have a unique ID")
-                    .with_category(RuleCategory::Structure),
+                    Diagnostic::error(self.id(), format!("Duplicate section ID: '{}'", section.id))
+                        .with_suggestion("Each section must have a unique ID")
+                        .with_category(RuleCategory::Structure),
                 );
             }
         }
@@ -281,7 +281,7 @@ impl ValidationRule for NonEmptyBlocksRule {
 }
 
 /// Returns all structural validation rules.
-#[must_use] 
+#[must_use]
 pub fn structural_rules() -> Vec<Box<dyn ValidationRule>> {
     vec![
         Box::new(RequiredMetadataRule),
@@ -298,7 +298,10 @@ mod tests {
     use crate::core::skill::{SkillBlock, SkillSection};
     use crate::lint::config::ValidationConfig;
 
-    fn make_context<'a>(skill: &'a SkillSpec, config: &'a ValidationConfig) -> ValidationContext<'a> {
+    fn make_context<'a>(
+        skill: &'a SkillSpec,
+        config: &'a ValidationConfig,
+    ) -> ValidationContext<'a> {
         ValidationContext::new(skill, config)
     }
 

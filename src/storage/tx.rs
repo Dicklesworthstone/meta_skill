@@ -307,7 +307,7 @@ impl GlobalLock {
                 );
                 let dest = tombstones.join(format!("ms.lock_{stamp}.json"));
                 fs::write(&dest, &content)?;
-                
+
                 // Parse holder for logging
                 if let Ok(holder) = serde_json::from_str::<LockHolder>(&content) {
                     warn!(
@@ -321,7 +321,7 @@ impl GlobalLock {
             lock.lock_file
                 .set_len(0)
                 .map_err(|e| MsError::TransactionFailed(format!("truncate lock file: {e}")))?;
-            
+
             info!("Stale lock file cleared (truncated)");
             Ok(true)
         } else {
@@ -843,7 +843,7 @@ pub struct RecoveryReport {
 
 impl RecoveryReport {
     /// Check if any recovery actions were needed
-    #[must_use] 
+    #[must_use]
     pub const fn had_work(&self) -> bool {
         self.rolled_back > 0 || self.completed > 0 || self.orphaned_files > 0
     }

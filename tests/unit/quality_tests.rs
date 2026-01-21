@@ -173,7 +173,10 @@ fn quality_scorer_with_defaults() {
         + weights.usage_weight
         + weights.toolchain_weight
         + weights.freshness_weight;
-    assert!((sum - 1.0).abs() < 0.01, "Weights should sum to ~1.0, got {sum}");
+    assert!(
+        (sum - 1.0).abs() < 0.01,
+        "Weights should sum to ~1.0, got {sum}"
+    );
 }
 
 #[test]
@@ -195,7 +198,10 @@ fn quality_scorer_new_with_custom_weights() {
 fn quality_scorer_default_is_with_defaults() {
     let default = QualityScorer::default();
     let with_defaults = QualityScorer::with_defaults();
-    assert_eq!(default.weights.structure_weight, with_defaults.weights.structure_weight);
+    assert_eq!(
+        default.weights.structure_weight,
+        with_defaults.weights.structure_weight
+    );
 }
 
 #[test]
@@ -205,7 +211,10 @@ fn score_spec_empty_produces_low_score() {
 
     assert!(score.overall >= 0.0 && score.overall <= 1.0);
     assert!(score.overall < 0.5, "Empty spec should have low score");
-    assert!(score.breakdown.structure < 0.5, "Empty spec structure should be low");
+    assert!(
+        score.breakdown.structure < 0.5,
+        "Empty spec structure should be low"
+    );
 }
 
 #[test]
@@ -230,14 +239,23 @@ fn score_spec_rich_produces_high_score() {
     let score = scorer.score_spec(&rich_spec(), &context);
 
     assert!(score.overall >= 0.0 && score.overall <= 1.0);
-    assert!(score.overall > 0.6, "Rich spec with good context should score high: {}", score.overall);
+    assert!(
+        score.overall > 0.6,
+        "Rich spec with good context should score high: {}",
+        score.overall
+    );
 }
 
 #[test]
 fn score_spec_always_in_range() {
     let scorer = QualityScorer::with_defaults();
 
-    for spec in [empty_spec(), minimal_spec(), spec_with_code_example(), rich_spec()] {
+    for spec in [
+        empty_spec(),
+        minimal_spec(),
+        spec_with_code_example(),
+        rich_spec(),
+    ] {
         for context in [
             QualityContext::default(),
             QualityContext {
@@ -277,7 +295,10 @@ fn score_spec_always_in_range() {
 fn structure_score_zero_sections() {
     let scorer = QualityScorer::with_defaults();
     let score = scorer.score_spec(&empty_spec(), &QualityContext::default());
-    assert!(score.breakdown.structure < 0.2, "0 sections should score very low");
+    assert!(
+        score.breakdown.structure < 0.2,
+        "0 sections should score very low"
+    );
 }
 
 #[test]
@@ -301,7 +322,10 @@ fn structure_score_three_plus_sections() {
     assert_eq!(score.breakdown.structure, 1.0);
 
     let score5 = scorer.score_spec(&spec_with_sections(5), &QualityContext::default());
-    assert_eq!(score5.breakdown.structure, 1.0, "3+ sections should all score 1.0");
+    assert_eq!(
+        score5.breakdown.structure, 1.0,
+        "3+ sections should all score 1.0"
+    );
 }
 
 // ============================================================================
@@ -590,7 +614,10 @@ fn issues_detected_for_empty_spec() {
     assert!(!score.issues.is_empty(), "Empty spec should have issues");
 
     // Should have missing section issue
-    let has_missing_section = score.issues.iter().any(|i| matches!(i, QualityIssue::MissingSection(_)));
+    let has_missing_section = score
+        .issues
+        .iter()
+        .any(|i| matches!(i, QualityIssue::MissingSection(_)));
     assert!(has_missing_section, "Should detect missing section");
 }
 
@@ -599,7 +626,10 @@ fn issues_no_examples() {
     let scorer = QualityScorer::with_defaults();
     let score = scorer.score_spec(&minimal_spec(), &QualityContext::default());
 
-    let has_no_examples = score.issues.iter().any(|i| matches!(i, QualityIssue::NoExamples));
+    let has_no_examples = score
+        .issues
+        .iter()
+        .any(|i| matches!(i, QualityIssue::NoExamples));
     assert!(has_no_examples, "Should detect no examples");
 }
 
@@ -608,7 +638,10 @@ fn issues_no_tags() {
     let scorer = QualityScorer::with_defaults();
     let score = scorer.score_spec(&minimal_spec(), &QualityContext::default());
 
-    let has_no_tags = score.issues.iter().any(|i| matches!(i, QualityIssue::NoTags));
+    let has_no_tags = score
+        .issues
+        .iter()
+        .any(|i| matches!(i, QualityIssue::NoTags));
     assert!(has_no_tags, "Should detect no tags");
 }
 
@@ -622,7 +655,10 @@ fn issues_low_evidence() {
     };
     let score = scorer.score_spec(&minimal_spec(), &context);
 
-    let has_low_evidence = score.issues.iter().any(|i| matches!(i, QualityIssue::LowEvidence(_)));
+    let has_low_evidence = score
+        .issues
+        .iter()
+        .any(|i| matches!(i, QualityIssue::LowEvidence(_)));
     assert!(has_low_evidence, "Should detect low evidence");
 }
 
@@ -636,7 +672,10 @@ fn issues_low_usage() {
     };
     let score = scorer.score_spec(&minimal_spec(), &context);
 
-    let has_low_usage = score.issues.iter().any(|i| matches!(i, QualityIssue::LowUsage(_)));
+    let has_low_usage = score
+        .issues
+        .iter()
+        .any(|i| matches!(i, QualityIssue::LowUsage(_)));
     assert!(has_low_usage, "Should detect low usage");
 }
 
@@ -652,8 +691,14 @@ fn no_issues_for_rich_spec_with_good_context() {
     let score = scorer.score_spec(&rich_spec(), &context);
 
     // Rich spec with tags and examples should have few issues
-    let has_no_examples = score.issues.iter().any(|i| matches!(i, QualityIssue::NoExamples));
-    let has_no_tags = score.issues.iter().any(|i| matches!(i, QualityIssue::NoTags));
+    let has_no_examples = score
+        .issues
+        .iter()
+        .any(|i| matches!(i, QualityIssue::NoExamples));
+    let has_no_tags = score
+        .issues
+        .iter()
+        .any(|i| matches!(i, QualityIssue::NoTags));
     assert!(!has_no_examples, "Rich spec has examples");
     assert!(!has_no_tags, "Rich spec has tags");
 }
@@ -665,7 +710,10 @@ fn suggestions_accompany_issues() {
 
     // When there are issues, there should be suggestions
     if !score.issues.is_empty() {
-        assert!(!score.suggestions.is_empty(), "Issues should come with suggestions");
+        assert!(
+            !score.suggestions.is_empty(),
+            "Issues should come with suggestions"
+        );
     }
 }
 

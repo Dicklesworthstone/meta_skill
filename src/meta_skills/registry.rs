@@ -16,7 +16,7 @@ pub struct MetaSkillRegistry {
 }
 
 impl MetaSkillRegistry {
-    #[must_use] 
+    #[must_use]
     pub fn new() -> Self {
         Self::default()
     }
@@ -69,17 +69,17 @@ impl MetaSkillRegistry {
         }
     }
 
-    #[must_use] 
+    #[must_use]
     pub fn get(&self, id: &str) -> Option<&MetaSkill> {
         self.meta_skills.get(id)
     }
 
-    #[must_use] 
+    #[must_use]
     pub fn all(&self) -> Vec<&MetaSkill> {
         self.meta_skills.values().collect()
     }
 
-    #[must_use] 
+    #[must_use]
     pub fn search(&self, query: &MetaSkillQuery) -> Vec<&MetaSkill> {
         let mut results: Vec<&MetaSkill> = self.meta_skills.values().collect();
 
@@ -139,7 +139,7 @@ impl MetaSkillRegistry {
         Ok(count)
     }
 
-    #[must_use] 
+    #[must_use]
     pub fn stats(&self) -> MetaSkillRegistryStats {
         MetaSkillRegistryStats {
             total: self.meta_skills.len(),
@@ -345,7 +345,9 @@ mod tests {
     #[test]
     fn registry_indexes_multiple_tags() {
         let mut registry = MetaSkillRegistry::new();
-        registry.insert(meta_skill_with_tags("m1", vec!["cli", "rust"])).unwrap();
+        registry
+            .insert(meta_skill_with_tags("m1", vec!["cli", "rust"]))
+            .unwrap();
 
         let stats = registry.stats();
         assert_eq!(stats.tags_indexed, 2);
@@ -354,8 +356,12 @@ mod tests {
     #[test]
     fn registry_indexes_shared_tags() {
         let mut registry = MetaSkillRegistry::new();
-        registry.insert(meta_skill_with_tags("m1", vec!["rust"])).unwrap();
-        registry.insert(meta_skill_with_tags("m2", vec!["rust"])).unwrap();
+        registry
+            .insert(meta_skill_with_tags("m1", vec!["rust"]))
+            .unwrap();
+        registry
+            .insert(meta_skill_with_tags("m2", vec!["rust"]))
+            .unwrap();
 
         // Both share "rust" tag
         let stats = registry.stats();
@@ -366,10 +372,14 @@ mod tests {
     #[test]
     fn registry_update_reindexes_tags() {
         let mut registry = MetaSkillRegistry::new();
-        registry.insert(meta_skill_with_tags("m1", vec!["old-tag"])).unwrap();
+        registry
+            .insert(meta_skill_with_tags("m1", vec!["old-tag"]))
+            .unwrap();
 
         // Update with new tags
-        registry.insert(meta_skill_with_tags("m1", vec!["new-tag"])).unwrap();
+        registry
+            .insert(meta_skill_with_tags("m1", vec!["new-tag"]))
+            .unwrap();
 
         let query = MetaSkillQuery {
             text: None,
@@ -478,8 +488,12 @@ mod tests {
     #[test]
     fn registry_search_by_tags() {
         let mut registry = MetaSkillRegistry::new();
-        registry.insert(meta_skill_with_tags("m1", vec!["rust", "cli"])).unwrap();
-        registry.insert(meta_skill_with_tags("m2", vec!["python"])).unwrap();
+        registry
+            .insert(meta_skill_with_tags("m1", vec!["rust", "cli"]))
+            .unwrap();
+        registry
+            .insert(meta_skill_with_tags("m2", vec!["python"]))
+            .unwrap();
 
         let query = MetaSkillQuery {
             text: None,
@@ -495,8 +509,12 @@ mod tests {
     #[test]
     fn registry_search_by_multiple_tags_any_match() {
         let mut registry = MetaSkillRegistry::new();
-        registry.insert(meta_skill_with_tags("m1", vec!["rust"])).unwrap();
-        registry.insert(meta_skill_with_tags("m2", vec!["python"])).unwrap();
+        registry
+            .insert(meta_skill_with_tags("m1", vec!["rust"]))
+            .unwrap();
+        registry
+            .insert(meta_skill_with_tags("m2", vec!["python"]))
+            .unwrap();
 
         // Should find m1 because it has "rust"
         let query = MetaSkillQuery {
@@ -513,8 +531,12 @@ mod tests {
     #[test]
     fn registry_search_by_tech_stack() {
         let mut registry = MetaSkillRegistry::new();
-        registry.insert(meta_skill_with_stacks("m1", vec!["rust"])).unwrap();
-        registry.insert(meta_skill_with_stacks("m2", vec!["python"])).unwrap();
+        registry
+            .insert(meta_skill_with_stacks("m1", vec!["rust"]))
+            .unwrap();
+        registry
+            .insert(meta_skill_with_stacks("m2", vec!["python"]))
+            .unwrap();
 
         let query = MetaSkillQuery {
             text: None,

@@ -9,7 +9,9 @@ use colored::Colorize;
 use crate::app::AppContext;
 use crate::core::recovery::{RecoveryManager, RecoveryReport};
 use crate::error::Result;
-use crate::output::{OutputModeReport, is_agent_environment, is_ci_environment, is_ide_environment};
+use crate::output::{
+    OutputModeReport, is_agent_environment, is_ci_environment, is_ide_environment,
+};
 use crate::security::{SafetyGate, scan_secrets_summary};
 use crate::storage::tx::GlobalLock;
 
@@ -452,12 +454,16 @@ fn check_transactions(
         return Ok(0);
     }
 
-    let db = if let Ok(db) = crate::storage::Database::open(&db_path) { std::sync::Arc::new(db) } else {
+    let db = if let Ok(db) = crate::storage::Database::open(&db_path) {
+        std::sync::Arc::new(db)
+    } else {
         println!("{} Skipped (cannot open database)", "-".dimmed());
         return Ok(0);
     };
 
-    let git = if let Ok(git) = crate::storage::GitArchive::open(&archive_path) { std::sync::Arc::new(git) } else {
+    let git = if let Ok(git) = crate::storage::GitArchive::open(&archive_path) {
+        std::sync::Arc::new(git)
+    } else {
         println!("{} Skipped (cannot open archive)", "-".dimmed());
         return Ok(0);
     };
@@ -704,7 +710,10 @@ fn check_output_mode(ctx: &AppContext, verbose: bool) -> Result<usize> {
     } else {
         println!("  Status: {} No agent environment", "✓".green());
         if verbose {
-            println!("  (Checked {} agent env vars)", crate::output::AGENT_ENV_VARS.len());
+            println!(
+                "  (Checked {} agent env vars)",
+                crate::output::AGENT_ENV_VARS.len()
+            );
         }
     }
     println!();
@@ -721,7 +730,10 @@ fn check_output_mode(ctx: &AppContext, verbose: bool) -> Result<usize> {
     } else {
         println!("  Status: {} No CI environment", "✓".green());
         if verbose {
-            println!("  (Checked {} CI env vars)", crate::output::CI_ENV_VARS.len());
+            println!(
+                "  (Checked {} CI env vars)",
+                crate::output::CI_ENV_VARS.len()
+            );
         }
     }
     println!();
@@ -738,7 +750,10 @@ fn check_output_mode(ctx: &AppContext, verbose: bool) -> Result<usize> {
     } else {
         println!("  Status: {} No special IDE environment", "✓".green());
         if verbose {
-            println!("  (Checked {} IDE env vars)", crate::output::IDE_ENV_VARS.len());
+            println!(
+                "  (Checked {} IDE env vars)",
+                crate::output::IDE_ENV_VARS.len()
+            );
         }
     }
     println!();
@@ -756,16 +771,10 @@ fn check_output_mode(ctx: &AppContext, verbose: bool) -> Result<usize> {
 
     // Print summary
     if report.decision.use_rich {
-        println!(
-            "{} Rich terminal output is enabled",
-            "✓".green().bold()
-        );
+        println!("{} Rich terminal output is enabled", "✓".green().bold());
         println!("  Colors, Unicode box drawing, and styling will be used.");
     } else {
-        println!(
-            "{} Plain text output is enabled",
-            "!".yellow().bold()
-        );
+        println!("{} Plain text output is enabled", "!".yellow().bold());
         println!("  No ANSI codes or fancy Unicode will be emitted.");
     }
 
@@ -785,9 +794,9 @@ fn check_output_mode(ctx: &AppContext, verbose: bool) -> Result<usize> {
 /// Check performance metrics
 fn check_perf(ctx: &AppContext, verbose: bool) -> Result<usize> {
     print!("Checking performance... ");
-    
+
     let mut issues = 0;
-    
+
     #[cfg(target_os = "linux")]
     {
         if let Ok(statm) = std::fs::read_to_string("/proc/self/statm") {
@@ -797,9 +806,13 @@ fn check_perf(ctx: &AppContext, verbose: bool) -> Result<usize> {
                     let page_size = 4096; // Standard page size assumption
                     let rss_bytes = pages * page_size;
                     let rss_mb = rss_bytes as f64 / (1024.0 * 1024.0);
-                    
+
                     if rss_mb > 100.0 {
-                        println!("{} High memory usage: {:.2} MB (target < 100 MB)", "!".yellow(), rss_mb);
+                        println!(
+                            "{} High memory usage: {:.2} MB (target < 100 MB)",
+                            "!".yellow(),
+                            rss_mb
+                        );
                         issues += 1;
                     } else {
                         println!("{} Memory usage: {:.2} MB", "✓".green(), rss_mb);
@@ -807,13 +820,19 @@ fn check_perf(ctx: &AppContext, verbose: bool) -> Result<usize> {
                 }
             }
         } else {
-             println!("{} Memory check failed (cannot read /proc/self/statm)", "!".yellow());
+            println!(
+                "{} Memory check failed (cannot read /proc/self/statm)",
+                "!".yellow()
+            );
         }
     }
-    
+
     #[cfg(not(target_os = "linux"))]
     {
-        println!("{} Memory check skipped (not supported on this OS)", "-".dimmed());
+        println!(
+            "{} Memory check skipped (not supported on this OS)",
+            "-".dimmed()
+        );
     }
 
     // Check search latency (simple benchmark)
@@ -821,12 +840,16 @@ fn check_perf(ctx: &AppContext, verbose: bool) -> Result<usize> {
     // Use a simple query that should be fast
     let _ = ctx.db.search_fts("test", 1).ok();
     let elapsed = start.elapsed();
-    
+
     if elapsed.as_millis() > 50 {
-        println!("{} Search latency high: {:?} (target < 50ms)", "!".yellow(), elapsed);
+        println!(
+            "{} Search latency high: {:?} (target < 50ms)",
+            "!".yellow(),
+            elapsed
+        );
         issues += 1;
     } else if verbose {
-         println!("  Search latency: {elapsed:?}");
+        println!("  Search latency: {elapsed:?}");
     }
 
     Ok(issues)
@@ -991,7 +1014,14 @@ mod tests {
     #[test]
     fn available_checks_are_documented() {
         // This test documents the available check types
-        let available_checks = ["safety", "security", "recovery", "perf", "output", "output-mode"];
+        let available_checks = [
+            "safety",
+            "security",
+            "recovery",
+            "perf",
+            "output",
+            "output-mode",
+        ];
 
         for check in &available_checks {
             let cli = TestCli::try_parse_from(["test", "--check", check]).unwrap();

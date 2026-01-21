@@ -79,7 +79,7 @@ pub struct FileStatus {
 
 impl FileStatus {
     /// Check if this file requires user attention
-    #[must_use] 
+    #[must_use]
     pub const fn needs_attention(&self) -> bool {
         matches!(
             self.status,
@@ -121,13 +121,13 @@ pub struct ModificationSummary {
 
 impl ModificationSummary {
     /// Total number of files
-    #[must_use] 
+    #[must_use]
     pub const fn total(&self) -> usize {
         self.clean + self.modified + self.new + self.deleted + self.conflict
     }
 
     /// Check if any files need attention
-    #[must_use] 
+    #[must_use]
     pub const fn needs_attention(&self) -> bool {
         self.modified > 0 || self.deleted > 0 || self.conflict > 0
     }
@@ -135,13 +135,13 @@ impl ModificationSummary {
 
 impl SkillModificationReport {
     /// Check if any files in this skill need attention
-    #[must_use] 
+    #[must_use]
     pub const fn needs_attention(&self) -> bool {
         self.summary.needs_attention()
     }
 
     /// Get list of modified files
-    #[must_use] 
+    #[must_use]
     pub fn modified_files(&self) -> Vec<&FileStatus> {
         self.files
             .iter()
@@ -150,7 +150,7 @@ impl SkillModificationReport {
     }
 
     /// Get list of files in conflict
-    #[must_use] 
+    #[must_use]
     pub fn conflicting_files(&self) -> Vec<&FileStatus> {
         self.files
             .iter()
@@ -194,7 +194,7 @@ pub fn hash_file(path: &Path) -> Result<String> {
 }
 
 /// Compute SHA256 hash of bytes
-#[must_use] 
+#[must_use]
 pub fn hash_bytes(data: &[u8]) -> String {
     let mut hasher = Sha256::new();
     hasher.update(data);
@@ -316,7 +316,7 @@ pub fn detect_modifications(
 }
 
 /// Detect conflicts between local files and incoming bundle
-#[must_use] 
+#[must_use]
 pub fn detect_conflicts(
     skill_path: &Path,
     skill_id: &str,
@@ -459,7 +459,7 @@ pub struct ResolutionResult {
 }
 
 impl ResolutionResult {
-    #[must_use] 
+    #[must_use]
     pub const fn new() -> Self {
         Self {
             kept_local: Vec::new(),
@@ -470,7 +470,7 @@ impl ResolutionResult {
     }
 
     /// Check if all conflicts were resolved
-    #[must_use] 
+    #[must_use]
     pub fn is_complete(&self) -> bool {
         self.unresolved.is_empty()
     }

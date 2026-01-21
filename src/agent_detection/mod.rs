@@ -309,8 +309,8 @@ mod tests {
 
     #[test]
     fn test_detected_agent_serialization() {
-        let agent = DetectedAgent::new(AgentType::Cursor, DetectionMethod::Binary)
-            .with_version("0.50.0");
+        let agent =
+            DetectedAgent::new(AgentType::Cursor, DetectionMethod::Binary).with_version("0.50.0");
 
         let json = serde_json::to_string(&agent).unwrap();
         assert!(json.contains("\"cursor\""));

@@ -6,7 +6,9 @@ use crate::app::AppContext;
 use crate::cli::output::OutputFormat;
 use crate::cli::output::{HumanLayout, emit_human, emit_json};
 use crate::error::{MsError, Result};
-use crate::sync::{RemoteAuth, RemoteConfig, RemoteType, SyncConfig, SyncDirection, validate_remote_name};
+use crate::sync::{
+    RemoteAuth, RemoteConfig, RemoteType, SyncConfig, SyncDirection, validate_remote_name,
+};
 
 #[derive(Args, Debug)]
 pub struct RemoteArgs {
@@ -253,7 +255,8 @@ fn list(ctx: &AppContext, _args: &RemoteListArgs) -> Result<()> {
                     "Auth",
                     &remote
                         .auth
-                        .as_ref().map_or_else(|| "none".to_string(), |a| format!("{a:?}")),
+                        .as_ref()
+                        .map_or_else(|| "none".to_string(), |a| format!("{a:?}")),
                 )
                 .blank();
         }
@@ -431,9 +434,7 @@ fn parse_auth_from(
         }
         "ssh" => {
             let Some(key_path) = ssh_key else {
-                return Err(MsError::Config(
-                    "auth=ssh requires --ssh-key".to_string(),
-                ));
+                return Err(MsError::Config("auth=ssh requires --ssh-key".to_string()));
             };
             Ok(Some(RemoteAuth::SshKey {
                 key_path: key_path.clone(),

@@ -95,7 +95,11 @@ fn create_contract(ctx: &AppContext, args: &CreateArgs) -> Result<()> {
         } else {
             Some(group_weights)
         },
-        tag_weights: if tag_weights.is_empty() { None } else { Some(tag_weights) },
+        tag_weights: if tag_weights.is_empty() {
+            None
+        } else {
+            Some(tag_weights)
+        },
     };
 
     let path = custom_contracts_path(&ctx.ms_root);
@@ -113,7 +117,10 @@ fn create_contract(ctx: &AppContext, args: &CreateArgs) -> Result<()> {
             .kv("Id", &contract.id)
             .kv("Path", &path.display().to_string())
             .kv("Required Groups", &join_or_none(&contract.required_groups))
-            .kv("Mandatory Slices", &join_or_none(&contract.mandatory_slices));
+            .kv(
+                "Mandatory Slices",
+                &join_or_none(&contract.mandatory_slices),
+            );
         if let Some(max) = contract.max_per_group {
             layout.kv("Max Per Group", &max.to_string());
         }
@@ -204,20 +211,19 @@ fn split_values(values: &[String]) -> Vec<String> {
 fn parse_weight_entries(entries: &[String]) -> Result<HashMap<String, f32>> {
     let mut out = HashMap::new();
     for entry in entries {
-        let (key, value) = entry
-            .split_once(':')
-            .ok_or_else(|| MsError::ValidationFailed(format!(
-                "weight must be key:value ({entry})",
-            )))?;
+        let (key, value) = entry.split_once(':').ok_or_else(|| {
+            MsError::ValidationFailed(format!("weight must be key:value ({entry})",))
+        })?;
         let key = key.trim();
         if key.is_empty() {
             return Err(MsError::ValidationFailed(
                 "weight key cannot be empty".to_string(),
             ));
         }
-        let weight: f32 = value.trim().parse().map_err(|_| {
-            MsError::ValidationFailed(format!("invalid weight for {key}: {value}"))
-        })?;
+        let weight: f32 = value
+            .trim()
+            .parse()
+            .map_err(|_| MsError::ValidationFailed(format!("invalid weight for {key}: {value}")))?;
         if weight < 0.0 {
             return Err(MsError::ValidationFailed(format!(
                 "weight must be >= 0 for {key}"

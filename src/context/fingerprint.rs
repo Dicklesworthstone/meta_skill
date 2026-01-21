@@ -23,7 +23,7 @@ pub struct ContextFingerprint {
 
 impl ContextFingerprint {
     /// Create a fingerprint from captured context.
-    #[must_use] 
+    #[must_use]
     pub fn capture(ctx: &ContextCapture) -> Self {
         Self {
             repo_root: ctx.repo_root.clone(),
@@ -35,7 +35,7 @@ impl ContextFingerprint {
     }
 
     /// Compute a single u64 hash for storage.
-    #[must_use] 
+    #[must_use]
     pub fn as_u64(&self) -> u64 {
         let mut hasher = DefaultHasher::new();
         self.hash(&mut hasher);
@@ -43,7 +43,7 @@ impl ContextFingerprint {
     }
 
     /// Compare two fingerprints for change significance.
-    #[must_use] 
+    #[must_use]
     pub fn compare(&self, other: &Self) -> ChangeSignificance {
         if self.repo_root != other.repo_root {
             return ChangeSignificance::Major;

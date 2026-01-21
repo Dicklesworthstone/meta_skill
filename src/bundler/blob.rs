@@ -43,7 +43,7 @@ impl BlobStore {
             .map_err(|err| MsError::Config(format!("read blob {}: {err}", path.display())))
     }
 
-    #[must_use] 
+    #[must_use]
     pub fn has_blob(&self, hash: &str) -> bool {
         self.blob_path(hash).map(|p| p.exists()).unwrap_or(false)
     }
@@ -117,7 +117,9 @@ impl BlobStore {
         }
         let hex_part = &hash[7..];
         if hex_part.len() != 64 || !hex_part.chars().all(|c| c.is_ascii_hexdigit()) {
-            return Err(MsError::ValidationFailed("invalid blob hash: malformed hex component".to_string()));
+            return Err(MsError::ValidationFailed(
+                "invalid blob hash: malformed hex component".to_string(),
+            ));
         }
 
         // Check for legacy flat structure first
@@ -151,7 +153,11 @@ pub(crate) fn collect_files_for_bundle(
             let name_str = file_name.to_string_lossy();
 
             // Skip hidden VCS directories/files
-            if name_str == ".git" || name_str == ".svn" || name_str == ".hg" || name_str == ".DS_Store" {
+            if name_str == ".git"
+                || name_str == ".svn"
+                || name_str == ".hg"
+                || name_str == ".DS_Store"
+            {
                 continue;
             }
 

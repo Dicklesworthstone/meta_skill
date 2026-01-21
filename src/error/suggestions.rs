@@ -76,9 +76,7 @@ fn suggest_skill_parse_error(context: Option<&Value>) -> String {
     let file_path = context
         .and_then(|c| c.get("file_path"))
         .and_then(Value::as_str);
-    let line = context
-        .and_then(|c| c.get("line"))
-        .and_then(Value::as_u64);
+    let line = context.and_then(|c| c.get("line")).and_then(Value::as_u64);
 
     match (file_path, line) {
         (Some(path), Some(line)) => format!(
@@ -121,10 +119,7 @@ fn suggest_skill_cyclic_dependency(context: Option<&Value>) -> String {
 
     match cycle {
         Some(chain) if !chain.is_empty() => {
-            let chain_str: Vec<_> = chain
-                .iter()
-                .filter_map(Value::as_str)
-                .collect();
+            let chain_str: Vec<_> = chain.iter().filter_map(Value::as_str).collect();
             format!(
                 "Circular dependency detected: {}\nBreak the cycle by removing one of the `extends` or `includes` references",
                 chain_str.join(" -> ")
@@ -191,9 +186,7 @@ fn suggest_config_missing_required(context: Option<&Value>) -> String {
 }
 
 fn suggest_search_no_results(context: Option<&Value>) -> String {
-    let query = context
-        .and_then(|c| c.get("query"))
-        .and_then(Value::as_str);
+    let query = context.and_then(|c| c.get("query")).and_then(Value::as_str);
 
     match query {
         Some(q) if !q.is_empty() => format!(
@@ -232,7 +225,11 @@ fn suggest_validation_failed(context: Option<&Value>) -> String {
 ///
 /// This is a helper for `SkillNotFound` errors that can suggest
 /// similar skill names using fuzzy matching.
-pub fn suggest_similar_skills(query: &str, available: &[&str], max_suggestions: usize) -> Vec<String> {
+pub fn suggest_similar_skills(
+    query: &str,
+    available: &[&str],
+    max_suggestions: usize,
+) -> Vec<String> {
     let query_lower = query.to_lowercase();
     let mut scored: Vec<_> = available
         .iter()

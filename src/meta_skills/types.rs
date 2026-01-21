@@ -140,7 +140,6 @@ pub enum PinStrategy {
     PerSkill(HashMap<String, String>),
 }
 
-
 /// TOML document for meta-skill definitions.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MetaSkillDoc {
@@ -494,7 +493,9 @@ mod tests {
 
     #[test]
     fn slice_condition_tech_stack() {
-        let cond = SliceCondition::TechStack { value: "rust".to_string() };
+        let cond = SliceCondition::TechStack {
+            value: "rust".to_string(),
+        };
         if let SliceCondition::TechStack { value } = cond {
             assert_eq!(value, "rust");
         }
@@ -502,7 +503,9 @@ mod tests {
 
     #[test]
     fn slice_condition_file_exists() {
-        let cond = SliceCondition::FileExists { value: "Cargo.toml".to_string() };
+        let cond = SliceCondition::FileExists {
+            value: "Cargo.toml".to_string(),
+        };
         if let SliceCondition::FileExists { value } = cond {
             assert_eq!(value, "Cargo.toml");
         }
@@ -510,7 +513,9 @@ mod tests {
 
     #[test]
     fn slice_condition_env_var() {
-        let cond = SliceCondition::EnvVar { value: "HOME".to_string() };
+        let cond = SliceCondition::EnvVar {
+            value: "HOME".to_string(),
+        };
         if let SliceCondition::EnvVar { value } = cond {
             assert_eq!(value, "HOME");
         }
@@ -530,7 +535,9 @@ mod tests {
 
     #[test]
     fn slice_condition_clone() {
-        let cond = SliceCondition::TechStack { value: "go".to_string() };
+        let cond = SliceCondition::TechStack {
+            value: "go".to_string(),
+        };
         let cloned = cond.clone();
         if let SliceCondition::TechStack { value } = cloned {
             assert_eq!(value, "go");
@@ -539,7 +546,9 @@ mod tests {
 
     #[test]
     fn slice_condition_debug() {
-        let cond = SliceCondition::EnvVar { value: "PATH".to_string() };
+        let cond = SliceCondition::EnvVar {
+            value: "PATH".to_string(),
+        };
         let debug = format!("{:?}", cond);
         assert!(debug.contains("EnvVar"));
         assert!(debug.contains("PATH"));
@@ -656,7 +665,9 @@ mod tests {
 
     #[test]
     fn slice_condition_serializes_correctly() {
-        let cond = SliceCondition::TechStack { value: "python".to_string() };
+        let cond = SliceCondition::TechStack {
+            value: "python".to_string(),
+        };
         let json = serde_json::to_string(&cond).unwrap();
         assert!(json.contains("tech_stack"));
         assert!(json.contains("python"));

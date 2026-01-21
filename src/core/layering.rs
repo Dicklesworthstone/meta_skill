@@ -123,7 +123,7 @@ pub struct ResolvedSkill {
 
 impl ResolvedSkill {
     /// Create a resolved skill from a single candidate (no conflicts)
-    #[must_use] 
+    #[must_use]
     pub fn from_single(spec: SkillSpec, layer: SkillLayer) -> Self {
         Self {
             spec,
@@ -136,7 +136,7 @@ impl ResolvedSkill {
     }
 
     /// Check if there were any conflicts
-    #[must_use] 
+    #[must_use]
     pub fn has_conflicts(&self) -> bool {
         !self.conflicts.is_empty()
     }
@@ -176,13 +176,13 @@ pub struct LayeredRegistry {
 
 impl LayeredRegistry {
     /// Create a new layered registry
-    #[must_use] 
+    #[must_use]
     pub fn new() -> Self {
         Self::default()
     }
 
     /// Create with specific strategies
-    #[must_use] 
+    #[must_use]
     pub fn with_strategies(conflict: ConflictStrategy, merge: MergeStrategy) -> Self {
         Self {
             skills: HashMap::new(),
@@ -217,7 +217,7 @@ impl LayeredRegistry {
     }
 
     /// Get all candidate layers for a skill ID
-    #[must_use] 
+    #[must_use]
     pub fn candidate_layers(&self, id: &str) -> Vec<SkillLayer> {
         self.skills
             .get(id)
@@ -404,13 +404,13 @@ impl LayeredRegistry {
     }
 
     /// List all skill IDs in the registry
-    #[must_use] 
+    #[must_use]
     pub fn list_ids(&self) -> Vec<String> {
         self.skills.keys().cloned().collect()
     }
 
     /// Get candidate at a specific layer
-    #[must_use] 
+    #[must_use]
     pub fn get_at_layer(&self, id: &str, layer: SkillLayer) -> Option<&SkillCandidate> {
         self.skills
             .get(id)
@@ -618,7 +618,7 @@ pub struct ResolutionOptions {
 
 impl LayeredRegistry {
     /// Get resolution options for a skill with conflicts
-    #[must_use] 
+    #[must_use]
     pub fn get_resolution_options(&self, id: &str) -> Option<ResolutionOptions> {
         let candidates = self.skills.get(id)?;
         if candidates.len() <= 1 {

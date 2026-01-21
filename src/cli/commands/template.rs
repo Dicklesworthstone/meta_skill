@@ -104,7 +104,10 @@ fn run_list(ctx: &AppContext, _args: &TemplateListArgs) -> Result<()> {
 
     println!("Templates:");
     for template in templates {
-        println!("  {:<14} {} — {}", template.id, template.name, template.summary);
+        println!(
+            "  {:<14} {} — {}",
+            template.id, template.name, template.summary
+        );
     }
     Ok(())
 }

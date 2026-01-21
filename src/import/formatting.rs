@@ -100,9 +100,8 @@ pub fn format_rule(content: &str) -> String {
 // =============================================================================
 
 /// Code fence regex for extracting code blocks.
-static CODE_FENCE_REGEX: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"```(\w*)\n([\s\S]*?)```").unwrap()
-});
+static CODE_FENCE_REGEX: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"```(\w*)\n([\s\S]*?)```").unwrap());
 
 /// A code block extracted from content.
 #[derive(Debug, Clone)]
@@ -168,7 +167,10 @@ pub fn extract_example_title(content: &str) -> Option<String> {
     // Look for "Example:" or "Example -" prefix
     for line in content.lines() {
         let trimmed = line.trim();
-        if let Some(rest) = trimmed.strip_prefix("Example:").or_else(|| trimmed.strip_prefix("Example -")) {
+        if let Some(rest) = trimmed
+            .strip_prefix("Example:")
+            .or_else(|| trimmed.strip_prefix("Example -"))
+        {
             let title = rest.trim();
             if !title.is_empty() {
                 return Some(title.to_string());
@@ -224,14 +226,18 @@ pub fn detect_language(code: &str) -> Option<String> {
     }
 
     // YAML indicators
-    if code.lines().all(|l| l.trim().is_empty() || l.contains(": ") || l.starts_with('-') || l.starts_with('#')) {
+    if code.lines().all(|l| {
+        l.trim().is_empty() || l.contains(": ") || l.starts_with('-') || l.starts_with('#')
+    }) {
         if code.contains(": ") {
             return Some("yaml".to_string());
         }
     }
 
     // JSON indicators
-    if (code.starts_with('{') && code.ends_with('}')) || (code.starts_with('[') && code.ends_with(']')) {
+    if (code.starts_with('{') && code.ends_with('}'))
+        || (code.starts_with('[') && code.ends_with(']'))
+    {
         return Some("json".to_string());
     }
 
@@ -252,14 +258,12 @@ pub struct ChecklistItem {
 }
 
 /// Checkbox pattern: "- [ ] item" or "- [x] item"
-static CHECKBOX_REGEX: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"^\s*[-*]?\s*\[([ xX])\]\s*(.*)$").unwrap()
-});
+static CHECKBOX_REGEX: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"^\s*[-*]?\s*\[([ xX])\]\s*(.*)$").unwrap());
 
 /// Numbered item pattern: "1. item" or "1) item"
-static NUMBERED_REGEX: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"^\s*\d+[.)]\s+(.*)$").unwrap()
-});
+static NUMBERED_REGEX: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"^\s*\d+[.)]\s+(.*)$").unwrap());
 
 /// Parse checklist items from content.
 ///
@@ -334,9 +338,7 @@ pub struct MetadataKV {
 }
 
 /// YAML-like key-value pattern.
-static KV_REGEX: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"^(\w+):\s*(.+)$").unwrap()
-});
+static KV_REGEX: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"^(\w+):\s*(.+)$").unwrap());
 
 /// Extract key-value pairs from metadata content.
 ///
@@ -426,13 +428,61 @@ pub fn infer_domain(content: &str) -> Option<String> {
     let content_lower = content.to_lowercase();
 
     let domain_keywords: &[(&str, &[&str])] = &[
-        ("programming", &["code", "function", "class", "variable", "api", "debug"]),
-        ("devops", &["deploy", "ci/cd", "docker", "kubernetes", "pipeline", "terraform"]),
-        ("security", &["authentication", "authorization", "encrypt", "vulnerability", "oauth"]),
-        ("testing", &["test", "assert", "mock", "coverage", "unit test", "integration"]),
-        ("frontend", &["react", "vue", "angular", "css", "html", "component", "ui"]),
-        ("backend", &["server", "database", "rest", "graphql", "endpoint", "middleware"]),
-        ("data", &["sql", "query", "database", "etl", "analytics", "pandas"]),
+        (
+            "programming",
+            &["code", "function", "class", "variable", "api", "debug"],
+        ),
+        (
+            "devops",
+            &[
+                "deploy",
+                "ci/cd",
+                "docker",
+                "kubernetes",
+                "pipeline",
+                "terraform",
+            ],
+        ),
+        (
+            "security",
+            &[
+                "authentication",
+                "authorization",
+                "encrypt",
+                "vulnerability",
+                "oauth",
+            ],
+        ),
+        (
+            "testing",
+            &[
+                "test",
+                "assert",
+                "mock",
+                "coverage",
+                "unit test",
+                "integration",
+            ],
+        ),
+        (
+            "frontend",
+            &["react", "vue", "angular", "css", "html", "component", "ui"],
+        ),
+        (
+            "backend",
+            &[
+                "server",
+                "database",
+                "rest",
+                "graphql",
+                "endpoint",
+                "middleware",
+            ],
+        ),
+        (
+            "data",
+            &["sql", "query", "database", "etl", "analytics", "pandas"],
+        ),
     ];
 
     let mut best_domain = None;
@@ -477,7 +527,10 @@ pub fn infer_tags(content: &str) -> Vec<String> {
 
     // Topic detection
     let topics = [
-        ("error-handling", &["error", "exception", "try", "catch"][..]),
+        (
+            "error-handling",
+            &["error", "exception", "try", "catch"][..],
+        ),
         ("async", &["async", "await", "promise", "future"]),
         ("testing", &["test", "assert", "mock"]),
         ("security", &["security", "auth", "encrypt"]),
@@ -525,10 +578,7 @@ mod tests {
             normalize_to_imperative("Make sure you test thoroughly"),
             "Test thoroughly"
         );
-        assert_eq!(
-            normalize_to_imperative("Make sure to validate"),
-            "Validate"
-        );
+        assert_eq!(normalize_to_imperative("Make sure to validate"), "Validate");
     }
 
     #[test]
@@ -566,7 +616,8 @@ mod tests {
 
     #[test]
     fn test_extract_code_blocks() {
-        let content = "Some text\n```rust\nfn main() {}\n```\nMore text\n```python\nprint('hi')\n```";
+        let content =
+            "Some text\n```rust\nfn main() {}\n```\nMore text\n```python\nprint('hi')\n```";
         let blocks = extract_code_blocks(content);
 
         assert_eq!(blocks.len(), 2);
@@ -596,32 +647,56 @@ mod tests {
     #[test]
     fn test_extract_example_title_header() {
         let content = "## Good Error Handling\n```rust\ncode\n```";
-        assert_eq!(extract_example_title(content), Some("Good Error Handling".to_string()));
+        assert_eq!(
+            extract_example_title(content),
+            Some("Good Error Handling".to_string())
+        );
     }
 
     #[test]
     fn test_extract_example_title_prefix() {
         let content = "Example: Handling errors\n```rust\ncode\n```";
-        assert_eq!(extract_example_title(content), Some("Handling errors".to_string()));
+        assert_eq!(
+            extract_example_title(content),
+            Some("Handling errors".to_string())
+        );
     }
 
     #[test]
     fn test_detect_language_rust() {
-        assert_eq!(detect_language("fn main() -> Result<()> {}"), Some("rust".to_string()));
+        assert_eq!(
+            detect_language("fn main() -> Result<()> {}"),
+            Some("rust".to_string())
+        );
         assert_eq!(detect_language("let mut x = 5;"), Some("rust".to_string()));
-        assert_eq!(detect_language("impl Foo for Bar {}"), Some("rust".to_string()));
+        assert_eq!(
+            detect_language("impl Foo for Bar {}"),
+            Some("rust".to_string())
+        );
     }
 
     #[test]
     fn test_detect_language_python() {
-        assert_eq!(detect_language("def foo():\n    pass"), Some("python".to_string()));
-        assert_eq!(detect_language("import os\nfrom sys import argv"), Some("python".to_string()));
+        assert_eq!(
+            detect_language("def foo():\n    pass"),
+            Some("python".to_string())
+        );
+        assert_eq!(
+            detect_language("import os\nfrom sys import argv"),
+            Some("python".to_string())
+        );
     }
 
     #[test]
     fn test_detect_language_javascript() {
-        assert_eq!(detect_language("const x = 5;"), Some("javascript".to_string()));
-        assert_eq!(detect_language("const fn = () => {}"), Some("javascript".to_string()));
+        assert_eq!(
+            detect_language("const x = 5;"),
+            Some("javascript".to_string())
+        );
+        assert_eq!(
+            detect_language("const fn = () => {}"),
+            Some("javascript".to_string())
+        );
     }
 
     // Checklist formatting tests
@@ -656,12 +731,18 @@ mod tests {
     #[test]
     fn test_format_pitfall_emoji() {
         assert_eq!(format_pitfall("⚠️ Don't use eval"), "Don't use eval");
-        assert_eq!(format_pitfall("🚫 Never hardcode secrets"), "Never hardcode secrets");
+        assert_eq!(
+            format_pitfall("🚫 Never hardcode secrets"),
+            "Never hardcode secrets"
+        );
     }
 
     #[test]
     fn test_format_pitfall_prefix() {
-        assert_eq!(format_pitfall("Warning: This is dangerous"), "This is dangerous");
+        assert_eq!(
+            format_pitfall("Warning: This is dangerous"),
+            "This is dangerous"
+        );
     }
 
     // Metadata tests
@@ -691,7 +772,10 @@ mod tests {
     #[test]
     fn test_extract_skill_id_from_header() {
         let content = "# Error Handling Best Practices\n\nSome content here.";
-        assert_eq!(extract_skill_id(content), Some("error-handling-best-practices".to_string()));
+        assert_eq!(
+            extract_skill_id(content),
+            Some("error-handling-best-practices".to_string())
+        );
     }
 
     #[test]
@@ -705,9 +789,18 @@ mod tests {
 
     #[test]
     fn test_infer_domain() {
-        assert_eq!(infer_domain("Always handle errors in your code function"), Some("programming".to_string()));
-        assert_eq!(infer_domain("Deploy using docker and kubernetes"), Some("devops".to_string()));
-        assert_eq!(infer_domain("Use proper authentication and authorization"), Some("security".to_string()));
+        assert_eq!(
+            infer_domain("Always handle errors in your code function"),
+            Some("programming".to_string())
+        );
+        assert_eq!(
+            infer_domain("Deploy using docker and kubernetes"),
+            Some("devops".to_string())
+        );
+        assert_eq!(
+            infer_domain("Use proper authentication and authorization"),
+            Some("security".to_string())
+        );
     }
 
     #[test]

@@ -88,7 +88,7 @@ pub struct CacheStats {
 
 impl CacheStats {
     /// Calculate query cache hit rate.
-    #[must_use] 
+    #[must_use]
     pub fn query_hit_rate(&self) -> f64 {
         let total = self.query_hits + self.query_misses;
         if total == 0 {
@@ -99,7 +99,7 @@ impl CacheStats {
     }
 
     /// Calculate embedding cache hit rate.
-    #[must_use] 
+    #[must_use]
     pub fn embedding_hit_rate(&self) -> f64 {
         let total = self.embedding_hits + self.embedding_misses;
         if total == 0 {
@@ -110,7 +110,7 @@ impl CacheStats {
     }
 
     /// Calculate fingerprint cache hit rate.
-    #[must_use] 
+    #[must_use]
     pub fn fingerprint_hit_rate(&self) -> f64 {
         let total = self.fingerprint_hits + self.fingerprint_misses;
         if total == 0 {
@@ -129,7 +129,7 @@ impl Default for CacheLayer {
 
 impl CacheLayer {
     /// Create a new cache layer with default sizes.
-    #[must_use] 
+    #[must_use]
     pub fn new() -> Self {
         Self::with_sizes(
             DEFAULT_QUERY_CACHE_SIZE,
@@ -139,7 +139,7 @@ impl CacheLayer {
     }
 
     /// Create a new cache layer with custom sizes.
-    #[must_use] 
+    #[must_use]
     pub fn with_sizes(query_size: usize, embedding_size: usize, fingerprint_size: usize) -> Self {
         Self {
             query_cache: Mutex::new(LruCache::new(
@@ -257,10 +257,7 @@ impl CacheLayer {
 
     /// Get current cache statistics.
     pub fn stats(&self) -> CacheStats {
-        self.stats
-            .try_lock()
-            .map(|s| s.clone())
-            .unwrap_or_default()
+        self.stats.try_lock().map(|s| s.clone()).unwrap_or_default()
     }
 
     /// Clear all caches.
@@ -281,11 +278,7 @@ impl CacheLayer {
 
     /// Get the current number of entries in each cache.
     pub fn sizes(&self) -> (usize, usize, usize) {
-        let query = self
-            .query_cache
-            .try_lock()
-            .map(|c| c.len())
-            .unwrap_or(0);
+        let query = self.query_cache.try_lock().map(|c| c.len()).unwrap_or(0);
         let embedding = self
             .embedding_cache
             .try_lock()
@@ -434,10 +427,13 @@ mod tests {
 
         cache.put_query("test", 10, vec![]);
         cache.put_embedding("skill-1", "hash", vec![0.1]);
-        cache.put_fingerprint("session-1", SessionFingerprint {
-            content_hash: "x".to_string(),
-            keywords: vec![],
-        });
+        cache.put_fingerprint(
+            "session-1",
+            SessionFingerprint {
+                content_hash: "x".to_string(),
+                keywords: vec![],
+            },
+        );
 
         let (q, e, f) = cache.sizes();
         assert_eq!((q, e, f), (1, 1, 1));

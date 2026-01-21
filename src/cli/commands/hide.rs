@@ -107,11 +107,7 @@ fn add_hidden(ctx: &AppContext, skill: &str) -> Result<()> {
                 })
             );
         } else {
-            println!(
-                "{} '{}' is already hidden",
-                "!".yellow(),
-                skill_id.cyan()
-            );
+            println!("{} '{}' is already hidden", "!".yellow(), skill_id.cyan());
         }
         return Ok(());
     }
@@ -192,10 +188,7 @@ pub fn list_hidden(ctx: &AppContext, limit: usize, offset: usize) -> Result<()> 
         }
 
         println!();
-        println!(
-            "{}",
-            "To unhide a skill: ms unhide <skill>".dimmed()
-        );
+        println!("{}", "To unhide a skill: ms unhide <skill>".dimmed());
     }
 
     Ok(())

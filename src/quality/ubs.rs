@@ -3,8 +3,8 @@
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-use std::sync::LazyLock;
 use regex::Regex;
+use std::sync::LazyLock;
 
 use crate::error::{MsError, Result};
 use crate::security::SafetyGate;
@@ -16,7 +16,7 @@ pub struct UbsClient {
 }
 
 impl UbsClient {
-    #[must_use] 
+    #[must_use]
     pub fn new(ubs_path: Option<PathBuf>) -> Self {
         Self {
             ubs_path: ubs_path.unwrap_or_else(|| PathBuf::from("ubs")),
@@ -24,7 +24,7 @@ impl UbsClient {
         }
     }
 
-    #[must_use] 
+    #[must_use]
     pub fn with_safety(mut self, safety: SafetyGate) -> Self {
         self.safety = Some(safety);
         self
@@ -102,7 +102,7 @@ impl UbsResult {
         }
     }
 
-    #[must_use] 
+    #[must_use]
     pub fn is_clean(&self) -> bool {
         self.exit_code == 0 && self.findings.is_empty()
     }

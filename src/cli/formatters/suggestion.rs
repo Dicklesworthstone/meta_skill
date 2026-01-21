@@ -28,7 +28,8 @@ impl ScorePercentageBreakdown {
     ) -> Self {
         // The final score is approximately: contextual*0.7 + thompson*0.3 + exploration + personal
         // Normalize to percentages
-        let total = contextual_score * 0.7 + thompson_score * 0.3 + exploration_bonus + personal_boost;
+        let total =
+            contextual_score * 0.7 + thompson_score * 0.3 + exploration_bonus + personal_boost;
         if total <= 0.0 {
             return Self::default();
         }
@@ -54,8 +55,10 @@ impl ScorePercentageBreakdown {
 
     /// Check if any meaningful breakdown is available
     pub fn has_breakdown(&self) -> bool {
-        self.context_pct > 0.0 || self.history_pct > 0.0
-            || self.exploration_pct > 0.0 || self.favorites_pct > 0.0
+        self.context_pct > 0.0
+            || self.history_pct > 0.0
+            || self.exploration_pct > 0.0
+            || self.favorites_pct > 0.0
     }
 }
 
@@ -182,7 +185,11 @@ impl SuggestionOutput {
         SuggestionResponseJson {
             status: "ok".to_string(),
             context: self.context.clone(),
-            suggestions: self.suggestions.iter().map(Self::to_suggestion_json).collect(),
+            suggestions: self
+                .suggestions
+                .iter()
+                .map(Self::to_suggestion_json)
+                .collect(),
             discovery_suggestions: self
                 .discovery_suggestions
                 .iter()
@@ -207,10 +214,7 @@ impl SuggestionOutput {
 
         // Main suggestions
         if !self.suggestions.is_empty() {
-            out.push_str(&format!(
-                "{}\n\n",
-                style("Suggested skills:").bold()
-            ));
+            out.push_str(&format!("{}\n\n", style("Suggested skills:").bold()));
 
             for (i, suggestion) in self.suggestions.iter().enumerate() {
                 out.push_str(&format!(

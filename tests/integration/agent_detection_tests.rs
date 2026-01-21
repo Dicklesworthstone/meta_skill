@@ -41,7 +41,9 @@ fn setup_mock_home(agents: &[AgentType]) -> TempDir {
                 std::fs::write(dir.join("settings.json"), r#"{"theme": "dark"}"#).unwrap();
             }
             AgentType::Cline => {
-                let dir = temp.path().join(".vscode/extensions/saoudrizwan.claude-dev-2.1.0");
+                let dir = temp
+                    .path()
+                    .join(".vscode/extensions/saoudrizwan.claude-dev-2.1.0");
                 std::fs::create_dir_all(&dir).unwrap();
             }
             AgentType::OpenCode => {
@@ -50,8 +52,11 @@ fn setup_mock_home(agents: &[AgentType]) -> TempDir {
                 std::fs::write(dir.join("config.json"), r#"{}"#).unwrap();
             }
             AgentType::Aider => {
-                std::fs::write(temp.path().join(".aider.conf.yml"), "model: claude-3-opus\n")
-                    .unwrap();
+                std::fs::write(
+                    temp.path().join(".aider.conf.yml"),
+                    "model: claude-3-opus\n",
+                )
+                .unwrap();
             }
             AgentType::Windsurf => {
                 let dir = temp.path().join(".windsurf");
@@ -109,11 +114,7 @@ fn test_version_parsing() {
     let temp = TempDir::new().unwrap();
     let claude_dir = temp.path().join(".claude");
     std::fs::create_dir_all(&claude_dir).unwrap();
-    std::fs::write(
-        claude_dir.join("config.json"),
-        r#"{"version": "1.2.3"}"#,
-    )
-    .unwrap();
+    std::fs::write(claude_dir.join("config.json"), r#"{"version": "1.2.3"}"#).unwrap();
 
     let service = AgentDetectionService::with_home(temp.path());
     let claude = service.detect_by_type(AgentType::ClaudeCode);
@@ -157,11 +158,7 @@ fn test_integration_status() {
     std::fs::create_dir_all(&claude_dir).unwrap();
 
     // Config without ms integration
-    std::fs::write(
-        claude_dir.join("config.json"),
-        r#"{"version": "1.0.0"}"#,
-    )
-    .unwrap();
+    std::fs::write(claude_dir.join("config.json"), r#"{"version": "1.0.0"}"#).unwrap();
 
     let service = AgentDetectionService::with_home(temp.path());
     let claude = service.detect_by_type(AgentType::ClaudeCode).unwrap();
@@ -176,14 +173,19 @@ fn test_integration_status() {
 
     let service = AgentDetectionService::with_home(temp.path());
     let claude = service.detect_by_type(AgentType::ClaudeCode).unwrap();
-    assert_eq!(claude.integration_status, IntegrationStatus::FullyConfigured);
+    assert_eq!(
+        claude.integration_status,
+        IntegrationStatus::FullyConfigured
+    );
 }
 
 /// Test Cline VSCode extension detection.
 #[test]
 fn test_cline_vscode_extension_detection() {
     let temp = TempDir::new().unwrap();
-    let ext_dir = temp.path().join(".vscode/extensions/saoudrizwan.claude-dev-2.5.0");
+    let ext_dir = temp
+        .path()
+        .join(".vscode/extensions/saoudrizwan.claude-dev-2.5.0");
     std::fs::create_dir_all(&ext_dir).unwrap();
 
     let service = AgentDetectionService::with_home(temp.path());

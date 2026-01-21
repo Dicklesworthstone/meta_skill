@@ -319,7 +319,7 @@ fn truncate(s: &str, max_chars: usize) -> String {
 // =============================================================================
 
 /// Format anti-patterns for inclusion in skill output
-#[must_use] 
+#[must_use]
 pub fn format_anti_patterns(anti_patterns: &[AntiPattern]) -> AntiPatternSection {
     let mut section = AntiPatternSection::default();
 
@@ -371,7 +371,7 @@ fn count_unique_sessions(evidence: &[AntiPatternEvidence]) -> usize {
 }
 
 /// Find orphaned anti-patterns (no positive counterpart)
-#[must_use] 
+#[must_use]
 pub fn find_orphaned(anti_patterns: &[AntiPattern]) -> Vec<&AntiPattern> {
     anti_patterns.iter().filter(|ap| ap.is_orphaned()).collect()
 }

@@ -45,7 +45,7 @@ pub struct SuggestionCooldownCache {
 }
 
 impl SuggestionCooldownCache {
-    #[must_use] 
+    #[must_use]
     pub const fn new() -> Self {
         Self {
             entries: Vec::new(),
@@ -60,7 +60,7 @@ impl SuggestionCooldownCache {
         cooldown_storage::save_cache(path, self)
     }
 
-    #[must_use] 
+    #[must_use]
     pub fn stats(&self) -> CooldownStats {
         let now = Utc::now();
         let mut active = 0usize;
@@ -79,7 +79,7 @@ impl SuggestionCooldownCache {
         }
     }
 
-    #[must_use] 
+    #[must_use]
     pub fn status(&self, fingerprint: u64, skill_id: &str) -> CooldownStatus {
         let now = Utc::now();
         let Some(entry) = self
@@ -132,11 +132,11 @@ fn cooldown_remaining_seconds(entry: &CooldownEntry, now: DateTime<Utc>) -> u64 
         .signed_duration_since(entry.suggested_at)
         .num_seconds()
         .max(0);
-    
+
     // Cast elapsed to u64 (safe because we max(0))
     // This avoids overflow when cooldown_seconds > i64::MAX
     let elapsed_u64 = elapsed as u64;
-    
+
     if elapsed_u64 >= entry.cooldown_seconds {
         0
     } else {

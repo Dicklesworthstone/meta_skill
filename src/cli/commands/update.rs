@@ -217,7 +217,9 @@ fn run_interactive(
         checker.check()?
     };
 
-    let release = if let Some(r) = update { r } else {
+    let release = if let Some(r) = update {
+        r
+    } else {
         if let Some(target) = target_version {
             println!("✗ Target version not found: v{target}");
             return Err(MsError::NotFound(format!(

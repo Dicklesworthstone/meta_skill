@@ -36,11 +36,7 @@ pub fn run(ctx: &AppContext, args: &UnhideArgs) -> Result<()> {
             skill_id.cyan()
         );
     } else {
-        println!(
-            "{} '{}' was not hidden",
-            "!".yellow(),
-            skill_id.cyan()
-        );
+        println!("{} '{}' was not hidden", "!".yellow(), skill_id.cyan());
     }
 
     Ok(())

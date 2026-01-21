@@ -32,7 +32,7 @@ pub struct PackConstraints {
 }
 
 impl PackConstraints {
-    #[must_use] 
+    #[must_use]
     pub const fn new(budget: usize, max_per_group: usize) -> Self {
         Self {
             budget,
@@ -410,7 +410,10 @@ fn rank_by_density<'a>(
     mode: PackMode,
     contract: Option<&PackContract>,
 ) -> Vec<&'a SkillSlice> {
-    let recent: HashSet<&str> = recent_slice_ids.iter().map(std::string::String::as_str).collect();
+    let recent: HashSet<&str> = recent_slice_ids
+        .iter()
+        .map(std::string::String::as_str)
+        .collect();
     let mut scored: Vec<(f32, &'a SkillSlice)> = slices
         .iter()
         .map(|slice| {
@@ -875,7 +878,7 @@ mod tests {
         // 2. C needs 99. Skip.
         // 3. Pick A (Density 0.1). Rem 89.
         // Selected: [B, A].
-        
+
         // Improve:
         // Candidate C (105u).
         // Removable: A (0.1), B (20.0).
@@ -892,11 +895,19 @@ mod tests {
 
         let constraints = PackConstraints::new(100, 1);
         let packer = ConstrainedPacker;
-        
-        let result = packer.pack(&slices, &constraints, PackMode::Balanced).unwrap();
-        
-        assert!(result.slices.iter().any(|s| s.id == "C"), "Optimization failed to swap B for C");
-        assert!(!result.slices.iter().any(|s| s.id == "B"), "B should have been removed");
+
+        let result = packer
+            .pack(&slices, &constraints, PackMode::Balanced)
+            .unwrap();
+
+        assert!(
+            result.slices.iter().any(|s| s.id == "C"),
+            "Optimization failed to swap B for C"
+        );
+        assert!(
+            !result.slices.iter().any(|s| s.id == "B"),
+            "B should have been removed"
+        );
         assert!(result.slices.iter().any(|s| s.id == "A"), "A should remain");
     }
 
@@ -906,7 +917,7 @@ mod tests {
         // A (2t, 6s). D=3.
         // B (13t, 100s). D=7.6.
         // C (12t, 30s). D=2.5.
-        
+
         // Greedy:
         // Ranked: B, A, C.
         // 1. B (13t). > 12. Skip.
@@ -921,7 +932,7 @@ mod tests {
         // Avail: 10 + 2 = 12.
         // B needs 13. Fail.
         // BUG: Stops here.
-        
+
         // Expected: Check C.
         // Swap A (2t) for C (12t)?
         // Avail: 12.
@@ -937,9 +948,17 @@ mod tests {
         let constraints = PackConstraints::new(12, 1);
         let packer = ConstrainedPacker;
 
-        let result = packer.pack(&slices, &constraints, PackMode::Balanced).unwrap();
+        let result = packer
+            .pack(&slices, &constraints, PackMode::Balanced)
+            .unwrap();
 
-        assert!(result.slices.iter().any(|s| s.id == "C"), "Should have swapped A for C");
-        assert!(!result.slices.iter().any(|s| s.id == "A"), "A should be removed");
+        assert!(
+            result.slices.iter().any(|s| s.id == "C"),
+            "Should have swapped A for C"
+        );
+        assert!(
+            !result.slices.iter().any(|s| s.id == "A"),
+            "A should be removed"
+        );
     }
 }

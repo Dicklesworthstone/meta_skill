@@ -6,8 +6,7 @@ use serde::{Deserialize, Serialize};
 use crate::error::{MsError, Result};
 use crate::security::{AcipConfig, TrustLevel};
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[derive(Default)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct Config {
     #[serde(default)]
     pub skill_paths: SkillPathsConfig,
@@ -40,7 +39,6 @@ pub struct Config {
     #[serde(default)]
     pub output: OutputConfig,
 }
-
 
 impl Config {
     pub fn load(explicit_path: Option<&Path>, ms_root: &Path) -> Result<Self> {
@@ -757,7 +755,10 @@ impl Default for AgentMailConfig {
             enabled: false,
             endpoint: "http://localhost:3000/mcp".to_string(),
             project_key: "default".to_string(),
-            agent_name: hostname::get().map_or_else(|_| "unknown-agent".to_string(), |h| h.to_string_lossy().to_string()),
+            agent_name: hostname::get().map_or_else(
+                |_| "unknown-agent".to_string(),
+                |h| h.to_string_lossy().to_string(),
+            ),
             timeout_secs: 10,
         }
     }
@@ -783,13 +784,11 @@ impl AgentMailConfig {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[derive(Default)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct SecurityConfig {
     #[serde(default)]
     pub acip: AcipConfig,
 }
-
 
 impl SecurityConfig {
     fn merge(&mut self, patch: SecurityPatch) {

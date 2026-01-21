@@ -311,7 +311,10 @@ mod tests {
             vec![],
         );
         assert_eq!(block.preview(10), "This is a ...");
-        assert_eq!(block.preview(100), "This is a long piece of text that should be truncated");
+        assert_eq!(
+            block.preview(100),
+            "This is a long piece of text that should be truncated"
+        );
     }
 
     #[test]

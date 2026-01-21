@@ -3,7 +3,9 @@
 //! These rules check reference integrity, including inheritance chains,
 //! cycle detection, and reference validity.
 
-use crate::core::resolution::{detect_inheritance_cycle, CycleDetectionResult, MAX_INHERITANCE_DEPTH};
+use crate::core::resolution::{
+    CycleDetectionResult, MAX_INHERITANCE_DEPTH, detect_inheritance_cycle,
+};
 use crate::lint::config::ValidationContext;
 use crate::lint::diagnostic::{Diagnostic, RuleCategory, Severity};
 use crate::lint::rule::ValidationRule;
@@ -39,31 +41,32 @@ impl ValidationRule for ValidExtendsRule {
 
         let Some(repository) = ctx.repository else {
             // Can't validate without repository access
-            return vec![Diagnostic::info(
-                self.id(),
-                "Cannot validate extends reference without repository access",
-            )
-            .with_category(RuleCategory::Reference)];
+            return vec![
+                Diagnostic::info(
+                    self.id(),
+                    "Cannot validate extends reference without repository access",
+                )
+                .with_category(RuleCategory::Reference),
+            ];
         };
 
         match repository.get(parent_id) {
             Ok(Some(_)) => vec![], // Parent exists
             Ok(None) => {
                 vec![
-                    Diagnostic::error(
-                        self.id(),
-                        format!("Parent skill '{parent_id}' not found"),
-                    )
-                    .with_suggestion("Check that the parent skill ID is correct and indexed")
-                    .with_category(RuleCategory::Reference),
+                    Diagnostic::error(self.id(), format!("Parent skill '{parent_id}' not found"))
+                        .with_suggestion("Check that the parent skill ID is correct and indexed")
+                        .with_category(RuleCategory::Reference),
                 ]
             }
             Err(e) => {
-                vec![Diagnostic::warning(
-                    self.id(),
-                    format!("Could not validate parent skill '{parent_id}': {e}"),
-                )
-                .with_category(RuleCategory::Reference)]
+                vec![
+                    Diagnostic::warning(
+                        self.id(),
+                        format!("Could not validate parent skill '{parent_id}': {e}"),
+                    )
+                    .with_category(RuleCategory::Reference),
+                ]
             }
         }
     }
@@ -100,11 +103,13 @@ impl ValidationRule for NoCycleRule {
         }
 
         let Some(repository) = ctx.repository else {
-            return vec![Diagnostic::info(
-                self.id(),
-                "Cannot check for cycles without repository access",
-            )
-            .with_category(RuleCategory::Reference)];
+            return vec![
+                Diagnostic::info(
+                    self.id(),
+                    "Cannot check for cycles without repository access",
+                )
+                .with_category(RuleCategory::Reference),
+            ];
         };
 
         match detect_inheritance_cycle(&ctx.skill.metadata.id, repository) {
@@ -120,11 +125,10 @@ impl ValidationRule for NoCycleRule {
                 ]
             }
             Err(e) => {
-                vec![Diagnostic::warning(
-                    self.id(),
-                    format!("Could not check for cycles: {e}"),
-                )
-                .with_category(RuleCategory::Reference)]
+                vec![
+                    Diagnostic::warning(self.id(), format!("Could not check for cycles: {e}"))
+                        .with_category(RuleCategory::Reference),
+                ]
             }
         }
     }
@@ -145,7 +149,7 @@ impl Default for DeepInheritanceRule {
 
 impl DeepInheritanceRule {
     /// Create a new rule with custom max depth.
-    #[must_use] 
+    #[must_use]
     pub const fn with_max_depth(max_depth: usize) -> Self {
         Self { max_depth }
     }
@@ -201,23 +205,27 @@ impl ValidationRule for DeepInheritanceRule {
         }
 
         let Some(depth) = self.calculate_depth(ctx) else {
-            return vec![Diagnostic::info(
-                self.id(),
-                "Cannot calculate inheritance depth without repository access",
-            )
-            .with_category(RuleCategory::Reference)];
+            return vec![
+                Diagnostic::info(
+                    self.id(),
+                    "Cannot calculate inheritance depth without repository access",
+                )
+                .with_category(RuleCategory::Reference),
+            ];
         };
 
         if depth > self.max_depth {
-            vec![Diagnostic::warning(
-                self.id(),
-                format!(
-                    "Inheritance depth {} exceeds recommended maximum {}",
-                    depth, self.max_depth
-                ),
-            )
-            .with_suggestion("Consider flattening the inheritance chain or using composition")
-            .with_category(RuleCategory::Reference)]
+            vec![
+                Diagnostic::warning(
+                    self.id(),
+                    format!(
+                        "Inheritance depth {} exceeds recommended maximum {}",
+                        depth, self.max_depth
+                    ),
+                )
+                .with_suggestion("Consider flattening the inheritance chain or using composition")
+                .with_category(RuleCategory::Reference),
+            ]
         } else {
             vec![]
         }
@@ -253,42 +261,37 @@ impl ValidationRule for FormatVersionRule {
         let current = crate::core::skill::SkillSpec::FORMAT_VERSION;
 
         if version.is_empty() {
-            return vec![Diagnostic::warning(
-                self.id(),
-                "Skill has no format_version specified",
-            )
-            .with_suggestion(format!("Add 'format_version: {current}' to the metadata"))
-            .with_category(RuleCategory::Structure)];
+            return vec![
+                Diagnostic::warning(self.id(), "Skill has no format_version specified")
+                    .with_suggestion(format!("Add 'format_version: {current}' to the metadata"))
+                    .with_category(RuleCategory::Structure),
+            ];
         }
 
         // Parse versions for comparison
-        let skill_version: Vec<u32> = version
-            .split('.')
-            .filter_map(|s| s.parse().ok())
-            .collect();
-        let current_version: Vec<u32> = current
-            .split('.')
-            .filter_map(|s| s.parse().ok())
-            .collect();
+        let skill_version: Vec<u32> = version.split('.').filter_map(|s| s.parse().ok()).collect();
+        let current_version: Vec<u32> = current.split('.').filter_map(|s| s.parse().ok()).collect();
 
         if skill_version.is_empty() {
-            return vec![Diagnostic::warning(
-                self.id(),
-                format!("Invalid format_version '{version}' (expected X.Y)"),
-            )
-            .with_category(RuleCategory::Structure)];
+            return vec![
+                Diagnostic::warning(
+                    self.id(),
+                    format!("Invalid format_version '{version}' (expected X.Y)"),
+                )
+                .with_category(RuleCategory::Structure),
+            ];
         }
 
         // Check if skill version is newer than current
         if skill_version > current_version {
-            return vec![Diagnostic::warning(
-                self.id(),
-                format!(
-                    "Skill format_version '{version}' is newer than current '{current}'"
-                ),
-            )
-            .with_suggestion("This skill may use features not supported by this version")
-            .with_category(RuleCategory::Structure)];
+            return vec![
+                Diagnostic::warning(
+                    self.id(),
+                    format!("Skill format_version '{version}' is newer than current '{current}'"),
+                )
+                .with_suggestion("This skill may use features not supported by this version")
+                .with_category(RuleCategory::Structure),
+            ];
         }
 
         vec![]
@@ -296,7 +299,7 @@ impl ValidationRule for FormatVersionRule {
 }
 
 /// Returns all reference validation rules.
-#[must_use] 
+#[must_use]
 pub fn reference_rules() -> Vec<Box<dyn ValidationRule>> {
     vec![
         Box::new(ValidExtendsRule),

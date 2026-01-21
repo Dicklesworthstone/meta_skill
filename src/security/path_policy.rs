@@ -341,7 +341,7 @@ pub fn safe_join(root: &Path, relative: &str, check_escape: bool) -> Result<Path
 /// let normalized = normalize_path(path);
 /// assert_eq!(normalized, PathBuf::from("/foo/baz"));
 /// ```
-#[must_use] 
+#[must_use]
 pub fn normalize_path(path: &Path) -> PathBuf {
     let mut normalized = PathBuf::new();
 
@@ -381,7 +381,7 @@ pub fn normalize_path(path: &Path) -> PathBuf {
 ///
 /// * `true` if path is under root (or equals root)
 /// * `false` otherwise
-#[must_use] 
+#[must_use]
 pub fn is_under_root(path: &Path, root: &Path) -> bool {
     let normalized_path = normalize_path(path);
     let normalized_root = normalize_path(root);

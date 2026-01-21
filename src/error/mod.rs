@@ -112,10 +112,7 @@ pub enum MsError {
     },
 
     #[error("Parent skill not found: {parent_id} (required by {child_id})")]
-    ParentSkillNotFound {
-        parent_id: String,
-        child_id: String,
-    },
+    ParentSkillNotFound { parent_id: String, child_id: String },
 
     #[error("Import error: {0}")]
     Import(String),

@@ -49,7 +49,6 @@ pub struct SkillSpec {
     pub sections: Vec<SkillSection>,
 
     // === INHERITANCE FIELDS ===
-
     /// Parent skill to inherit from (single inheritance).
     /// When set, this skill inherits all sections from the parent
     /// unless explicitly overridden.
@@ -73,7 +72,6 @@ pub struct SkillSpec {
     pub replace_checklist: bool,
 
     // === COMPOSITION FIELDS ===
-
     /// Other skills to include/compose into this skill.
     /// Includes are applied after inheritance resolution.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -278,13 +276,13 @@ impl SkillSpec {
     }
 
     /// Check if this skill extends another skill
-    #[must_use] 
+    #[must_use]
     pub const fn has_parent(&self) -> bool {
         self.extends.is_some()
     }
 
     /// Get the parent skill ID if this skill extends another
-    #[must_use] 
+    #[must_use]
     pub fn parent_id(&self) -> Option<&str> {
         self.extends.as_deref()
     }
@@ -326,7 +324,7 @@ pub enum SkillLayer {
 }
 
 impl SkillLayer {
-    #[must_use] 
+    #[must_use]
     pub const fn as_str(&self) -> &'static str {
         match self {
             Self::Base => "base",
@@ -490,7 +488,7 @@ pub struct ContextTags {
 
 impl ContextTags {
     /// Check if this context has any relevance criteria defined.
-    #[must_use] 
+    #[must_use]
     pub fn is_empty(&self) -> bool {
         self.project_types.is_empty()
             && self.file_patterns.is_empty()
@@ -499,7 +497,7 @@ impl ContextTags {
     }
 
     /// Check if a project type matches this context.
-    #[must_use] 
+    #[must_use]
     pub fn matches_project_type(&self, project_type: &str) -> bool {
         if self.project_types.is_empty() {
             return false;
@@ -511,7 +509,7 @@ impl ContextTags {
     }
 
     /// Check if a filename matches any file pattern.
-    #[must_use] 
+    #[must_use]
     pub fn matches_file(&self, filename: &str) -> bool {
         for pattern in &self.file_patterns {
             if pattern_matches(pattern, filename) {
@@ -522,7 +520,7 @@ impl ContextTags {
     }
 
     /// Check if a tool name matches.
-    #[must_use] 
+    #[must_use]
     pub fn matches_tool(&self, tool: &str) -> bool {
         if self.tools.is_empty() {
             return false;
@@ -565,7 +563,7 @@ impl ContextSignal {
     }
 
     /// Compile the pattern to a regex (returns None if invalid).
-    #[must_use] 
+    #[must_use]
     pub fn compile_pattern(&self) -> Option<regex::Regex> {
         regex::Regex::new(&self.pattern).ok()
     }
@@ -814,7 +812,6 @@ pub struct PackContract {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tag_weights: Option<HashMap<String, f32>>,
 }
-
 
 // =============================================================================
 // SPEC LENS (MARKDOWN MAPPING)

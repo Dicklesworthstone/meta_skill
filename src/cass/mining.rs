@@ -289,13 +289,13 @@ pub struct SegmentedSession {
 
 impl SegmentedSession {
     /// Get all segments of a particular phase
-    #[must_use] 
+    #[must_use]
     pub fn segments_for_phase(&self, phase: SessionPhase) -> Vec<&SessionSegment> {
         self.segments.iter().filter(|s| s.phase == phase).collect()
     }
 
     /// Get the dominant phase (most messages)
-    #[must_use] 
+    #[must_use]
     pub fn dominant_phase(&self) -> Option<SessionPhase> {
         let mut counts = std::collections::HashMap::new();
         for seg in &self.segments {
@@ -508,7 +508,9 @@ fn merge_adjacent_segments(segments: Vec<SessionSegment>) -> Vec<SessionSegment>
             // Use saturating_sub to prevent underflow if segments have unexpected values
             let old_len = current_len.saturating_sub(seg_len);
             current.confidence = if current_len > 0 {
-                current.confidence.mul_add(old_len as f32, seg.confidence * seg_len as f32)
+                current
+                    .confidence
+                    .mul_add(old_len as f32, seg.confidence * seg_len as f32)
                     / current_len as f32
             } else {
                 0.0
@@ -564,8 +566,8 @@ pub enum SimplePatternType {
 ///
 /// Parses the session file (JSON or JSONL format) and extracts patterns.
 pub fn extract_patterns(session_path: &str) -> Result<Vec<Pattern>> {
-    use std::path::Path;
     use crate::error::MsError;
+    use std::path::Path;
 
     let path = Path::new(session_path);
     if !path.exists() {
@@ -620,24 +622,46 @@ fn pattern_content(pt: &PatternType) -> String {
     match pt {
         PatternType::CommandPattern { commands, .. } => commands.join(" && "),
         PatternType::CodePattern { code, .. } => code.clone(),
-        PatternType::WorkflowPattern { steps, .. } => {
-            steps.iter().map(|s| s.action.clone()).collect::<Vec<_>>().join(" -> ")
-        }
-        PatternType::DecisionPattern { condition, branches, .. } => {
+        PatternType::WorkflowPattern { steps, .. } => steps
+            .iter()
+            .map(|s| s.action.clone())
+            .collect::<Vec<_>>()
+            .join(" -> "),
+        PatternType::DecisionPattern {
+            condition,
+            branches,
+            ..
+        } => {
             let branch_strs: Vec<_> = branches.iter().map(|b| b.action.clone()).collect();
             format!("{}: {}", condition, branch_strs.join(" | "))
         }
-        PatternType::ErrorPattern { error_type, resolution_steps, .. } => {
+        PatternType::ErrorPattern {
+            error_type,
+            resolution_steps,
+            ..
+        } => {
             format!("{}: {}", error_type, resolution_steps.join(", "))
         }
-        PatternType::RefactorPattern { before_pattern, after_pattern, .. } => {
+        PatternType::RefactorPattern {
+            before_pattern,
+            after_pattern,
+            ..
+        } => {
             format!("{before_pattern} -> {after_pattern}")
         }
-        PatternType::ConfigPattern { config_type, settings, .. } => {
+        PatternType::ConfigPattern {
+            config_type,
+            settings,
+            ..
+        } => {
             let keys: Vec<_> = settings.iter().map(|s| s.key.clone()).collect();
             format!("{}: {}", config_type, keys.join(", "))
         }
-        PatternType::ToolPattern { tool_name, common_args, .. } => {
+        PatternType::ToolPattern {
+            tool_name,
+            common_args,
+            ..
+        } => {
             format!("{} {}", tool_name, common_args.join(" "))
         }
     }
@@ -1316,7 +1340,7 @@ fn patterns_are_similar(a: &ExtractedPattern, b: &ExtractedPattern) -> bool {
             if la != lb {
                 return false;
             }
-            
+
             if la == "python" || la == "py" || la == "yaml" || la == "yml" {
                 // Indentation-sensitive comparison
                 let norm_a = normalize_indentation_sensitive(ca);
@@ -1423,7 +1447,7 @@ fn extract_code_blocks(content: &str) -> Vec<(String, String)> {
 
     for line in content.lines() {
         let trimmed_start = line.trim_start();
-        
+
         if !in_block {
             if let Some((fence, lang)) = parse_opening_fence(trimmed_start) {
                 current_fence = fence;
@@ -1435,8 +1459,11 @@ fn extract_code_blocks(content: &str) -> Vec<(String, String)> {
             // Check for closing fence
             if trimmed_start.starts_with(&current_fence) {
                 let fence_char = current_fence.chars().next().unwrap_or('`');
-                let closing_len = trimmed_start.chars().take_while(|&c| c == fence_char).count();
-                
+                let closing_len = trimmed_start
+                    .chars()
+                    .take_while(|&c| c == fence_char)
+                    .count();
+
                 // Closing fence must be at least as long as opening fence
                 if closing_len >= current_fence.len() {
                     // Rest of the line must be empty (or whitespace)
@@ -1509,7 +1536,7 @@ fn tokenize_command(cmd: &str) -> Vec<String> {
 }
 
 /// Convert extracted pattern to IR
-#[must_use] 
+#[must_use]
 pub fn pattern_to_ir(pattern: &ExtractedPattern) -> PatternIR {
     match &pattern.pattern_type {
         PatternType::CommandPattern { commands, .. } => PatternIR::CommandSeq {
@@ -1520,7 +1547,7 @@ pub fn pattern_to_ir(pattern: &ExtractedPattern) -> PatternIR {
                     // Handle env vars (VAR=val) at the start
                     let mut start_idx = 0;
                     let mut env_vars = Vec::new();
-                    
+
                     while start_idx < parts.len() {
                         let part = &parts[start_idx];
                         if part.contains('=') && !part.starts_with('-') {
@@ -2081,7 +2108,7 @@ And more text.
         assert_eq!(tokens[2], "-m");
         assert_eq!(tokens[3], "fix bug");
         assert_eq!(tokens[4], "--author=Jane Doe");
-        
+
         let escaped = r#"echo "escaped \" quote""#;
         let tokens = tokenize_command(escaped);
         assert_eq!(tokens.len(), 2);
@@ -2151,34 +2178,36 @@ And more text.
             id: "test-session".to_string(),
             path: "/path/to/session.json".to_string(),
             content_hash: "hash".to_string(),
-            messages: vec![
-                SessionMessage {
-                    index: 0,
-                    role: "assistant".to_string(),
-                    content: "running command".to_string(),
-                    tool_calls: vec![
-                        ToolCall {
-                            id: "call-1".to_string(),
-                            name: "bash".to_string(),
-                            arguments: serde_json::json!({
-                                "command": "RUST_LOG=debug ./my-script.sh"
-                            }),
-                        }
-                    ],
-                    tool_results: vec![],
-                }
-            ],
+            messages: vec![SessionMessage {
+                index: 0,
+                role: "assistant".to_string(),
+                content: "running command".to_string(),
+                tool_calls: vec![ToolCall {
+                    id: "call-1".to_string(),
+                    name: "bash".to_string(),
+                    arguments: serde_json::json!({
+                        "command": "RUST_LOG=debug ./my-script.sh"
+                    }),
+                }],
+                tool_results: vec![],
+            }],
             metadata: Default::default(),
         };
 
         let pattern = extract_command_patterns(&session).expect("Should extract pattern");
-        
+
         if let PatternType::CommandPattern { ref commands, .. } = pattern.pattern_type {
             let ir = pattern_to_ir(&pattern);
             if let PatternIR::CommandSeq { commands, .. } = ir {
                 let cmd = &commands[0];
-                assert_ne!(cmd.executable, "RUST_LOG=debug", "Environment variable captured as executable");
-                assert_eq!(cmd.executable, "./my-script.sh", "Executable should be the command itself");
+                assert_ne!(
+                    cmd.executable, "RUST_LOG=debug",
+                    "Environment variable captured as executable"
+                );
+                assert_eq!(
+                    cmd.executable, "./my-script.sh",
+                    "Executable should be the command itself"
+                );
             } else {
                 assert!(false, "Expected CommandSeq IR");
             }

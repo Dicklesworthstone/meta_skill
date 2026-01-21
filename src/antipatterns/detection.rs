@@ -126,7 +126,7 @@ impl Default for DefaultDetector {
 
 impl DefaultDetector {
     /// Create a new detector with custom settings
-    #[must_use] 
+    #[must_use]
     pub const fn new(min_confidence: f32, context_window: usize) -> Self {
         Self {
             min_confidence,
@@ -593,7 +593,8 @@ pub fn extract_context(
 ) -> Result<AntiPatternContext> {
     let failed_action = signal
         .preceding_action
-        .as_ref().map_or_else(|| "unknown action".to_string(), |a| a.description.clone());
+        .as_ref()
+        .map_or_else(|| "unknown action".to_string(), |a| a.description.clone());
 
     let failure_reason = session
         .messages
@@ -655,7 +656,7 @@ fn find_correction_in_context(
 }
 
 /// Convert detection results into evidence
-#[must_use] 
+#[must_use]
 pub fn signals_to_evidence(
     signals: Vec<AntiPatternSignal>,
     session: &Session,
@@ -703,7 +704,7 @@ pub fn signals_to_evidence(
 }
 
 /// Convert rollbacks into evidence
-#[must_use] 
+#[must_use]
 pub fn rollbacks_to_evidence(
     rollbacks: Vec<RollbackSequence>,
     session: &Session,
@@ -736,7 +737,7 @@ pub fn rollbacks_to_evidence(
 }
 
 /// Convert corrections into evidence
-#[must_use] 
+#[must_use]
 pub fn corrections_to_evidence(
     corrections: Vec<Correction>,
     session: &Session,
@@ -854,7 +855,7 @@ mod tests {
     #[test]
     fn test_extract_annotation_unicode_expansion() {
         // 'İ' (U+0130) lowercases to 'i\u{307}' (2 chars) in Rust
-        let prefix = "İ"; 
+        let prefix = "İ";
         let content = format!("{} anti-pattern example", prefix);
         // If the logic relies on char count matching, it will likely fail to extract correctly.
         let result = extract_annotation(&content, "anti-pattern");

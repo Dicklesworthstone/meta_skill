@@ -5,8 +5,8 @@ use std::path::PathBuf;
 use clap::Args;
 
 use crate::app::AppContext;
-use crate::cli::output::OutputFormat;
 use crate::cli::output;
+use crate::cli::output::OutputFormat;
 use crate::error::{MsError, Result};
 use crate::quality::ubs::UbsClient;
 use crate::security::SafetyGate;

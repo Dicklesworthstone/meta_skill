@@ -84,10 +84,7 @@ impl OutputEnvironment {
 
         trace!(
             no_color,
-            plain_output,
-            force_rich,
-            stdout_is_terminal,
-            "Captured output environment"
+            plain_output, force_rich, stdout_is_terminal, "Captured output environment"
         );
 
         Self {
@@ -464,19 +461,48 @@ impl OutputModeReport {
         lines.push(String::new());
 
         lines.push("Environment Variables:".to_string());
-        lines.push(format!("  NO_COLOR: {}", if self.env.no_color { "set" } else { "not set" }));
-        lines.push(format!("  MS_PLAIN_OUTPUT: {}", if self.env.plain_output { "set" } else { "not set" }));
-        lines.push(format!("  MS_FORCE_RICH: {}", if self.env.force_rich { "set" } else { "not set" }));
+        lines.push(format!(
+            "  NO_COLOR: {}",
+            if self.env.no_color { "set" } else { "not set" }
+        ));
+        lines.push(format!(
+            "  MS_PLAIN_OUTPUT: {}",
+            if self.env.plain_output {
+                "set"
+            } else {
+                "not set"
+            }
+        ));
+        lines.push(format!(
+            "  MS_FORCE_RICH: {}",
+            if self.env.force_rich {
+                "set"
+            } else {
+                "not set"
+            }
+        ));
         lines.push(String::new());
 
         lines.push("Terminal:".to_string());
         lines.push(format!("  is_terminal(): {}", self.env.stdout_is_terminal));
-        lines.push(format!("  TERM: {}", self.term.as_deref().unwrap_or("not set")));
-        lines.push(format!("  COLORTERM: {}", self.colorterm.as_deref().unwrap_or("not set")));
-        lines.push(format!("  COLUMNS: {}", self.columns.as_deref().unwrap_or("not set")));
+        lines.push(format!(
+            "  TERM: {}",
+            self.term.as_deref().unwrap_or("not set")
+        ));
+        lines.push(format!(
+            "  COLORTERM: {}",
+            self.colorterm.as_deref().unwrap_or("not set")
+        ));
+        lines.push(format!(
+            "  COLUMNS: {}",
+            self.columns.as_deref().unwrap_or("not set")
+        ));
         lines.push(String::new());
 
-        lines.push(format!("Agent Environment: {}", !self.agent_vars.is_empty()));
+        lines.push(format!(
+            "Agent Environment: {}",
+            !self.agent_vars.is_empty()
+        ));
         if self.agent_vars.is_empty() {
             lines.push("  (none detected)".to_string());
         } else {
@@ -507,7 +533,11 @@ impl OutputModeReport {
         lines.push(String::new());
 
         lines.push("Decision:".to_string());
-        let mode = if self.decision.use_rich { "RICH OUTPUT" } else { "PLAIN OUTPUT" };
+        let mode = if self.decision.use_rich {
+            "RICH OUTPUT"
+        } else {
+            "PLAIN OUTPUT"
+        };
         lines.push(format!("  Mode: {}", mode));
         lines.push(format!("  Reason: {:?}", self.decision.reason));
 
@@ -519,7 +549,11 @@ impl OutputModeReport {
 pub fn maybe_print_debug_output(output_format: OutputFormat, robot_mode: bool) {
     if std::env::var_os("MS_DEBUG_OUTPUT").is_some() {
         let report = OutputModeReport::generate(output_format, robot_mode);
-        let mode = if report.decision.use_rich { "rich" } else { "plain" };
+        let mode = if report.decision.use_rich {
+            "rich"
+        } else {
+            "plain"
+        };
         eprintln!(
             "[DEBUG] Output mode: {} (reason: {:?})",
             mode, report.decision.reason

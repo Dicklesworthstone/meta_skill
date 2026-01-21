@@ -51,10 +51,7 @@ fn test_skill_not_found_structured_error() {
 
                         // Check for recoverable flag if present
                         if let Some(recoverable) = status.get("recoverable") {
-                            assert!(
-                                recoverable.is_boolean(),
-                                "Recoverable should be a boolean"
-                            );
+                            assert!(recoverable.is_boolean(), "Recoverable should be a boolean");
                         }
                     }
                 }
@@ -149,7 +146,12 @@ fn test_validation_error_structured() {
     std::fs::write(skill_path.join("invalid.md"), invalid_skill_content).unwrap();
 
     // Try to validate it
-    let output = fixture.run_ms(&["-O", "json", "validate", &skill_path.join("invalid.md").to_string_lossy()]);
+    let output = fixture.run_ms(&[
+        "-O",
+        "json",
+        "validate",
+        &skill_path.join("invalid.md").to_string_lossy(),
+    ]);
 
     // Check if we got structured output
     if let Ok(json) = serde_json::from_str::<Value>(&output.stdout) {
@@ -162,7 +164,9 @@ fn test_validation_error_structured() {
                     // Should be validation-related
                     let is_validation = code
                         .as_str()
-                        .map(|s| s.contains("VALIDATION") || s.contains("INVALID") || s.contains("PARSE"))
+                        .map(|s| {
+                            s.contains("VALIDATION") || s.contains("INVALID") || s.contains("PARSE")
+                        })
                         .unwrap_or(false);
 
                     if is_validation {
@@ -194,16 +198,15 @@ fn test_error_response_completeness() {
             if let Some(status) = json.get("status") {
                 if status.is_object() {
                     // Check for completeness of error response
-                    let fields_to_check = [
-                        ("code", "Error code"),
-                        ("message", "Error message"),
-                    ];
+                    let fields_to_check = [("code", "Error code"), ("message", "Error message")];
 
                     for (field, name) in &fields_to_check {
                         if let Some(value) = status.get(*field) {
                             // Field exists, verify it has content
                             match value {
-                                Value::String(s) => assert!(!s.is_empty(), "{} should not be empty", name),
+                                Value::String(s) => {
+                                    assert!(!s.is_empty(), "{} should not be empty", name)
+                                }
                                 _ => {} // Other types are OK
                             }
                         }
@@ -215,7 +218,10 @@ fn test_error_response_completeness() {
 
                     // Log what we found for debugging
                     if !has_optional {
-                        eprintln!("Note: Error response lacks optional enriched fields: {:?}", status);
+                        eprintln!(
+                            "Note: Error response lacks optional enriched fields: {:?}",
+                            status
+                        );
                     }
                 }
             }

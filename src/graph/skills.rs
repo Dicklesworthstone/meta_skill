@@ -264,9 +264,13 @@ mod tests {
 
         let issues = skills_to_issues(&[skill_a, skill_b]).unwrap();
         let issue_b = issues.iter().find(|i| i.id == "skill-b").unwrap();
-        
+
         // Should find skill-a as a dependency despite case mismatch
-        assert_eq!(issue_b.dependencies.len(), 1, "Should resolve dependency case-insensitively");
+        assert_eq!(
+            issue_b.dependencies.len(),
+            1,
+            "Should resolve dependency case-insensitively"
+        );
         assert_eq!(issue_b.dependencies[0].id, "skill-a");
     }
 
@@ -284,7 +288,11 @@ mod tests {
 
         // Should be deduped to just "rust" (and "layer:project")
         // "layer:project" is added automatically
-        let tags: Vec<_> = issue.labels.iter().filter(|l| !l.starts_with("layer:")).collect();
+        let tags: Vec<_> = issue
+            .labels
+            .iter()
+            .filter(|l| !l.starts_with("layer:"))
+            .collect();
         assert_eq!(tags.len(), 1, "Tags should be normalized and deduped");
         assert_eq!(tags[0], "rust");
     }
@@ -459,7 +467,10 @@ mod tests {
             }),
         );
         let issues = skills_to_issues(&[skill]).unwrap();
-        assert!(issues[0].dependencies.is_empty(), "Self-dependencies should be filtered");
+        assert!(
+            issues[0].dependencies.is_empty(),
+            "Self-dependencies should be filtered"
+        );
     }
 
     #[test]
@@ -479,18 +490,9 @@ mod tests {
     #[test]
     fn test_skills_to_issues_multiple_providers() {
         // Multiple skills provide the same capability
-        let skill_a = record_with_meta(
-            "skill-a",
-            &serde_json::json!({ "provides": ["logging"] }),
-        );
-        let skill_b = record_with_meta(
-            "skill-b",
-            &serde_json::json!({ "provides": ["logging"] }),
-        );
-        let skill_c = record_with_meta(
-            "skill-c",
-            &serde_json::json!({ "requires": ["logging"] }),
-        );
+        let skill_a = record_with_meta("skill-a", &serde_json::json!({ "provides": ["logging"] }));
+        let skill_b = record_with_meta("skill-b", &serde_json::json!({ "provides": ["logging"] }));
+        let skill_c = record_with_meta("skill-c", &serde_json::json!({ "requires": ["logging"] }));
 
         let issues = skills_to_issues(&[skill_a, skill_b, skill_c]).unwrap();
         let issue_c = issues.iter().find(|i| i.id == "skill-c").unwrap();
@@ -506,10 +508,7 @@ mod tests {
     fn test_skills_to_issues_direct_id_match() {
         // Can depend on skill directly by ID, not just capability
         let skill_a = record_with_meta("skill-a", &serde_json::json!({}));
-        let skill_b = record_with_meta(
-            "skill-b",
-            &serde_json::json!({ "requires": ["skill-a"] }),
-        );
+        let skill_b = record_with_meta("skill-b", &serde_json::json!({ "requires": ["skill-a"] }));
 
         let issues = skills_to_issues(&[skill_a, skill_b]).unwrap();
         let issue_b = issues.iter().find(|i| i.id == "skill-b").unwrap();

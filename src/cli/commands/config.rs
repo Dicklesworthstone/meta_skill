@@ -5,8 +5,8 @@ use clap::Args;
 use std::path::PathBuf;
 
 use crate::app::AppContext;
-use crate::cli::output::OutputFormat;
 use crate::cli::output;
+use crate::cli::output::OutputFormat;
 use crate::config::Config;
 use crate::error::Result;
 

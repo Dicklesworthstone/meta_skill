@@ -256,18 +256,16 @@ Some content.
     drop(db);
 
     let mut create = Command::cargo_bin("ms").unwrap();
-    create
-        .env("MS_ROOT", ms_root)
-        .args([
-            "--robot",
-            "experiment",
-            "create",
-            "test-skill",
-            "--variant",
-            "control",
-            "--variant",
-            "concise",
-        ]);
+    create.env("MS_ROOT", ms_root).args([
+        "--robot",
+        "experiment",
+        "create",
+        "test-skill",
+        "--variant",
+        "control",
+        "--variant",
+        "concise",
+    ]);
     let output = create.output().unwrap();
     assert!(output.status.success());
     let json: Value = serde_json::from_slice(&output.stdout).unwrap();

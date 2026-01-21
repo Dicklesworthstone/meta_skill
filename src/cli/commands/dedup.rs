@@ -126,7 +126,10 @@ fn run_scan_human(
         };
 
         if let Some(action) = filter_action {
-            pairs.iter().filter(|p| p.recommendation == action).collect()
+            pairs
+                .iter()
+                .filter(|p| p.recommendation == action)
+                .collect()
         } else {
             pairs.iter().collect()
         }
@@ -178,7 +181,9 @@ fn run_scan_human(
             println!(
                 "   Tag overlap: {}/{} tags in common",
                 pair.structural_details.tag_overlap,
-                pair.structural_details.primary_tags.max(pair.structural_details.candidate_tags)
+                pair.structural_details
+                    .primary_tags
+                    .max(pair.structural_details.candidate_tags)
             );
         }
 
@@ -212,7 +217,10 @@ fn run_scan_robot(
         };
 
         if let Some(action) = filter_action {
-            pairs.iter().filter(|p| p.recommendation == action).collect()
+            pairs
+                .iter()
+                .filter(|p| p.recommendation == action)
+                .collect()
         } else {
             pairs.iter().collect()
         }
@@ -317,9 +325,10 @@ fn run_merge(ctx: &AppContext, args: &MergeArgs) -> Result<()> {
     })?;
 
     // Deprecate the secondary skill
-    let reason = args.reason.clone().unwrap_or_else(|| {
-        format!("Merged into {} ({})", primary.name, primary.id)
-    });
+    let reason = args
+        .reason
+        .clone()
+        .unwrap_or_else(|| format!("Merged into {} ({})", primary.name, primary.id));
 
     db.update_skill_deprecation(&secondary.id, true, Some(&reason))?;
 

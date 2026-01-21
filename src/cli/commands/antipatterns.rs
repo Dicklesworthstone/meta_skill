@@ -10,8 +10,8 @@ use crate::antipatterns::{
     AntiPattern, AntiPatternSeverity, DefaultDetector, format_anti_patterns, mine_anti_patterns,
 };
 use crate::app::AppContext;
-use crate::cli::output::OutputFormat;
 use crate::cass::CassClient;
+use crate::cli::output::OutputFormat;
 use crate::error::{MsError, Result};
 
 #[derive(Args, Debug)]

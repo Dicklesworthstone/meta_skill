@@ -10,9 +10,9 @@ use console::style;
 use serde::Serialize;
 
 use crate::app::AppContext;
-use crate::cli::output::OutputFormat;
 use crate::cli::commands::{discover_skill_markdowns, resolve_skill_markdown};
-use crate::cli::output::{emit_human, emit_json, HumanLayout};
+use crate::cli::output::OutputFormat;
+use crate::cli::output::{HumanLayout, emit_human, emit_json};
 use crate::core::spec_lens::parse_markdown;
 use crate::error::{MsError, Result};
 use crate::lint::diagnostic::{RuleCategory, Severity};
@@ -184,7 +184,9 @@ pub fn run(ctx: &AppContext, args: &LintArgs) -> Result<()> {
 
     // Output based on format
     match args.format {
-        LintFormat::Human => output_human(ctx, &all_results, total_errors, total_warnings, total_fixed),
+        LintFormat::Human => {
+            output_human(ctx, &all_results, total_errors, total_warnings, total_fixed)
+        }
         LintFormat::Json => output_json(&all_results)?,
         LintFormat::Sarif => output_sarif(&all_results)?,
         LintFormat::Junit => output_junit(&all_results)?,
@@ -309,19 +311,11 @@ fn output_human(
         let path_str = file_result.path.display().to_string();
 
         if file_result.result.diagnostics.is_empty() {
-            layout.push_line(format!(
-                "{} {}",
-                style("✓").green(),
-                style(&path_str).dim()
-            ));
+            layout.push_line(format!("{} {}", style("✓").green(), style(&path_str).dim()));
             continue;
         }
 
-        layout.push_line(format!(
-            "{} {}",
-            style("✗").red(),
-            style(&path_str).bold()
-        ));
+        layout.push_line(format!("{} {}", style("✗").red(), style(&path_str).bold()));
 
         for diag in &file_result.result.diagnostics {
             let severity_icon = match diag.severity {
@@ -345,11 +339,7 @@ fn output_human(
             ));
 
             if let Some(suggestion) = &diag.suggestion {
-                layout.push_line(format!(
-                    "    {} {}",
-                    style("hint:").cyan(),
-                    suggestion
-                ));
+                layout.push_line(format!("    {} {}", style("hint:").cyan(), suggestion));
             }
         }
 
@@ -485,7 +475,10 @@ fn output_sarif(results: &[LintFileResult]) -> Result<()> {
 }
 
 fn output_junit(results: &[LintFileResult]) -> Result<()> {
-    let total_tests: usize = results.iter().map(|r| r.result.diagnostics.len().max(1)).sum();
+    let total_tests: usize = results
+        .iter()
+        .map(|r| r.result.diagnostics.len().max(1))
+        .sum();
     let total_failures: usize = results.iter().map(|r| r.result.error_count()).sum();
 
     let mut xml = String::new();

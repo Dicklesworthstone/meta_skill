@@ -39,7 +39,7 @@ pub struct ContextModifier {
 }
 
 impl ContextModifier {
-    #[must_use] 
+    #[must_use]
     pub fn apply(&self, signal: SignalType, base: f64) -> f64 {
         let mut adjusted = base;
         if let Some(multiplier) = self.weight_multiplier.get(&signal) {
@@ -62,7 +62,7 @@ pub struct SuggestionContext {
 }
 
 impl SuggestionContext {
-    #[must_use] 
+    #[must_use]
     pub fn keys(&self) -> Vec<ContextKey> {
         let mut keys = Vec::new();
         if let Some(stack) = &self.tech_stack {

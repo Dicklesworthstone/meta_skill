@@ -45,7 +45,7 @@ impl Default for RetryConfig {
 
 impl RetryConfig {
     /// Create a config for aggressive retries (quick recovery).
-    #[must_use] 
+    #[must_use]
     pub const fn aggressive() -> Self {
         Self {
             max_attempts: 5,
@@ -57,7 +57,7 @@ impl RetryConfig {
     }
 
     /// Create a config for patient retries (long-running ops).
-    #[must_use] 
+    #[must_use]
     pub const fn patient() -> Self {
         Self {
             max_attempts: 10,
@@ -69,7 +69,7 @@ impl RetryConfig {
     }
 
     /// Calculate delay for a given attempt number (0-indexed).
-    #[must_use] 
+    #[must_use]
     pub fn delay_for_attempt(&self, attempt: u32) -> Duration {
         let base_delay =
             self.initial_delay.as_secs_f64() * self.backoff_multiplier.powi(attempt as i32);
@@ -112,21 +112,21 @@ pub enum FailureMode {
 
 impl FailureMode {
     /// Whether this failure mode is typically recoverable.
-    #[must_use] 
+    #[must_use]
     pub const fn is_recoverable(&self) -> bool {
         match self {
-            Self::Database => true, // Often can recover via WAL checkpoint
-            Self::GitArchive => true, // Can rebuild/fsck
+            Self::Database => true,    // Often can recover via WAL checkpoint
+            Self::GitArchive => true,  // Can rebuild/fsck
             Self::SearchIndex => true, // Can rebuild from source
-            Self::Cache => true,    // Always rebuildable
+            Self::Cache => true,       // Always rebuildable
             Self::Transaction => true, // 2PC recovery
-            Self::Lock => true,     // Can break stale locks
-            Self::Config => false,  // Needs user intervention
+            Self::Lock => true,        // Can break stale locks
+            Self::Config => false,     // Needs user intervention
         }
     }
 
     /// Human-readable description of the failure mode.
-    #[must_use] 
+    #[must_use]
     pub const fn description(&self) -> &'static str {
         match self {
             Self::Database => "SQLite database issue",
@@ -171,7 +171,7 @@ impl RecoveryIssue {
         self
     }
 
-    #[must_use] 
+    #[must_use]
     pub const fn not_auto_recoverable(mut self) -> Self {
         self.auto_recoverable = false;
         self
@@ -201,7 +201,7 @@ pub struct RecoveryReport {
 
 impl RecoveryReport {
     /// Whether any recovery work was performed.
-    #[must_use] 
+    #[must_use]
     pub const fn had_work(&self) -> bool {
         self.fixed > 0
             || self.rolled_back > 0
@@ -211,7 +211,7 @@ impl RecoveryReport {
     }
 
     /// Whether there are critical issues remaining.
-    #[must_use] 
+    #[must_use]
     pub fn has_critical_issues(&self) -> bool {
         self.issues
             .iter()
@@ -219,7 +219,7 @@ impl RecoveryReport {
     }
 
     /// Summary string suitable for logging.
-    #[must_use] 
+    #[must_use]
     pub fn summary(&self) -> String {
         let mut parts = Vec::new();
         if self.fixed > 0 {
@@ -271,14 +271,14 @@ impl RecoveryManager {
     }
 
     /// Set the git archive.
-    #[must_use] 
+    #[must_use]
     pub fn with_git(mut self, git: Arc<GitArchive>) -> Self {
         self.git = Some(git);
         self
     }
 
     /// Set a custom retry configuration.
-    #[must_use] 
+    #[must_use]
     pub const fn with_retry_config(mut self, config: RetryConfig) -> Self {
         self.retry_config = config;
         self
@@ -547,10 +547,9 @@ impl RecoveryManager {
 
         if let Some(holder) = GlobalLock::status(&self.ms_root)? {
             // Only break lock if process is confirmed dead (cross-platform check)
-            if !is_process_alive(holder.pid)
-                && GlobalLock::break_lock(&self.ms_root)? {
-                    report.fixed += 1;
-                }
+            if !is_process_alive(holder.pid) && GlobalLock::break_lock(&self.ms_root)? {
+                report.fixed += 1;
+            }
         }
         Ok(())
     }
@@ -586,9 +585,10 @@ impl RecoveryManager {
                 if let Some(name) = path.file_name().and_then(|n| n.to_str()) {
                     // Clean up temp files
                     if (name.starts_with(".tmp") || name.ends_with(".tmp"))
-                        && tombstone_file(&self.ms_root, &path, "cache").is_ok() {
-                            report.cache_invalidated += 1;
-                        }
+                        && tombstone_file(&self.ms_root, &path, "cache").is_ok()
+                    {
+                        report.cache_invalidated += 1;
+                    }
                 }
             }
         }
@@ -746,7 +746,7 @@ impl Checkpoint {
     }
 
     /// Retrieve a state value.
-    #[must_use] 
+    #[must_use]
     pub fn get_state(&self, key: &str) -> Option<&str> {
         self.state.get(key).map(std::string::String::as_str)
     }
@@ -797,9 +797,7 @@ impl Checkpoint {
     pub fn load(ms_root: &Path, operation_id: &str) -> Result<Option<Self>> {
         let safe_id = Self::sanitize_operation_id(operation_id)?;
 
-        let path = ms_root
-            .join("checkpoints")
-            .join(format!("{safe_id}.json"));
+        let path = ms_root.join("checkpoints").join(format!("{safe_id}.json"));
         if !path.exists() {
             return Ok(None);
         }
@@ -817,9 +815,7 @@ impl Checkpoint {
     pub fn remove(ms_root: &Path, operation_id: &str) -> Result<bool> {
         let safe_id = Self::sanitize_operation_id(operation_id)?;
 
-        let path = ms_root
-            .join("checkpoints")
-            .join(format!("{safe_id}.json"));
+        let path = ms_root.join("checkpoints").join(format!("{safe_id}.json"));
         if !path.exists() {
             return Ok(false);
         }

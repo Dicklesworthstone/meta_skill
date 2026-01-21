@@ -515,7 +515,10 @@ mod relevance_scorer_tests {
         let context = context_for_project(ProjectType::Rust);
 
         let score = scorer.score(&skill, &context);
-        assert!(score < 0.001, "Empty context skill should have near-zero score");
+        assert!(
+            score < 0.001,
+            "Empty context skill should have near-zero score"
+        );
     }
 
     #[test]
@@ -525,7 +528,10 @@ mod relevance_scorer_tests {
         let context = ScoringContext::new(); // Empty context
 
         let score = scorer.score(&skill, &context);
-        assert!(score < 0.001, "Empty working context should yield near-zero score");
+        assert!(
+            score < 0.001,
+            "Empty working context should yield near-zero score"
+        );
     }
 
     #[test]

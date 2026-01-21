@@ -33,8 +33,8 @@
 //! ```
 
 use std::io::{self, Write};
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use parking_lot::Mutex;
 use rich_rust::color::ColorSystem;
@@ -48,7 +48,7 @@ use crate::cli::output::OutputFormat;
 use crate::config::Config;
 
 use super::detection::{OutputDecision, OutputDetector, OutputEnvironment};
-use super::theme::{detect_terminal_capabilities, BoxStyle, Theme};
+use super::theme::{BoxStyle, Theme, detect_terminal_capabilities};
 
 // =============================================================================
 // Output Mode
@@ -280,7 +280,11 @@ impl RichOutput {
     }
 
     /// Internal constructor from detection with format context.
-    fn from_detection_inner(decision: OutputDecision, format: &OutputFormat, config: &Config) -> Self {
+    fn from_detection_inner(
+        decision: OutputDecision,
+        format: &OutputFormat,
+        config: &Config,
+    ) -> Self {
         let mode = match format {
             OutputFormat::Json | OutputFormat::Jsonl => OutputMode::Json,
             OutputFormat::Plain | OutputFormat::Tsv => OutputMode::Plain,
@@ -295,7 +299,8 @@ impl RichOutput {
 
         let caps = detect_terminal_capabilities();
         let theme = if mode == OutputMode::Rich {
-            Theme::from_config(config).unwrap_or_else(|_| Theme::auto_detect())
+            Theme::from_config(config)
+                .unwrap_or_else(|_| Theme::auto_detect())
                 .adapted_for_terminal(&caps)
         } else {
             Theme::default().with_ascii_fallback()
@@ -511,7 +516,9 @@ impl RichOutput {
                     box_chars.top_left,
                     box_chars.horizontal,
                     t,
-                    box_chars.horizontal.repeat(width.saturating_sub(t.len() + 4)),
+                    box_chars
+                        .horizontal
+                        .repeat(width.saturating_sub(t.len() + 4)),
                     box_chars.top_right
                 );
             } else {
@@ -524,7 +531,10 @@ impl RichOutput {
             }
 
             for line in content.lines() {
-                println!("{} {:<width$} {}", box_chars.vertical, line, box_chars.vertical);
+                println!(
+                    "{} {:<width$} {}",
+                    box_chars.vertical, line, box_chars.vertical
+                );
             }
 
             println!(
@@ -776,12 +786,18 @@ impl RichOutput {
         trace!(mode = ?self.mode, "json");
 
         if self.is_json() {
-            println!("{}", serde_json::to_string_pretty(value).unwrap_or_default());
+            println!(
+                "{}",
+                serde_json::to_string_pretty(value).unwrap_or_default()
+            );
         } else if self.is_rich() {
             let json_str = serde_json::to_string_pretty(value).unwrap_or_default();
             self.print_syntax(&json_str, "json");
         } else {
-            println!("{}", serde_json::to_string_pretty(value).unwrap_or_default());
+            println!(
+                "{}",
+                serde_json::to_string_pretty(value).unwrap_or_default()
+            );
         }
     }
 
@@ -814,7 +830,8 @@ impl RichOutput {
 
         for (key, value) in pairs {
             if self.is_rich() {
-                let styled_key = self.render_style(&self.theme.colors.key, &format!("{key:>max_key_len$}"));
+                let styled_key =
+                    self.render_style(&self.theme.colors.key, &format!("{key:>max_key_len$}"));
                 let styled_value = self.render_style(&self.theme.colors.value, value);
                 println!("{styled_key}: {styled_value}");
             } else {
@@ -845,7 +862,8 @@ impl RichOutput {
         let width = items.len().to_string().len();
         for (i, item) in items.iter().enumerate() {
             if self.is_rich() {
-                let num = self.render_style(&self.theme.colors.number, &format!("{:>width$}", i + 1));
+                let num =
+                    self.render_style(&self.theme.colors.number, &format!("{:>width$}", i + 1));
                 let styled = self.render_style(&self.theme.colors.value, item);
                 println!("  {num}. {styled}");
             } else {
@@ -876,7 +894,8 @@ impl RichOutput {
         for line in &new_lines {
             if !old_lines.contains(line) {
                 if self.is_rich() {
-                    let styled = self.render_style(&self.theme.colors.success, &format!("+ {line}"));
+                    let styled =
+                        self.render_style(&self.theme.colors.success, &format!("+ {line}"));
                     println!("{styled}");
                 } else {
                     println!("+ {line}");
@@ -910,8 +929,14 @@ impl RichOutput {
         if self.is_rich() {
             let bar = format!(
                 "{}{}",
-                self.render_style(&self.theme.colors.progress_done, &progress_chars.filled.repeat(filled)),
-                self.render_style(&self.theme.colors.progress_remaining, &progress_chars.empty.repeat(empty))
+                self.render_style(
+                    &self.theme.colors.progress_done,
+                    &progress_chars.filled.repeat(filled)
+                ),
+                self.render_style(
+                    &self.theme.colors.progress_remaining,
+                    &progress_chars.empty.repeat(empty)
+                )
             );
             let text = self.render_style(&self.theme.colors.progress_text, message);
             eprint!("\r[{bar}] {pct:>3}% {text}");

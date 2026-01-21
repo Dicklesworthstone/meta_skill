@@ -393,7 +393,11 @@ where
 ///
 /// If colors are not supported, returns the plain text.
 /// Otherwise, returns the colored string as-is.
-pub fn with_color<S: AsRef<str>>(colored: ColoredString, plain: S, support: ColorSupport) -> String {
+pub fn with_color<S: AsRef<str>>(
+    colored: ColoredString,
+    plain: S,
+    support: ColorSupport,
+) -> String {
     if support.has_color() {
         colored.to_string()
     } else {

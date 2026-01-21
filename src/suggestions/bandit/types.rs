@@ -20,7 +20,7 @@ pub enum SignalType {
 }
 
 impl SignalType {
-    #[must_use] 
+    #[must_use]
     pub const fn all() -> &'static [Self] {
         &[
             Self::Bm25,
@@ -92,7 +92,7 @@ pub struct BanditArm {
 }
 
 impl BanditArm {
-    #[must_use] 
+    #[must_use]
     pub const fn new(signal_type: SignalType, decay_factor: f64) -> Self {
         Self {
             signal_type,
@@ -122,7 +122,7 @@ impl BanditArm {
         }
     }
 
-    #[must_use] 
+    #[must_use]
     pub fn observations(&self) -> f64 {
         self.successes + self.failures
     }
@@ -135,7 +135,7 @@ pub struct SignalWeights {
 }
 
 impl SignalWeights {
-    #[must_use] 
+    #[must_use]
     pub fn get(&self, signal: SignalType) -> f64 {
         *self.weights.get(&signal).unwrap_or(&0.0)
     }

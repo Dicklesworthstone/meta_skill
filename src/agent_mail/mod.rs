@@ -45,12 +45,12 @@ impl AgentMailClient {
         })
     }
 
-    #[must_use] 
+    #[must_use]
     pub fn agent_name(&self) -> &str {
         &self.agent_name
     }
 
-    #[must_use] 
+    #[must_use]
     pub fn project_key(&self) -> &str {
         &self.project_key
     }
@@ -148,7 +148,9 @@ impl std::fmt::Debug for McpClient {
 impl McpClient {
     fn new(endpoint: &str, timeout_secs: u64) -> Result<Self> {
         if endpoint.starts_with("http://") {
-            tracing::warn!("Agent mail endpoint uses unencrypted HTTP. Credentials will be sent in plain text.");
+            tracing::warn!(
+                "Agent mail endpoint uses unencrypted HTTP. Credentials will be sent in plain text."
+            );
         }
 
         let timeout = Duration::from_secs(timeout_secs.max(1));
@@ -231,9 +233,9 @@ impl McpClient {
             )));
         }
 
-        response.result.ok_or_else(|| {
-            MsError::Config(format!("agent mail empty response for {method}"))
-        })
+        response
+            .result
+            .ok_or_else(|| MsError::Config(format!("agent mail empty response for {method}")))
     }
 
     fn send_notification(&self, method: &str, params: Value) -> Result<()> {
@@ -285,7 +287,7 @@ fn unwrap_tool_result(value: Value) -> Result<Value> {
             return Ok(parsed);
         }
     }
-    
+
     // If we reach here, we found content but no valid JSON in text fields.
     // This is unexpected for our tools which should return JSON.
     Err(MsError::Config(

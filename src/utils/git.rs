@@ -25,9 +25,7 @@ pub fn current_branch_in(path: Option<impl AsRef<std::path::Path>>) -> Result<Op
         return Ok(None); // not in a git repo
     }
 
-    let branch = String::from_utf8_lossy(&output.stdout)
-        .trim()
-        .to_string();
+    let branch = String::from_utf8_lossy(&output.stdout).trim().to_string();
 
     if branch.is_empty() || branch == "HEAD" {
         Ok(None) // detached HEAD state

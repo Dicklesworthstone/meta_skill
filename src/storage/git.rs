@@ -4,9 +4,9 @@ use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 
+use chrono::{DateTime, Utc};
 use git2::{Commit, ErrorCode, Oid, Repository, Signature};
 use serde::{Deserialize, Serialize};
-use chrono::{DateTime, Utc};
 
 use crate::core::{SkillMetadata, SkillSpec};
 use crate::error::{MsError, Result};
@@ -50,12 +50,12 @@ impl GitArchive {
     }
 
     /// Get a reference to the repository
-    #[must_use] 
+    #[must_use]
     pub const fn repo(&self) -> &Repository {
         &self.repo
     }
 
-    #[must_use] 
+    #[must_use]
     pub fn root(&self) -> &Path {
         &self.root
     }
@@ -63,7 +63,7 @@ impl GitArchive {
     /// Get the path to a skill directory in the archive
     ///
     /// Returns None if `skill_id` contains path traversal sequences.
-    #[must_use] 
+    #[must_use]
     pub fn skill_path(&self, skill_id: &str) -> Option<PathBuf> {
         // Prevent path traversal attacks
         if skill_id.trim().is_empty() {
@@ -76,15 +76,18 @@ impl GitArchive {
             return None;
         }
         // Stricter check: must be safe filename characters only
-        if !skill_id.chars().all(|c| c.is_alphanumeric() || c == '-' || c == '_' || c == '.') {
+        if !skill_id
+            .chars()
+            .all(|c| c.is_alphanumeric() || c == '-' || c == '_' || c == '.')
+        {
             return None;
         }
-        
+
         Some(self.root.join("skills/by-id").join(skill_id))
     }
 
     /// Check if a skill exists in the archive (has spec file)
-    #[must_use] 
+    #[must_use]
     pub fn skill_exists(&self, skill_id: &str) -> bool {
         self.skill_path(skill_id)
             .is_some_and(|p| p.join("skill.spec.json").exists())
@@ -95,20 +98,29 @@ impl GitArchive {
     pub fn skill_committed(&self, skill_id: &str) -> Result<bool> {
         // Safe because skill_exists/skill_path checks for traversal, but we construct path manually here
         // to match repo root relative path.
-        if skill_id.trim().is_empty() || skill_id == "." || skill_id == ".." || skill_id.contains('/') || skill_id.contains('\\') {
-             return Ok(false);
+        if skill_id.trim().is_empty()
+            || skill_id == "."
+            || skill_id == ".."
+            || skill_id.contains('/')
+            || skill_id.contains('\\')
+        {
+            return Ok(false);
         }
-        
-        let path = Path::new("skills/by-id").join(skill_id).join("skill.spec.json");
+
+        let path = Path::new("skills/by-id")
+            .join(skill_id)
+            .join("skill.spec.json");
         let head = match self.repo.head() {
             Ok(h) => h,
             Err(_) => return Ok(false), // No head = no commits
         };
-        
-        let target = head.target().ok_or_else(|| MsError::Git(git2::Error::from_str("HEAD is not a commit")))?;
+
+        let target = head
+            .target()
+            .ok_or_else(|| MsError::Git(git2::Error::from_str("HEAD is not a commit")))?;
         let commit = self.repo.find_commit(target)?;
         let tree = commit.tree().map_err(MsError::Git)?;
-        
+
         match tree.get_path(&path) {
             Ok(_) => Ok(true),
             Err(e) if e.code() == ErrorCode::NotFound => Ok(false),
@@ -159,7 +171,9 @@ impl GitArchive {
             }
             Err(_) => return Ok(results),
         }
-        revwalk.set_sorting(git2::Sort::TIME).map_err(MsError::Git)?;
+        revwalk
+            .set_sorting(git2::Sort::TIME)
+            .map_err(MsError::Git)?;
 
         // Iterate commits
         for oid in revwalk {
@@ -624,13 +638,13 @@ mod tests {
         let archive = GitArchive::open(dir.path()).unwrap();
 
         let spec = sample_spec("comm-skill");
-        
+
         // Not committed yet
         assert!(!archive.skill_committed("comm-skill").unwrap());
 
         // Write and commit
         archive.write_skill(&spec).unwrap();
-        
+
         // Now committed
         assert!(archive.skill_committed("comm-skill").unwrap());
 

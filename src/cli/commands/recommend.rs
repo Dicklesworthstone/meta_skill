@@ -13,7 +13,7 @@ use crate::cli::output::OutputFormat;
 use crate::cli::output::{HumanLayout, emit_json};
 use crate::error::Result;
 use crate::suggestions::bandit::contextual::ContextualBandit;
-use crate::suggestions::bandit::features::{UserHistory, FEATURE_DIM};
+use crate::suggestions::bandit::features::{FEATURE_DIM, UserHistory};
 
 #[derive(Args, Debug)]
 pub struct RecommendArgs {
@@ -86,9 +86,8 @@ fn stats(ctx: &AppContext, args: &StatsArgs) -> Result<()> {
     let bandit_path = default_bandit_path();
     let history_path = UserHistory::default_path();
 
-    let bandit = ContextualBandit::load(&bandit_path).unwrap_or_else(|_| {
-        ContextualBandit::with_feature_dim(FEATURE_DIM)
-    });
+    let bandit = ContextualBandit::load(&bandit_path)
+        .unwrap_or_else(|_| ContextualBandit::with_feature_dim(FEATURE_DIM));
     let user_history = UserHistory::load(&history_path);
 
     if ctx.output_format != OutputFormat::Human {
@@ -132,15 +131,24 @@ fn stats(ctx: &AppContext, args: &StatsArgs) -> Result<()> {
         .title("Recommendation Engine Stats")
         .section("Contextual Bandit")
         .kv("Path", &bandit_path.display().to_string())
-        .kv("Total recommendations", &bandit.total_recommendations().to_string())
+        .kv(
+            "Total recommendations",
+            &bandit.total_recommendations().to_string(),
+        )
         .kv("Total updates", &bandit.total_updates().to_string())
         .kv("Registered skills", &bandit.skill_count().to_string())
         .kv("Feature dimensions", &FEATURE_DIM.to_string())
         .blank()
         .section("User History")
         .kv("Path", &history_path.display().to_string())
-        .kv("Total skill loads", &user_history.total_skill_loads.to_string())
-        .kv("Unique skills used", &user_history.skill_load_counts.len().to_string())
+        .kv(
+            "Total skill loads",
+            &user_history.total_skill_loads.to_string(),
+        )
+        .kv(
+            "Unique skills used",
+            &user_history.skill_load_counts.len().to_string(),
+        )
         .kv(
             "Days since last use",
             &user_history
@@ -208,7 +216,10 @@ fn history(ctx: &AppContext, args: &HistoryArgs) -> Result<()> {
     if user_history.total_skill_loads == 0 {
         println!("{}", "No recommendation history yet.".dimmed());
         println!();
-        println!("Use {} to get skill suggestions and build history.", "ms suggest".cyan());
+        println!(
+            "Use {} to get skill suggestions and build history.",
+            "ms suggest".cyan()
+        );
         return Ok(());
     }
 
@@ -220,7 +231,13 @@ fn history(ctx: &AppContext, args: &HistoryArgs) -> Result<()> {
     let mut entries: Vec<_> = user_history.skill_load_counts.iter().collect();
     entries.sort_by(|a, b| b.1.cmp(a.1));
 
-    println!("{:40} {:>8} {:>10} {:>8}", "SKILL".bold(), "LOADS".bold(), "FREQUENCY".bold(), "RECENCY".bold());
+    println!(
+        "{:40} {:>8} {:>10} {:>8}",
+        "SKILL".bold(),
+        "LOADS".bold(),
+        "FREQUENCY".bold(),
+        "RECENCY".bold()
+    );
     println!("{}", "─".repeat(70).dimmed());
 
     let mut shown = 0;
@@ -267,15 +284,20 @@ fn tune(ctx: &AppContext, args: &TuneArgs) -> Result<()> {
             return emit_json(&payload);
         }
 
-        println!("{} Contextual bandit reset to fresh state", "✓".green().bold());
+        println!(
+            "{} Contextual bandit reset to fresh state",
+            "✓".green().bold()
+        );
         println!();
-        println!("{}", "The recommendation engine will now re-learn from your usage patterns.".dimmed());
+        println!(
+            "{}",
+            "The recommendation engine will now re-learn from your usage patterns.".dimmed()
+        );
         return Ok(());
     }
 
-    let mut bandit = ContextualBandit::load(&bandit_path).unwrap_or_else(|_| {
-        ContextualBandit::with_feature_dim(FEATURE_DIM)
-    });
+    let mut bandit = ContextualBandit::load(&bandit_path)
+        .unwrap_or_else(|_| ContextualBandit::with_feature_dim(FEATURE_DIM));
 
     let mut changed = false;
 
@@ -313,10 +335,26 @@ fn tune(ctx: &AppContext, args: &TuneArgs) -> Result<()> {
     if changed {
         layout.section("Updated");
         if args.exploration.is_some() {
-            layout.kv("Exploration rate", &format!("{:.3}", config.get("exploration_rate").unwrap_or(&serde_json::json!(0.1))));
+            layout.kv(
+                "Exploration rate",
+                &format!(
+                    "{:.3}",
+                    config
+                        .get("exploration_rate")
+                        .unwrap_or(&serde_json::json!(0.1))
+                ),
+            );
         }
         if args.learning_rate.is_some() {
-            layout.kv("Learning rate", &format!("{:.3}", config.get("learning_rate").unwrap_or(&serde_json::json!(0.01))));
+            layout.kv(
+                "Learning rate",
+                &format!(
+                    "{:.3}",
+                    config
+                        .get("learning_rate")
+                        .unwrap_or(&serde_json::json!(0.01))
+                ),
+            );
         }
         layout.blank();
     }
@@ -392,7 +430,8 @@ mod tests {
 
     #[test]
     fn parse_recommend_history_with_filter() {
-        let parsed = TestCli::parse_from(["test", "recommend", "history", "--skill", "rust", "-n", "5"]);
+        let parsed =
+            TestCli::parse_from(["test", "recommend", "history", "--skill", "rust", "-n", "5"]);
         let TestCommand::Recommend(args) = parsed.cmd;
         match args.command {
             RecommendCommand::History(history) => {
@@ -420,9 +459,13 @@ mod tests {
     #[test]
     fn parse_recommend_tune_with_params() {
         let parsed = TestCli::parse_from([
-            "test", "recommend", "tune",
-            "--exploration", "0.2",
-            "--learning-rate", "0.05",
+            "test",
+            "recommend",
+            "tune",
+            "--exploration",
+            "0.2",
+            "--learning-rate",
+            "0.05",
         ]);
         let TestCommand::Recommend(args) = parsed.cmd;
         match args.command {

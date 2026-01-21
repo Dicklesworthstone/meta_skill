@@ -197,7 +197,10 @@ impl BrowseTui {
     }
 
     /// Run the TUI main loop.
-    pub fn run(mut self, terminal: &mut Terminal<CrosstermBackend<Stdout>>) -> Result<Option<String>> {
+    pub fn run(
+        mut self,
+        terminal: &mut Terminal<CrosstermBackend<Stdout>>,
+    ) -> Result<Option<String>> {
         loop {
             terminal.draw(|f| self.draw(f))?;
 
@@ -217,10 +220,10 @@ impl BrowseTui {
         let chunks = Layout::default()
             .direction(Direction::Vertical)
             .constraints([
-                Constraint::Length(1),  // Title bar
-                Constraint::Length(3),  // Search bar
-                Constraint::Min(10),    // Main content
-                Constraint::Length(1),  // Help bar
+                Constraint::Length(1), // Title bar
+                Constraint::Length(3), // Search bar
+                Constraint::Min(10),   // Main content
+                Constraint::Length(1), // Help bar
             ])
             .split(f.area());
 
@@ -398,7 +401,10 @@ impl BrowseTui {
         f.render_widget(Clear, help_area);
 
         let help_text = vec![
-            Line::from(Span::styled("Keyboard Shortcuts", Style::default().add_modifier(Modifier::BOLD))),
+            Line::from(Span::styled(
+                "Keyboard Shortcuts",
+                Style::default().add_modifier(Modifier::BOLD),
+            )),
             Line::from(""),
             Line::from("Navigation:"),
             Line::from("  j / Down     Move down in list"),
@@ -791,11 +797,7 @@ impl TerminalGuard {
 impl Drop for TerminalGuard {
     fn drop(&mut self) {
         let _ = disable_raw_mode();
-        let _ = execute!(
-            io::stdout(),
-            LeaveAlternateScreen,
-            DisableMouseCapture
-        );
+        let _ = execute!(io::stdout(), LeaveAlternateScreen, DisableMouseCapture);
     }
 }
 
@@ -847,7 +849,13 @@ fn quality_color(quality: f64) -> Color {
 mod tests {
     use super::*;
 
-    fn make_test_skill(id: &str, name: &str, layer: &str, quality: f64, tags: Vec<&str>) -> SkillSummary {
+    fn make_test_skill(
+        id: &str,
+        name: &str,
+        layer: &str,
+        quality: f64,
+        tags: Vec<&str>,
+    ) -> SkillSummary {
         SkillSummary {
             id: id.to_string(),
             name: name.to_string(),
@@ -862,9 +870,27 @@ mod tests {
     #[test]
     fn test_filter_by_search_query() {
         let skills = vec![
-            make_test_skill("rust-errors", "Rust Error Handling", "base", 0.9, vec!["rust", "error"]),
-            make_test_skill("python-errors", "Python Error Handling", "base", 0.85, vec!["python", "error"]),
-            make_test_skill("rust-async", "Rust Async Patterns", "base", 0.8, vec!["rust", "async"]),
+            make_test_skill(
+                "rust-errors",
+                "Rust Error Handling",
+                "base",
+                0.9,
+                vec!["rust", "error"],
+            ),
+            make_test_skill(
+                "python-errors",
+                "Python Error Handling",
+                "base",
+                0.85,
+                vec!["python", "error"],
+            ),
+            make_test_skill(
+                "rust-async",
+                "Rust Async Patterns",
+                "base",
+                0.8,
+                vec!["rust", "async"],
+            ),
         ];
 
         let mut app = BrowseTui::with_test_skills(skills);

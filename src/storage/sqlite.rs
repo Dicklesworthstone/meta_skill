@@ -261,16 +261,14 @@ impl Database {
         use std::collections::HashMap;
 
         // Get total loads
-        let total_loads: i64 = self.conn.query_row(
-            "SELECT COUNT(*) FROM skill_usage",
-            [],
-            |row| row.get(0),
-        )?;
+        let total_loads: i64 =
+            self.conn
+                .query_row("SELECT COUNT(*) FROM skill_usage", [], |row| row.get(0))?;
 
         // Get per-skill load counts
-        let mut stmt = self.conn.prepare(
-            "SELECT skill_id, COUNT(*) as count FROM skill_usage GROUP BY skill_id"
-        )?;
+        let mut stmt = self
+            .conn
+            .prepare("SELECT skill_id, COUNT(*) as count FROM skill_usage GROUP BY skill_id")?;
         let counts: Result<HashMap<String, u64>> = stmt
             .query_map([], |row| {
                 let skill_id: String = row.get(0)?;
@@ -283,7 +281,7 @@ impl Database {
 
         // Get per-skill last load timestamps
         let mut stmt = self.conn.prepare(
-            "SELECT skill_id, MAX(used_at) as last_used FROM skill_usage GROUP BY skill_id"
+            "SELECT skill_id, MAX(used_at) as last_used FROM skill_usage GROUP BY skill_id",
         )?;
         let last_loads: Result<HashMap<String, chrono::DateTime<chrono::Utc>>> = stmt
             .query_map([], |row| {
@@ -302,7 +300,11 @@ impl Database {
             .collect();
         let skill_last_load = last_loads?;
 
-        Ok((total_loads.max(0) as u64, skill_load_counts, skill_last_load))
+        Ok((
+            total_loads.max(0) as u64,
+            skill_load_counts,
+            skill_last_load,
+        ))
     }
 
     /// Record a skill usage entry (lightweight summary table).
@@ -317,9 +319,10 @@ impl Database {
     ) -> Result<()> {
         let used_at = chrono::Utc::now().to_rfc3339();
         let keywords_json = if let Some(keys) = context_keywords {
-            Some(serde_json::to_string(keys).map_err(|err| {
-                MsError::Config(format!("encode context keywords: {err}"))
-            })?)
+            Some(
+                serde_json::to_string(keys)
+                    .map_err(|err| MsError::Config(format!("encode context keywords: {err}")))?,
+            )
         } else {
             None
         };
@@ -629,16 +632,16 @@ impl Database {
     /// Efficiently load all embeddings for the vector index.
     /// Returns pairs of (`skill_id`, `embedding_vector`).
     pub fn get_all_embeddings(&self) -> Result<Vec<(String, Vec<f32>)>> {
-        let mut stmt = self.conn.prepare(
-            "SELECT skill_id, embedding, dims FROM skill_embeddings"
-        )?;
-        
+        let mut stmt = self
+            .conn
+            .prepare("SELECT skill_id, embedding, dims FROM skill_embeddings")?;
+
         let rows = stmt.query_map([], |row| {
             let skill_id: String = row.get(0)?;
             let blob: Vec<u8> = row.get(1)?;
             let dims: i64 = row.get(2)?;
             let dims_usize = if dims <= 0 { 0 } else { dims as usize };
-            
+
             // We have to decode inside the closure or return the blob to decode outside.
             // Decoding here is cleaner but might hold the lock longer.
             // Given we are reading everything, holding the lock is expected.
@@ -647,13 +650,13 @@ impl Database {
                 Err(e) => {
                     // Map error to sqlite failure to propagate
                     return Err(rusqlite::Error::FromSqlConversionFailure(
-                        1, 
-                        rusqlite::types::Type::Blob, 
-                        Box::new(e)
+                        1,
+                        rusqlite::types::Type::Blob,
+                        Box::new(e),
                     ));
                 }
             };
-            
+
             Ok((skill_id, embedding))
         })?;
 
@@ -1463,9 +1466,7 @@ impl Database {
             params![status, id],
         )?;
         if updated == 0 {
-            return Err(MsError::NotFound(format!(
-                "experiment not found: {id}"
-            )));
+            return Err(MsError::NotFound(format!("experiment not found: {id}")));
         }
         Ok(())
     }
@@ -2135,8 +2136,13 @@ mod tests {
                 level: EvidenceLevel::Pointer,
                 confidence: 0.7 + (i as f32 * 0.05),
             }];
-            db.upsert_evidence("multi-rule-skill", &format!("rule-{}", i), &evidence, &coverage)
-                .unwrap();
+            db.upsert_evidence(
+                "multi-rule-skill",
+                &format!("rule-{}", i),
+                &evidence,
+                &coverage,
+            )
+            .unwrap();
         }
 
         // List all evidence

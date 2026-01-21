@@ -35,10 +35,9 @@ pub enum DisclosureLevel {
     Auto,
 }
 
-
 impl DisclosureLevel {
     /// Target token budget for this disclosure level
-    #[must_use] 
+    #[must_use]
     pub const fn token_budget(&self) -> Option<usize> {
         match self {
             Self::Minimal => Some(100),
@@ -51,7 +50,7 @@ impl DisclosureLevel {
     }
 
     /// Parse from string (CLI argument)
-    #[must_use] 
+    #[must_use]
     pub fn from_str_or_level(s: &str) -> Option<Self> {
         match s.to_lowercase().as_str() {
             "minimal" | "0" => Some(Self::Minimal),
@@ -65,7 +64,7 @@ impl DisclosureLevel {
     }
 
     /// Get human-readable name
-    #[must_use] 
+    #[must_use]
     pub const fn name(&self) -> &'static str {
         match self {
             Self::Minimal => "minimal",
@@ -78,7 +77,7 @@ impl DisclosureLevel {
     }
 
     /// Numeric level for comparison
-    #[must_use] 
+    #[must_use]
     pub const fn level_num(&self) -> u8 {
         match self {
             Self::Minimal => 0,
@@ -125,7 +124,7 @@ pub struct TokenBudget {
 
 impl TokenBudget {
     /// Create a new token budget with defaults
-    #[must_use] 
+    #[must_use]
     pub const fn new(tokens: usize) -> Self {
         Self {
             tokens,
@@ -136,7 +135,7 @@ impl TokenBudget {
     }
 
     /// Create with a specific mode
-    #[must_use] 
+    #[must_use]
     pub const fn with_mode(tokens: usize, mode: PackMode) -> Self {
         Self {
             tokens,
@@ -163,10 +162,9 @@ pub enum PackMode {
     PitfallSafe,
 }
 
-
 impl PackMode {
     /// Parse from string (CLI argument)
-    #[must_use] 
+    #[must_use]
     pub fn from_str(s: &str) -> Option<Self> {
         match s.to_lowercase().replace('-', "_").as_str() {
             "balanced" => Some(Self::Balanced),
@@ -288,7 +286,7 @@ pub enum RequestType {
 // =============================================================================
 
 /// Generate content at a specified disclosure plan
-#[must_use] 
+#[must_use]
 pub fn disclose(spec: &SkillSpec, assets: &SkillAssets, plan: &DisclosurePlan) -> DisclosedContent {
     match plan {
         DisclosurePlan::Level(level) => disclose_level(spec, assets, *level),
@@ -297,7 +295,7 @@ pub fn disclose(spec: &SkillSpec, assets: &SkillAssets, plan: &DisclosurePlan) -
 }
 
 /// Generate content at a specified disclosure level
-#[must_use] 
+#[must_use]
 pub fn disclose_level(
     spec: &SkillSpec,
     assets: &SkillAssets,
@@ -495,7 +493,7 @@ fn render_packed_body(slices: &[crate::core::skill::SkillSlice]) -> String {
 }
 
 /// Determine optimal disclosure level based on context
-#[must_use] 
+#[must_use]
 pub fn optimal_disclosure(context: &DisclosureContext) -> DisclosurePlan {
     // If explicitly requested, use that level
     if let Some(level) = context.explicit_level {
@@ -625,8 +623,15 @@ fn estimate_tokens_frontmatter(meta: &SkillMetadata, minimal: bool) -> usize {
     let extras = if minimal {
         0
     } else {
-        meta.tags.iter().map(std::string::String::len).sum::<usize>()
-            + meta.requires.iter().map(std::string::String::len).sum::<usize>()
+        meta.tags
+            .iter()
+            .map(std::string::String::len)
+            .sum::<usize>()
+            + meta
+                .requires
+                .iter()
+                .map(std::string::String::len)
+                .sum::<usize>()
     };
     // Rough: 4 chars per token
     (base + extras) / 4 + 20 // +20 for formatting overhead

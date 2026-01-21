@@ -16,7 +16,6 @@ pub enum ConflictStrategy {
     KeepBoth,
 }
 
-
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "kebab-case")]
 pub enum RemoteType {
@@ -65,7 +64,6 @@ pub enum SyncDirection {
     Bidirectional,
 }
 
-
 impl SyncDirection {
     pub fn from_str(value: &str) -> Result<Self> {
         match value {
@@ -78,26 +76,24 @@ impl SyncDirection {
         }
     }
 
-    #[must_use] 
+    #[must_use]
     pub const fn allows_pull(self) -> bool {
         matches!(self, Self::PullOnly | Self::Bidirectional)
     }
 
-    #[must_use] 
+    #[must_use]
     pub const fn allows_push(self) -> bool {
         matches!(self, Self::PushOnly | Self::Bidirectional)
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[derive(Default)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct MachineConfig {
     #[serde(default)]
     pub name: Option<String>,
     #[serde(default)]
     pub description: Option<String>,
 }
-
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SyncSettings {
@@ -188,8 +184,7 @@ pub fn validate_remote_name(name: &str) -> Result<()> {
     Ok(())
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[derive(Default)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct SyncConfig {
     #[serde(default)]
     pub machine: MachineConfig,
@@ -200,7 +195,6 @@ pub struct SyncConfig {
     #[serde(default)]
     pub conflict_strategies: HashMap<String, ConflictStrategy>,
 }
-
 
 impl SyncConfig {
     pub fn path() -> Result<PathBuf> {
@@ -259,7 +253,7 @@ impl SyncConfig {
         before != self.remotes.len()
     }
 
-    #[must_use] 
+    #[must_use]
     pub fn remote(&self, name: &str) -> Option<&RemoteConfig> {
         self.remotes.iter().find(|r| r.name == name)
     }

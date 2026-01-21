@@ -5,6 +5,7 @@
 //! - Terminal capability detection
 //! - Theme system for semantic colors and icons
 //! - Rich output abstraction layer
+//! - Plain format specification for machine-parseable output
 //! - Test utilities for output testing (test-only)
 //!
 //! # Overview
@@ -19,6 +20,9 @@
 //!
 //! 3. **RichOutput** (`rich_output`): Main abstraction that provides output
 //!    methods adapting to the current mode (rich, plain, or JSON).
+//!
+//! 4. **PlainFormat** (`plain_format`): Specification and utilities for
+//!    machine-parseable plain text and JSON output formats.
 //!
 //! # Example
 //!
@@ -36,6 +40,7 @@
 
 pub mod builders;
 pub mod detection;
+pub mod plain_format;
 pub mod rich_output;
 pub mod theme;
 
@@ -44,11 +49,10 @@ pub mod test_utils;
 
 // Re-export detection types
 pub use detection::{
-    OutputDecision, OutputDecisionReason, OutputDetector, OutputEnvironment,
-    OutputModeReport, should_use_rich_output, should_use_rich_with_flags,
-    is_agent_environment, is_ci_environment, is_ide_environment,
-    detected_agent_vars, detected_ci_vars, detected_ide_vars,
-    maybe_print_debug_output, AGENT_ENV_VARS, CI_ENV_VARS, IDE_ENV_VARS,
+    AGENT_ENV_VARS, CI_ENV_VARS, IDE_ENV_VARS, OutputDecision, OutputDecisionReason,
+    OutputDetector, OutputEnvironment, OutputModeReport, detected_agent_vars, detected_ci_vars,
+    detected_ide_vars, is_agent_environment, is_ci_environment, is_ide_environment,
+    maybe_print_debug_output, should_use_rich_output, should_use_rich_with_flags,
 };
 
 // Re-export rich output types
@@ -56,22 +60,29 @@ pub use rich_output::{OutputMode, RichOutput, SpinnerHandle};
 
 // Re-export theme types
 pub use theme::{
-    BoxChars, BoxStyle, ProgressChars, ProgressStyle, TerminalBackground,
-    TerminalCapabilities, Theme, ThemeColors, ThemeError, ThemeIcons, ThemePreset,
-    TreeChars, TreeGuides, detect_terminal_background, detect_terminal_capabilities,
+    BoxChars, BoxStyle, ProgressChars, ProgressStyle, TerminalBackground, TerminalCapabilities,
+    Theme, ThemeColors, ThemeError, ThemeIcons, ThemePreset, TreeChars, TreeGuides,
+    detect_terminal_background, detect_terminal_capabilities,
 };
 
 // Re-export builder types and functions
 pub use builders::{
-    CheckResult, CheckStatus,
-    bulleted_list, bulleted_list_plain,
-    error_panel, error_panel_with_hint, error_panel_with_hint_and_width, error_panel_with_width,
-    key_value_plain, key_value_table,
-    numbered_list,
-    progress_line, progress_line_plain,
-    quality_bar, quality_bar_plain, quality_indicator,
-    search_results_table, search_results_table_with_id,
-    skill_detail_panel, skill_detail_panel_with_width, skill_panel, skill_panel_with_width,
-    status_tree, status_tree_with_title,
-    success_panel, success_panel_with_width, warning_panel, warning_panel_with_width,
+    CheckResult, CheckStatus, bulleted_list, bulleted_list_plain, error_panel,
+    error_panel_with_hint, error_panel_with_hint_and_width, error_panel_with_width,
+    key_value_plain, key_value_table, numbered_list, progress_line, progress_line_plain,
+    quality_bar, quality_bar_plain, quality_indicator, search_results_table,
+    search_results_table_with_id, skill_detail_panel, skill_detail_panel_with_width, skill_panel,
+    skill_panel_with_width, status_tree, status_tree_with_title, success_panel,
+    success_panel_with_width, warning_panel, warning_panel_with_width,
 };
+
+// Re-export plain format types
+pub use plain_format::{
+    JsonEnvelope, JsonError, JsonErrorDetail, JsonMeta, PlainCheckResult, PlainCheckResults,
+    PlainDone, PlainError, PlainFormatter, PlainKeyValue, PlainProgress, PlainStatus,
+};
+
+/// Plain format utilities for TSV escaping, score formatting, etc.
+pub mod plain_utils {
+    pub use super::plain_format::utils::*;
+}

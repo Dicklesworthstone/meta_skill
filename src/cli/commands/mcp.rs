@@ -65,9 +65,7 @@ fn would_enable_rich_output() -> Option<&'static str> {
     // Check if stdout is a terminal (would default to rich)
     if std::io::stdout().is_terminal() {
         // Only if NO_COLOR and MS_PLAIN_OUTPUT are not set
-        if std::env::var_os("NO_COLOR").is_none()
-            && std::env::var_os("MS_PLAIN_OUTPUT").is_none()
-        {
+        if std::env::var_os("NO_COLOR").is_none() && std::env::var_os("MS_PLAIN_OUTPUT").is_none() {
             return Some("terminal_default");
         }
     }
@@ -502,7 +500,9 @@ fn define_tools() -> Vec<Tool> {
         },
         Tool {
             name: "lint".to_string(),
-            description: "Lint a skill file for validation issues, security problems, and quality warnings".to_string(),
+            description:
+                "Lint a skill file for validation issues, security problems, and quality warnings"
+                    .to_string(),
             input_schema: serde_json::json!({
                 "type": "object",
                 "properties": {
@@ -529,7 +529,8 @@ fn define_tools() -> Vec<Tool> {
         },
         Tool {
             name: "suggest".to_string(),
-            description: "Get context-aware skill suggestions based on working directory".to_string(),
+            description: "Get context-aware skill suggestions based on working directory"
+                .to_string(),
             input_schema: serde_json::json!({
                 "type": "object",
                 "properties": {
@@ -909,7 +910,10 @@ fn handle_tool_search(ctx: &AppContext, args: &Value) -> Result<ToolResult> {
         MsError::ValidationFailed("Missing required parameter: query".to_string())
     })?;
 
-    let limit = args.get("limit").and_then(serde_json::Value::as_u64).unwrap_or(20) as usize;
+    let limit = args
+        .get("limit")
+        .and_then(serde_json::Value::as_u64)
+        .unwrap_or(20) as usize;
 
     // Use BM25 search via Tantivy
     let results = ctx.search.search(query, limit)?;
@@ -933,7 +937,10 @@ fn handle_tool_load(ctx: &AppContext, args: &Value) -> Result<ToolResult> {
         MsError::ValidationFailed("Missing required parameter: skill".to_string())
     })?;
 
-    let full = args.get("full").and_then(serde_json::Value::as_bool).unwrap_or(false);
+    let full = args
+        .get("full")
+        .and_then(serde_json::Value::as_bool)
+        .unwrap_or(false);
 
     // Look up skill
     let skill = ctx
@@ -1018,8 +1025,14 @@ fn handle_tool_evidence(ctx: &AppContext, args: &Value) -> Result<ToolResult> {
 }
 
 fn handle_tool_list(ctx: &AppContext, args: &Value) -> Result<ToolResult> {
-    let limit = args.get("limit").and_then(serde_json::Value::as_u64).unwrap_or(50) as usize;
-    let offset = args.get("offset").and_then(serde_json::Value::as_u64).unwrap_or(0) as usize;
+    let limit = args
+        .get("limit")
+        .and_then(serde_json::Value::as_u64)
+        .unwrap_or(50) as usize;
+    let offset = args
+        .get("offset")
+        .and_then(serde_json::Value::as_u64)
+        .unwrap_or(0) as usize;
 
     let all_skills = ctx.db.list_skills(limit, offset)?;
 
@@ -1043,7 +1056,10 @@ fn handle_tool_show(ctx: &AppContext, args: &Value) -> Result<ToolResult> {
         MsError::ValidationFailed("Missing required parameter: skill".to_string())
     })?;
 
-    let full = args.get("full").and_then(serde_json::Value::as_bool).unwrap_or(false);
+    let full = args
+        .get("full")
+        .and_then(serde_json::Value::as_bool)
+        .unwrap_or(false);
 
     let skill = ctx
         .db
@@ -1073,7 +1089,10 @@ fn handle_tool_show(ctx: &AppContext, args: &Value) -> Result<ToolResult> {
 }
 
 fn handle_tool_doctor(ctx: &AppContext, args: &Value) -> Result<ToolResult> {
-    let fix = args.get("fix").and_then(serde_json::Value::as_bool).unwrap_or(false);
+    let fix = args
+        .get("fix")
+        .and_then(serde_json::Value::as_bool)
+        .unwrap_or(false);
 
     // Basic health checks
     let mut checks = Vec::new();
@@ -1133,12 +1152,16 @@ fn handle_tool_lint(ctx: &AppContext, args: &Value) -> Result<ToolResult> {
     };
 
     // Parse the skill
-    let spec = parse_markdown(&content)
-        .map_err(|e| MsError::InvalidSkill(format!("{source}: {e}")))?;
+    let spec =
+        parse_markdown(&content).map_err(|e| MsError::InvalidSkill(format!("{source}: {e}")))?;
 
     // Build validation config
     let mut config = ValidationConfig::new();
-    if args.get("strict").and_then(serde_json::Value::as_bool).unwrap_or(false) {
+    if args
+        .get("strict")
+        .and_then(serde_json::Value::as_bool)
+        .unwrap_or(false)
+    {
         config = config.strict();
     }
 
@@ -1249,19 +1272,24 @@ fn handle_tool_feedback(ctx: &AppContext, args: &Value) -> Result<ToolResult> {
     let skill_id = args
         .get("skill_id")
         .and_then(|v| v.as_str())
-        .ok_or_else(|| MsError::ValidationFailed("Missing required parameter: skill_id".to_string()))?;
+        .ok_or_else(|| {
+            MsError::ValidationFailed("Missing required parameter: skill_id".to_string())
+        })?;
 
     let helpful = args
         .get("helpful")
         .and_then(serde_json::Value::as_bool)
-        .ok_or_else(|| MsError::ValidationFailed("Missing required parameter: helpful".to_string()))?;
+        .ok_or_else(|| {
+            MsError::ValidationFailed("Missing required parameter: helpful".to_string())
+        })?;
 
     let comment = args.get("comment").and_then(|v| v.as_str());
 
     // Record feedback using record_skill_feedback
     let feedback_type = if helpful { "positive" } else { "negative" };
     let rating = if helpful { Some(1) } else { Some(-1) };
-    ctx.db.record_skill_feedback(skill_id, feedback_type, rating, comment)?;
+    ctx.db
+        .record_skill_feedback(skill_id, feedback_type, rating, comment)?;
 
     let output = serde_json::json!({
         "recorded": true,
@@ -1279,10 +1307,12 @@ fn handle_tool_index(ctx: &AppContext, args: &Value) -> Result<ToolResult> {
         .and_then(serde_json::Value::as_bool)
         .unwrap_or(false);
 
-    let custom_paths: Option<Vec<String>> = args
-        .get("paths")
-        .and_then(|v| v.as_array())
-        .map(|arr| arr.iter().filter_map(|v| v.as_str().map(String::from)).collect());
+    let custom_paths: Option<Vec<String>> =
+        args.get("paths").and_then(|v| v.as_array()).map(|arr| {
+            arr.iter()
+                .filter_map(|v| v.as_str().map(String::from))
+                .collect()
+        });
 
     // Collect all configured paths
     let paths: Vec<std::path::PathBuf> = if let Some(ref custom) = custom_paths {
@@ -1336,8 +1366,8 @@ fn handle_tool_validate(_ctx: &AppContext, args: &Value) -> Result<ToolResult> {
     };
 
     // Parse the skill
-    let spec = parse_markdown(&content)
-        .map_err(|e| MsError::InvalidSkill(format!("{source}: {e}")))?;
+    let spec =
+        parse_markdown(&content).map_err(|e| MsError::InvalidSkill(format!("{source}: {e}")))?;
 
     // Build validation engine
     let config = ValidationConfig::new();
@@ -1423,12 +1453,16 @@ fn handle_tool_config(ctx: &AppContext, args: &Value) -> Result<ToolResult> {
                 "skill_paths.community" => serde_json::to_value(&ctx.config.skill_paths.community)?,
                 "search.use_embeddings" => serde_json::to_value(ctx.config.search.use_embeddings)?,
                 "search.bm25_weight" => serde_json::to_value(ctx.config.search.bm25_weight)?,
-                "search.semantic_weight" => serde_json::to_value(ctx.config.search.semantic_weight)?,
+                "search.semantic_weight" => {
+                    serde_json::to_value(ctx.config.search.semantic_weight)?
+                }
                 "cache.enabled" => serde_json::to_value(ctx.config.cache.enabled)?,
                 "cache.max_size_mb" => serde_json::to_value(ctx.config.cache.max_size_mb)?,
                 "cache.ttl_seconds" => serde_json::to_value(ctx.config.cache.ttl_seconds)?,
                 _ => {
-                    return Err(MsError::ValidationFailed(format!("Unknown config key: {key}")));
+                    return Err(MsError::ValidationFailed(format!(
+                        "Unknown config key: {key}"
+                    )));
                 }
             };
 
@@ -1442,7 +1476,8 @@ fn handle_tool_config(ctx: &AppContext, args: &Value) -> Result<ToolResult> {
         "set" => {
             // For now, config is read-only through MCP
             Err(MsError::ValidationFailed(
-                "Config modification via MCP not yet supported. Use 'ms config set' CLI.".to_string(),
+                "Config modification via MCP not yet supported. Use 'ms config set' CLI."
+                    .to_string(),
             ))
         }
         _ => Err(MsError::ValidationFailed(format!(
@@ -1573,7 +1608,12 @@ mod tests {
         assert!(props.get("comment").is_some());
 
         // skill_id and helpful are required
-        let required = tool.input_schema.get("required").unwrap().as_array().unwrap();
+        let required = tool
+            .input_schema
+            .get("required")
+            .unwrap()
+            .as_array()
+            .unwrap();
         assert!(required.iter().any(|r| r == "skill_id"));
         assert!(required.iter().any(|r| r == "helpful"));
     }
@@ -1659,7 +1699,11 @@ mod tests {
         let tools = define_tools();
         // We should have at least 12 tools: search, load, evidence, list, show, doctor, lint,
         // suggest, feedback, index, validate, config
-        assert!(tools.len() >= 12, "Expected at least 12 tools, got {}", tools.len());
+        assert!(
+            tools.len() >= 12,
+            "Expected at least 12 tools, got {}",
+            tools.len()
+        );
     }
 
     // ========================================================================
@@ -1872,6 +1916,9 @@ mod tests {
         assert!(parsed.is_ok(), "Response should be valid JSON");
 
         // Should not contain ANSI
-        assert!(!contains_ansi(&json), "Response should not contain ANSI codes");
+        assert!(
+            !contains_ansi(&json),
+            "Response should not contain ANSI codes"
+        );
     }
 }

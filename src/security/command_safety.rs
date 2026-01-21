@@ -41,7 +41,7 @@ pub struct SafetyGate {
 }
 
 impl SafetyGate {
-    #[must_use] 
+    #[must_use]
     pub fn from_context(ctx: &AppContext) -> Self {
         let guard = DcgGuard::new(
             ctx.config.safety.dcg_bin.clone(),
@@ -86,7 +86,7 @@ impl SafetyGate {
     }
 
     /// Get the current status of the safety gate.
-    #[must_use] 
+    #[must_use]
     pub fn status(&self) -> SafetyStatus {
         SafetyStatus {
             dcg_version: self.dcg_version.clone(),

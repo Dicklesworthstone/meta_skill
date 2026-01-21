@@ -17,7 +17,7 @@ pub enum PackContractPreset {
 }
 
 impl PackContractPreset {
-    #[must_use] 
+    #[must_use]
     pub const fn as_str(&self) -> &'static str {
         match self {
             Self::Complete => "complete",
@@ -29,7 +29,7 @@ impl PackContractPreset {
         }
     }
 
-    #[must_use] 
+    #[must_use]
     pub fn contract(&self) -> PackContract {
         match self {
             Self::Complete => PackContract {
@@ -141,7 +141,7 @@ impl PackContractPreset {
     }
 }
 
-#[must_use] 
+#[must_use]
 pub fn contract_from_name(name: &str) -> Option<PackContract> {
     let normalized = name.trim().to_lowercase();
     let preset = match normalized.as_str() {
@@ -178,12 +178,12 @@ impl Default for ContractStore {
     }
 }
 
-#[must_use] 
+#[must_use]
 pub fn custom_contracts_path(ms_root: &Path) -> PathBuf {
     ms_root.join("contracts.json")
 }
 
-#[must_use] 
+#[must_use]
 pub fn builtin_contracts() -> Vec<PackContract> {
     [
         PackContractPreset::Complete,

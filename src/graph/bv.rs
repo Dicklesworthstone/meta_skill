@@ -24,7 +24,7 @@ pub struct BvClient {
 
 impl BvClient {
     /// Create a new `BvClient` with default settings.
-    #[must_use] 
+    #[must_use]
     pub fn new() -> Self {
         Self {
             bv_bin: PathBuf::from("bv"),
@@ -55,7 +55,7 @@ impl BvClient {
     }
 
     /// Check if bv is available and responsive.
-    #[must_use] 
+    #[must_use]
     pub fn is_available(&self) -> bool {
         let mut cmd = Command::new(&self.bv_bin);
         cmd.arg("--version");

@@ -33,7 +33,7 @@ pub struct BeadsClient {
 
 impl BeadsClient {
     /// Create a new `BeadsClient` with default settings.
-    #[must_use] 
+    #[must_use]
     pub fn new() -> Self {
         Self {
             bd_bin: PathBuf::from("bd"),
@@ -66,14 +66,14 @@ impl BeadsClient {
     }
 
     /// Set the safety gate for command execution.
-    #[must_use] 
+    #[must_use]
     pub fn with_safety(mut self, safety: SafetyGate) -> Self {
         self.safety = Some(safety);
         self
     }
 
     /// Check if beads is available and responsive.
-    #[must_use] 
+    #[must_use]
     pub fn is_available(&self) -> bool {
         let mut cmd = Command::new(&self.bd_bin);
         cmd.arg("--version");
@@ -92,7 +92,7 @@ impl BeadsClient {
     }
 
     /// Get beads version.
-    #[must_use] 
+    #[must_use]
     pub fn version(&self) -> Option<String> {
         let mut cmd = Command::new(&self.bd_bin);
         cmd.arg("--version");
@@ -195,18 +195,16 @@ impl BeadsClient {
         }
 
         let output = self.run_command(&args)?;
-        let issues: Vec<Issue> = serde_json::from_slice(&output).map_err(|e| {
-            MsError::BeadsUnavailable(format!("failed to parse list output: {e}"))
-        })?;
+        let issues: Vec<Issue> = serde_json::from_slice(&output)
+            .map_err(|e| MsError::BeadsUnavailable(format!("failed to parse list output: {e}")))?;
         Ok(issues)
     }
 
     /// List issues ready to work (open and unblocked).
     pub fn ready(&self) -> Result<Vec<Issue>> {
         let output = self.run_command(&["ready", "--json"])?;
-        let issues: Vec<Issue> = serde_json::from_slice(&output).map_err(|e| {
-            MsError::BeadsUnavailable(format!("failed to parse ready output: {e}"))
-        })?;
+        let issues: Vec<Issue> = serde_json::from_slice(&output)
+            .map_err(|e| MsError::BeadsUnavailable(format!("failed to parse ready output: {e}")))?;
         Ok(issues)
     }
 
@@ -218,9 +216,8 @@ impl BeadsClient {
         let output = self.run_command(&["show", issue_id, "--json"])?;
 
         // bd show returns an array with one element
-        let issues: Vec<Issue> = serde_json::from_slice(&output).map_err(|e| {
-            MsError::BeadsUnavailable(format!("failed to parse show output: {e}"))
-        })?;
+        let issues: Vec<Issue> = serde_json::from_slice(&output)
+            .map_err(|e| MsError::BeadsUnavailable(format!("failed to parse show output: {e}")))?;
 
         issues
             .into_iter()
@@ -341,9 +338,8 @@ impl BeadsClient {
         let output = self.run_command(&args_refs)?;
 
         // bd close --json returns an array with one element
-        let issues: Vec<Issue> = serde_json::from_slice(&output).map_err(|e| {
-            MsError::BeadsUnavailable(format!("failed to parse close output: {e}"))
-        })?;
+        let issues: Vec<Issue> = serde_json::from_slice(&output)
+            .map_err(|e| MsError::BeadsUnavailable(format!("failed to parse close output: {e}")))?;
 
         issues
             .into_iter()
@@ -367,9 +363,8 @@ impl BeadsClient {
         let args_refs: Vec<&str> = args.iter().map(String::as_str).collect();
         let output = self.run_command(&args_refs)?;
 
-        let issues: Vec<Issue> = serde_json::from_slice(&output).map_err(|e| {
-            MsError::BeadsUnavailable(format!("failed to parse close output: {e}"))
-        })?;
+        let issues: Vec<Issue> = serde_json::from_slice(&output)
+            .map_err(|e| MsError::BeadsUnavailable(format!("failed to parse close output: {e}")))?;
         Ok(issues)
     }
 
@@ -625,9 +620,7 @@ fn classify_beads_error(exit_code: i32, stderr: &str) -> MsError {
     }
 
     // Default: beads unavailable
-    MsError::BeadsUnavailable(format!(
-        "beads command failed (exit {exit_code}): {stderr}"
-    ))
+    MsError::BeadsUnavailable(format!("beads command failed (exit {exit_code}): {stderr}"))
 }
 
 #[cfg(test)]

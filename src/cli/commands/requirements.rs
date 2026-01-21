@@ -124,9 +124,10 @@ pub fn run(ctx: &AppContext, args: &RequirementsArgs) -> Result<()> {
             "-".yellow()
         };
 
-        let path_str = check
-            .path
-            .as_ref().map_or_else(|| "Not found".dimmed().to_string(), |p| p.to_string_lossy().to_string());
+        let path_str = check.path.as_ref().map_or_else(
+            || "Not found".dimmed().to_string(),
+            |p| p.to_string_lossy().to_string(),
+        );
 
         let version_str = check
             .version

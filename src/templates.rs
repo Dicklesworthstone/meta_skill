@@ -26,7 +26,10 @@ impl TemplateContext {
 
     fn tags_yaml(&self, defaults: &[&str]) -> String {
         let mut tags = if self.tags.is_empty() {
-            defaults.iter().map(std::string::ToString::to_string).collect::<Vec<_>>()
+            defaults
+                .iter()
+                .map(std::string::ToString::to_string)
+                .collect::<Vec<_>>()
         } else {
             self.tags.clone()
         };
@@ -47,12 +50,12 @@ impl TemplateContext {
     }
 }
 
-#[must_use] 
+#[must_use]
 pub fn list_templates() -> &'static [SkillTemplate] {
     TEMPLATES
 }
 
-#[must_use] 
+#[must_use]
 pub fn find_template(id: &str) -> Option<&'static SkillTemplate> {
     TEMPLATES
         .iter()
@@ -61,7 +64,9 @@ pub fn find_template(id: &str) -> Option<&'static SkillTemplate> {
 
 pub fn render_template(template: &SkillTemplate, ctx: &TemplateContext) -> Result<String> {
     if ctx.id.trim().is_empty() {
-        return Err(MsError::ValidationFailed("template id is required".to_string()));
+        return Err(MsError::ValidationFailed(
+            "template id is required".to_string(),
+        ));
     }
     if ctx.name.trim().is_empty() {
         return Err(MsError::ValidationFailed(

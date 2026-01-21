@@ -18,7 +18,7 @@ pub struct SkillSliceIndex {
 pub struct SkillSlicer;
 
 impl SkillSlicer {
-    #[must_use] 
+    #[must_use]
     pub fn slice(spec: &SkillSpec) -> SkillSliceIndex {
         let mut slices = Vec::new();
         let mut counters: HashMap<&'static str, usize> = HashMap::new();
@@ -33,7 +33,7 @@ impl SkillSlicer {
         }
     }
 
-    #[must_use] 
+    #[must_use]
     pub fn estimate_total_tokens(spec: &SkillSpec) -> usize {
         let mut total = 0;
         for section in &spec.sections {

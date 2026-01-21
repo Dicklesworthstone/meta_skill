@@ -11,9 +11,9 @@ use colored::Colorize;
 use serde::Serialize;
 
 use crate::app::AppContext;
-use crate::cli::output::OutputFormat;
 use crate::cass::CassClient;
 use crate::cass::mining::{ExtractedPattern, PatternType, extract_from_session};
+use crate::cli::output::OutputFormat;
 use crate::cli::output::{HumanLayout, emit_json};
 use crate::error::{MsError, Result};
 use crate::utils::format::truncate_string;
@@ -172,10 +172,7 @@ fn run_summary(ctx: &AppContext, args: &CrossProjectSummaryArgs) -> Result<()> {
 
     let mut aggregates: HashMap<String, ProjectAggregate> = HashMap::new();
     for m in matches {
-        let project = m
-            .project
-            .clone()
-            .unwrap_or_else(|| "unknown".to_string());
+        let project = m.project.clone().unwrap_or_else(|| "unknown".to_string());
         if project == "unknown" && !args.include_unknown {
             continue;
         }
@@ -249,13 +246,8 @@ fn run_patterns(ctx: &AppContext, args: &CrossProjectPatternsArgs) -> Result<()>
         ));
     }
 
-    let (aggregates, scanned) = collect_pattern_aggregates(
-        ctx,
-        &cass,
-        &args.query,
-        args.limit,
-        args.include_unknown,
-    )?;
+    let (aggregates, scanned) =
+        collect_pattern_aggregates(ctx, &cass, &args.query, args.limit, args.include_unknown)?;
 
     let mut patterns: Vec<PatternSummary> = aggregates
         .into_iter()
@@ -307,13 +299,8 @@ fn run_gaps(ctx: &AppContext, args: &CrossProjectGapsArgs) -> Result<()> {
         ));
     }
 
-    let (aggregates, scanned) = collect_pattern_aggregates(
-        ctx,
-        &cass,
-        &args.query,
-        args.limit,
-        args.include_unknown,
-    )?;
+    let (aggregates, scanned) =
+        collect_pattern_aggregates(ctx, &cass, &args.query, args.limit, args.include_unknown)?;
 
     let mut summaries: Vec<PatternSummary> = aggregates
         .into_iter()
@@ -398,11 +385,7 @@ fn print_summary(report: &CrossProjectReport) {
         let last_seen = format_date(project.last_seen.as_deref());
         layout.push_line(format!(
             "{:32} {:>8} {:>7} {:>12} {:>12}",
-            project.project,
-            project.sessions,
-            share,
-            first_seen,
-            last_seen
+            project.project, project.sessions, share, first_seen, last_seen
         ));
     }
 
@@ -468,10 +451,7 @@ fn collect_pattern_aggregates(
     let mut scanned = 0usize;
 
     for m in matches {
-        let project = m
-            .project
-            .clone()
-            .unwrap_or_else(|| "unknown".to_string());
+        let project = m.project.clone().unwrap_or_else(|| "unknown".to_string());
         if project == "unknown" && !include_unknown {
             continue;
         }
@@ -525,7 +505,9 @@ fn pattern_label(pattern: &ExtractedPattern) -> String {
                 format!("Commands: {}", names.join(", "))
             }
         }
-        PatternType::CodePattern { language, purpose, .. } => {
+        PatternType::CodePattern {
+            language, purpose, ..
+        } => {
             let purpose = truncate_string(&one_line(purpose), 40);
             format!("Code ({language}): {purpose}")
         }
@@ -587,9 +569,7 @@ fn pattern_example(pattern: &ExtractedPattern) -> Option<String> {
         PatternType::RefactorPattern { before_pattern, .. } => {
             Some(truncate_string(&one_line(before_pattern), 80))
         }
-        PatternType::ConfigPattern { context, .. } => {
-            Some(truncate_string(&one_line(context), 80))
-        }
+        PatternType::ConfigPattern { context, .. } => Some(truncate_string(&one_line(context), 80)),
         PatternType::ToolPattern { use_cases, .. } => use_cases
             .first()
             .map(|case| truncate_string(&one_line(case), 80)),
@@ -896,9 +876,10 @@ fn print_gaps(report: &CrossProjectGapsReport) {
         .push_line("-".repeat(90));
 
     for gap in &report.gaps {
-        let best = gap
-            .best_match
-            .as_ref().map_or_else(|| "-".to_string(), |m| format!("{} ({:.2})", m.skill_id, m.score));
+        let best = gap.best_match.as_ref().map_or_else(
+            || "-".to_string(),
+            |m| format!("{} ({:.2})", m.skill_id, m.score),
+        );
         let label = truncate_string(&gap.label, 36);
         layout.push_line(format!(
             "{:38} {:>6} {:>6} {:>8.2} {:>18}",

@@ -92,7 +92,7 @@ pub struct SkillTestReport {
 
 impl SkillTestReport {
     /// Returns true if all tests passed.
-    #[must_use] 
+    #[must_use]
     pub const fn success(&self) -> bool {
         self.failed == 0
     }
@@ -106,7 +106,7 @@ pub struct SkillTestRunner<'a> {
 
 impl<'a> SkillTestRunner<'a> {
     /// Create a new test runner.
-    #[must_use] 
+    #[must_use]
     pub const fn new(ctx: &'a AppContext, options: TestOptions) -> Self {
         Self { ctx, options }
     }

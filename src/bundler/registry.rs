@@ -223,7 +223,7 @@ impl BundleRegistry {
     }
 
     /// Get an installed bundle by ID.
-    #[must_use] 
+    #[must_use]
     pub fn get(&self, id: &str) -> Option<&InstalledBundle> {
         self.bundles.get(id)
     }
@@ -234,7 +234,7 @@ impl BundleRegistry {
     }
 
     /// Check if a bundle is installed.
-    #[must_use] 
+    #[must_use]
     pub fn is_installed(&self, id: &str) -> bool {
         self.bundles.contains_key(id)
     }
@@ -259,9 +259,8 @@ impl BundleRegistry {
             Ok(()) => {}
             Err(err) if err.kind() == std::io::ErrorKind::AlreadyExists => {
                 // Windows does not allow renaming over an existing file.
-                std::fs::remove_file(&self.path).map_err(|e| {
-                    MsError::Config(format!("remove existing registry file: {e}"))
-                })?;
+                std::fs::remove_file(&self.path)
+                    .map_err(|e| MsError::Config(format!("remove existing registry file: {e}")))?;
                 if let Err(err) = std::fs::rename(&temp_path, &self.path) {
                     let _ = std::fs::remove_file(&temp_path);
                     return Err(MsError::Config(format!("rename registry file: {err}")));
@@ -270,9 +269,7 @@ impl BundleRegistry {
             Err(err) => {
                 // Clean up temp file on rename failure
                 let _ = std::fs::remove_file(&temp_path);
-                return Err(MsError::Config(format!(
-                    "rename registry file: {err}"
-                )));
+                return Err(MsError::Config(format!("rename registry file: {err}")));
             }
         }
 

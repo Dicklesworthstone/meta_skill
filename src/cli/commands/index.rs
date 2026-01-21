@@ -13,8 +13,8 @@ use crate::app::AppContext;
 use crate::cli::output::OutputFormat;
 use crate::core::{GitSkillRepository, ResolutionCache, SkillLayer, spec_lens::parse_markdown};
 use crate::error::{MsError, Result};
-use crate::storage::{SkillRecord, TxManager};
 use crate::storage::tx::GlobalLock;
+use crate::storage::{SkillRecord, TxManager};
 use crate::sync::ru::RuClient;
 
 #[derive(Args, Debug)]
@@ -230,7 +230,14 @@ fn index_human(ctx: &AppContext, roots: &[SkillRoot], args: &IndexArgs) -> Resul
             skill.path.file_name().unwrap_or_default().to_string_lossy()
         ));
 
-        match index_skill_file(ctx, &tx_mgr, &resolution_cache, &repository, skill, args.force) {
+        match index_skill_file(
+            ctx,
+            &tx_mgr,
+            &resolution_cache,
+            &repository,
+            skill,
+            args.force,
+        ) {
             Ok(()) => indexed += 1,
             Err(e) => {
                 errors += 1;
@@ -285,7 +292,14 @@ fn index_robot(ctx: &AppContext, roots: &[SkillRoot], args: &IndexArgs) -> Resul
     let repository = GitSkillRepository::new(&ctx.git);
 
     for skill in &skill_files {
-        match index_skill_file(ctx, &tx_mgr, &resolution_cache, &repository, skill, args.force) {
+        match index_skill_file(
+            ctx,
+            &tx_mgr,
+            &resolution_cache,
+            &repository,
+            skill,
+            args.force,
+        ) {
             Ok(()) => indexed += 1,
             Err(e) => {
                 errors.push(serde_json::json!({

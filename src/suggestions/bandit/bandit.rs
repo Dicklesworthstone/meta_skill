@@ -48,7 +48,7 @@ impl Default for SignalBandit {
 }
 
 impl SignalBandit {
-    #[must_use] 
+    #[must_use]
     pub fn new() -> Self {
         let config = BanditConfig::default();
         let mut arms = HashMap::new();
@@ -95,14 +95,11 @@ impl SignalBandit {
         weights
     }
 
-    #[must_use] 
+    #[must_use]
     pub fn estimated_weights(&self, context: &SuggestionContext) -> SignalWeights {
         let mut weights = HashMap::new();
         for signal in SignalType::all() {
-            let mut value = self
-                .arms
-                .get(signal)
-                .map_or(0.5, |arm| arm.estimated_prob);
+            let mut value = self.arms.get(signal).map_or(0.5, |arm| arm.estimated_prob);
             if self.config.use_context {
                 for key in context.keys() {
                     if let Some(modifier) = self.context_modifiers.get(&key) {

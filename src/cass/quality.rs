@@ -24,13 +24,13 @@ pub struct SessionQuality {
 
 impl SessionQuality {
     /// Check if the session passes the quality threshold
-    #[must_use] 
+    #[must_use]
     pub fn passes_threshold(&self, config: &QualityConfig) -> bool {
         self.score >= config.min_score
     }
 
     /// Get a human-readable summary of the quality assessment
-    #[must_use] 
+    #[must_use]
     pub fn summary(&self) -> String {
         let grade = if self.score >= 0.8 {
             "excellent"
@@ -74,7 +74,7 @@ pub enum MissingSignal {
 
 impl MissingSignal {
     /// Get a human-readable description
-    #[must_use] 
+    #[must_use]
     pub const fn description(&self) -> &'static str {
         match self {
             Self::NoTestsPassed => "No tests were run or passed",
@@ -142,19 +142,19 @@ pub struct QualityScorer {
 
 impl QualityScorer {
     /// Create a new quality scorer with the given config
-    #[must_use] 
+    #[must_use]
     pub const fn new(config: QualityConfig) -> Self {
         Self { config }
     }
 
     /// Create a quality scorer with default config
-    #[must_use] 
+    #[must_use]
     pub fn with_defaults() -> Self {
         Self::new(QualityConfig::default())
     }
 
     /// Score a session for quality
-    #[must_use] 
+    #[must_use]
     pub fn score(&self, session: &Session) -> SessionQuality {
         let mut score: f32 = 0.0;
         let mut signals = Vec::new();
@@ -228,7 +228,7 @@ impl QualityScorer {
     }
 
     /// Get the configuration
-    #[must_use] 
+    #[must_use]
     pub const fn config(&self) -> &QualityConfig {
         &self.config
     }
@@ -261,10 +261,12 @@ fn has_tests_passed(messages: &[SessionMessage]) -> bool {
             }
 
             // pytest success patterns
-            if content_lower.contains("pytest") && !content_lower.contains("failed")
-                && content_lower.contains("passed") {
-                    return true;
-                }
+            if content_lower.contains("pytest")
+                && !content_lower.contains("failed")
+                && content_lower.contains("passed")
+            {
+                return true;
+            }
 
             // cargo test success - require success indicator, not just "cargo test"
             if content_lower.contains("cargo test")

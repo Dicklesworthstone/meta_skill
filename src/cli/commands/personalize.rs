@@ -7,10 +7,10 @@ use clap::{Args, Subcommand};
 use colored::Colorize;
 
 use crate::app::AppContext;
-use crate::cli::output::OutputFormat;
 use crate::cass::CassClient;
+use crate::cli::output::OutputFormat;
 use crate::dedup::{
-    CaseStyle, CodePattern, CommentStyle, NamingConvention, Personalizer, PersonalizedSkill,
+    CaseStyle, CodePattern, CommentStyle, NamingConvention, PersonalizedSkill, Personalizer,
     StyleProfile,
 };
 use crate::error::Result;
@@ -138,7 +138,10 @@ fn run_extract(ctx: &AppContext, args: &ExtractArgs) -> Result<()> {
     }
 
     if ctx.output_format == OutputFormat::Human {
-        println!("{}", "Extracting style profile from CASS sessions...".bold());
+        println!(
+            "{}",
+            "Extracting style profile from CASS sessions...".bold()
+        );
         println!();
     }
 
@@ -248,13 +251,8 @@ fn load_style_profile(ctx: &AppContext, path: Option<&str>) -> Result<StyleProfi
 
     // Return default style if no profile exists
     if ctx.output_format == OutputFormat::Human {
-        eprintln!(
-            "{} No style profile found, using defaults",
-            "⚠".yellow()
-        );
-        eprintln!(
-            "  Run 'ms personalize extract' to create a profile from CASS sessions"
-        );
+        eprintln!("{} No style profile found, using defaults", "⚠".yellow());
+        eprintln!("  Run 'ms personalize extract' to create a profile from CASS sessions");
     }
 
     Ok(StyleProfile::default())
@@ -419,7 +417,10 @@ fn output_personalized_robot(personalized: &PersonalizedSkill) -> Result<()> {
     Ok(())
 }
 
-fn output_personalized_human(personalized: &PersonalizedSkill, output_path: Option<&str>) -> Result<()> {
+fn output_personalized_human(
+    personalized: &PersonalizedSkill,
+    output_path: Option<&str>,
+) -> Result<()> {
     if personalized.adaptations_applied.is_empty() {
         println!(
             "{} No adaptations were applied to '{}'",
@@ -455,18 +456,9 @@ fn output_personalized_human(personalized: &PersonalizedSkill, output_path: Opti
 
 fn print_style_summary(style: &StyleProfile) {
     println!("{}", "Naming Conventions:".cyan());
-    println!(
-        "  Variable case: {:?}",
-        style.naming.variable_case
-    );
-    println!(
-        "  Function case: {:?}",
-        style.naming.function_case
-    );
-    println!(
-        "  Use abbreviations: {}",
-        style.naming.use_abbreviations
-    );
+    println!("  Variable case: {:?}", style.naming.variable_case);
+    println!("  Function case: {:?}", style.naming.function_case);
+    println!("  Use abbreviations: {}", style.naming.use_abbreviations);
     println!();
 
     println!("{}", "Code Patterns:".cyan());

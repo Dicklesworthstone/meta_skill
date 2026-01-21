@@ -35,9 +35,10 @@ pub fn run(ctx: &AppContext, args: &MigrateArgs) -> Result<()> {
     let mut changed_count = 0usize;
 
     for skill_id in skill_ids {
-        let spec = ctx.git.read_skill(&skill_id).map_err(|err| {
-            MsError::Config(format!("read skill {skill_id} from archive: {err}"))
-        })?;
+        let spec = ctx
+            .git
+            .read_skill(&skill_id)
+            .map_err(|err| MsError::Config(format!("read skill {skill_id} from archive: {err}")))?;
         let from_version = spec.format_version.clone();
         let (migrated, changed) = migrate_spec(spec)?;
         let to_version = migrated.format_version.clone();

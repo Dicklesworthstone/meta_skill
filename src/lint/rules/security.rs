@@ -121,11 +121,7 @@ fn shannon_entropy(s: &str) -> f64 {
     freq.values()
         .map(|&count| {
             let p = count as f64 / len;
-            if p > 0.0 {
-                -p * p.log2()
-            } else {
-                0.0
-            }
+            if p > 0.0 { -p * p.log2() } else { 0.0 }
         })
         .sum()
 }
@@ -215,8 +211,10 @@ impl Default for NoSecretsRule {
                 },
                 SecretPattern {
                     name: "Generic API Key Assignment",
-                    regex: Regex::new(r#"(?i)(api[_-]?key|apikey)\s*[:=]\s*['"][a-zA-Z0-9]{20,}['"]"#)
-                        .unwrap(),
+                    regex: Regex::new(
+                        r#"(?i)(api[_-]?key|apikey)\s*[:=]\s*['"][a-zA-Z0-9]{20,}['"]"#,
+                    )
+                    .unwrap(),
                     severity: Severity::Error,
                 },
                 SecretPattern {
@@ -233,8 +231,10 @@ impl Default for NoSecretsRule {
                 },
                 SecretPattern {
                     name: "JWT Token",
-                    regex: Regex::new(r"eyJ[A-Za-z0-9_-]{10,}\.eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}")
-                        .unwrap(),
+                    regex: Regex::new(
+                        r"eyJ[A-Za-z0-9_-]{10,}\.eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}",
+                    )
+                    .unwrap(),
                     severity: Severity::Warning, // Often used in examples
                 },
                 SecretPattern {
@@ -250,7 +250,7 @@ impl Default for NoSecretsRule {
 
 impl NoSecretsRule {
     /// Create a new rule with custom entropy threshold.
-    #[must_use] 
+    #[must_use]
     pub const fn with_entropy_threshold(mut self, threshold: f64) -> Self {
         self.entropy_threshold = threshold;
         self
@@ -295,10 +295,14 @@ impl ValidationRule for NoSecretsRule {
                 };
 
                 diagnostics.push(
-                    Diagnostic::new(self.id(), severity, format!("Potential {} detected", pattern.name))
-                        .with_span(byte_offset_to_span(&content, mat.start(), mat.end()))
-                        .with_suggestion("Remove or redact the secret value")
-                        .with_category(RuleCategory::Security),
+                    Diagnostic::new(
+                        self.id(),
+                        severity,
+                        format!("Potential {} detected", pattern.name),
+                    )
+                    .with_span(byte_offset_to_span(&content, mat.start(), mat.end()))
+                    .with_suggestion("Remove or redact the secret value")
+                    .with_category(RuleCategory::Security),
                 );
             }
         }
@@ -320,9 +324,7 @@ impl ValidationRule for NoSecretsRule {
                     diagnostics.push(
                         Diagnostic::warning(
                             self.id(),
-                            format!(
-                                "High-entropy string detected (entropy: {entropy:.2})"
-                            ),
+                            format!("High-entropy string detected (entropy: {entropy:.2})"),
                         )
                         .with_span(span)
                         .with_suggestion("Review if this is a secret that should be removed")
@@ -445,9 +447,7 @@ impl ValidationRule for NoPromptInjectionRule {
                         format!("{}: {}{}", pattern.name, pattern.context, note),
                     )
                     .with_span(byte_offset_to_span(&content, mat.start(), mat.end()))
-                    .with_suggestion(
-                        "Remove or clearly mark as an example of what NOT to do",
-                    )
+                    .with_suggestion("Remove or clearly mark as an example of what NOT to do")
                     .with_category(RuleCategory::Security),
                 );
             }
@@ -519,13 +519,10 @@ impl ValidationRule for SafePathsRule {
             }
 
             diagnostics.push(
-                Diagnostic::warning(
-                    self.id(),
-                    "Path traversal pattern detected (../ or ..\\)",
-                )
-                .with_span(byte_offset_to_span(&content, mat.start(), mat.end()))
-                .with_suggestion("Use absolute paths or avoid directory traversal")
-                .with_category(RuleCategory::Security),
+                Diagnostic::warning(self.id(), "Path traversal pattern detected (../ or ..\\)")
+                    .with_span(byte_offset_to_span(&content, mat.start(), mat.end()))
+                    .with_suggestion("Use absolute paths or avoid directory traversal")
+                    .with_category(RuleCategory::Security),
             );
         }
 
@@ -611,9 +608,7 @@ impl ValidationRule for InputSanitizationRule {
                     self.id(),
                     "Skill handles user input but may lack sanitization guidance",
                 )
-                .with_suggestion(
-                    "Consider adding rules for input validation or sanitization",
-                )
+                .with_suggestion("Consider adding rules for input validation or sanitization")
                 .with_category(RuleCategory::Security),
             );
         }
@@ -627,7 +622,7 @@ impl ValidationRule for InputSanitizationRule {
 // =============================================================================
 
 /// Returns all security validation rules.
-#[must_use] 
+#[must_use]
 pub fn security_rules() -> Vec<Box<dyn ValidationRule>> {
     vec![
         Box::new(NoSecretsRule::default()),
@@ -647,7 +642,10 @@ mod tests {
     use crate::core::skill::{SkillBlock, SkillSection};
     use crate::lint::config::ValidationConfig;
 
-    fn make_context<'a>(skill: &'a SkillSpec, config: &'a ValidationConfig) -> ValidationContext<'a> {
+    fn make_context<'a>(
+        skill: &'a SkillSpec,
+        config: &'a ValidationConfig,
+    ) -> ValidationContext<'a> {
         ValidationContext::new(skill, config)
     }
 

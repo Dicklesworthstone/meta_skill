@@ -182,7 +182,13 @@ impl<'a> DeduplicationEngine<'a> {
                 self.compute_structural_similarity(skill, candidate);
 
             // Compute weighted overall score (clamped to valid range)
-            let similarity = self.config.semantic_weight.mul_add(semantic_score, self.config.structural_weight * structural_score)
+            let similarity = self
+                .config
+                .semantic_weight
+                .mul_add(
+                    semantic_score,
+                    self.config.structural_weight * structural_score,
+                )
                 .clamp(0.0, 1.0);
 
             // Only include if above threshold
@@ -247,8 +253,7 @@ impl<'a> DeduplicationEngine<'a> {
                 }
 
                 // Compute semantic similarity
-                let semantic_score =
-                    cosine_similarity(&embeddings[i].1, &embeddings[j].1);
+                let semantic_score = cosine_similarity(&embeddings[i].1, &embeddings[j].1);
 
                 // Quick filter - if semantic is too low, skip structural
                 // Use max(0.0, ...) to handle edge case of very low thresholds
@@ -262,7 +267,13 @@ impl<'a> DeduplicationEngine<'a> {
                     self.compute_structural_similarity(skill_a, skill_b);
 
                 // Compute weighted overall score (clamped to valid range)
-                let similarity = self.config.semantic_weight.mul_add(semantic_score, self.config.structural_weight * structural_score)
+                let similarity = self
+                    .config
+                    .semantic_weight
+                    .mul_add(
+                        semantic_score,
+                        self.config.structural_weight * structural_score,
+                    )
                     .clamp(0.0, 1.0);
 
                 if similarity >= self.config.similarity_threshold {
@@ -528,7 +539,7 @@ pub struct DeduplicationSummary {
 
 impl DeduplicationSummary {
     /// Create summary from scan results
-    #[must_use] 
+    #[must_use]
     pub fn from_pairs(total_skills: usize, pairs: Vec<DuplicatePair>, top_limit: usize) -> Self {
         let duplicate_pairs = pairs.len();
         let mut by_recommendation: HashMap<String, usize> = HashMap::new();
@@ -649,13 +660,13 @@ pub struct Personalizer {
 
 impl Personalizer {
     /// Create a new personalizer with the given style profile
-    #[must_use] 
+    #[must_use]
     pub const fn new(style: StyleProfile) -> Self {
         Self { style }
     }
 
     /// Get the style profile
-    #[must_use] 
+    #[must_use]
     pub const fn style(&self) -> &StyleProfile {
         &self.style
     }
@@ -666,7 +677,7 @@ impl Personalizer {
     /// - Convert variable/function naming to preferred case style in code blocks
     /// - Adjust terminology based on tech preferences
     /// - Apply pattern preferences where applicable
-    #[must_use] 
+    #[must_use]
     pub fn personalize(&self, skill: &SkillRecord) -> PersonalizedSkill {
         let mut adaptations = Vec::new();
         let mut content = skill.body.clone();
@@ -697,7 +708,7 @@ impl Personalizer {
     ///
     /// Returns true if the style profile has patterns or tech preferences that
     /// could be applied, or if naming conventions differ from defaults.
-    #[must_use] 
+    #[must_use]
     pub fn should_personalize(&self, _skill: &SkillRecord) -> bool {
         // Check if we have any non-default style preferences
         let has_naming_prefs = self.style.naming.variable_case != CaseStyle::SnakeCase
@@ -771,7 +782,10 @@ impl Personalizer {
 
         // Skip if language typically uses snake_case (Rust, Python, etc.)
         let snake_case_langs = ["rust", "python", "ruby", "go"];
-        if snake_case_langs.iter().any(|l| lang.eq_ignore_ascii_case(l)) {
+        if snake_case_langs
+            .iter()
+            .any(|l| lang.eq_ignore_ascii_case(l))
+        {
             return line.to_string();
         }
 

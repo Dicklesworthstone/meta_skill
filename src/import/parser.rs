@@ -4,12 +4,10 @@
 //! applies classifiers to determine each block's type.
 
 use super::classifiers::{
-    BlockClassifier, ChecklistClassifier, ContextClassifier, ExampleClassifier,
-    MetadataClassifier, PitfallClassifier, RuleClassifier,
+    BlockClassifier, ChecklistClassifier, ContextClassifier, ExampleClassifier, MetadataClassifier,
+    PitfallClassifier, RuleClassifier,
 };
-use super::types::{
-    ClassificationResult, ContentBlock, ContentBlockType, SourceSpan,
-};
+use super::types::{ClassificationResult, ContentBlock, ContentBlockType, SourceSpan};
 
 // =============================================================================
 // CONTENT PARSER
@@ -116,7 +114,12 @@ impl ContentParser {
                     if !text.is_empty() {
                         blocks.push((
                             text,
-                            SourceSpan::new(block_start, current_pos + line_len, block_start_line, current_line),
+                            SourceSpan::new(
+                                block_start,
+                                current_pos + line_len,
+                                block_start_line,
+                                current_line,
+                            ),
                         ));
                     }
                     current_block = String::new();
@@ -128,7 +131,12 @@ impl ContentParser {
                     if !text.is_empty() {
                         blocks.push((
                             text,
-                            SourceSpan::new(block_start, line_start, block_start_line, current_line - 1),
+                            SourceSpan::new(
+                                block_start,
+                                line_start,
+                                block_start_line,
+                                current_line - 1,
+                            ),
                         ));
                     }
                     current_block = String::new();
@@ -148,7 +156,12 @@ impl ContentParser {
                 if !text.is_empty() {
                     blocks.push((
                         text,
-                        SourceSpan::new(block_start, line_start, block_start_line, current_line - 1),
+                        SourceSpan::new(
+                            block_start,
+                            line_start,
+                            block_start_line,
+                            current_line - 1,
+                        ),
                     ));
                     current_block = String::new();
                     block_start = current_pos + 1;
@@ -160,7 +173,12 @@ impl ContentParser {
                 if !text.is_empty() {
                     blocks.push((
                         text,
-                        SourceSpan::new(block_start, line_start, block_start_line, current_line - 1),
+                        SourceSpan::new(
+                            block_start,
+                            line_start,
+                            block_start_line,
+                            current_line - 1,
+                        ),
                     ));
                 }
                 current_block = line.to_string();
@@ -181,7 +199,12 @@ impl ContentParser {
                 if !text.is_empty() {
                     blocks.push((
                         text,
-                        SourceSpan::new(block_start, current_pos + line_len, block_start_line, current_line),
+                        SourceSpan::new(
+                            block_start,
+                            current_pos + line_len,
+                            block_start_line,
+                            current_line,
+                        ),
                     ));
                 }
                 current_block = String::new();
@@ -193,7 +216,12 @@ impl ContentParser {
                 if !text.is_empty() {
                     blocks.push((
                         text,
-                        SourceSpan::new(block_start, line_start, block_start_line, current_line - 1),
+                        SourceSpan::new(
+                            block_start,
+                            line_start,
+                            block_start_line,
+                            current_line - 1,
+                        ),
                     ));
                 }
                 current_block = String::new();
@@ -313,7 +341,8 @@ mod tests {
     #[test]
     fn test_parser_basic() {
         let parser = ContentParser::new();
-        let content = "# Title\n\nSome context here.\n\n- Always handle errors\n- Never ignore exceptions";
+        let content =
+            "# Title\n\nSome context here.\n\n- Always handle errors\n- Never ignore exceptions";
         let blocks = parser.parse(content);
 
         assert!(!blocks.is_empty());
@@ -411,7 +440,9 @@ except ValueError as e:
         let blocks = parser.parse(content);
 
         // Should find a checklist block
-        let checklist = blocks.iter().find(|b| b.block_type == ContentBlockType::Checklist);
+        let checklist = blocks
+            .iter()
+            .find(|b| b.block_type == ContentBlockType::Checklist);
         assert!(checklist.is_some());
     }
 

@@ -279,12 +279,12 @@ fn run_restore(ctx: &AppContext, args: &BackupRestoreArgs) -> Result<()> {
         (Some(_), true) => {
             return Err(MsError::ValidationFailed(
                 "cannot use both id and --latest".to_string(),
-            ))
+            ));
         }
         (None, false) => {
             return Err(MsError::ValidationFailed(
                 "restore requires backup id or --latest".to_string(),
-            ))
+            ));
         }
     };
     validate_backup_id(&backup_id)?;
@@ -303,12 +303,9 @@ fn run_restore(ctx: &AppContext, args: &BackupRestoreArgs) -> Result<()> {
     let mut restored = 0usize;
     let mut skipped = Vec::new();
     for entry in &manifest.entries {
-        let Some((source, dest, is_dir)) = restore_paths_for_entry(
-            &ctx.ms_root,
-            &ctx.config_path,
-            &backup_dir,
-            &entry.name,
-        ) else {
+        let Some((source, dest, is_dir)) =
+            restore_paths_for_entry(&ctx.ms_root, &ctx.config_path, &backup_dir, &entry.name)
+        else {
             skipped.push(entry.name.clone());
             continue;
         };
@@ -407,8 +404,8 @@ fn validate_restore_paths(
     let normalized_config = normalize_path(config_path);
 
     let dest_in_ms_root = normalized_dest.starts_with(&normalized_ms_root);
-    let dest_is_config = normalized_dest == normalized_config
-        || normalized_dest.starts_with(&normalized_config);
+    let dest_is_config =
+        normalized_dest == normalized_config || normalized_dest.starts_with(&normalized_config);
 
     if !dest_in_ms_root && !dest_is_config {
         return Err(MsError::ValidationFailed(format!(
@@ -427,11 +424,7 @@ fn restore_paths_for_entry(
     entry_name: &str,
 ) -> Option<(PathBuf, PathBuf, bool)> {
     match entry_name {
-        "ms.db" => Some((
-            backup_dir.join("ms.db"),
-            ms_root.join("ms.db"),
-            false,
-        )),
+        "ms.db" => Some((backup_dir.join("ms.db"), ms_root.join("ms.db"), false)),
         "ms.db-wal" => Some((
             backup_dir.join("ms.db-wal"),
             ms_root.join("ms.db-wal"),
@@ -442,11 +435,7 @@ fn restore_paths_for_entry(
             ms_root.join("ms.db-shm"),
             false,
         )),
-        "archive" => Some((
-            backup_dir.join("archive"),
-            ms_root.join("archive"),
-            true,
-        )),
+        "archive" => Some((backup_dir.join("archive"), ms_root.join("archive"), true)),
         "index" => Some((backup_dir.join("index"), ms_root.join("index"), true)),
         "config" => Some((
             backup_dir.join("config.toml"),
@@ -485,7 +474,9 @@ fn latest_backup_id(root: &Path) -> Result<String> {
         .filter(|entry| entry.path().is_dir())
         .collect::<Vec<_>>();
     dirs.sort_by_key(std::fs::DirEntry::file_name);
-    let latest = dirs.pop().ok_or_else(|| MsError::NotFound("no backups found".to_string()))?;
+    let latest = dirs
+        .pop()
+        .ok_or_else(|| MsError::NotFound("no backups found".to_string()))?;
     Ok(latest.file_name().to_string_lossy().to_string())
 }
 
@@ -516,8 +507,7 @@ fn copy_file(src: &Path, dst: &Path) -> Result<u64> {
         std::fs::create_dir_all(parent)
             .map_err(|err| MsError::Config(format!("create {}: {err}", parent.display())))?;
     }
-    std::fs::copy(src, dst)
-        .map_err(|err| MsError::Config(format!("copy {}: {err}", src.display())))
+    std::fs::copy(src, dst).map_err(|err| MsError::Config(format!("copy {}: {err}", src.display())))
 }
 
 fn copy_dir_recursive(src: &Path, dst: &Path) -> Result<u64> {
@@ -574,24 +564,28 @@ mod tests {
         let config_path = Path::new("/home/user/.ms/config.toml");
 
         // Valid: backup path in backup_dir, dest in ms_root
-        assert!(validate_restore_paths(
-            "/backups/20240101/ms.db",
-            "/home/user/.ms/ms.db",
-            backup_dir,
-            ms_root,
-            config_path,
-        )
-        .is_ok());
+        assert!(
+            validate_restore_paths(
+                "/backups/20240101/ms.db",
+                "/home/user/.ms/ms.db",
+                backup_dir,
+                ms_root,
+                config_path,
+            )
+            .is_ok()
+        );
 
         // Valid: dest is config_path
-        assert!(validate_restore_paths(
-            "/backups/20240101/config.toml",
-            "/home/user/.ms/config.toml",
-            backup_dir,
-            ms_root,
-            config_path,
-        )
-        .is_ok());
+        assert!(
+            validate_restore_paths(
+                "/backups/20240101/config.toml",
+                "/home/user/.ms/config.toml",
+                backup_dir,
+                ms_root,
+                config_path,
+            )
+            .is_ok()
+        );
     }
 
     #[test]
@@ -601,34 +595,40 @@ mod tests {
         let config_path = Path::new("/home/user/.ms/config.toml");
 
         // Reject: backup path escapes backup_dir
-        assert!(validate_restore_paths(
-            "/backups/20240101/../20230101/ms.db",
-            "/home/user/.ms/ms.db",
-            backup_dir,
-            ms_root,
-            config_path,
-        )
-        .is_err());
+        assert!(
+            validate_restore_paths(
+                "/backups/20240101/../20230101/ms.db",
+                "/home/user/.ms/ms.db",
+                backup_dir,
+                ms_root,
+                config_path,
+            )
+            .is_err()
+        );
 
         // Reject: dest escapes ms_root
-        assert!(validate_restore_paths(
-            "/backups/20240101/ms.db",
-            "/home/user/.ms/../.bashrc",
-            backup_dir,
-            ms_root,
-            config_path,
-        )
-        .is_err());
+        assert!(
+            validate_restore_paths(
+                "/backups/20240101/ms.db",
+                "/home/user/.ms/../.bashrc",
+                backup_dir,
+                ms_root,
+                config_path,
+            )
+            .is_err()
+        );
 
         // Reject: dest to arbitrary location
-        assert!(validate_restore_paths(
-            "/backups/20240101/evil",
-            "/etc/passwd",
-            backup_dir,
-            ms_root,
-            config_path,
-        )
-        .is_err());
+        assert!(
+            validate_restore_paths(
+                "/backups/20240101/evil",
+                "/etc/passwd",
+                backup_dir,
+                ms_root,
+                config_path,
+            )
+            .is_err()
+        );
     }
 
     #[test]
@@ -638,24 +638,28 @@ mod tests {
         let config_path = Path::new("/home/user/.ms/config.toml");
 
         // Reject: null byte in backup path
-        assert!(validate_restore_paths(
-            "/backups/20240101/ms\0.db",
-            "/home/user/.ms/ms.db",
-            backup_dir,
-            ms_root,
-            config_path,
-        )
-        .is_err());
+        assert!(
+            validate_restore_paths(
+                "/backups/20240101/ms\0.db",
+                "/home/user/.ms/ms.db",
+                backup_dir,
+                ms_root,
+                config_path,
+            )
+            .is_err()
+        );
 
         // Reject: null byte in dest path
-        assert!(validate_restore_paths(
-            "/backups/20240101/ms.db",
-            "/home/user/.ms/ms\0.db",
-            backup_dir,
-            ms_root,
-            config_path,
-        )
-        .is_err());
+        assert!(
+            validate_restore_paths(
+                "/backups/20240101/ms.db",
+                "/home/user/.ms/ms\0.db",
+                backup_dir,
+                ms_root,
+                config_path,
+            )
+            .is_err()
+        );
     }
 
     #[test]

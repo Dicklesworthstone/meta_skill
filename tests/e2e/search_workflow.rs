@@ -5,8 +5,8 @@
 use super::fixture::E2EFixture;
 use ms::error::Result;
 use ms::search::embeddings::HashEmbedder;
-use ms::storage::sqlite::EmbeddingRecord;
 use ms::storage::Database;
+use ms::storage::sqlite::EmbeddingRecord;
 
 const SKILL_ALPHA: &str = r#"---
 name: Alpha Search
@@ -57,9 +57,19 @@ fn setup_search_fixture(scenario: &str) -> Result<E2EFixture> {
     fixture.assert_success(&output, "init");
 
     fixture.log_step("Configure skill paths for global/local layers");
-    let output = fixture.run_ms(&["--robot", "config", "skill_paths.global", r#"[\"./global_skills\"]"#]);
+    let output = fixture.run_ms(&[
+        "--robot",
+        "config",
+        "skill_paths.global",
+        r#"[\"./global_skills\"]"#,
+    ]);
     fixture.assert_success(&output, "config skill_paths.global");
-    let output = fixture.run_ms(&["--robot", "config", "skill_paths.local", r#"[\"./local_skills\"]"#]);
+    let output = fixture.run_ms(&[
+        "--robot",
+        "config",
+        "skill_paths.local",
+        r#"[\"./local_skills\"]"#,
+    ]);
     fixture.assert_success(&output, "config skill_paths.local");
 
     fixture.log_step("Create skills in multiple layers");
@@ -83,7 +93,10 @@ fn seed_embeddings(fixture: &E2EFixture) -> Result<()> {
     let embedder = HashEmbedder::new(384);
 
     let skills = db.list_skills(50, 0)?;
-    assert!(!skills.is_empty(), "Expected skills to be indexed before embeddings");
+    assert!(
+        !skills.is_empty(),
+        "Expected skills to be indexed before embeddings"
+    );
 
     for skill in skills {
         let text = format!("{}\n{}\n{}", skill.name, skill.description, skill.body);
@@ -107,13 +120,7 @@ fn test_search_bm25_only() -> Result<()> {
     let mut fixture = setup_search_fixture("search_bm25_only")?;
 
     fixture.log_step("BM25 search");
-    let output = fixture.run_ms(&[
-        "--robot",
-        "search",
-        "zebradrive",
-        "--search-type",
-        "bm25",
-    ]);
+    let output = fixture.run_ms(&["--robot", "search", "zebradrive", "--search-type", "bm25"]);
     fixture.assert_success(&output, "search bm25");
 
     let json = output.json();
@@ -143,7 +150,10 @@ fn test_search_semantic_only() -> Result<()> {
     let results = json["results"].as_array().expect("results array");
     assert!(!results.is_empty(), "Semantic search should return results");
     let top_id = results[0]["id"].as_str().unwrap_or_default();
-    assert_eq!(top_id, "beta-search", "Semantic search should rank beta first");
+    assert_eq!(
+        top_id, "beta-search",
+        "Semantic search should rank beta first"
+    );
 
     Ok(())
 }
@@ -153,20 +163,17 @@ fn test_search_hybrid() -> Result<()> {
     let mut fixture = setup_search_fixture("search_hybrid")?;
 
     fixture.log_step("Hybrid search");
-    let output = fixture.run_ms(&[
-        "--robot",
-        "search",
-        "zebradrive",
-        "--search-type",
-        "hybrid",
-    ]);
+    let output = fixture.run_ms(&["--robot", "search", "zebradrive", "--search-type", "hybrid"]);
     fixture.assert_success(&output, "search hybrid");
 
     let json = output.json();
     let results = json["results"].as_array().expect("results array");
     assert!(!results.is_empty(), "Hybrid search should return results");
     let top_id = results[0]["id"].as_str().unwrap_or_default();
-    assert_eq!(top_id, "alpha-search", "Hybrid search should rank alpha first");
+    assert_eq!(
+        top_id, "alpha-search",
+        "Hybrid search should rank alpha first"
+    );
 
     Ok(())
 }
@@ -228,20 +235,17 @@ fn test_search_ranking() -> Result<()> {
     let mut fixture = setup_search_fixture("search_ranking")?;
 
     fixture.log_step("Search ranking by term frequency");
-    let output = fixture.run_ms(&[
-        "--robot",
-        "search",
-        "commonterm",
-        "--search-type",
-        "bm25",
-    ]);
+    let output = fixture.run_ms(&["--robot", "search", "commonterm", "--search-type", "bm25"]);
     fixture.assert_success(&output, "search ranking");
 
     let json = output.json();
     let results = json["results"].as_array().expect("results array");
     assert!(!results.is_empty(), "Ranking search should return results");
     let top_id = results[0]["id"].as_str().unwrap_or_default();
-    assert_eq!(top_id, "beta-search", "Repeated term should rank beta first");
+    assert_eq!(
+        top_id, "beta-search",
+        "Repeated term should rank beta first"
+    );
 
     Ok(())
 }
@@ -251,23 +255,11 @@ fn test_search_caching() -> Result<()> {
     let mut fixture = setup_search_fixture("search_caching")?;
 
     fixture.log_step("Search caching - first run");
-    let output1 = fixture.run_ms(&[
-        "--robot",
-        "search",
-        "commonterm",
-        "--search-type",
-        "bm25",
-    ]);
+    let output1 = fixture.run_ms(&["--robot", "search", "commonterm", "--search-type", "bm25"]);
     fixture.assert_success(&output1, "search caching run 1");
 
     fixture.log_step("Search caching - second run");
-    let output2 = fixture.run_ms(&[
-        "--robot",
-        "search",
-        "commonterm",
-        "--search-type",
-        "bm25",
-    ]);
+    let output2 = fixture.run_ms(&["--robot", "search", "commonterm", "--search-type", "bm25"]);
     fixture.assert_success(&output2, "search caching run 2");
 
     let results1 = output1.json()["results"].clone();
@@ -301,7 +293,10 @@ fn test_search_no_results() -> Result<()> {
 
     let json = output.json();
     let results = json["results"].as_array().expect("results array");
-    assert!(results.is_empty(), "Search with no results should return empty list");
+    assert!(
+        results.is_empty(),
+        "Search with no results should return empty list"
+    );
 
     Ok(())
 }

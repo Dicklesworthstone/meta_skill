@@ -17,7 +17,7 @@ pub struct BeadsVersion {
 
 impl BeadsVersion {
     /// Create a new version.
-    #[must_use] 
+    #[must_use]
     pub const fn new(major: u32, minor: u32, patch: u32) -> Self {
         Self {
             major,
@@ -75,10 +75,12 @@ impl PartialOrd for BeadsVersion {
 }
 
 /// Minimum bd version this client supports.
-pub static MINIMUM_SUPPORTED_VERSION: LazyLock<BeadsVersion> = LazyLock::new(|| BeadsVersion::new(0, 9, 0));
+pub static MINIMUM_SUPPORTED_VERSION: LazyLock<BeadsVersion> =
+    LazyLock::new(|| BeadsVersion::new(0, 9, 0));
 
 /// Recommended bd version for full feature support.
-pub static RECOMMENDED_VERSION: LazyLock<BeadsVersion> = LazyLock::new(|| BeadsVersion::new(1, 0, 0));
+pub static RECOMMENDED_VERSION: LazyLock<BeadsVersion> =
+    LazyLock::new(|| BeadsVersion::new(1, 0, 0));
 
 #[derive(Debug, Clone)]
 pub enum VersionCompatibility {

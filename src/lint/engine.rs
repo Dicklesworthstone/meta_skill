@@ -20,7 +20,7 @@ pub struct ValidationResult {
 
 impl ValidationResult {
     /// Create a new empty result
-    #[must_use] 
+    #[must_use]
     pub const fn new() -> Self {
         Self {
             diagnostics: Vec::new(),
@@ -58,19 +58,19 @@ impl ValidationResult {
     }
 
     /// Get count of errors
-    #[must_use] 
+    #[must_use]
     pub fn error_count(&self) -> usize {
         self.errors().count()
     }
 
     /// Get count of warnings
-    #[must_use] 
+    #[must_use]
     pub fn warning_count(&self) -> usize {
         self.warnings().count()
     }
 
     /// Get total count of diagnostics
-    #[must_use] 
+    #[must_use]
     pub fn total_count(&self) -> usize {
         self.diagnostics.len()
     }
@@ -93,7 +93,7 @@ pub struct FixResult {
 
 impl FixResult {
     /// Create a new empty fix result
-    #[must_use] 
+    #[must_use]
     pub const fn new() -> Self {
         Self {
             fixed: Vec::new(),
@@ -102,13 +102,13 @@ impl FixResult {
     }
 
     /// Check if all fixes succeeded
-    #[must_use] 
+    #[must_use]
     pub fn all_succeeded(&self) -> bool {
         self.failed.is_empty()
     }
 
     /// Get number of successful fixes
-    #[must_use] 
+    #[must_use]
     pub fn fixed_count(&self) -> usize {
         self.fixed.len()
     }
@@ -128,7 +128,7 @@ pub struct ValidationEngine {
 
 impl ValidationEngine {
     /// Create a new validation engine with the given config
-    #[must_use] 
+    #[must_use]
     pub fn new(config: ValidationConfig) -> Self {
         Self {
             rules: Vec::new(),
@@ -137,7 +137,7 @@ impl ValidationEngine {
     }
 
     /// Create a new engine with default config
-    #[must_use] 
+    #[must_use]
     pub fn with_defaults() -> Self {
         Self::new(ValidationConfig::default())
     }
@@ -148,20 +148,20 @@ impl ValidationEngine {
     }
 
     /// Register a validation rule (builder pattern)
-    #[must_use] 
+    #[must_use]
     pub fn with_rule(mut self, rule: BoxedRule) -> Self {
         self.register(rule);
         self
     }
 
     /// Get registered rules
-    #[must_use] 
+    #[must_use]
     pub fn rules(&self) -> &[BoxedRule] {
         &self.rules
     }
 
     /// Get the config
-    #[must_use] 
+    #[must_use]
     pub const fn config(&self) -> &ValidationConfig {
         &self.config
     }
@@ -172,14 +172,14 @@ impl ValidationEngine {
     }
 
     /// Validate a skill spec
-    #[must_use] 
+    #[must_use]
     pub fn validate(&self, skill: &SkillSpec) -> ValidationResult {
         let ctx = ValidationContext::new(skill, &self.config);
         self.validate_with_context(&ctx)
     }
 
     /// Validate with a custom context
-    #[must_use] 
+    #[must_use]
     pub fn validate_with_context(&self, ctx: &ValidationContext<'_>) -> ValidationResult {
         let mut result = ValidationResult::new();
         let mut error_count = 0;
@@ -194,9 +194,7 @@ impl ValidationEngine {
 
             for mut diag in rule_diagnostics {
                 // Apply severity override and strict mode
-                diag.severity = self
-                    .config
-                    .effective_severity(&diag.rule_id, diag.severity);
+                diag.severity = self.config.effective_severity(&diag.rule_id, diag.severity);
 
                 if diag.severity == Severity::Error {
                     error_count += 1;
@@ -255,7 +253,7 @@ impl ValidationEngine {
     }
 
     /// List all registered rules
-    #[must_use] 
+    #[must_use]
     pub fn list_rules(&self) -> Vec<RuleInfo> {
         self.rules
             .iter()
@@ -318,8 +316,10 @@ mod tests {
         }
         fn validate(&self, ctx: &ValidationContext<'_>) -> Vec<Diagnostic> {
             if ctx.skill.metadata.id.is_empty() {
-                vec![Diagnostic::error(self.id(), "Skill ID is empty")
-                    .with_category(RuleCategory::Structure)]
+                vec![
+                    Diagnostic::error(self.id(), "Skill ID is empty")
+                        .with_category(RuleCategory::Structure),
+                ]
             } else {
                 vec![]
             }
@@ -346,8 +346,10 @@ mod tests {
         }
         fn validate(&self, ctx: &ValidationContext<'_>) -> Vec<Diagnostic> {
             if ctx.skill.metadata.description.is_empty() {
-                vec![Diagnostic::warning(self.id(), "Skill description is empty")
-                    .with_category(RuleCategory::Quality)]
+                vec![
+                    Diagnostic::warning(self.id(), "Skill description is empty")
+                        .with_category(RuleCategory::Quality),
+                ]
             } else {
                 vec![]
             }
@@ -461,15 +463,15 @@ mod tests {
     #[test]
     fn test_validation_result_filters() {
         let mut result = ValidationResult::new();
-        result.diagnostics.push(
-            Diagnostic::error("rule1", "Error 1").with_category(RuleCategory::Structure),
-        );
-        result.diagnostics.push(
-            Diagnostic::warning("rule2", "Warning 1").with_category(RuleCategory::Quality),
-        );
-        result.diagnostics.push(
-            Diagnostic::info("rule3", "Info 1").with_category(RuleCategory::Structure),
-        );
+        result
+            .diagnostics
+            .push(Diagnostic::error("rule1", "Error 1").with_category(RuleCategory::Structure));
+        result
+            .diagnostics
+            .push(Diagnostic::warning("rule2", "Warning 1").with_category(RuleCategory::Quality));
+        result
+            .diagnostics
+            .push(Diagnostic::info("rule3", "Info 1").with_category(RuleCategory::Structure));
 
         assert_eq!(result.errors().count(), 1);
         assert_eq!(result.warnings().count(), 1);

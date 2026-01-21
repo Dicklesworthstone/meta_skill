@@ -294,7 +294,10 @@ fn resolve_metric_items(
         let mut id = None;
         let mut score = None;
         if let Some(obj) = item.as_object() {
-            id = obj.get("id").and_then(|v| v.as_str()).map(std::string::ToString::to_string);
+            id = obj
+                .get("id")
+                .and_then(|v| v.as_str())
+                .map(std::string::ToString::to_string);
             score = obj.get("value").and_then(serde_json::Value::as_f64);
         } else if let Some(arr) = item.as_array() {
             if let Some(first) = arr.first().and_then(|v| v.as_str()) {
@@ -360,7 +363,8 @@ fn format_metric_table(
     ));
     for (idx, entry) in resolved.iter().enumerate() {
         let score_str = entry
-            .score.map_or_else(|| "-".to_string(), |s| format!("{s:.4}"));
+            .score
+            .map_or_else(|| "-".to_string(), |s| format!("{s:.4}"));
         lines.push(format!(
             "{:>4} {:>10} {:36} {}",
             idx + 1,

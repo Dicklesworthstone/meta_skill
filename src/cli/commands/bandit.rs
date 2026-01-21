@@ -112,7 +112,8 @@ fn stats(ctx: &AppContext, args: &StatsArgs) -> Result<()> {
                 &bandit
                     .config
                     .persistence_path
-                    .as_ref().map_or_else(|| "(default)".to_string(), |p| p.display().to_string()),
+                    .as_ref()
+                    .map_or_else(|| "(default)".to_string(), |p| p.display().to_string()),
             )
             .blank()
             .section("Weights");

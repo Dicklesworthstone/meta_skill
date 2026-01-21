@@ -444,7 +444,7 @@ pub fn contains_emoji(s: &str) -> bool {
             || (0x2600..=0x26FF).contains(&cp)    // Misc symbols
             || (0x2700..=0x27BF).contains(&cp)    // Dingbats
             || (0xFE00..=0xFE0F).contains(&cp)    // Variation Selectors
-            || (0x1F1E0..=0x1F1FF).contains(&cp)  // Flags
+            || (0x1F1E0..=0x1F1FF).contains(&cp) // Flags
     })
 }
 
@@ -1363,7 +1363,8 @@ mod tests {
 
     #[test]
     fn test_output_capture() {
-        let capture = OutputCapture::new("stdout content".to_string(), "stderr content".to_string());
+        let capture =
+            OutputCapture::new("stdout content".to_string(), "stderr content".to_string());
         assert!(capture.stdout_contains("stdout"));
         assert!(capture.stderr_contains("stderr"));
         assert!(capture.combined().contains("stdout"));

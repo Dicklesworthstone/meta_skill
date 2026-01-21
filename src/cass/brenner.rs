@@ -49,7 +49,7 @@ pub enum CognitiveMoveTag {
 }
 
 impl CognitiveMoveTag {
-    #[must_use] 
+    #[must_use]
     pub const fn all() -> &'static [Self] {
         &[
             Self::ProblemSelection,
@@ -63,7 +63,7 @@ impl CognitiveMoveTag {
         ]
     }
 
-    #[must_use] 
+    #[must_use]
     pub const fn description(&self) -> &'static str {
         match self {
             Self::ProblemSelection => "How to pick what to work on",
@@ -254,7 +254,7 @@ pub struct WizardCheckpoint {
 }
 
 impl WizardCheckpoint {
-    #[must_use] 
+    #[must_use]
     pub fn new(query: &str, state: WizardState) -> Self {
         let now = Utc::now();
         Self {
@@ -295,7 +295,7 @@ pub enum WizardOutput {
 }
 
 /// Generate SKILL.md content from a draft (standalone function)
-#[must_use] 
+#[must_use]
 pub fn generate_skill_md(draft: &BrennerSkillDraft) -> String {
     let mut md = String::new();
 
@@ -394,7 +394,7 @@ impl Default for BrennerConfig {
 
 impl BrennerWizard {
     /// Create a new wizard with a query
-    #[must_use] 
+    #[must_use]
     pub fn new(query: &str, config: BrennerConfig) -> Self {
         let state = WizardState::SessionSelection {
             query: query.to_string(),
@@ -413,7 +413,7 @@ impl BrennerWizard {
     }
 
     /// Resume from a checkpoint
-    #[must_use] 
+    #[must_use]
     pub fn resume(checkpoint: WizardCheckpoint, config: BrennerConfig) -> Self {
         Self {
             state: checkpoint.state.clone(),
@@ -829,7 +829,10 @@ pub fn run_interactive(
                                         });
                                     }
                                     Err(e) => {
-                                        println!("Failed to load session {}: {}", match_data.session_id, e);
+                                        println!(
+                                            "Failed to load session {}: {}",
+                                            match_data.session_id, e
+                                        );
                                     }
                                 }
                             }

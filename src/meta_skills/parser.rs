@@ -27,8 +27,8 @@ impl MetaSkillParser {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use super::super::types::{MetaDisclosureLevel, PinStrategy, SliceCondition};
+    use super::*;
 
     #[test]
     fn parse_meta_skill_minimal() {
@@ -108,7 +108,10 @@ mod tests {
         "#;
 
         let parsed = MetaSkillParser::parse_str(toml, Path::new("pinned.toml")).unwrap();
-        assert_eq!(parsed.pin_strategy, PinStrategy::ExactVersion("2.0.0".to_string()));
+        assert_eq!(
+            parsed.pin_strategy,
+            PinStrategy::ExactVersion("2.0.0".to_string())
+        );
     }
 
     #[test]

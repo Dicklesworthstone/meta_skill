@@ -14,15 +14,15 @@ use std::path::PathBuf;
 use which::which;
 
 use crate::app::AppContext;
-use crate::cli::output::OutputFormat;
 use crate::beads::{BeadsClient, CreateIssueRequest, IssueType, Priority};
+use crate::cli::output::OutputFormat;
+use crate::cli::output::{HumanLayout, emit_human};
 use crate::core::spec_lens::{compile_markdown, parse_markdown};
 use crate::error::{MsError, Result};
 use crate::search::embeddings::VectorIndex;
 use crate::security::SafetyGate;
-use crate::storage::TombstoneManager;
 use crate::storage::Database;
-use crate::cli::output::{HumanLayout, emit_human};
+use crate::storage::TombstoneManager;
 use rusqlite::params;
 
 #[derive(Args, Debug)]
@@ -355,7 +355,10 @@ fn build_proposals(ctx: &AppContext, args: &AnalyzeArgs, dry_run: bool) -> Resul
         rationale_map
             .entry(candidate.skill_id.clone())
             .or_default()
-            .push(format!("quality {:.2} < {:.2}", candidate.quality_score, args.max_quality));
+            .push(format!(
+                "quality {:.2} < {:.2}",
+                candidate.quality_score, args.max_quality
+            ));
         candidate_ids.insert(candidate.skill_id.clone());
     }
     for candidate in &analysis.toolchain_mismatch {
@@ -389,14 +392,21 @@ fn build_proposals(ctx: &AppContext, args: &AnalyzeArgs, dry_run: bool) -> Resul
 
     let mut merge = Vec::new();
     for pair in &analysis.similarity_pairs {
-        let (target_id, target_name) =
-            pick_merge_target(pair, &analysis.usage_map, &analysis.quality_map, &analysis.name_map);
+        let (target_id, target_name) = pick_merge_target(
+            pair,
+            &analysis.usage_map,
+            &analysis.quality_map,
+            &analysis.name_map,
+        );
         merge.push(MergeProposal {
             sources: vec![pair.skill_a.clone(), pair.skill_b.clone()],
             target_id,
             target_name,
             similarity: pair.similarity,
-            rationale: format!("similarity {:.2} >= {:.2}", pair.similarity, args.similarity),
+            rationale: format!(
+                "similarity {:.2} >= {:.2}",
+                pair.similarity, args.similarity
+            ),
             draft_path: None,
         });
         candidate_ids.insert(pair.skill_a.clone());
@@ -417,13 +427,12 @@ fn build_proposals(ctx: &AppContext, args: &AnalyzeArgs, dry_run: bool) -> Resul
             let mut records = Vec::new();
             for source in &proposal.sources {
                 let Some(skill) = ctx.db.get_skill(source)? else {
-                    return Err(MsError::SkillNotFound(format!(
-                        "skill not found: {source}"
-                    )));
+                    return Err(MsError::SkillNotFound(format!("skill not found: {source}")));
                 };
                 records.push(skill);
             }
-            let spec = merge_spec_from_records(&records, &proposal.target_id, Some(&proposal.rationale))?;
+            let spec =
+                merge_spec_from_records(&records, &proposal.target_id, Some(&proposal.rationale))?;
             let draft = compile_markdown(&spec);
             write_draft(&draft_path, &draft)?;
         }
@@ -435,7 +444,8 @@ fn build_proposals(ctx: &AppContext, args: &AnalyzeArgs, dry_run: bool) -> Resul
         split.truncate(args.limit);
     }
     for proposal in &mut split {
-        let draft_paths = split_draft_paths(&ctx.ms_root, &proposal.skill_id, proposal.children.len());
+        let draft_paths =
+            split_draft_paths(&ctx.ms_root, &proposal.skill_id, proposal.children.len());
         proposal.draft_paths = draft_paths
             .iter()
             .map(|path| path.display().to_string())
@@ -447,7 +457,8 @@ fn build_proposals(ctx: &AppContext, args: &AnalyzeArgs, dry_run: bool) -> Resul
                     proposal.skill_id
                 )));
             };
-            let specs = split_specs_from_skill(&skill, proposal.children.len(), Some(&proposal.rationale))?;
+            let specs =
+                split_specs_from_skill(&skill, proposal.children.len(), Some(&proposal.rationale))?;
             for (idx, spec) in specs.into_iter().enumerate() {
                 let draft = compile_markdown(&spec);
                 if let Some(path) = draft_paths.get(idx) {
@@ -529,7 +540,10 @@ fn run_proposals(ctx: &AppContext, args: &AnalyzeArgs, dry_run: bool) -> Result<
         .kv("Max quality", &format!("{:.2}", args.max_quality))
         .kv("Similarity", &format!("{:.2}", args.similarity))
         .kv("Candidates", &proposals.candidate_count.to_string())
-        .kv("Deprecate proposals", &proposals.deprecate.len().to_string())
+        .kv(
+            "Deprecate proposals",
+            &proposals.deprecate.len().to_string(),
+        )
         .kv("Merge proposals", &proposals.merge.len().to_string())
         .kv("Split proposals", &proposals.split.len().to_string())
         .blank();
@@ -606,15 +620,15 @@ fn run_review(ctx: &AppContext, args: &ReviewArgs, dry_run: bool) -> Result<()> 
     }
 
     let proposals = build_proposals(ctx, &args.analyze, true)?;
-    if proposals.deprecate.is_empty()
-        && proposals.merge.is_empty()
-        && proposals.split.is_empty()
-    {
+    if proposals.deprecate.is_empty() && proposals.merge.is_empty() && proposals.split.is_empty() {
         println!("No proposals to review.");
         return Ok(());
     }
 
-    println!("Reviewing prune proposals{}", if dry_run { " (dry-run)" } else { "" });
+    println!(
+        "Reviewing prune proposals{}",
+        if dry_run { " (dry-run)" } else { "" }
+    );
 
     for proposal in &proposals.deprecate {
         println!(
@@ -805,9 +819,7 @@ fn merge_spec_from_records(
     let target_idx = records
         .iter()
         .position(|r| r.id == target_id)
-        .ok_or_else(|| {
-            MsError::ValidationFailed(format!("merge target not found: {target_id}"))
-        })?;
+        .ok_or_else(|| MsError::ValidationFailed(format!("merge target not found: {target_id}")))?;
 
     let mut target_spec = parse_markdown(&records[target_idx].body).map_err(|e| {
         MsError::ValidationFailed(format!("failed to parse {}: {}", records[target_idx].id, e))
@@ -822,8 +834,9 @@ fn merge_spec_from_records(
         if idx == target_idx {
             continue;
         }
-        let spec = parse_markdown(&record.body)
-            .map_err(|e| MsError::ValidationFailed(format!("failed to parse {}: {}", record.id, e)))?;
+        let spec = parse_markdown(&record.body).map_err(|e| {
+            MsError::ValidationFailed(format!("failed to parse {}: {}", record.id, e))
+        })?;
         for section in spec.sections {
             let key = section.title.trim().to_lowercase();
             if title_set.insert(key) {
@@ -898,7 +911,9 @@ fn apply_deprecate(
     dry_run: bool,
 ) -> Result<ApplyOutcome> {
     let Some(skill) = ctx.db.get_skill(skill_id)? else {
-        return Err(MsError::SkillNotFound(format!("skill not found: {skill_id}")));
+        return Err(MsError::SkillNotFound(format!(
+            "skill not found: {skill_id}"
+        )));
     };
     if let Some(target) = replacement {
         if ctx.db.get_skill(target)?.is_none() {
@@ -921,7 +936,8 @@ fn apply_deprecate(
             .update_skill_deprecation(&skill.id, true, Some(&reason))?;
         if let Some(target) = replacement {
             let created_at = chrono::Utc::now().to_rfc3339();
-            ctx.db.upsert_alias(&skill.id, target, "deprecated", &created_at)?;
+            ctx.db
+                .upsert_alias(&skill.id, target, "deprecated", &created_at)?;
         }
         if let Some(record) = ctx.db.get_skill(&skill.id)? {
             ctx.search.index_skill(&record)?;
@@ -934,7 +950,11 @@ fn apply_deprecate(
         dry_run,
         message: format!(
             "{} {}",
-            if dry_run { "Would deprecate" } else { "Deprecated" },
+            if dry_run {
+                "Would deprecate"
+            } else {
+                "Deprecated"
+            },
             skill_id
         ),
         drafts: Vec::new(),
@@ -1000,7 +1020,9 @@ fn apply_split(
     dry_run: bool,
 ) -> Result<ApplyOutcome> {
     let Some(skill) = ctx.db.get_skill(skill_id)? else {
-        return Err(MsError::SkillNotFound(format!("skill not found: {skill_id}")));
+        return Err(MsError::SkillNotFound(format!(
+            "skill not found: {skill_id}"
+        )));
     };
     let mut drafts = Vec::new();
     let section_count = parse_markdown(&skill.body)
@@ -1050,11 +1072,7 @@ fn merge_draft_path(ms_root: &PathBuf, target_id: &str, sources: &[String]) -> P
 fn split_draft_paths(ms_root: &PathBuf, skill_id: &str, count: usize) -> Vec<PathBuf> {
     let mut paths = Vec::new();
     for idx in 0..count {
-        let draft_name = format!(
-            "split-{}-part-{}.md",
-            safe_filename(skill_id),
-            idx + 1
-        );
+        let draft_name = format!("split-{}-part-{}.md", safe_filename(skill_id), idx + 1);
         paths.push(proposals_dir(ms_root).join(draft_name));
     }
     paths
@@ -2075,8 +2093,7 @@ mod tests {
         name_map.insert("a".to_string(), "Alpha".to_string());
         name_map.insert("b".to_string(), "Beta".to_string());
 
-        let (target, target_name) =
-            pick_merge_target(&pair, &usage_map, &quality_map, &name_map);
+        let (target, target_name) = pick_merge_target(&pair, &usage_map, &quality_map, &name_map);
         assert_eq!(target, "a");
         assert_eq!(target_name, "Alpha");
     }
@@ -2100,8 +2117,7 @@ mod tests {
         name_map.insert("a".to_string(), "Alpha".to_string());
         name_map.insert("b".to_string(), "Beta".to_string());
 
-        let (target, target_name) =
-            pick_merge_target(&pair, &usage_map, &quality_map, &name_map);
+        let (target, target_name) = pick_merge_target(&pair, &usage_map, &quality_map, &name_map);
         assert_eq!(target, "b");
         assert_eq!(target_name, "Beta");
     }

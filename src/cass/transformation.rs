@@ -83,7 +83,7 @@ pub struct CodePatternSignature {
 
 impl CodePatternSignature {
     /// Generate a searchable signature string
-    #[must_use] 
+    #[must_use]
     pub fn signature(&self) -> String {
         format!(
             "{} {} {}",
@@ -107,7 +107,7 @@ pub struct SolutionApproach {
 
 impl SolutionApproach {
     /// Get keywords for search
-    #[must_use] 
+    #[must_use]
     pub fn keywords(&self) -> &[String] {
         &self.keywords
     }
@@ -141,7 +141,7 @@ pub struct ClusteredInstance {
 
 impl ClusteredInstance {
     /// Convert to example format for general pattern
-    #[must_use] 
+    #[must_use]
     pub fn to_example(&self) -> String {
         self.instance.content.chars().take(200).collect()
     }
@@ -232,7 +232,7 @@ pub struct GeneralizationValidation {
 
 impl GeneralizationValidation {
     /// Compute validation metrics for a pattern against instances
-    #[must_use] 
+    #[must_use]
     pub fn compute(
         common: &CommonElements,
         instances: &[ClusteredInstance],
@@ -256,8 +256,13 @@ impl GeneralizationValidation {
         let specificity = Self::compute_specificity(coverage, coherence, &common.invariants);
 
         // Combined confidence with weights from spec
-        let confidence =
-            0.10f32.mul_add(specificity, 0.20f32.mul_add(coherence, 0.35f32.mul_add(coverage, 0.35 * predictive_power)));
+        let confidence = 0.10f32.mul_add(
+            specificity,
+            0.20f32.mul_add(
+                coherence,
+                0.35f32.mul_add(coverage, 0.35 * predictive_power),
+            ),
+        );
 
         // Identify counter-examples (instances that don't fit well)
         let counterexamples = Self::identify_counterexamples(instances, all_instances);
@@ -650,10 +655,13 @@ impl SpecificToGeneralTransformer {
         // Extract key tokens (simple tokenization)
         for word in content.split_whitespace() {
             let clean = word.trim_matches(|c: char| !c.is_alphanumeric());
-            if clean.len() > 3 && clean.chars().all(|c| c.is_alphanumeric() || c == '_')
-                && !key_tokens.contains(&clean.to_string()) && key_tokens.len() < 10 {
-                    key_tokens.push(clean.to_string());
-                }
+            if clean.len() > 3
+                && clean.chars().all(|c| c.is_alphanumeric() || c == '_')
+                && !key_tokens.contains(&clean.to_string())
+                && key_tokens.len() < 10
+            {
+                key_tokens.push(clean.to_string());
+            }
         }
 
         // Detect Rust-specific features
@@ -1274,7 +1282,11 @@ mod tests {
             let sim = transformer.embedder.similarity(e1, e2);
             println!("DEBUG: Computed Similarity: {}", sim);
         }
-        assert!(coherence > 0.0, "Coherence {} should be positive", coherence);
+        assert!(
+            coherence > 0.0,
+            "Coherence {} should be positive",
+            coherence
+        );
     }
 
     #[test]

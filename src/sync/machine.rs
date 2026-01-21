@@ -26,9 +26,12 @@ pub struct MachineMetadata {
 }
 
 impl MachineIdentity {
-    #[must_use] 
+    #[must_use]
     pub fn generate(machine_name: String, description: Option<String>) -> Self {
-        let hostname = hostname::get().map_or_else(|_| "unknown".to_string(), |h| h.to_string_lossy().to_string());
+        let hostname = hostname::get().map_or_else(
+            |_| "unknown".to_string(),
+            |h| h.to_string_lossy().to_string(),
+        );
         Self {
             machine_id: Uuid::new_v4().to_string(),
             machine_name,
@@ -105,7 +108,10 @@ impl MachineIdentity {
     }
 
     fn default_machine_name() -> String {
-        hostname::get().map_or_else(|_| "default-machine".to_string(), |h| h.to_string_lossy().to_string())
+        hostname::get().map_or_else(
+            |_| "default-machine".to_string(),
+            |h| h.to_string_lossy().to_string(),
+        )
     }
 }
 

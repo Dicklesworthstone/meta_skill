@@ -14,7 +14,7 @@ use std::path::PathBuf;
 use serde_json::Value as JsonValue;
 
 use ms::beads::{Dependency, Issue, IssueStatus, IssueType, Priority};
-use ms::graph::bv::{write_beads_jsonl, BvClient};
+use ms::graph::bv::{BvClient, write_beads_jsonl};
 use ms::graph::skills::skills_to_issues;
 use ms::storage::sqlite::SkillRecord;
 
@@ -203,10 +203,7 @@ fn skills_to_issues_deprecated_skill_is_closed() {
 
 #[test]
 fn skills_to_issues_mixed_deprecated_and_active() {
-    let skills = vec![
-        base_skill_record("active"),
-        deprecated_skill("deprecated"),
-    ];
+    let skills = vec![base_skill_record("active"), deprecated_skill("deprecated")];
 
     let issues = skills_to_issues(&skills).unwrap();
     let active_issue = issues.iter().find(|i| i.id == "active").unwrap();

@@ -8,9 +8,7 @@ use colored::Colorize;
 
 use crate::app::AppContext;
 use crate::error::Result;
-use crate::meta_skills::{
-    ConditionContext, MetaSkillManager, MetaSkillQuery, MetaSkillRegistry,
-};
+use crate::meta_skills::{ConditionContext, MetaSkillManager, MetaSkillQuery, MetaSkillRegistry};
 use crate::utils::format::truncate_string;
 
 #[derive(Args, Debug)]
@@ -150,7 +148,10 @@ fn run_list(ctx: &AppContext, args: &ListArgs) -> Result<()> {
             .collect();
         println!("{}", serde_json::to_string_pretty(&json_results)?);
     } else {
-        println!("{} meta-skill(s) found:\n", results.len().to_string().bold());
+        println!(
+            "{} meta-skill(s) found:\n",
+            results.len().to_string().bold()
+        );
         for ms in results {
             println!(
                 "  {} {}",
@@ -193,12 +194,18 @@ fn run_show(ctx: &AppContext, args: &ShowArgs) -> Result<()> {
             println!("  Author: {author}");
         }
         println!("  Tags: {}", meta_skill.metadata.tags.join(", "));
-        println!("  Tech Stacks: {}", meta_skill.metadata.tech_stacks.join(", "));
+        println!(
+            "  Tech Stacks: {}",
+            meta_skill.metadata.tech_stacks.join(", ")
+        );
         println!();
 
         println!("{}", "Token Requirements".bold());
         println!("  Minimum: {} tokens", meta_skill.min_context_tokens);
-        println!("  Recommended: {} tokens", meta_skill.recommended_context_tokens);
+        println!(
+            "  Recommended: {} tokens",
+            meta_skill.recommended_context_tokens
+        );
         println!();
 
         println!("{} ({} total)", "Slices".bold(), meta_skill.slices.len());
@@ -281,17 +288,18 @@ fn run_load(ctx: &AppContext, args: &LoadArgs) -> Result<()> {
         println!("Slices loaded: {}", result.slices.len());
 
         if !result.skipped.is_empty() {
-            println!("\n{} ({}):", "Skipped slices".yellow(), result.skipped.len());
+            println!(
+                "\n{} ({}):",
+                "Skipped slices".yellow(),
+                result.skipped.len()
+            );
             for skip in &result.skipped {
                 let slice_info = skip
                     .slice_id
                     .as_ref()
                     .map(|s| format!(":{s}"))
                     .unwrap_or_default();
-                println!(
-                    "  - {}{}: {:?}",
-                    skip.skill_id, slice_info, skip.reason
-                );
+                println!("  - {}{}: {:?}", skip.skill_id, slice_info, skip.reason);
             }
         }
 
@@ -495,18 +503,16 @@ ms meta bootstrap
 ```
 "#;
 
-    let spec = crate::core::spec_lens::parse_markdown(content)
-        .map_err(|e| crate::error::MsError::ValidationFailed(format!("Failed to parse meta skill: {e}")))?;
-    
+    let spec = crate::core::spec_lens::parse_markdown(content).map_err(|e| {
+        crate::error::MsError::ValidationFailed(format!("Failed to parse meta skill: {e}"))
+    })?;
+
     // Use 2PC to ensure consistency
-    let tx_mgr = crate::storage::TxManager::new(
-        ctx.db.clone(),
-        ctx.git.clone(),
-        ctx.ms_root.clone(),
-    )?;
-    
+    let tx_mgr =
+        crate::storage::TxManager::new(ctx.db.clone(), ctx.git.clone(), ctx.ms_root.clone())?;
+
     tx_mgr.write_skill_with_layer(&spec, crate::core::SkillLayer::Base)?;
-    
+
     println!("Bootstrapped meta skill 'ms'.");
     Ok(())
 }

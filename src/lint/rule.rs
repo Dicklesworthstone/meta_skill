@@ -82,7 +82,10 @@ macro_rules! impl_rule {
                 $sev
             }
 
-            fn validate(&self, $ctx: &$crate::lint::config::ValidationContext<'_>) -> Vec<$crate::lint::diagnostic::Diagnostic> {
+            fn validate(
+                &self,
+                $ctx: &$crate::lint::config::ValidationContext<'_>,
+            ) -> Vec<$crate::lint::diagnostic::Diagnostic> {
                 $validate_body
             }
         }

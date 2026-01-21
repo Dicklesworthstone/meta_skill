@@ -7,7 +7,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use clap::{Args, CommandFactory};
-use clap_complete::{generate, Shell};
+use clap_complete::{Shell, generate};
 use colored::Colorize;
 use serde::Serialize;
 use tracing::{debug, info};
@@ -16,7 +16,7 @@ use crate::agent_detection::{
     AgentDetectionService, AgentType, DetectedAgent, DetectionSummary, IntegrationStatus,
 };
 use crate::app::AppContext;
-use crate::cli::output::{emit_json, robot_ok, OutputFormat};
+use crate::cli::output::{OutputFormat, emit_json, robot_ok};
 use crate::error::{MsError, Result};
 use crate::skill_md::SkillMdGenerator;
 
@@ -148,7 +148,11 @@ pub struct SetupAction {
 }
 
 impl SetupAction {
-    fn new(action_type: SetupActionType, target_path: PathBuf, description: impl Into<String>) -> Self {
+    fn new(
+        action_type: SetupActionType,
+        target_path: PathBuf,
+        description: impl Into<String>,
+    ) -> Self {
         Self {
             agent: None,
             action_type,
@@ -209,25 +213,24 @@ impl SetupSummary {
             .iter()
             .filter(|a| matches!(a.status, ActionStatus::Updated))
             .count();
-        let completions_installed = actions
-            .iter()
-            .any(|a| {
-                matches!(a.action_type, SetupActionType::GenerateCompletions)
-                    && matches!(a.status, ActionStatus::Created)
-            });
-        let hooks_installed = actions
-            .iter()
-            .any(|a| {
-                matches!(a.action_type, SetupActionType::InstallPreCommitHook)
-                    && matches!(a.status, ActionStatus::Created)
-            });
+        let completions_installed = actions.iter().any(|a| {
+            matches!(a.action_type, SetupActionType::GenerateCompletions)
+                && matches!(a.status, ActionStatus::Created)
+        });
+        let hooks_installed = actions.iter().any(|a| {
+            matches!(a.action_type, SetupActionType::InstallPreCommitHook)
+                && matches!(a.status, ActionStatus::Created)
+        });
         let errors = actions
             .iter()
             .filter(|a| matches!(a.status, ActionStatus::Failed(_)))
             .count();
         let agents_configured = actions
             .iter()
-            .filter(|a| a.agent.is_some() && matches!(a.status, ActionStatus::Created | ActionStatus::Updated))
+            .filter(|a| {
+                a.agent.is_some()
+                    && matches!(a.status, ActionStatus::Created | ActionStatus::Updated)
+            })
             .map(|a| a.agent)
             .collect::<std::collections::HashSet<_>>()
             .len();
@@ -387,22 +390,14 @@ fn run_uninstall(format: OutputFormat, args: &SetupArgs) -> Result<()> {
     if skill_md.exists() {
         if args.dry_run {
             actions.push(
-                SetupAction::new(
-                    SetupActionType::CreateSkillMd,
-                    skill_md,
-                    "Remove SKILL.md",
-                )
-                .with_status(ActionStatus::WouldUpdate),
+                SetupAction::new(SetupActionType::CreateSkillMd, skill_md, "Remove SKILL.md")
+                    .with_status(ActionStatus::WouldUpdate),
             );
         } else {
             fs::remove_file(&skill_md)?;
             actions.push(
-                SetupAction::new(
-                    SetupActionType::CreateSkillMd,
-                    skill_md,
-                    "Removed SKILL.md",
-                )
-                .with_status(ActionStatus::Updated),
+                SetupAction::new(SetupActionType::CreateSkillMd, skill_md, "Removed SKILL.md")
+                    .with_status(ActionStatus::Updated),
             );
         }
     }
@@ -542,7 +537,10 @@ fn run_setup(_ctx: &AppContext, format: OutputFormat, args: &SetupArgs) -> Resul
     if summary.completions_installed {
         next_steps.push("Restart your shell to enable completions".to_string());
     }
-    if actions.iter().any(|a| matches!(a.action_type, SetupActionType::CreateSkillMd)) {
+    if actions
+        .iter()
+        .any(|a| matches!(a.action_type, SetupActionType::CreateSkillMd))
+    {
         next_steps.push("Commit SKILL.md to your repository".to_string());
     }
 
@@ -598,7 +596,6 @@ fn setup_skill_md(project_root: &Path, args: &SetupArgs) -> Result<SetupAction> 
     )
     .with_status(status))
 }
-
 
 /// Setup shell completions.
 fn setup_shell_completions(shell: Shell, dry_run: bool) -> Result<SetupAction> {
@@ -801,7 +798,10 @@ fn print_action(action: &SetupAction) {
     }
 
     if !action.target_path.as_os_str().is_empty() {
-        println!("    → {}", action.target_path.display().to_string().dimmed());
+        println!(
+            "    → {}",
+            action.target_path.display().to_string().dimmed()
+        );
     }
 }
 
@@ -856,7 +856,11 @@ fn print_setup_report(report: &SetupReport, dry_run: bool) {
         "Summary".bold(),
         s.files_created,
         s.files_updated,
-        report.actions_taken.iter().filter(|a| matches!(a.status, ActionStatus::Skipped)).count(),
+        report
+            .actions_taken
+            .iter()
+            .filter(|a| matches!(a.status, ActionStatus::Skipped))
+            .count(),
         s.errors
     );
 
@@ -914,18 +918,10 @@ mod tests {
     #[test]
     fn test_setup_summary_from_actions() {
         let actions = vec![
-            SetupAction::new(
-                SetupActionType::CreateSkillMd,
-                PathBuf::new(),
-                "test",
-            )
-            .with_status(ActionStatus::Created),
-            SetupAction::new(
-                SetupActionType::GenerateCompletions,
-                PathBuf::new(),
-                "test",
-            )
-            .with_status(ActionStatus::Created),
+            SetupAction::new(SetupActionType::CreateSkillMd, PathBuf::new(), "test")
+                .with_status(ActionStatus::Created),
+            SetupAction::new(SetupActionType::GenerateCompletions, PathBuf::new(), "test")
+                .with_status(ActionStatus::Created),
             SetupAction::new(
                 SetupActionType::InstallPreCommitHook,
                 PathBuf::new(),

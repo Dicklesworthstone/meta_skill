@@ -5,8 +5,8 @@
 //! - InboxMessage serialization/deserialization
 //! - Error message formatting
 
-use ms::config::AgentMailConfig;
 use ms::agent_mail::{AgentMailClient, InboxMessage};
+use ms::config::AgentMailConfig;
 
 // ============================================================================
 // Configuration Validation Tests

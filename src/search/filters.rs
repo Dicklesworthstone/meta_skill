@@ -10,7 +10,7 @@ use super::context::SearchFilters;
 use super::hybrid::HybridResult;
 
 /// Check if a skill record matches the given filters
-#[must_use] 
+#[must_use]
 pub fn matches_skill_record(filters: &SearchFilters, skill: &SkillRecord) -> bool {
     let skill_tags = parse_tags_from_metadata(&skill.metadata_json);
     filters.matches(

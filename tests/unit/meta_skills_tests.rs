@@ -119,9 +119,10 @@ fn meta_skill_validate_invalid_context_tokens() {
     meta.min_context_tokens = 100;
     meta.recommended_context_tokens = 50;
     let err = meta.validate().unwrap_err();
-    assert!(err
-        .to_string()
-        .contains("recommended_context_tokens must be >= min_context_tokens"));
+    assert!(
+        err.to_string()
+            .contains("recommended_context_tokens must be >= min_context_tokens")
+    );
 }
 
 #[test]
@@ -527,7 +528,12 @@ fn parser_parse_no_slices_fails_validation() {
     "#;
     let result = MetaSkillParser::parse_str(toml, Path::new("no-slices.toml"));
     assert!(result.is_err());
-    assert!(result.unwrap_err().to_string().contains("at least one slice"));
+    assert!(
+        result
+            .unwrap_err()
+            .to_string()
+            .contains("at least one slice")
+    );
 }
 
 // ============================================================================

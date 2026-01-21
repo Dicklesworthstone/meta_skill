@@ -152,6 +152,9 @@ More context here
         let mut draft = sample_draft();
         let original_content = draft.content.clone();
         refine_skill(&mut draft, "").unwrap();
-        assert_eq!(draft.content, original_content, "Empty feedback should not modify");
+        assert_eq!(
+            draft.content, original_content,
+            "Empty feedback should not modify"
+        );
     }
 }

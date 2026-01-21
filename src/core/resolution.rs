@@ -8,7 +8,9 @@ use std::collections::{HashMap, HashSet};
 
 use serde::{Deserialize, Serialize};
 
-use crate::core::skill::{BlockType, IncludePosition, IncludeTarget, SkillBlock, SkillInclude, SkillSection, SkillSpec};
+use crate::core::skill::{
+    BlockType, IncludePosition, IncludeTarget, SkillBlock, SkillInclude, SkillSection, SkillSpec,
+};
 use crate::error::{MsError, Result};
 
 /// Maximum inheritance depth before warning
@@ -88,10 +90,7 @@ pub struct ResolvedSkillSpec {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum ResolutionWarning {
     /// Inheritance depth exceeds recommended maximum
-    DeepInheritance {
-        depth: usize,
-        chain: Vec<String>,
-    },
+    DeepInheritance { depth: usize, chain: Vec<String> },
     /// Section in child shadows parent section completely
     SectionShadowed {
         section_id: String,
@@ -235,10 +234,12 @@ pub fn resolve_extends<R: SkillRepository + ?Sized>(
     }
 
     // Get parent skill
-    let parent = repository.get(parent_id)?.ok_or_else(|| MsError::ParentSkillNotFound {
-        parent_id: parent_id.clone(),
-        child_id: skill.metadata.id.clone(),
-    })?;
+    let parent = repository
+        .get(parent_id)?
+        .ok_or_else(|| MsError::ParentSkillNotFound {
+            parent_id: parent_id.clone(),
+            child_id: skill.metadata.id.clone(),
+        })?;
 
     // Recursively resolve parent
     let resolved_parent = resolve_extends(&parent, repository)?;
@@ -270,7 +271,11 @@ pub fn resolve_extends<R: SkillRepository + ?Sized>(
 }
 
 /// Merge a child skill onto a parent, applying inheritance rules
-fn merge_skills(parent: &SkillSpec, child: &SkillSpec, warnings: &mut Vec<ResolutionWarning>) -> SkillSpec {
+fn merge_skills(
+    parent: &SkillSpec,
+    child: &SkillSpec,
+    warnings: &mut Vec<ResolutionWarning>,
+) -> SkillSpec {
     let mut result = parent.clone();
 
     // Always replace these from child
@@ -373,7 +378,10 @@ fn merge_blocks(
     // Group parent blocks by type for replacement logic
     let mut blocks_by_type: HashMap<BlockType, Vec<SkillBlock>> = HashMap::new();
     for block in parent_blocks.drain(..) {
-        blocks_by_type.entry(block.block_type.clone()).or_default().push(block);
+        blocks_by_type
+            .entry(block.block_type.clone())
+            .or_default()
+            .push(block);
     }
 
     // Process child blocks
@@ -473,10 +481,12 @@ fn resolve_includes<R: SkillRepository + ?Sized>(
         let included_skill = match repository.get(&include.skill)? {
             Some(skill) => skill,
             None => {
-                resolved.warnings.push(ResolutionWarning::IncludedSkillNotFound {
-                    skill_id: include.skill.clone(),
-                    included_by: resolved.spec.metadata.id.clone(),
-                });
+                resolved
+                    .warnings
+                    .push(ResolutionWarning::IncludedSkillNotFound {
+                        skill_id: include.skill.clone(),
+                        included_by: resolved.spec.metadata.id.clone(),
+                    });
                 continue;
             }
         };
@@ -506,7 +516,10 @@ fn apply_include(target: &mut SkillSpec, source: &SkillSpec, include: &SkillIncl
     for section in &source.sections {
         // Filter by sections if specified
         if let Some(section_filter) = &include.sections {
-            if !section_filter.iter().any(|s| s == &section.id || s == &section.title) {
+            if !section_filter
+                .iter()
+                .any(|s| s == &section.id || s == &section.title)
+            {
                 continue;
             }
         }
@@ -543,10 +556,7 @@ fn apply_include(target: &mut SkillSpec, source: &SkillSpec, include: &SkillIncl
         IncludeTarget::Context => "context",
     };
 
-    let target_section = target
-        .sections
-        .iter_mut()
-        .find(|s| s.id == section_id);
+    let target_section = target.sections.iter_mut().find(|s| s.id == section_id);
 
     if let Some(section) = target_section {
         // Apply blocks based on position
@@ -751,7 +761,10 @@ mod tests {
 
         let err = resolve_extends(&child, &repo).unwrap_err();
         match err {
-            MsError::ParentSkillNotFound { parent_id, child_id } => {
+            MsError::ParentSkillNotFound {
+                parent_id,
+                child_id,
+            } => {
                 assert_eq!(parent_id, "nonexistent");
                 assert_eq!(child_id, "child");
             }
@@ -782,9 +795,10 @@ mod tests {
         let resolved = resolve_extends(&deepest, &repo).unwrap();
 
         // Should have a deep inheritance warning
-        let has_warning = resolved.warnings.iter().any(|w| {
-            matches!(w, ResolutionWarning::DeepInheritance { .. })
-        });
+        let has_warning = resolved
+            .warnings
+            .iter()
+            .any(|w| matches!(w, ResolutionWarning::DeepInheritance { .. }));
         assert!(has_warning, "Expected DeepInheritance warning");
     }
 
@@ -977,7 +991,12 @@ mod tests {
         let resolved = resolve_full(&main_skill, &repo).unwrap();
 
         // Should have main rule + 2 included rules
-        let rules_section = resolved.spec.sections.iter().find(|s| s.id == "rules").unwrap();
+        let rules_section = resolved
+            .spec
+            .sections
+            .iter()
+            .find(|s| s.id == "rules")
+            .unwrap();
         assert_eq!(rules_section.blocks.len(), 3);
         assert_eq!(rules_section.blocks[0].content, "Main rule");
         assert_eq!(rules_section.blocks[1].content, "Always handle errors");
@@ -991,7 +1010,8 @@ mod tests {
     fn test_include_with_prepend() {
         let mut repo = TestRepository::new();
 
-        let error_skill = make_skill_with_rules("error-handling", "Error Handling", vec!["Error rule"]);
+        let error_skill =
+            make_skill_with_rules("error-handling", "Error Handling", vec!["Error rule"]);
         repo.add(error_skill);
 
         let mut main_skill = make_skill_with_rules("main", "Main", vec!["Main rule"]);
@@ -1005,7 +1025,12 @@ mod tests {
 
         let resolved = resolve_full(&main_skill, &repo).unwrap();
 
-        let rules_section = resolved.spec.sections.iter().find(|s| s.id == "rules").unwrap();
+        let rules_section = resolved
+            .spec
+            .sections
+            .iter()
+            .find(|s| s.id == "rules")
+            .unwrap();
         // Error rule should come first (prepended)
         assert_eq!(rules_section.blocks[0].content, "Error rule");
         assert_eq!(rules_section.blocks[1].content, "Main rule");
@@ -1015,7 +1040,8 @@ mod tests {
     fn test_include_with_prefix() {
         let mut repo = TestRepository::new();
 
-        let error_skill = make_skill_with_rules("error-handling", "Error Handling", vec!["Handle errors"]);
+        let error_skill =
+            make_skill_with_rules("error-handling", "Error Handling", vec!["Handle errors"]);
         repo.add(error_skill);
 
         let mut main_skill = SkillSpec::new("main", "Main");
@@ -1029,7 +1055,12 @@ mod tests {
 
         let resolved = resolve_full(&main_skill, &repo).unwrap();
 
-        let rules_section = resolved.spec.sections.iter().find(|s| s.id == "rules").unwrap();
+        let rules_section = resolved
+            .spec
+            .sections
+            .iter()
+            .find(|s| s.id == "rules")
+            .unwrap();
         assert_eq!(rules_section.blocks[0].content, "[Error] Handle errors");
     }
 
@@ -1060,7 +1091,12 @@ mod tests {
 
         let resolved = resolve_full(&main_skill, &repo).unwrap();
 
-        let rules_section = resolved.spec.sections.iter().find(|s| s.id == "rules").unwrap();
+        let rules_section = resolved
+            .spec
+            .sections
+            .iter()
+            .find(|s| s.id == "rules")
+            .unwrap();
         assert_eq!(rules_section.blocks.len(), 2);
         assert_eq!(resolved.included_from, vec!["error-handling", "testing"]);
     }
@@ -1137,7 +1173,12 @@ mod tests {
         let resolved = resolve_full(&child, &repo).unwrap();
 
         // Should have parent rule + error rule
-        let rules_section = resolved.spec.sections.iter().find(|s| s.id == "rules").unwrap();
+        let rules_section = resolved
+            .spec
+            .sections
+            .iter()
+            .find(|s| s.id == "rules")
+            .unwrap();
         assert_eq!(rules_section.blocks.len(), 2);
         assert_eq!(resolved.inheritance_chain, vec!["parent", "child"]);
         assert_eq!(resolved.included_from, vec!["errors"]);
@@ -1182,7 +1223,11 @@ mod tests {
 
         // Create 5 skills to include
         for i in 1..=5 {
-            let skill = make_skill_with_rules(&format!("skill-{}", i), &format!("Skill {}", i), vec!["Rule"]);
+            let skill = make_skill_with_rules(
+                &format!("skill-{}", i),
+                &format!("Skill {}", i),
+                vec!["Rule"],
+            );
             repo.add(skill);
         }
 
@@ -1200,9 +1245,10 @@ mod tests {
         let resolved = resolve_full(&main_skill, &repo).unwrap();
 
         // Should have warning about many includes to same target
-        let has_warning = resolved.warnings.iter().any(|w| {
-            matches!(w, ResolutionWarning::ManyIncludes { count, .. } if *count == 5)
-        });
+        let has_warning = resolved
+            .warnings
+            .iter()
+            .any(|w| matches!(w, ResolutionWarning::ManyIncludes { count, .. } if *count == 5));
         assert!(has_warning);
     }
 
@@ -1274,8 +1320,18 @@ mod tests {
         let resolved = resolve_full(&main_skill, &repo).unwrap();
 
         // Should have both sections
-        let rules = resolved.spec.sections.iter().find(|s| s.id == "rules").unwrap();
-        let pitfalls = resolved.spec.sections.iter().find(|s| s.id == "pitfalls").unwrap();
+        let rules = resolved
+            .spec
+            .sections
+            .iter()
+            .find(|s| s.id == "rules")
+            .unwrap();
+        let pitfalls = resolved
+            .spec
+            .sections
+            .iter()
+            .find(|s| s.id == "pitfalls")
+            .unwrap();
 
         assert_eq!(rules.blocks.len(), 1);
         assert_eq!(pitfalls.blocks.len(), 1);

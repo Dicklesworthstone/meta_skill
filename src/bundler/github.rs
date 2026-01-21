@@ -91,10 +91,7 @@ pub fn publish_bundle(path: &Path, config: &GitHubConfig) -> Result<PublishResul
     }
 
     let version = package.manifest.bundle.version.clone();
-    let tag = config
-        .tag
-        .clone()
-        .unwrap_or_else(|| format!("v{version}"));
+    let tag = config.tag.clone().unwrap_or_else(|| format!("v{version}"));
     let release_name = format!(
         "{} v{}",
         package.manifest.bundle.name, package.manifest.bundle.version

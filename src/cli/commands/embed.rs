@@ -64,9 +64,11 @@ fn run_human(
     println!("  Length: {} floats", embedding.len());
 
     // Calculate basic statistics
-    let (min, max, sum) = embedding.iter().fold((f32::MAX, f32::MIN, 0.0f32), |acc, &x| {
-        (acc.0.min(x), acc.1.max(x), acc.2 + x)
-    });
+    let (min, max, sum) = embedding
+        .iter()
+        .fold((f32::MAX, f32::MIN, 0.0f32), |acc, &x| {
+            (acc.0.min(x), acc.1.max(x), acc.2 + x)
+        });
     let mean = sum / embedding.len() as f32;
     let norm: f32 = embedding.iter().map(|x| x * x).sum::<f32>().sqrt();
 
@@ -156,9 +158,11 @@ fn run_robot(
     }
 
     // Calculate statistics
-    let (min, max, sum) = embedding.iter().fold((f32::MAX, f32::MIN, 0.0f32), |acc, &x| {
-        (acc.0.min(x), acc.1.max(x), acc.2 + x)
-    });
+    let (min, max, sum) = embedding
+        .iter()
+        .fold((f32::MAX, f32::MIN, 0.0f32), |acc, &x| {
+            (acc.0.min(x), acc.1.max(x), acc.2 + x)
+        });
     let mean = sum / embedding.len() as f32;
     let norm: f32 = embedding.iter().map(|x| x * x).sum::<f32>().sqrt();
     let non_zero = embedding.iter().filter(|&&x| x.abs() > 1e-10).count();

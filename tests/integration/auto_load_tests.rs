@@ -10,7 +10,12 @@ use crate::fixture::{TestFixture, TestSkill};
 use std::fs;
 
 /// Create a skill with context tags for testing.
-fn skill_with_context(name: &str, description: &str, project_types: &[&str], file_patterns: &[&str]) -> TestSkill {
+fn skill_with_context(
+    name: &str,
+    description: &str,
+    project_types: &[&str],
+    file_patterns: &[&str],
+) -> TestSkill {
     let patterns = file_patterns.join(", ");
 
     // Build frontmatter with context
@@ -39,65 +44,93 @@ context:
 /// Create a Rust project structure in the fixture.
 fn setup_rust_project(fixture: &TestFixture) {
     let cargo_toml = fixture.root.join("Cargo.toml");
-    fs::write(&cargo_toml, r#"
+    fs::write(
+        &cargo_toml,
+        r#"
 [package]
 name = "test-project"
 version = "0.1.0"
 edition = "2021"
-"#).unwrap();
+"#,
+    )
+    .unwrap();
 
     let src_dir = fixture.root.join("src");
     fs::create_dir_all(&src_dir).unwrap();
 
     let main_rs = src_dir.join("main.rs");
-    fs::write(&main_rs, r#"
+    fs::write(
+        &main_rs,
+        r#"
 fn main() {
     println!("Hello, world!");
 }
-"#).unwrap();
+"#,
+    )
+    .unwrap();
 
     let lib_rs = src_dir.join("lib.rs");
-    fs::write(&lib_rs, r#"
+    fs::write(
+        &lib_rs,
+        r#"
 pub fn add(a: i32, b: i32) -> i32 {
     a + b
 }
-"#).unwrap();
+"#,
+    )
+    .unwrap();
 }
 
 /// Create a Node.js project structure in the fixture.
 fn setup_node_project(fixture: &TestFixture) {
     let package_json = fixture.root.join("package.json");
-    fs::write(&package_json, r#"
+    fs::write(
+        &package_json,
+        r#"
 {
     "name": "test-project",
     "version": "1.0.0",
     "main": "index.js"
 }
-"#).unwrap();
+"#,
+    )
+    .unwrap();
 
     let index_js = fixture.root.join("index.js");
-    fs::write(&index_js, r#"
+    fs::write(
+        &index_js,
+        r#"
 console.log("Hello, world!");
-"#).unwrap();
+"#,
+    )
+    .unwrap();
 }
 
 /// Create a Python project structure in the fixture.
 fn setup_python_project(fixture: &TestFixture) {
     let pyproject = fixture.root.join("pyproject.toml");
-    fs::write(&pyproject, r#"
+    fs::write(
+        &pyproject,
+        r#"
 [project]
 name = "test-project"
 version = "0.1.0"
-"#).unwrap();
+"#,
+    )
+    .unwrap();
 
     let main_py = fixture.root.join("main.py");
-    fs::write(&main_py, r#"
+    fs::write(
+        &main_py,
+        r#"
 def main():
     print("Hello, world!")
 
 if __name__ == "__main__":
     main()
-"#).unwrap();
+"#,
+    )
+    .unwrap();
 }
 
 #[test]
@@ -124,7 +157,14 @@ fn auto_load_detects_rust_project() {
     setup_rust_project(&fixture);
 
     // Run auto-load with robot mode for parseable output
-    let output = fixture.run_ms(&["--robot", "load", "--auto", "--threshold", "0.1", "--dry-run"]);
+    let output = fixture.run_ms(&[
+        "--robot",
+        "load",
+        "--auto",
+        "--threshold",
+        "0.1",
+        "--dry-run",
+    ]);
 
     // Should succeed
     assert!(output.success, "Auto-load failed: {}", output.stderr);
@@ -159,7 +199,14 @@ fn auto_load_detects_node_project() {
     setup_node_project(&fixture);
 
     // Run auto-load
-    let output = fixture.run_ms(&["--robot", "load", "--auto", "--threshold", "0.1", "--dry-run"]);
+    let output = fixture.run_ms(&[
+        "--robot",
+        "load",
+        "--auto",
+        "--threshold",
+        "0.1",
+        "--dry-run",
+    ]);
 
     assert!(output.success, "Auto-load failed: {}", output.stderr);
     println!("stdout: {}", output.stdout);
@@ -174,22 +221,29 @@ fn auto_load_respects_threshold() {
         &["*.rs"],
     );
 
-    let fixture = TestFixture::with_indexed_skills(
-        "auto_load_respects_threshold",
-        &[rust_skill],
-    );
+    let fixture = TestFixture::with_indexed_skills("auto_load_respects_threshold", &[rust_skill]);
 
     setup_rust_project(&fixture);
 
     // With very high threshold, nothing should be loaded
     let output_high = fixture.run_ms(&[
-        "--robot", "load", "--auto", "--threshold", "0.99", "--dry-run"
+        "--robot",
+        "load",
+        "--auto",
+        "--threshold",
+        "0.99",
+        "--dry-run",
     ]);
     assert!(output_high.success);
 
     // With low threshold, skill should be considered
     let output_low = fixture.run_ms(&[
-        "--robot", "load", "--auto", "--threshold", "0.1", "--dry-run"
+        "--robot",
+        "load",
+        "--auto",
+        "--threshold",
+        "0.1",
+        "--dry-run",
     ]);
     assert!(output_low.success);
 
@@ -199,17 +253,9 @@ fn auto_load_respects_threshold() {
 
 #[test]
 fn auto_load_dry_run_does_not_modify_state() {
-    let skill = skill_with_context(
-        "test-skill",
-        "Test skill for dry run",
-        &["rust"],
-        &["*.rs"],
-    );
+    let skill = skill_with_context("test-skill", "Test skill for dry run", &["rust"], &["*.rs"]);
 
-    let fixture = TestFixture::with_indexed_skills(
-        "auto_load_dry_run",
-        &[skill],
-    );
+    let fixture = TestFixture::with_indexed_skills("auto_load_dry_run", &[skill]);
 
     setup_rust_project(&fixture);
 
@@ -222,18 +268,16 @@ fn auto_load_dry_run_does_not_modify_state() {
     // State should be unchanged
     let after = fixture.run_ms(&["list", "--loaded"]);
 
-    assert_eq!(before.stdout, after.stdout, "Dry run should not modify loaded skills");
+    assert_eq!(
+        before.stdout, after.stdout,
+        "Dry run should not modify loaded skills"
+    );
 }
 
 #[test]
 fn auto_load_multi_language_project() {
     // Create skills for both languages
-    let rust_skill = skill_with_context(
-        "rust-errors",
-        "Rust error handling",
-        &["rust"],
-        &["*.rs"],
-    );
+    let rust_skill = skill_with_context("rust-errors", "Rust error handling", &["rust"], &["*.rs"]);
     let python_skill = skill_with_context(
         "python-async",
         "Python async patterns",
@@ -241,17 +285,22 @@ fn auto_load_multi_language_project() {
         &["*.py"],
     );
 
-    let fixture = TestFixture::with_indexed_skills(
-        "auto_load_multi_language",
-        &[rust_skill, python_skill],
-    );
+    let fixture =
+        TestFixture::with_indexed_skills("auto_load_multi_language", &[rust_skill, python_skill]);
 
     // Set up both Rust and Python project markers
     setup_rust_project(&fixture);
     setup_python_project(&fixture);
 
     // Run auto-load
-    let output = fixture.run_ms(&["--robot", "load", "--auto", "--threshold", "0.1", "--dry-run"]);
+    let output = fixture.run_ms(&[
+        "--robot",
+        "load",
+        "--auto",
+        "--threshold",
+        "0.1",
+        "--dry-run",
+    ]);
 
     assert!(output.success, "Auto-load failed: {}", output.stderr);
     println!("Multi-language output: {}", output.stdout);
@@ -261,17 +310,9 @@ fn auto_load_multi_language_project() {
 
 #[test]
 fn auto_load_empty_project() {
-    let skill = skill_with_context(
-        "test-skill",
-        "Generic skill",
-        &["rust"],
-        &["*.rs"],
-    );
+    let skill = skill_with_context("test-skill", "Generic skill", &["rust"], &["*.rs"]);
 
-    let fixture = TestFixture::with_indexed_skills(
-        "auto_load_empty_project",
-        &[skill],
-    );
+    let fixture = TestFixture::with_indexed_skills("auto_load_empty_project", &[skill]);
 
     // Don't set up any project markers
 
@@ -279,7 +320,11 @@ fn auto_load_empty_project() {
     let output = fixture.run_ms(&["load", "--auto", "--dry-run"]);
 
     // Should succeed but find nothing relevant
-    assert!(output.success, "Auto-load failed on empty project: {}", output.stderr);
+    assert!(
+        output.success,
+        "Auto-load failed on empty project: {}",
+        output.stderr
+    );
 }
 
 #[test]
@@ -291,10 +336,7 @@ fn auto_load_confirm_mode() {
         &["*.rs"],
     );
 
-    let fixture = TestFixture::with_indexed_skills(
-        "auto_load_confirm_mode",
-        &[skill],
-    );
+    let fixture = TestFixture::with_indexed_skills("auto_load_confirm_mode", &[skill]);
 
     setup_rust_project(&fixture);
 
@@ -302,5 +344,9 @@ fn auto_load_confirm_mode() {
     // This tests that the --confirm flag is accepted
     let output = fixture.run_ms(&["load", "--auto", "--confirm", "--dry-run"]);
 
-    assert!(output.success, "Auto-load with confirm failed: {}", output.stderr);
+    assert!(
+        output.success,
+        "Auto-load with confirm failed: {}",
+        output.stderr
+    );
 }

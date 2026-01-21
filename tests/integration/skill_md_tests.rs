@@ -3,7 +3,7 @@
 //! These tests verify the SKILL.md generation functionality works correctly
 //! and produces valid markdown content.
 
-use ms::skill_md::{generate_skill_md_for_project, SkillMdGenerator};
+use ms::skill_md::{SkillMdGenerator, generate_skill_md_for_project};
 use tempfile::TempDir;
 
 /// Test that SKILL.md is generated at the correct path.
@@ -28,9 +28,18 @@ fn test_generated_skill_md_has_sections() {
 
     // Check required sections
     assert!(content.contains("# ms"), "Missing title");
-    assert!(content.contains("## Capabilities"), "Missing Capabilities section");
-    assert!(content.contains("## MCP Server"), "Missing MCP Server section");
-    assert!(content.contains("## Context Integration"), "Missing Context section");
+    assert!(
+        content.contains("## Capabilities"),
+        "Missing Capabilities section"
+    );
+    assert!(
+        content.contains("## MCP Server"),
+        "Missing MCP Server section"
+    );
+    assert!(
+        content.contains("## Context Integration"),
+        "Missing Context section"
+    );
     assert!(content.contains("## Examples"), "Missing Examples section");
 }
 
@@ -41,7 +50,10 @@ fn test_generated_skill_md_has_mcp_tools() {
     let content = generator.generate();
 
     // Check for MCP tools
-    assert!(content.contains("### Available MCP Tools"), "Missing MCP tools heading");
+    assert!(
+        content.contains("### Available MCP Tools"),
+        "Missing MCP tools heading"
+    );
     assert!(content.contains("`search`"), "Missing search tool");
     assert!(content.contains("`load`"), "Missing load tool");
     assert!(content.contains("`lint`"), "Missing lint tool");
@@ -67,7 +79,10 @@ fn test_generated_skill_md_has_robot_mode() {
     let generator = SkillMdGenerator::new();
     let content = generator.generate();
 
-    assert!(content.contains("### Robot Mode"), "Missing Robot Mode section");
+    assert!(
+        content.contains("### Robot Mode"),
+        "Missing Robot Mode section"
+    );
     assert!(content.contains("-O json"), "Missing robot mode flag");
 }
 
@@ -97,7 +112,10 @@ fn test_generate_skill_md_overwrites_existing() {
     generate_skill_md_for_project(temp.path()).unwrap();
 
     let content = std::fs::read_to_string(&skill_md_path).unwrap();
-    assert!(!content.contains("old content"), "Old content should be replaced");
+    assert!(
+        !content.contains("old content"),
+        "Old content should be replaced"
+    );
     assert!(content.contains("# ms"), "Should contain new content");
 }
 
@@ -127,7 +145,10 @@ fn test_generated_skill_md_has_mcp_startup() {
     let generator = SkillMdGenerator::new();
     let content = generator.generate();
 
-    assert!(content.contains("ms mcp serve"), "Missing MCP serve command");
+    assert!(
+        content.contains("ms mcp serve"),
+        "Missing MCP serve command"
+    );
     assert!(
         content.contains("stdio transport"),
         "Missing stdio transport docs"

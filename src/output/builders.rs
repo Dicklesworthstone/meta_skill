@@ -35,10 +35,7 @@ use rich_rust::renderables::{Panel, Table, Tree};
 /// * `results` - Tuples of (name, score, layer, description)
 /// * `width` - Terminal width for layout
 #[must_use]
-pub fn search_results_table(
-    results: &[(&str, f32, &str, &str)],
-    width: usize,
-) -> Table {
+pub fn search_results_table(results: &[(&str, f32, &str, &str)], width: usize) -> Table {
     let mut table = Table::new()
         .with_column(Column::new("#").justify(JustifyMethod::Right))
         .with_column(Column::new("Skill").style(Style::new().bold()))
@@ -74,10 +71,7 @@ pub fn search_results_table(
 ///
 /// Similar to `search_results_table` but includes the skill ID.
 #[must_use]
-pub fn search_results_table_with_id(
-    results: &[(&str, &str, f32, &str)],
-    width: usize,
-) -> Table {
+pub fn search_results_table_with_id(results: &[(&str, &str, f32, &str)], width: usize) -> Table {
     let mut table = Table::new()
         .with_column(Column::new("#").justify(JustifyMethod::Right))
         .with_column(Column::new("ID"))
@@ -119,9 +113,7 @@ pub fn skill_panel(name: &str, description: &str, layer: &str) -> String {
 /// Build a panel for displaying skill information with custom width.
 #[must_use]
 pub fn skill_panel_with_width(name: &str, description: &str, layer: &str, width: usize) -> String {
-    let content = format!(
-        "{description}\n\nLayer: {layer}"
-    );
+    let content = format!("{description}\n\nLayer: {layer}");
     let panel = Panel::from_text(&content)
         .title(name.to_string())
         .border_style(Style::new().color(Color::parse("cyan").unwrap_or(Color::default())));
@@ -137,7 +129,14 @@ pub fn skill_detail_panel(
     quality: f64,
     content: &str,
 ) -> String {
-    skill_detail_panel_with_width(name, description, layer, quality, content, DEFAULT_PANEL_WIDTH)
+    skill_detail_panel_with_width(
+        name,
+        description,
+        layer,
+        quality,
+        content,
+        DEFAULT_PANEL_WIDTH,
+    )
 }
 
 /// Build a panel for displaying skill with full content and custom width.
@@ -151,9 +150,7 @@ pub fn skill_detail_panel_with_width(
     width: usize,
 ) -> String {
     let quality_bar_str = quality_bar_plain(quality, 10);
-    let header = format!(
-        "{description}\n\nLayer: {layer}  Quality: {quality_bar_str}"
-    );
+    let header = format!("{description}\n\nLayer: {layer}  Quality: {quality_bar_str}");
     let full_content = format!("{header}\n\n{content}");
     let panel = Panel::from_text(&full_content)
         .title(name.to_string())
@@ -264,8 +261,7 @@ pub fn status_tree(checks: &[CheckResult]) -> Tree {
     }
 
     // Create root node
-    let root = TreeNode::new("Status")
-        .children(checks.iter().map(build_node).collect::<Vec<_>>());
+    let root = TreeNode::new("Status").children(checks.iter().map(build_node).collect::<Vec<_>>());
 
     Tree::new(root)
 }
@@ -286,8 +282,7 @@ pub fn status_tree_with_title(title: &str, checks: &[CheckResult]) -> Tree {
         node
     }
 
-    let root = TreeNode::new(title)
-        .children(checks.iter().map(build_node).collect::<Vec<_>>());
+    let root = TreeNode::new(title).children(checks.iter().map(build_node).collect::<Vec<_>>());
 
     Tree::new(root)
 }
@@ -323,7 +318,12 @@ pub fn error_panel_with_hint(title: &str, message: &str, hint: &str) -> String {
 
 /// Build a panel for displaying an error with suggestion and custom width.
 #[must_use]
-pub fn error_panel_with_hint_and_width(title: &str, message: &str, hint: &str, width: usize) -> String {
+pub fn error_panel_with_hint_and_width(
+    title: &str,
+    message: &str,
+    hint: &str,
+    width: usize,
+) -> String {
     let content = format!("{message}\n\nHint: {hint}");
     let panel = Panel::from_text(&content)
         .title(format!("✗ {title}"))
@@ -391,11 +391,7 @@ pub fn progress_line(current: u64, total: u64, message: &str, width: usize) -> S
     };
     let empty = width.saturating_sub(filled);
 
-    let bar = format!(
-        "[{}{}]",
-        "█".repeat(filled),
-        "░".repeat(empty)
-    );
+    let bar = format!("[{}{}]", "█".repeat(filled), "░".repeat(empty));
 
     format!("{message}: {bar} {percentage}% ({current}/{total})")
 }
@@ -416,11 +412,7 @@ pub fn progress_line_plain(current: u64, total: u64, message: &str, width: usize
     };
     let empty = width.saturating_sub(filled);
 
-    let bar = format!(
-        "[{}{}]",
-        "#".repeat(filled),
-        "-".repeat(empty)
-    );
+    let bar = format!("[{}{}]", "#".repeat(filled), "-".repeat(empty));
 
     format!("{message}: {bar} {percentage}% ({current}/{total})")
 }

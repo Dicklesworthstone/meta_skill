@@ -6,8 +6,8 @@
 //! - packing: < 50ms for constrained optimization
 //! - `vector_search`: < 50ms p99 for 1000 embeddings
 
-use std::hint::black_box;
 use criterion::{BenchmarkId, Criterion, Throughput, criterion_group, criterion_main};
+use std::hint::black_box;
 
 use ms::core::disclosure::PackMode;
 use ms::core::packing::{ConstrainedPacker, PackConstraints};

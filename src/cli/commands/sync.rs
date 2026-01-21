@@ -75,7 +75,9 @@ pub fn run(ctx: &AppContext, args: &SyncArgs) -> Result<()> {
     // Check if we should auto-reindex after sync
     let should_reindex = !args.dry_run
         && ctx.config.ru.auto_index
-        && reports.iter().any(|r| !r.cloned.is_empty() || !r.pulled.is_empty());
+        && reports
+            .iter()
+            .any(|r| !r.cloned.is_empty() || !r.pulled.is_empty());
 
     if ctx.output_format != OutputFormat::Human {
         let mut payload = serde_json::json!({

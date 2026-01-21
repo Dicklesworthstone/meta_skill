@@ -284,23 +284,13 @@ impl ContextualBandit {
     }
 
     /// Update the bandit with feedback for a skill.
-    pub fn update(
-        &mut self,
-        skill_id: &str,
-        features: &ContextFeatures,
-        feedback: &SkillFeedback,
-    ) {
+    pub fn update(&mut self, skill_id: &str, features: &ContextFeatures, feedback: &SkillFeedback) {
         let reward = super::rewards::compute_reward(feedback);
         self.update_with_reward(skill_id, features, reward);
     }
 
     /// Update with a raw reward value.
-    pub fn update_with_reward(
-        &mut self,
-        skill_id: &str,
-        features: &ContextFeatures,
-        reward: f32,
-    ) {
+    pub fn update_with_reward(&mut self, skill_id: &str, features: &ContextFeatures, reward: f32) {
         // Copy config values to avoid borrow conflicts
         let learning_rate = self.config.learning_rate;
         let regularization = self.config.regularization;
@@ -313,10 +303,13 @@ impl ContextualBandit {
 
         // Update feature weights via gradient descent
         let feature_vec = features.as_vec();
-        let predicted = sigmoid(arm.feature_weights.iter()
-            .zip(feature_vec.iter())
-            .map(|(w, f)| w * f)
-            .sum::<f32>());
+        let predicted = sigmoid(
+            arm.feature_weights
+                .iter()
+                .zip(feature_vec.iter())
+                .map(|(w, f)| w * f)
+                .sum::<f32>(),
+        );
 
         let error = reward - predicted;
 
@@ -336,7 +329,11 @@ impl ContextualBandit {
     }
 
     /// Get component scores for a skill.
-    fn get_components(&self, skill_id: &str, features: &ContextFeatures) -> RecommendationComponents {
+    fn get_components(
+        &self,
+        skill_id: &str,
+        features: &ContextFeatures,
+    ) -> RecommendationComponents {
         let arm = match self.arms.get(skill_id) {
             Some(a) => a,
             None => return RecommendationComponents::default(),
@@ -374,10 +371,7 @@ impl ContextualBandit {
 
         // Cold start explanation
         if arm.pulls < self.config.cold_start_threshold {
-            reasons.push(format!(
-                "exploring (only {} past uses)",
-                arm.pulls
-            ));
+            reasons.push(format!("exploring (only {} past uses)", arm.pulls));
         }
 
         // Context match
@@ -855,16 +849,32 @@ mod tests {
             bandit.update("rust-testing", &rust_features, &SkillFeedback::LoadedOnly);
 
             // User provides explicit positive feedback for rust-errors
-            bandit.update("rust-errors", &rust_features, &SkillFeedback::ExplicitHelpful);
+            bandit.update(
+                "rust-errors",
+                &rust_features,
+                &SkillFeedback::ExplicitHelpful,
+            );
 
             // User provides usage duration feedback for rust-testing (3 mins = moderate use)
-            bandit.update("rust-testing", &rust_features, &SkillFeedback::UsedDuration { minutes: 3 });
+            bandit.update(
+                "rust-testing",
+                &rust_features,
+                &SkillFeedback::UsedDuration { minutes: 3 },
+            );
         }
 
         // Session 6-10: Python project, user finds python-errors helpful
         for _ in 0..5 {
-            bandit.update("python-errors", &python_features, &SkillFeedback::LoadedOnly);
-            bandit.update("python-errors", &python_features, &SkillFeedback::ExplicitHelpful);
+            bandit.update(
+                "python-errors",
+                &python_features,
+                &SkillFeedback::LoadedOnly,
+            );
+            bandit.update(
+                "python-errors",
+                &python_features,
+                &SkillFeedback::ExplicitHelpful,
+            );
         }
 
         // Verify learning: In Rust context, rust-errors should rank higher

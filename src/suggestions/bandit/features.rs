@@ -140,7 +140,10 @@ impl UserHistory {
         self.total_skill_loads += 1;
 
         // Update per-skill count
-        *self.skill_load_counts.entry(skill_id.to_string()).or_insert(0) += 1;
+        *self
+            .skill_load_counts
+            .entry(skill_id.to_string())
+            .or_insert(0) += 1;
 
         // Update last load timestamp
         self.skill_last_load.insert(skill_id.to_string(), now);

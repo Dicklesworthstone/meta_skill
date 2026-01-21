@@ -42,7 +42,7 @@ impl Default for RrfConfig {
 
 impl RrfConfig {
     /// Create config with custom k value
-    #[must_use] 
+    #[must_use]
     pub fn with_k(k: f32) -> Self {
         Self {
             k,
@@ -51,7 +51,7 @@ impl RrfConfig {
     }
 
     /// Create config with custom weights
-    #[must_use] 
+    #[must_use]
     pub fn with_weights(bm25_weight: f32, semantic_weight: f32) -> Self {
         Self {
             bm25_weight,
@@ -92,7 +92,7 @@ pub struct HybridResult {
 /// # Returns
 ///
 /// Combined results sorted by RRF score
-#[must_use] 
+#[must_use]
 pub fn fuse_results(
     bm25_results: &[(String, f32)],
     semantic_results: &[(String, f32)],
@@ -156,7 +156,7 @@ pub fn fuse_results(
 }
 
 /// Simple fusion returning only (`skill_id`, score) pairs
-#[must_use] 
+#[must_use]
 pub fn fuse_simple(
     bm25_results: &[(String, f32)],
     semantic_results: &[(String, f32)],
@@ -169,7 +169,7 @@ pub fn fuse_simple(
 }
 
 /// Fuse results with limit
-#[must_use] 
+#[must_use]
 pub fn fuse_with_limit(
     bm25_results: &[(String, f32)],
     semantic_results: &[(String, f32)],

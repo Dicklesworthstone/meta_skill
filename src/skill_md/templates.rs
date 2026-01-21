@@ -33,9 +33,18 @@ pub const CONTEXT_SECTION: &str = r#"## Context Integration
 /// Basic example commands.
 #[allow(dead_code)]
 pub const EXAMPLE_COMMANDS: &[(&str, &str)] = &[
-    ("Find skills for error handling", "ms search \"rust error handling\""),
-    ("Load with full content", "ms load rust-error-patterns --level full"),
-    ("Get suggestions for current project", "ms suggest --explain"),
+    (
+        "Find skills for error handling",
+        "ms search \"rust error handling\"",
+    ),
+    (
+        "Load with full content",
+        "ms load rust-error-patterns --level full",
+    ),
+    (
+        "Get suggestions for current project",
+        "ms suggest --explain",
+    ),
     ("Validate a skill file", "ms lint SKILL.md"),
     ("Run health checks", "ms doctor"),
 ];
@@ -90,13 +99,19 @@ mod tests {
 
     #[test]
     fn test_example_commands_have_text() {
-        assert!(EXAMPLE_COMMANDS.iter().all(|(label, cmd)| !label.is_empty() && !cmd.is_empty()));
+        assert!(
+            EXAMPLE_COMMANDS
+                .iter()
+                .all(|(label, cmd)| !label.is_empty() && !cmd.is_empty())
+        );
     }
 
     #[test]
     fn test_robot_mode_examples_include_json_flag() {
-        assert!(ROBOT_MODE_EXAMPLES
-            .iter()
-            .all(|(_, cmd)| cmd.contains("-O json")));
+        assert!(
+            ROBOT_MODE_EXAMPLES
+                .iter()
+                .all(|(_, cmd)| cmd.contains("-O json"))
+        );
     }
 }

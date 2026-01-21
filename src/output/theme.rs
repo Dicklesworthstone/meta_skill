@@ -108,7 +108,9 @@ impl Theme {
     pub fn auto_detect() -> Self {
         match detect_terminal_background() {
             TerminalBackground::Light => ThemePreset::Light.to_theme(),
-            TerminalBackground::Dark | TerminalBackground::Unknown => ThemePreset::Default.to_theme(),
+            TerminalBackground::Dark | TerminalBackground::Unknown => {
+                ThemePreset::Default.to_theme()
+            }
         }
     }
 
@@ -617,7 +619,8 @@ impl ThemeColors {
     }
 
     pub fn set_str(&mut self, key: &str, style_str: &str) -> Result<(), ThemeError> {
-        let style = Style::parse(style_str).map_err(|err| ThemeError::InvalidStyle(err.to_string()))?;
+        let style =
+            Style::parse(style_str).map_err(|err| ThemeError::InvalidStyle(err.to_string()))?;
         self.set(key, style)
     }
 
@@ -1266,10 +1269,7 @@ pub fn detect_terminal_background() -> TerminalBackground {
     }
 
     if let Ok(val) = std::env::var("COLORFGBG") {
-        let bg = val
-            .split(';')
-            .last()
-            .or_else(|| val.split(':').last());
+        let bg = val.split(';').last().or_else(|| val.split(':').last());
         if let Some(code) = bg.and_then(|v| v.parse::<u8>().ok()) {
             if code == 7 || code == 15 || (248..=255).contains(&code) {
                 return TerminalBackground::Light;
@@ -1350,10 +1350,7 @@ fn strip_style_colors(style: &Style) -> Style {
     stripped.color = None;
     stripped.bgcolor = None;
 
-    if stripped.attributes.is_empty()
-        && stripped.link.is_none()
-        && stripped.link_id.is_none()
-    {
+    if stripped.attributes.is_empty() && stripped.link.is_none() && stripped.link_id.is_none() {
         return Style::new();
     }
 

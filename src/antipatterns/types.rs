@@ -17,7 +17,7 @@ impl AntiPatternId {
     }
 
     /// Generate a new unique ID
-    #[must_use] 
+    #[must_use]
     pub fn generate() -> Self {
         Self(format!("ap-{}", uuid::Uuid::new_v4().simple()))
     }
@@ -97,7 +97,7 @@ pub struct AntiPattern {
 
 impl AntiPattern {
     /// Create a new anti-pattern with the given rule
-    #[must_use] 
+    #[must_use]
     pub fn new(rule: NegativeRule) -> Self {
         let now = chrono::Utc::now();
         Self {
@@ -115,7 +115,7 @@ impl AntiPattern {
     }
 
     /// Check if this anti-pattern is orphaned (no positive counterpart)
-    #[must_use] 
+    #[must_use]
     pub const fn is_orphaned(&self) -> bool {
         self.constrains.is_none()
     }
@@ -176,7 +176,7 @@ pub struct AntiPatternEvidence {
 
 impl AntiPatternEvidence {
     /// Create new evidence from a source and incident
-    #[must_use] 
+    #[must_use]
     pub fn new(
         source: AntiPatternSource,
         session_id: SessionId,
@@ -247,7 +247,7 @@ pub enum RollbackType {
 
 impl RollbackType {
     /// Get a human-readable description
-    #[must_use] 
+    #[must_use]
     pub const fn description(&self) -> &'static str {
         match self {
             Self::GitReset => "git reset (discarded changes)",
@@ -283,7 +283,7 @@ pub enum FailureSignalType {
 
 impl FailureSignalType {
     /// Get a human-readable description
-    #[must_use] 
+    #[must_use]
     pub const fn description(&self) -> &'static str {
         match self {
             Self::TestFailure => "test failure",
@@ -419,7 +419,7 @@ pub enum AntiPatternSeverity {
 
 impl AntiPatternSeverity {
     /// Get a human-readable description
-    #[must_use] 
+    #[must_use]
     pub const fn description(&self) -> &'static str {
         match self {
             Self::Advisory => "advisory (suggestion to avoid)",
@@ -429,7 +429,7 @@ impl AntiPatternSeverity {
     }
 
     /// Minimum evidence count required for this severity
-    #[must_use] 
+    #[must_use]
     pub const fn min_evidence_count(&self) -> usize {
         match self {
             Self::Advisory => 1,
@@ -521,13 +521,13 @@ impl Default for AntiPatternSection {
 
 impl AntiPatternSection {
     /// Check if section is empty
-    #[must_use] 
+    #[must_use]
     pub fn is_empty(&self) -> bool {
         self.patterns.is_empty()
     }
 
     /// Render to markdown
-    #[must_use] 
+    #[must_use]
     pub fn to_markdown(&self) -> String {
         if self.patterns.is_empty() {
             return String::new();
@@ -563,7 +563,7 @@ pub struct FormattedAntiPattern {
 
 impl FormattedAntiPattern {
     /// Render to markdown
-    #[must_use] 
+    #[must_use]
     pub fn to_markdown(&self) -> String {
         let mut output = format!("### {}\n", self.rule);
         output.push_str(&format!(

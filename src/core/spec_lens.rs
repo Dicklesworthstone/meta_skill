@@ -10,7 +10,7 @@ pub struct SpecLens;
 
 impl SpecLens {
     /// Compile a `SkillSpec` to deterministic markdown.
-    #[must_use] 
+    #[must_use]
     pub fn compile(&self, spec: &SkillSpec) -> String {
         compile_markdown(spec)
     }
@@ -214,7 +214,7 @@ pub fn parse_markdown(content: &str) -> Result<SkillSpec> {
 }
 
 /// Compile a `SkillSpec` back to markdown.
-#[must_use] 
+#[must_use]
 pub fn compile_markdown(spec: &SkillSpec) -> String {
     let mut output = String::new();
 

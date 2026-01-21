@@ -85,7 +85,11 @@ impl SkillMdGenerator {
     fn write_header(&self, out: &mut String) {
         writeln!(out, "# ms — Meta Skill CLI").unwrap();
         writeln!(out).unwrap();
-        writeln!(out, "> Local-first skill management platform for AI coding agents").unwrap();
+        writeln!(
+            out,
+            "> Local-first skill management platform for AI coding agents"
+        )
+        .unwrap();
         writeln!(out).unwrap();
         writeln!(out, "> Version: {}", self.version).unwrap();
         writeln!(out).unwrap();
@@ -131,7 +135,11 @@ impl SkillMdGenerator {
         writeln!(out, "## MCP Server").unwrap();
         writeln!(out, "Start MCP server for native tool integration:").unwrap();
         writeln!(out, "```bash").unwrap();
-        writeln!(out, "ms mcp serve           # stdio transport (Claude Code)").unwrap();
+        writeln!(
+            out,
+            "ms mcp serve           # stdio transport (Claude Code)"
+        )
+        .unwrap();
         writeln!(out, "ms mcp serve --tcp-port 8080  # HTTP transport").unwrap();
         writeln!(out, "```").unwrap();
         writeln!(out).unwrap();
@@ -146,8 +154,16 @@ impl SkillMdGenerator {
     /// Write the context integration section.
     fn write_context_section(&self, out: &mut String) {
         writeln!(out, "## Context Integration").unwrap();
-        writeln!(out, "- Reads `.ms/config.toml` for project-specific settings").unwrap();
-        writeln!(out, "- Respects `NO_COLOR` and `FORCE_COLOR` environment variables").unwrap();
+        writeln!(
+            out,
+            "- Reads `.ms/config.toml` for project-specific settings"
+        )
+        .unwrap();
+        writeln!(
+            out,
+            "- Respects `NO_COLOR` and `FORCE_COLOR` environment variables"
+        )
+        .unwrap();
         writeln!(out, "- Auto-detects project type from marker files").unwrap();
         writeln!(out).unwrap();
     }

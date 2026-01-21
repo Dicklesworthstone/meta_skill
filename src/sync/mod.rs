@@ -12,5 +12,7 @@ pub use config::{
 };
 pub use engine::{SyncEngine, SyncOptions, SyncReport};
 pub use machine::{MachineIdentity, MachineMetadata};
-pub use ru::{RuClient, RuConflict, RuError, RuExitCode, RuRepoStatus, RuSyncOptions, RuSyncResult};
+pub use ru::{
+    RuClient, RuConflict, RuError, RuExitCode, RuRepoStatus, RuSyncOptions, RuSyncResult,
+};
 pub use state::{SkillSyncState, SkillSyncStatus, SyncState};

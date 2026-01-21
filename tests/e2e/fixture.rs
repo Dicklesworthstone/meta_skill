@@ -608,14 +608,17 @@ impl E2EFixture {
         // Capture environment if configured
         if fixture.config.capture_environment {
             fixture.environment = Some(fixture.capture_environment());
-            fixture.log_json(&LogEvent::new(
-                LogLevel::Info,
-                "environment",
-                "Environment captured",
-                &fixture.scenario_name,
-                0,
-                Duration::ZERO,
-            ).with_data(serde_json::to_value(&fixture.environment).unwrap_or_default()));
+            fixture.log_json(
+                &LogEvent::new(
+                    LogLevel::Info,
+                    "environment",
+                    "Environment captured",
+                    &fixture.scenario_name,
+                    0,
+                    Duration::ZERO,
+                )
+                .with_data(serde_json::to_value(&fixture.environment).unwrap_or_default()),
+            );
         }
 
         fixture
@@ -637,7 +640,13 @@ impl E2EFixture {
     }
 
     /// Create and log an event.
-    fn emit_event(&mut self, level: LogLevel, category: &str, message: &str, data: Option<serde_json::Value>) {
+    fn emit_event(
+        &mut self,
+        level: LogLevel,
+        category: &str,
+        message: &str,
+        data: Option<serde_json::Value>,
+    ) {
         let event = LogEvent::new(
             level,
             category,
@@ -662,8 +671,14 @@ impl E2EFixture {
     pub fn capture_environment(&self) -> EnvironmentInfo {
         let mut env_vars = BTreeMap::new();
         let relevant_vars = [
-            "HOME", "USER", "PATH", "RUST_BACKTRACE", "RUST_LOG",
-            "MS_ROOT", "MS_CONFIG", "CARGO_PKG_VERSION",
+            "HOME",
+            "USER",
+            "PATH",
+            "RUST_BACKTRACE",
+            "RUST_LOG",
+            "MS_ROOT",
+            "MS_CONFIG",
+            "CARGO_PKG_VERSION",
         ];
         for var in relevant_vars {
             if let Ok(val) = std::env::var(var) {
@@ -734,7 +749,10 @@ impl E2EFixture {
 
     /// Log environment information to console and JSON.
     pub fn log_environment(&mut self) {
-        let env = self.environment.clone().unwrap_or_else(|| self.capture_environment());
+        let env = self
+            .environment
+            .clone()
+            .unwrap_or_else(|| self.capture_environment());
 
         println!();
         println!("┌{}", "─".repeat(68));
@@ -749,7 +767,10 @@ impl E2EFixture {
             println!("│ ms: {}", ms_ver);
         }
         println!("│ CWD: {:?}", env.cwd);
-        println!("│ Tools: {:?}", env.tool_versions.keys().collect::<Vec<_>>());
+        println!(
+            "│ Tools: {:?}",
+            env.tool_versions.keys().collect::<Vec<_>>()
+        );
         println!("└{}", "─".repeat(68));
 
         self.emit_event(
@@ -769,13 +790,10 @@ impl E2EFixture {
         let db = self.db.as_ref()?;
         let db_path = self.ms_root.join("ms.db");
 
-        let size_bytes = std::fs::metadata(&db_path)
-            .map(|m| m.len())
-            .unwrap_or(0);
+        let size_bytes = std::fs::metadata(&db_path).map(|m| m.len()).unwrap_or(0);
 
-        let schema_version: Option<i64> = db
-            .query_row("PRAGMA user_version", [], |r| r.get(0))
-            .ok();
+        let schema_version: Option<i64> =
+            db.query_row("PRAGMA user_version", [], |r| r.get(0)).ok();
 
         let mut tables = BTreeMap::new();
 
@@ -827,12 +845,14 @@ impl E2EFixture {
         let sample_rows: Vec<serde_json::Value> = {
             let mut stmt = match db.prepare(&sample_query) {
                 Ok(s) => s,
-                Err(_) => return Some(TableSnapshot {
-                    name: table_name.to_string(),
-                    row_count,
-                    sample_rows: Vec::new(),
-                    columns,
-                }),
+                Err(_) => {
+                    return Some(TableSnapshot {
+                        name: table_name.to_string(),
+                        row_count,
+                        sample_rows: Vec::new(),
+                        columns,
+                    });
+                }
             };
 
             let col_count = stmt.column_count();
@@ -842,7 +862,10 @@ impl E2EFixture {
                 while let Ok(Some(row)) = query_rows.next() {
                     let mut row_map = serde_json::Map::new();
                     for i in 0..col_count {
-                        let col_name = columns.get(i).cloned().unwrap_or_else(|| format!("col{}", i));
+                        let col_name = columns
+                            .get(i)
+                            .cloned()
+                            .unwrap_or_else(|| format!("col{}", i));
                         let value: serde_json::Value = match row.get_ref(i) {
                             Ok(rusqlite::types::ValueRef::Null) => serde_json::Value::Null,
                             Ok(rusqlite::types::ValueRef::Integer(i)) => serde_json::json!(i),
@@ -911,7 +934,10 @@ impl E2EFixture {
                 #[cfg(unix)]
                 let mode = {
                     use std::os::unix::fs::PermissionsExt;
-                    metadata.as_ref().map(|m| m.permissions().mode()).unwrap_or(0)
+                    metadata
+                        .as_ref()
+                        .map(|m| m.permissions().mode())
+                        .unwrap_or(0)
                 };
 
                 let hash = if self.config.rich_fs_snapshots && size < 1_000_000 {
@@ -983,7 +1009,10 @@ impl E2EFixture {
             return None;
         }
         let len = self.checkpoints.len();
-        self.checkpoint_diff(&self.checkpoints[len - 2].name, &self.checkpoints[len - 1].name)
+        self.checkpoint_diff(
+            &self.checkpoints[len - 2].name,
+            &self.checkpoints[len - 1].name,
+        )
     }
 
     // ========================================================================
@@ -1013,8 +1042,16 @@ impl E2EFixture {
                 } else {
                     Duration::ZERO
                 };
-                let min = ops.iter().map(|o| o.duration).min().unwrap_or(Duration::ZERO);
-                let max = ops.iter().map(|o| o.duration).max().unwrap_or(Duration::ZERO);
+                let min = ops
+                    .iter()
+                    .map(|o| o.duration)
+                    .min()
+                    .unwrap_or(Duration::ZERO);
+                let max = ops
+                    .iter()
+                    .map(|o| o.duration)
+                    .max()
+                    .unwrap_or(Duration::ZERO);
 
                 (
                     cat.clone(),
@@ -1074,7 +1111,10 @@ impl E2EFixture {
             recent_events,
             db_state: self.snapshot_db(),
             fs_state: Some(self.snapshot_fs()),
-            environment: self.environment.clone().unwrap_or_else(|| self.capture_environment()),
+            environment: self
+                .environment
+                .clone()
+                .unwrap_or_else(|| self.capture_environment()),
             suggestions,
         }
     }
@@ -1156,7 +1196,10 @@ impl E2EFixture {
             println!("[CHECKPOINT] DB Tables: {}", db_snap.tables.len());
         }
         if let Some(ref fs_snap) = fs_snapshot {
-            println!("[CHECKPOINT] FS: {} files, {} bytes", fs_snap.file_count, fs_snap.total_size);
+            println!(
+                "[CHECKPOINT] FS: {} files, {} bytes",
+                fs_snap.file_count, fs_snap.total_size
+            );
         }
 
         // Record timing
@@ -1260,7 +1303,11 @@ impl E2EFixture {
         }
 
         // Emit JSON event
-        let level = if result.success { LogLevel::Info } else { LogLevel::Error };
+        let level = if result.success {
+            LogLevel::Info
+        } else {
+            LogLevel::Error
+        };
         self.emit_event(
             level,
             "command",
@@ -1460,9 +1507,16 @@ impl E2EFixture {
 
         // Emit final JSON report
         self.emit_event(
-            if all_passed { LogLevel::Info } else { LogLevel::Error },
+            if all_passed {
+                LogLevel::Info
+            } else {
+                LogLevel::Error
+            },
             "report",
-            &format!("Test {} completed", if all_passed { "PASSED" } else { "FAILED" }),
+            &format!(
+                "Test {} completed",
+                if all_passed { "PASSED" } else { "FAILED" }
+            ),
             Some(serde_json::json!({
                 "scenario": self.scenario_name,
                 "total_steps": self.step_count,
@@ -1477,7 +1531,10 @@ impl E2EFixture {
         // Generate HTML report if configured
         if self.config.html_report {
             let html = self.generate_html_report();
-            let html_path = self.config.html_report_path.clone()
+            let html_path = self
+                .config
+                .html_report_path
+                .clone()
                 .unwrap_or_else(|| self.root.join("report.html"));
             if let Err(e) = std::fs::write(&html_path, &html) {
                 eprintln!("[E2E] Failed to write HTML report: {}", e);
@@ -1497,7 +1554,9 @@ impl E2EFixture {
         let mut html = String::new();
 
         // HTML header
-        let _ = write!(html, r#"<!DOCTYPE html>
+        let _ = write!(
+            html,
+            r#"<!DOCTYPE html>
 <html lang="en">
 <head>
     <meta charset="UTF-8">
@@ -1625,7 +1684,9 @@ impl E2EFixture {
         );
 
         // Step Results Table
-        let _ = write!(html, r#"
+        let _ = write!(
+            html,
+            r#"
         <h2>Step Results</h2>
         <table>
             <thead>
@@ -1638,12 +1699,15 @@ impl E2EFixture {
                 </tr>
             </thead>
             <tbody>
-"#);
+"#
+        );
 
         for (i, step) in self.step_results.iter().enumerate() {
             let status_class = if step.success { "success" } else { "error" };
             let status_icon = if step.success { "✓" } else { "✗" };
-            let _ = write!(html, r#"
+            let _ = write!(
+                html,
+                r#"
                 <tr>
                     <td class="status">{}</td>
                     <td>{}</td>
@@ -1661,13 +1725,18 @@ impl E2EFixture {
             );
         }
 
-        let _ = write!(html, r#"
+        let _ = write!(
+            html,
+            r#"
             </tbody>
         </table>
-"#);
+"#
+        );
 
         // Timing Breakdown
-        let _ = write!(html, r#"
+        let _ = write!(
+            html,
+            r#"
         <h2>Timing Breakdown</h2>
         <table>
             <thead>
@@ -1681,10 +1750,13 @@ impl E2EFixture {
                 </tr>
             </thead>
             <tbody>
-"#);
+"#
+        );
 
         for (cat, timing) in &timing_report.by_category {
-            let _ = write!(html, r#"
+            let _ = write!(
+                html,
+                r#"
                 <tr>
                     <td>{}</td>
                     <td>{}</td>
@@ -1698,18 +1770,26 @@ impl E2EFixture {
             );
         }
 
-        let _ = write!(html, r#"
+        let _ = write!(
+            html,
+            r#"
             </tbody>
         </table>
-"#);
+"#
+        );
 
         // Checkpoints
-        let _ = write!(html, r#"
+        let _ = write!(
+            html,
+            r#"
         <h2>Checkpoints</h2>
-"#);
+"#
+        );
 
         for checkpoint in &self.checkpoints {
-            let _ = write!(html, r#"
+            let _ = write!(
+                html,
+                r#"
         <div class="checkpoint">
             <strong>{}</strong> (step {}, {:?})
             <div>Files: {}</div>
@@ -1721,7 +1801,9 @@ impl E2EFixture {
             );
 
             if let Some(ref db_snap) = checkpoint.db_snapshot {
-                let _ = write!(html, r#"
+                let _ = write!(
+                    html,
+                    r#"
             <div>DB Tables: {} (size: {} bytes)</div>
 "#,
                     db_snap.tables.len(),
@@ -1730,22 +1812,28 @@ impl E2EFixture {
             }
 
             if let Some(ref fs_snap) = checkpoint.fs_snapshot {
-                let _ = write!(html, r#"
+                let _ = write!(
+                    html,
+                    r#"
             <div>FS: {} files, {} bytes total</div>
 "#,
-                    fs_snap.file_count,
-                    fs_snap.total_size
+                    fs_snap.file_count, fs_snap.total_size
                 );
             }
 
-            let _ = write!(html, r#"
+            let _ = write!(
+                html,
+                r#"
         </div>
-"#);
+"#
+            );
         }
 
         // Environment info
         if let Some(ref env) = self.environment {
-            let _ = write!(html, r#"
+            let _ = write!(
+                html,
+                r#"
         <h2>Environment</h2>
         <pre>{}</pre>
 "#,
@@ -1754,7 +1842,9 @@ impl E2EFixture {
         }
 
         // Footer
-        let _ = write!(html, r#"
+        let _ = write!(
+            html,
+            r#"
         <footer style="margin-top: 2rem; color: var(--text-secondary); font-size: 0.875rem;">
             Generated at {} | ms E2E Test Framework
         </footer>
@@ -1885,9 +1975,8 @@ impl CheckpointDiff {
         let mut parts = Vec::new();
 
         if let Some(ref db) = self.db_diff {
-            let total_changes = db.added_tables.len()
-                + db.removed_tables.len()
-                + db.row_count_changes.len();
+            let total_changes =
+                db.added_tables.len() + db.removed_tables.len() + db.row_count_changes.len();
             if total_changes > 0 {
                 parts.push(format!("DB: {} changes", total_changes));
             }
@@ -1964,10 +2053,7 @@ fn get_os_version() -> String {
 
     #[cfg(target_os = "windows")]
     {
-        if let Ok(output) = Command::new("cmd")
-            .args(["/C", "ver"])
-            .output()
-        {
+        if let Ok(output) = Command::new("cmd").args(["/C", "ver"]).output() {
             if output.status.success() {
                 return String::from_utf8_lossy(&output.stdout).trim().to_string();
             }
@@ -2042,7 +2128,9 @@ fn generate_error_suggestions(error: &str, error_type: &str) -> Vec<String> {
         }
         "assertion" => {
             suggestions.push("Review the expected vs actual values".to_string());
-            suggestions.push("Check previous steps for issues that may have caused this failure".to_string());
+            suggestions.push(
+                "Check previous steps for issues that may have caused this failure".to_string(),
+            );
         }
         _ => {}
     }

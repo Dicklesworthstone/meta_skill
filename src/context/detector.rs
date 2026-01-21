@@ -34,7 +34,7 @@ pub enum ProjectType {
 
 impl ProjectType {
     /// Get a human-readable name for the project type.
-    #[must_use] 
+    #[must_use]
     pub const fn name(&self) -> &'static str {
         match self {
             Self::Rust => "Rust",
@@ -60,7 +60,7 @@ impl ProjectType {
     }
 
     /// Get a lowercase identifier for the project type.
-    #[must_use] 
+    #[must_use]
     pub const fn id(&self) -> &'static str {
         match self {
             Self::Rust => "rust",
@@ -101,7 +101,7 @@ pub struct ProjectMarker {
 
 impl ProjectMarker {
     /// Create a new marker with exact filename match.
-    #[must_use] 
+    #[must_use]
     pub const fn new(pattern: &'static str, project_type: ProjectType, confidence: f32) -> Self {
         Self {
             pattern,
@@ -112,7 +112,7 @@ impl ProjectMarker {
     }
 
     /// Create a new marker with glob pattern.
-    #[must_use] 
+    #[must_use]
     pub const fn glob(pattern: &'static str, project_type: ProjectType, confidence: f32) -> Self {
         Self {
             pattern,
@@ -123,7 +123,7 @@ impl ProjectMarker {
     }
 
     /// Check if this marker matches a given filename.
-    #[must_use] 
+    #[must_use]
     pub fn matches(&self, filename: &str) -> bool {
         if self.is_glob {
             self.glob_matches(filename)
@@ -208,7 +208,7 @@ impl Default for DefaultDetector {
 
 impl DefaultDetector {
     /// Create a new detector with the default marker registry.
-    #[must_use] 
+    #[must_use]
     pub fn new() -> Self {
         Self {
             markers: default_markers(),
@@ -216,7 +216,7 @@ impl DefaultDetector {
     }
 
     /// Create a detector with custom markers.
-    #[must_use] 
+    #[must_use]
     pub const fn with_markers(markers: Vec<ProjectMarker>) -> Self {
         Self { markers }
     }
@@ -227,7 +227,7 @@ impl DefaultDetector {
     }
 
     /// Get the marker registry.
-    #[must_use] 
+    #[must_use]
     pub fn markers(&self) -> &[ProjectMarker] {
         &self.markers
     }
@@ -511,9 +511,7 @@ mod tests {
         ));
 
         let results = detector.detect(dir.path());
-        let custom = results
-            .iter()
-            .find(|r| r.marker_pattern == "custom.marker");
+        let custom = results.iter().find(|r| r.marker_pattern == "custom.marker");
         assert!(custom.is_some());
     }
 }

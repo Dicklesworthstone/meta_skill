@@ -211,7 +211,11 @@ fn test_index_base_skill() {
     fixture.verify_db_state(
         |db| {
             let count: i64 = db
-                .query_row("SELECT COUNT(*) FROM skills WHERE id = 'error-handling-base'", [], |r| r.get(0))
+                .query_row(
+                    "SELECT COUNT(*) FROM skills WHERE id = 'error-handling-base'",
+                    [],
+                    |r| r.get(0),
+                )
                 .unwrap();
             count == 1
         },

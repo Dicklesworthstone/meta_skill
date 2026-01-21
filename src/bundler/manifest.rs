@@ -205,7 +205,7 @@ pub struct Ed25519Verifier {
 
 impl Ed25519Verifier {
     /// Create a new verifier with no trusted keys.
-    #[must_use] 
+    #[must_use]
     pub fn new() -> Self {
         Self {
             trusted_keys: std::collections::HashMap::new(),
@@ -295,7 +295,7 @@ impl Ed25519Signer {
     }
 
     /// Sign data and return a `BundleSignature`.
-    #[must_use] 
+    #[must_use]
     pub fn sign(&self, payload: &[u8], signer_name: &str) -> BundleSignature {
         let signature = self.keypair.sign(payload);
         BundleSignature {
@@ -306,13 +306,13 @@ impl Ed25519Signer {
     }
 
     /// Get the public key bytes (32 bytes).
-    #[must_use] 
+    #[must_use]
     pub fn public_key(&self) -> &[u8] {
         self.keypair.public_key().as_ref()
     }
 
     /// Get the key ID.
-    #[must_use] 
+    #[must_use]
     pub fn key_id(&self) -> &str {
         &self.key_id
     }
@@ -642,7 +642,7 @@ checksum = "sha256:abc123"
     #[test]
     fn validate_rejects_unsafe_paths() {
         let mut manifest = BundleManifest::from_toml_str(SAMPLE_TOML).unwrap();
-        
+
         // Absolute path
         manifest.skills[0].path = PathBuf::from("/etc/passwd");
         let err = manifest.validate().unwrap_err();
@@ -873,7 +873,10 @@ checksum = "sha256:abc123"
         verifier.add_key("publisher-key", public_key);
 
         let result = manifest.verify_signatures(payload, &verifier);
-        assert!(result.is_ok(), "Should verify trusted signature and skip unknown one");
+        assert!(
+            result.is_ok(),
+            "Should verify trusted signature and skip unknown one"
+        );
     }
 
     #[test]

@@ -4,12 +4,12 @@ use std::sync::Arc;
 use std::time::Instant;
 
 use chrono::{DateTime, Utc};
-use git2::{build::CheckoutBuilder, Cred, RemoteCallbacks, Repository};
+use git2::{Cred, RemoteCallbacks, Repository, build::CheckoutBuilder};
 use serde::Serialize;
 use sha2::{Digest, Sha256};
 
-use crate::core::SkillSpec;
 use crate::config::RuConfig;
+use crate::core::SkillSpec;
 use crate::error::{MsError, Result};
 use crate::storage::{Database, GitArchive, TxManager};
 
@@ -42,7 +42,7 @@ pub struct SyncReport {
 }
 
 impl SyncReport {
-    #[must_use] 
+    #[must_use]
     pub fn summary_line(&self) -> String {
         format!(
             "{}: ↓{} +{} ↑{} ⚠{} ↯{}",
@@ -95,17 +95,17 @@ impl SyncEngine {
         }
     }
 
-    #[must_use] 
+    #[must_use]
     pub const fn config(&self) -> &SyncConfig {
         &self.config
     }
 
-    #[must_use] 
+    #[must_use]
     pub const fn state(&self) -> &SyncState {
         &self.state
     }
 
-    #[must_use] 
+    #[must_use]
     pub const fn machine(&self) -> &MachineIdentity {
         &self.machine
     }
@@ -130,9 +130,7 @@ impl SyncEngine {
             .find(|r| r.name == remote_name)
             .cloned()
         else {
-            return Err(MsError::Config(format!(
-                "remote not found: {remote_name}"
-            )));
+            return Err(MsError::Config(format!("remote not found: {remote_name}")));
         };
 
         let start = Instant::now();
@@ -210,7 +208,8 @@ impl SyncEngine {
         let result = client.sync(&ru_options)?;
         report.cloned.extend(result.cloned.clone());
         report.pulled.extend(result.pulled.clone());
-        report.conflicts
+        report
+            .conflicts
             .extend(result.conflicts.iter().map(|c| c.repo.clone()));
         report.errors.extend(
             result
@@ -263,11 +262,12 @@ impl SyncEngine {
             let local = local_map.get(&id);
             let remote_snap = remote_map.get(&id);
 
-            let base_hash = self
-                .state
-                .skill_states
-                .get(&id)
-                .and_then(|state| state.remote_hashes.get(&remote.name).map(std::string::String::as_str));
+            let base_hash = self.state.skill_states.get(&id).and_then(|state| {
+                state
+                    .remote_hashes
+                    .get(&remote.name)
+                    .map(std::string::String::as_str)
+            });
 
             let status = determine_sync_status(local, remote_snap, base_hash);
 
@@ -376,7 +376,12 @@ impl SyncEngine {
 
         if needs_git_push && !options.dry_run {
             if let Some(auth) = git_auth.as_ref() {
-                push_git_repo(remote_git.repo(), &remote.url, remote.branch.as_deref(), auth)?;
+                push_git_repo(
+                    remote_git.repo(),
+                    &remote.url,
+                    remote.branch.as_deref(),
+                    auth,
+                )?;
             }
         }
 
@@ -541,7 +546,7 @@ impl SyncEngine {
                     continue;
                 }
             };
-            
+
             let hash = match hash_skill_spec(&spec) {
                 Ok(h) => h,
                 Err(e) => {
@@ -549,7 +554,7 @@ impl SyncEngine {
                     continue;
                 }
             };
-            
+
             // Determine modified time: check bulk result, fallback to FS
             let modified = if let Some(rel_path) = id_to_path.get(&id) {
                 if let Some(time) = modified_times.get(rel_path) {
@@ -558,10 +563,10 @@ impl SyncEngine {
                     // Fallback to FS metadata
                     let abs_path = archive.root().join(rel_path);
                     match std::fs::metadata(&abs_path) {
-                        Ok(metadata) => {
-                            metadata.modified().map_or_else(|_| Utc::now(), DateTime::<Utc>::from)
-                        },
-                        Err(_) => Utc::now()
+                        Ok(metadata) => metadata
+                            .modified()
+                            .map_or_else(|_| Utc::now(), DateTime::<Utc>::from),
+                        Err(_) => Utc::now(),
                     }
                 }
             } else {
@@ -662,7 +667,11 @@ fn sync_git_repo(
     fetch.remote_callbacks(callbacks);
 
     remote
-        .fetch(&["refs/heads/*:refs/remotes/origin/*"], Some(&mut fetch), None)
+        .fetch(
+            &["refs/heads/*:refs/remotes/origin/*"],
+            Some(&mut fetch),
+            None,
+        )
         .map_err(MsError::Git)?;
 
     let branch = resolve_branch_name(repo, branch_override)?;
@@ -754,7 +763,10 @@ fn resolve_branch_name(repo: &Repository, branch_override: Option<&str>) -> Resu
 #[derive(Debug, Clone)]
 enum ResolvedAuth {
     Default,
-    Token { token: String, username: Option<String> },
+    Token {
+        token: String,
+        username: Option<String>,
+    },
     SshKey {
         key_path: PathBuf,
         public_key: Option<PathBuf>,
@@ -766,10 +778,12 @@ enum ResolvedAuth {
 fn resolve_auth(remote: &RemoteConfig) -> Result<ResolvedAuth> {
     match remote.auth.as_ref() {
         None => Ok(ResolvedAuth::Default),
-        Some(RemoteAuth::Token { token_env, username }) => {
-            let token = std::env::var(token_env).map_err(|_| {
-                MsError::Config(format!("missing token env var: {token_env}"))
-            })?;
+        Some(RemoteAuth::Token {
+            token_env,
+            username,
+        }) => {
+            let token = std::env::var(token_env)
+                .map_err(|_| MsError::Config(format!("missing token env var: {token_env}")))?;
             Ok(ResolvedAuth::Token {
                 token,
                 username: username.clone(),
@@ -780,13 +794,13 @@ fn resolve_auth(remote: &RemoteConfig) -> Result<ResolvedAuth> {
             public_key,
             passphrase_env,
         }) => {
-            let passphrase = match passphrase_env {
-                Some(env) => Some(
-                    std::env::var(env)
-                        .map_err(|_| MsError::Config(format!("missing passphrase env var: {env}")))?,
-                ),
-                None => None,
-            };
+            let passphrase =
+                match passphrase_env {
+                    Some(env) => Some(std::env::var(env).map_err(|_| {
+                        MsError::Config(format!("missing passphrase env var: {env}"))
+                    })?),
+                    None => None,
+                };
             Ok(ResolvedAuth::SshKey {
                 key_path: key_path.clone(),
                 public_key: public_key.clone(),
@@ -815,10 +829,7 @@ fn build_callbacks(auth: &ResolvedAuth) -> Result<RemoteCallbacks<'static>> {
             passphrase,
             username,
         } => {
-            let user = username
-                .as_deref()
-                .or(username_from_url)
-                .unwrap_or("git");
+            let user = username.as_deref().or(username_from_url).unwrap_or("git");
             Cred::ssh_key(
                 user,
                 public_key.as_deref(),
@@ -936,10 +947,10 @@ mod tests {
         // Reproduce the LWW bug scenario from legacy logic
         let local = make_snap("hashA", 100); // Modified older
         let remote = make_snap("hashB", 50); // Modified newer
-        
+
         // In legacy LWW logic: remote > local -> RemoteAhead.
         // This would overwrite local changes (hashA).
-        
+
         // In new 3-way logic:
         // Case 1: We started from hash1.
         // Local changed hash1 -> hashA.

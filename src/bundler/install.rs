@@ -43,7 +43,7 @@ impl<V: SignatureVerifier> Default for InstallOptions<'_, V> {
 impl<'a, V: SignatureVerifier> InstallOptions<'a, V> {
     /// Create options that skip signature verification (for development/testing).
     /// Both unsigned bundles and signed bundles will be accepted without verification.
-    #[must_use] 
+    #[must_use]
     pub const fn allow_unsigned() -> Self {
         Self {
             allow_unsigned: true,
@@ -248,7 +248,10 @@ fn ensure_safe_id(id: &str) -> Result<()> {
     }
     // Only allow alphanumeric, hyphen, underscore, and dot
     // This prevents path separators (/, \), control characters, and other weirdness
-    if !id.chars().all(|c| c.is_alphanumeric() || c == '-' || c == '_' || c == '.') {
+    if !id
+        .chars()
+        .all(|c| c.is_alphanumeric() || c == '-' || c == '_' || c == '.')
+    {
         return Err(MsError::ValidationFailed(format!(
             "skill id contains invalid characters (allowed: a-z, A-Z, 0-9, -, _, .): {id}"
         )));
@@ -267,7 +270,10 @@ fn ensure_safe_id(id: &str) -> Result<()> {
         _ => {
             if (stem.starts_with("COM") || stem.starts_with("LPT"))
                 && stem.len() == 4
-                && stem.chars().nth(3).is_some_and(|c| c.is_ascii_digit() && c != '0')
+                && stem
+                    .chars()
+                    .nth(3)
+                    .is_some_and(|c| c.is_ascii_digit() && c != '0')
             {
                 return Err(MsError::ValidationFailed(format!(
                     "skill id '{id}' is a reserved filename on Windows"

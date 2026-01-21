@@ -8,7 +8,7 @@ use crate::app::AppContext;
 use crate::cli::output::OutputFormat;
 use crate::cli::output::{HumanLayout, emit_json};
 use crate::error::{MsError, Result};
-use crate::suggestions::bandit::{ContextualBandit, ContextFeatures, SkillFeedback};
+use crate::suggestions::bandit::{ContextFeatures, ContextualBandit, SkillFeedback};
 
 #[derive(Args, Debug)]
 pub struct FeedbackArgs {
@@ -109,7 +109,8 @@ fn run_add(ctx: &AppContext, args: &FeedbackAddArgs) -> Result<()> {
         .kv(
             "Rating",
             &record
-                .rating.map_or_else(|| "-".to_string(), |r| r.to_string()),
+                .rating
+                .map_or_else(|| "-".to_string(), |r| r.to_string()),
         )
         .kv(
             "Comment",
@@ -147,7 +148,8 @@ fn run_list(ctx: &AppContext, args: &FeedbackListArgs) -> Result<()> {
     for record in records {
         let label = format!("{} ({})", record.skill_id, record.feedback_type);
         let rating = record
-            .rating.map_or_else(|| "-".to_string(), |r| r.to_string());
+            .rating
+            .map_or_else(|| "-".to_string(), |r| r.to_string());
         let comment = record.comment.unwrap_or_else(|| "-".to_string());
         layout.kv(&label, &format!("rating {rating} · {comment}"));
     }
@@ -204,7 +206,9 @@ fn update_contextual_bandit(
         "negative" => SkillFeedback::ExplicitNotHelpful { reason: None },
         "rating" => {
             let stars = rating.unwrap_or(3) as u8;
-            SkillFeedback::Rating { stars: stars.clamp(1, 5) }
+            SkillFeedback::Rating {
+                stars: stars.clamp(1, 5),
+            }
         }
         _ => SkillFeedback::LoadedOnly, // Unknown type, treat as minimal signal
     };

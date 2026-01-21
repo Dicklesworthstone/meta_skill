@@ -67,12 +67,13 @@ pub struct ConditionContext<'a> {
 }
 
 impl ConditionContext<'_> {
-    #[must_use] 
+    #[must_use]
     pub fn evaluate(&self, condition: &SliceCondition) -> bool {
         match condition {
-            SliceCondition::TechStack { value } => {
-                self.tech_stacks.iter().any(|s| s.eq_ignore_ascii_case(value))
-            }
+            SliceCondition::TechStack { value } => self
+                .tech_stacks
+                .iter()
+                .any(|s| s.eq_ignore_ascii_case(value)),
             SliceCondition::FileExists { value } => {
                 if is_safe_relative_path(value) {
                     self.working_dir.join(value).exists()
@@ -81,13 +82,13 @@ impl ConditionContext<'_> {
                 }
             }
             SliceCondition::EnvVar { value } => std::env::var(value).is_ok(),
-            SliceCondition::DependsOn { skill_id, slice_id } => {
-                self.loaded_slices.contains(&(skill_id.clone(), slice_id.clone()))
-            }
+            SliceCondition::DependsOn { skill_id, slice_id } => self
+                .loaded_slices
+                .contains(&(skill_id.clone(), slice_id.clone())),
         }
     }
 
-    #[must_use] 
+    #[must_use]
     pub fn evaluate_all(&self, conditions: &[SliceCondition]) -> bool {
         conditions.iter().all(|c| self.evaluate(c))
     }
@@ -100,7 +101,9 @@ fn is_safe_relative_path(path_str: &str) -> bool {
     }
     for component in path.components() {
         match component {
-            std::path::Component::ParentDir | std::path::Component::RootDir | std::path::Component::Prefix(_) => {
+            std::path::Component::ParentDir
+            | std::path::Component::RootDir
+            | std::path::Component::Prefix(_) => {
                 return false;
             }
             _ => {}
@@ -115,7 +118,7 @@ pub struct MetaSkillManager<'a> {
 }
 
 impl<'a> MetaSkillManager<'a> {
-    #[must_use] 
+    #[must_use]
     pub const fn new(ctx: &'a AppContext) -> Self {
         Self { ctx }
     }
@@ -156,7 +159,8 @@ impl<'a> MetaSkillManager<'a> {
 
         // Sort by priority (higher first) then by required status
         resolved_slices.sort_by(|a, b| {
-            b.required.cmp(&a.required)
+            b.required
+                .cmp(&a.required)
                 .then_with(|| b.priority.cmp(&a.priority))
         });
 
@@ -174,11 +178,8 @@ impl<'a> MetaSkillManager<'a> {
         }
 
         // Pack slices within budget
-        let (packed_slices, tokens_used) = self.pack_within_budget(
-            resolved_slices,
-            token_budget,
-            &mut skipped,
-        );
+        let (packed_slices, tokens_used) =
+            self.pack_within_budget(resolved_slices, token_budget, &mut skipped);
 
         // Generate packed content
         let packed_content = self.render_packed_content(&packed_slices, meta_skill);
@@ -286,7 +287,11 @@ impl<'a> MetaSkillManager<'a> {
         SliceResolution::Resolved(resolved)
     }
 
-    fn select_by_level(&self, slices: &[SkillSlice], level: Option<MetaDisclosureLevel>) -> Vec<SkillSlice> {
+    fn select_by_level(
+        &self,
+        slices: &[SkillSlice],
+        level: Option<MetaDisclosureLevel>,
+    ) -> Vec<SkillSlice> {
         use crate::core::skill::SliceType;
 
         let level = level.unwrap_or(MetaDisclosureLevel::Core);
@@ -299,7 +304,13 @@ impl<'a> MetaSkillManager<'a> {
                         matches!(s.slice_type, SliceType::Overview | SliceType::Policy)
                     }
                     MetaDisclosureLevel::Extended => {
-                        matches!(s.slice_type, SliceType::Overview | SliceType::Policy | SliceType::Example | SliceType::Command)
+                        matches!(
+                            s.slice_type,
+                            SliceType::Overview
+                                | SliceType::Policy
+                                | SliceType::Example
+                                | SliceType::Command
+                        )
                     }
                     MetaDisclosureLevel::Deep => {
                         // Include all slice types
@@ -329,9 +340,9 @@ impl<'a> MetaSkillManager<'a> {
 
         for slice in slices {
             let slice_cost = slice.token_estimate + TOKEN_OVERHEAD_PER_SLICE;
-            
+
             if slice.required {
-                // Required slices always included (we already verified they fit total budget, 
+                // Required slices always included (we already verified they fit total budget,
                 // though individual packing might slightly exceed if we didn't account for overhead before)
                 used += slice_cost;
                 packed.push(slice);
@@ -359,7 +370,8 @@ impl<'a> MetaSkillManager<'a> {
         output.push_str("---\n\n");
 
         // Group slices by skill for better readability
-        let mut by_skill: std::collections::HashMap<&str, Vec<&ResolvedSlice>> = std::collections::HashMap::new();
+        let mut by_skill: std::collections::HashMap<&str, Vec<&ResolvedSlice>> =
+            std::collections::HashMap::new();
         for slice in slices {
             by_skill.entry(&slice.skill_id).or_default().push(slice);
         }
@@ -525,7 +537,9 @@ mod tests {
             loaded_slices: &HashSet::new(),
         };
 
-        let conditions = vec![SliceCondition::TechStack { value: "rust".to_string() }];
+        let conditions = vec![SliceCondition::TechStack {
+            value: "rust".to_string(),
+        }];
         assert!(ctx.evaluate_all(&conditions));
     }
 
@@ -537,7 +551,9 @@ mod tests {
             loaded_slices: &HashSet::new(),
         };
 
-        let conditions = vec![SliceCondition::TechStack { value: "rust".to_string() }];
+        let conditions = vec![SliceCondition::TechStack {
+            value: "rust".to_string(),
+        }];
         assert!(!ctx.evaluate_all(&conditions));
     }
 
@@ -553,8 +569,13 @@ mod tests {
         };
 
         let conditions = vec![
-            SliceCondition::TechStack { value: "rust".to_string() },
-            SliceCondition::DependsOn { skill_id: "skill-a".to_string(), slice_id: "slice-1".to_string() },
+            SliceCondition::TechStack {
+                value: "rust".to_string(),
+            },
+            SliceCondition::DependsOn {
+                skill_id: "skill-a".to_string(),
+                slice_id: "slice-1".to_string(),
+            },
         ];
         assert!(ctx.evaluate_all(&conditions));
     }
@@ -568,8 +589,12 @@ mod tests {
         };
 
         let conditions = vec![
-            SliceCondition::TechStack { value: "rust".to_string() },  // true
-            SliceCondition::TechStack { value: "python".to_string() }, // false
+            SliceCondition::TechStack {
+                value: "rust".to_string(),
+            }, // true
+            SliceCondition::TechStack {
+                value: "python".to_string(),
+            }, // false
         ];
         assert!(!ctx.evaluate_all(&conditions));
     }

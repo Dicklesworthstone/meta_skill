@@ -140,10 +140,7 @@ fn add_favorite(ctx: &AppContext, skill: &str) -> Result<()> {
             skill_id.cyan()
         );
         println!();
-        println!(
-            "{}",
-            "This skill will be boosted in suggestions.".dimmed()
-        );
+        println!("{}", "This skill will be boosted in suggestions.".dimmed());
     }
 
     Ok(())

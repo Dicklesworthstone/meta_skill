@@ -29,7 +29,7 @@ pub struct CassClient {
 
 impl CassClient {
     /// Create a new CASS client with default settings
-    #[must_use] 
+    #[must_use]
     pub fn new() -> Self {
         Self {
             cass_bin: PathBuf::from("cass"),
@@ -230,7 +230,9 @@ fn command_string(cmd: &Command) -> String {
         .get_args()
         .map(|arg| {
             let s = arg.to_string_lossy();
-            if s.chars().any(|c| c.is_whitespace() || "()[]{}$|&;<>`'\"*?!".contains(c)) {
+            if s.chars()
+                .any(|c| c.is_whitespace() || "()[]{}$|&;<>`'\"*?!".contains(c))
+            {
                 format!("'{}'", s.replace('\'', "'\\''"))
             } else {
                 s.to_string()
@@ -270,9 +272,7 @@ fn classify_cass_error(exit_code: i32, stderr: &str) -> MsError {
     }
 
     // Default: CASS unavailable/generic error
-    MsError::CassUnavailable(format!(
-        "CASS command failed (exit {exit_code}): {stderr}"
-    ))
+    MsError::CassUnavailable(format!("CASS command failed (exit {exit_code}): {stderr}"))
 }
 
 // =============================================================================

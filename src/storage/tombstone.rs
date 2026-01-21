@@ -40,7 +40,7 @@ pub struct TombstoneManager {
 
 impl TombstoneManager {
     /// Create a new tombstone manager.
-    #[must_use] 
+    #[must_use]
     pub fn new(ms_root: &Path) -> Self {
         let tombstone_dir = ms_root.join("tombstones");
         Self {
@@ -320,7 +320,10 @@ impl TombstoneManager {
         // UUID format: 8-4-4-4-12 hex chars with hyphens
         // e.g., 550e8400-e29b-41d4-a716-446655440000
         if !id.chars().all(|c| c.is_ascii_hexdigit() || c == '-') {
-            return Err(MsError::ValidationFailed("invalid tombstone ID: contains invalid characters (expected UUID format)".to_string()));
+            return Err(MsError::ValidationFailed(
+                "invalid tombstone ID: contains invalid characters (expected UUID format)"
+                    .to_string(),
+            ));
         }
         Ok(())
     }

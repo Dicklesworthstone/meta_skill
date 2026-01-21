@@ -249,10 +249,7 @@ fn show_evidence_index_human(
     println!();
     println!(
         "{}",
-        format!(
-            "Jump to source: ms evidence show {skill_id} --rule <rule-id>"
-        )
-        .dimmed()
+        format!("Jump to source: ms evidence show {skill_id} --rule <rule-id>").dimmed()
     );
 
     Ok(())
@@ -264,10 +261,7 @@ fn show_rule_evidence_human(
     evidence: &[EvidenceRef],
     show_excerpts: bool,
 ) -> Result<()> {
-    println!(
-        "{}",
-        format!("Evidence for {skill_id}/{rule_id}").bold()
-    );
+    println!("{}", format!("Evidence for {skill_id}/{rule_id}").bold());
     println!("{}", "═".repeat(50));
     println!();
 

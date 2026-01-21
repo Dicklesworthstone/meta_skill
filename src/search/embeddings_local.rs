@@ -53,7 +53,7 @@ impl LocalEmbedder {
     }
 
     /// Check if local embeddings are available
-    #[must_use] 
+    #[must_use]
     pub const fn is_available() -> bool {
         false
     }

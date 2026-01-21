@@ -168,11 +168,7 @@ impl<'a> SkillCard<'a> {
 
     fn format_tsv(&self) -> String {
         // Escape tabs and newlines in description
-        let desc = self
-            .skill
-            .description
-            .replace('\t', " ")
-            .replace('\n', " ");
+        let desc = self.skill.description.replace('\t', " ").replace('\n', " ");
 
         format!(
             "{}\t{}\t{}\t{}\t{:.2}\t{}",

@@ -39,21 +39,53 @@ pub struct RuleClassifier;
 // Precompiled patterns for rules
 static IMPERATIVE_STARTERS: LazyLock<Vec<&'static str>> = LazyLock::new(|| {
     vec![
-        "always", "never", "must", "should", "do not", "don't",
-        "ensure", "make sure", "remember to", "be sure to",
-        "prefer", "avoid", "use", "keep",
+        "always",
+        "never",
+        "must",
+        "should",
+        "do not",
+        "don't",
+        "ensure",
+        "make sure",
+        "remember to",
+        "be sure to",
+        "prefer",
+        "avoid",
+        "use",
+        "keep",
     ]
 });
 
 static RULE_MARKERS: LazyLock<Vec<&'static str>> = LazyLock::new(|| {
-    vec!["rule:", "guideline:", "policy:", "principle:", "requirement:"]
+    vec![
+        "rule:",
+        "guideline:",
+        "policy:",
+        "principle:",
+        "requirement:",
+    ]
 });
 
 static ACTION_VERBS: LazyLock<Vec<&'static str>> = LazyLock::new(|| {
     vec![
-        "use", "avoid", "prefer", "implement", "create", "handle",
-        "return", "throw", "catch", "log", "validate", "check",
-        "ensure", "verify", "test", "write", "read", "call",
+        "use",
+        "avoid",
+        "prefer",
+        "implement",
+        "create",
+        "handle",
+        "return",
+        "throw",
+        "catch",
+        "log",
+        "validate",
+        "check",
+        "ensure",
+        "verify",
+        "test",
+        "write",
+        "read",
+        "call",
     ]
 });
 
@@ -67,11 +99,7 @@ impl BlockClassifier for RuleClassifier {
         for starter in IMPERATIVE_STARTERS.iter() {
             if lower.starts_with(starter) || lower.starts_with(&format!("- {starter}")) {
                 score += 0.4;
-                signals.push(ClassificationSignal::new(
-                    "imperative_start",
-                    *starter,
-                    0.4,
-                ));
+                signals.push(ClassificationSignal::new("imperative_start", *starter, 0.4));
                 break;
             }
         }
@@ -155,9 +183,17 @@ pub struct ExampleClassifier;
 
 static EXAMPLE_MARKERS: LazyLock<Vec<&'static str>> = LazyLock::new(|| {
     vec![
-        "example:", "for example:", "for instance:", "e.g.",
-        "such as:", "like this:", "here's how:", "here is how:",
-        "consider:", "sample:", "demo:",
+        "example:",
+        "for example:",
+        "for instance:",
+        "e.g.",
+        "such as:",
+        "like this:",
+        "here's how:",
+        "here is how:",
+        "consider:",
+        "sample:",
+        "demo:",
     ]
 });
 
@@ -224,9 +260,24 @@ impl BlockClassifier for ExampleClassifier {
         // Code-like syntax indicators (not in fences)
         if !block.contains("```") {
             let code_indicators = [
-                "fn ", "def ", "function ", "class ", "import ", "require(",
-                "const ", "let ", "var ", "return ", "if (", "for (", "while (",
-                "=>", "->", "::", "pub fn", "async fn",
+                "fn ",
+                "def ",
+                "function ",
+                "class ",
+                "import ",
+                "require(",
+                "const ",
+                "let ",
+                "var ",
+                "return ",
+                "if (",
+                "for (",
+                "while (",
+                "=>",
+                "->",
+                "::",
+                "pub fn",
+                "async fn",
             ];
             let indicator_count = code_indicators
                 .iter()
@@ -270,22 +321,39 @@ pub struct PitfallClassifier;
 
 static WARNING_MARKERS: LazyLock<Vec<&'static str>> = LazyLock::new(|| {
     vec![
-        "warning:", "caution:", "note:", "important:",
-        "danger:", "alert:", "beware:", "careful:",
+        "warning:",
+        "caution:",
+        "note:",
+        "important:",
+        "danger:",
+        "alert:",
+        "beware:",
+        "careful:",
     ]
 });
 
-static WARNING_EMOJIS: LazyLock<Vec<&'static str>> = LazyLock::new(|| {
-    vec!["⚠️", "❌", "🚫", "❗", "⛔", "💀", "🔥", "⚡"]
-});
+static WARNING_EMOJIS: LazyLock<Vec<&'static str>> =
+    LazyLock::new(|| vec!["⚠️", "❌", "🚫", "❗", "⛔", "💀", "🔥", "⚡"]);
 
 static ANTI_PATTERN_PHRASES: LazyLock<Vec<&'static str>> = LazyLock::new(|| {
     vec![
-        "don't", "do not", "avoid", "never",
-        "common mistake", "anti-pattern", "pitfall",
-        "wrong way", "bad practice", "gotcha",
-        "trap", "foot gun", "footgun", "careful not to",
-        "watch out", "be careful", "prone to",
+        "don't",
+        "do not",
+        "avoid",
+        "never",
+        "common mistake",
+        "anti-pattern",
+        "pitfall",
+        "wrong way",
+        "bad practice",
+        "gotcha",
+        "trap",
+        "foot gun",
+        "footgun",
+        "careful not to",
+        "watch out",
+        "be careful",
+        "prone to",
     ]
 });
 
@@ -330,9 +398,15 @@ impl BlockClassifier for PitfallClassifier {
 
         // Negative consequence language
         let consequence_phrases = [
-            "will fail", "will crash", "will break",
-            "causes", "leads to", "results in",
-            "performance issue", "memory leak", "security risk",
+            "will fail",
+            "will crash",
+            "will break",
+            "causes",
+            "leads to",
+            "results in",
+            "performance issue",
+            "memory leak",
+            "security risk",
         ];
         let consequence_count = consequence_phrases
             .iter()
@@ -381,8 +455,7 @@ static NUMBERED_STEP_REGEX: LazyLock<Regex> =
 
 static STEP_MARKERS: LazyLock<Vec<&'static str>> = LazyLock::new(|| {
     vec![
-        "step 1", "step 2", "step 3",
-        "first,", "second,", "third,", "then,", "next,", "finally,",
+        "step 1", "step 2", "step 3", "first,", "second,", "third,", "then,", "next,", "finally,",
         "firstly", "secondly", "thirdly", "lastly",
     ]
 });
@@ -394,10 +467,7 @@ impl BlockClassifier for ChecklistClassifier {
         let lower = block.to_lowercase();
 
         // Checkbox pattern (strongest signal)
-        let checkbox_count = block
-            .lines()
-            .filter(|l| CHECKBOX_REGEX.is_match(l))
-            .count();
+        let checkbox_count = block.lines().filter(|l| CHECKBOX_REGEX.is_match(l)).count();
         if checkbox_count > 0 {
             let weight = (checkbox_count as f32 * 0.2).min(0.7);
             score += weight;
@@ -489,10 +559,19 @@ pub struct ContextClassifier;
 
 static CONTEXT_MARKERS: LazyLock<Vec<&'static str>> = LazyLock::new(|| {
     vec![
-        "background:", "context:", "overview:", "introduction:",
-        "about:", "description:", "summary:", "tldr:",
-        "this document", "this guide", "this skill",
-        "in this", "the following",
+        "background:",
+        "context:",
+        "overview:",
+        "introduction:",
+        "about:",
+        "description:",
+        "summary:",
+        "tldr:",
+        "this document",
+        "this guide",
+        "this skill",
+        "in this",
+        "the following",
     ]
 });
 
@@ -513,9 +592,18 @@ impl BlockClassifier for ContextClassifier {
 
         // Explanatory sentence patterns
         let explanatory_patterns = [
-            "is a ", "is an ", "are ", "was ", "were ",
-            "provides ", "enables ", "allows ", "helps ",
-            "designed to ", "intended to ", "meant to ",
+            "is a ",
+            "is an ",
+            "are ",
+            "was ",
+            "were ",
+            "provides ",
+            "enables ",
+            "allows ",
+            "helps ",
+            "designed to ",
+            "intended to ",
+            "meant to ",
         ];
         let explanatory_count = explanatory_patterns
             .iter()
@@ -616,9 +704,19 @@ impl BlockClassifier for MetadataClassifier {
 
         // Metadata-like key-value pairs
         let kv_patterns = [
-            "version:", "author:", "date:", "tags:", "id:",
-            "name:", "description:", "license:", "created:",
-            "updated:", "category:", "type:", "status:",
+            "version:",
+            "author:",
+            "date:",
+            "tags:",
+            "id:",
+            "name:",
+            "description:",
+            "license:",
+            "created:",
+            "updated:",
+            "category:",
+            "type:",
+            "status:",
         ];
         let kv_count = kv_patterns.iter().filter(|p| lower.contains(*p)).count();
         if kv_count >= 2 {
@@ -636,11 +734,7 @@ impl BlockClassifier for MetadataClassifier {
             let words: Vec<&str> = trimmed.split_whitespace().collect();
             let capitalized_words = words
                 .iter()
-                .filter(|w| {
-                    w.chars()
-                        .next()
-                        .is_some_and(|c| c.is_uppercase())
-                })
+                .filter(|w| w.chars().next().is_some_and(|c| c.is_uppercase()))
                 .count();
             if words.len() <= 8 && capitalized_words > words.len() / 2 {
                 score += 0.2;
@@ -692,7 +786,8 @@ mod tests {
     fn test_rule_classifier_bullet_rules() {
         let classifier = RuleClassifier;
 
-        let text = "- Use meaningful variable names\n- Avoid global state\n- Handle errors properly";
+        let text =
+            "- Use meaningful variable names\n- Avoid global state\n- Handle errors properly";
         let result = classifier.classify(text);
         assert!(result.is_some());
     }
@@ -776,7 +871,8 @@ mod tests {
     fn test_context_classifier_overview() {
         let classifier = ContextClassifier;
 
-        let text = "Overview: This document describes the error handling patterns used in our codebase.";
+        let text =
+            "Overview: This document describes the error handling patterns used in our codebase.";
         let result = classifier.classify(text);
         assert!(result.is_some());
         let result = result.unwrap();

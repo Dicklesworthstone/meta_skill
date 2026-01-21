@@ -329,32 +329,36 @@ fn is_match_at(body: &str, start_byte: usize, word_lower: &str) -> bool {
     let slice = &body[start_byte..];
     let mut slice_chars = slice.chars().flat_map(char::to_lowercase);
     let mut word_chars = word_lower.chars();
-    
+
     loop {
         match (slice_chars.next(), word_chars.next()) {
-            (Some(sc), Some(wc)) => if sc != wc { return false; },
+            (Some(sc), Some(wc)) => {
+                if sc != wc {
+                    return false;
+                }
+            }
             (None, Some(_)) => return false, // slice ended before word
-            (_, None) => return true, // word ended, match!
+            (_, None) => return true,        // word ended, match!
         }
     }
 }
 
 fn count_source_chars_consumed(body: &str, start_byte: usize, word_lower: &str) -> usize {
-     let slice = &body[start_byte..];
-     let mut slice_chars = slice.chars();
-     let mut consumed_count = 0;
-     let mut matched_lower_count = 0;
-     let target_count = word_lower.chars().count();
-     
-     while matched_lower_count < target_count {
-         if let Some(c) = slice_chars.next() {
-             consumed_count += 1;
-             matched_lower_count += c.to_lowercase().count();
-         } else {
-             break;
-         }
-     }
-     consumed_count
+    let slice = &body[start_byte..];
+    let mut slice_chars = slice.chars();
+    let mut consumed_count = 0;
+    let mut matched_lower_count = 0;
+    let target_count = word_lower.chars().count();
+
+    while matched_lower_count < target_count {
+        if let Some(c) = slice_chars.next() {
+            consumed_count += 1;
+            matched_lower_count += c.to_lowercase().count();
+        } else {
+            break;
+        }
+    }
+    consumed_count
 }
 
 /// Truncate a string to a maximum number of characters (not bytes), safe for UTF-8
@@ -535,7 +539,7 @@ mod tests {
     fn test_find_snippet_unicode_expansion_bug() {
         // "İ" (U+0130) lowercases to "i\u{307}" (U+0069 U+0307)
         // Original: 1 char. Lower: 2 chars.
-        
+
         // Create a string with enough expanding characters to offset the index
         // beyond the length of the original string.
         let mut body = String::new();
@@ -543,14 +547,14 @@ mod tests {
             body.push('İ');
         }
         body.push_str(" final");
-        
+
         // body len: 50 + 6 = 56 chars.
         // body_lower len: 100 + 6 = 106 chars.
-        
+
         // "final" found at char index 101 in lower.
         // But body only has 56 chars.
         // This should panic if the bug exists.
-        
+
         let snippet = find_snippet(&body, "final");
         assert!(snippet.is_some());
         let s = snippet.unwrap();

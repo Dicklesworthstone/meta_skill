@@ -14,14 +14,14 @@ pub struct MigrationRegistry {
 }
 
 impl MigrationRegistry {
-    #[must_use] 
+    #[must_use]
     pub const fn with_defaults() -> Self {
         Self {
             migrations: Vec::new(),
         }
     }
 
-    #[must_use] 
+    #[must_use]
     pub fn find(&self, from: &str) -> Option<&SpecMigration> {
         self.migrations.iter().find(|m| m.from == from)
     }

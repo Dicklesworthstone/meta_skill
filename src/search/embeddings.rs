@@ -33,7 +33,8 @@ pub fn build_embedder(config: &SearchConfig) -> Result<Box<dyn Embedder>> {
     match backend.as_str() {
         "" | "hash" => Ok(Box::new(HashEmbedder::new(dims))),
         "local" => Err(MsError::Config(
-            "search.embedding_backend=local requires ONNX runtime (not yet implemented)".to_string(),
+            "search.embedding_backend=local requires ONNX runtime (not yet implemented)"
+                .to_string(),
         )),
         "api" => {
             let api_key = std::env::var(&config.api_key_env).map_err(|_| {
@@ -69,19 +70,19 @@ impl Default for HashEmbedder {
 
 impl HashEmbedder {
     /// Create embedder with specified dimension
-    #[must_use] 
+    #[must_use]
     pub const fn new(dim: usize) -> Self {
         Self { dim }
     }
 
     /// Embedding dimension
-    #[must_use] 
+    #[must_use]
     pub const fn dims(&self) -> usize {
         self.dim
     }
 
     /// Embed text into vector
-    #[must_use] 
+    #[must_use]
     pub fn embed(&self, text: &str) -> Vec<f32> {
         if self.dim == 0 {
             return Vec::new();
@@ -108,7 +109,7 @@ impl HashEmbedder {
     }
 
     /// Compute cosine similarity between two embeddings
-    #[must_use] 
+    #[must_use]
     pub fn similarity(&self, a: &[f32], b: &[f32]) -> f32 {
         if a.len() != b.len() {
             return 0.0;
@@ -203,7 +204,9 @@ impl ApiEmbedder {
             let text = response.text().unwrap_or_default();
             // Handle rate limiting with exponential backoff hint
             if status.as_u16() == 429 {
-                return Err(format!("Rate limited by API (429). Try again later. Response: {text}"));
+                return Err(format!(
+                    "Rate limited by API (429). Try again later. Response: {text}"
+                ));
             }
             return Err(format!("API returned {status}: {text}"));
         }
@@ -261,7 +264,7 @@ pub struct VectorIndex {
 
 impl VectorIndex {
     /// Create a new empty vector index
-    #[must_use] 
+    #[must_use]
     pub fn new(dims: usize) -> Self {
         Self {
             embeddings: HashMap::new(),
@@ -270,19 +273,19 @@ impl VectorIndex {
     }
 
     /// Current embedding dimension
-    #[must_use] 
+    #[must_use]
     pub const fn dims(&self) -> usize {
         self.dims
     }
 
     /// Number of embeddings stored
-    #[must_use] 
+    #[must_use]
     pub fn len(&self) -> usize {
         self.embeddings.len()
     }
 
     /// Whether the index is empty
-    #[must_use] 
+    #[must_use]
     pub fn is_empty(&self) -> bool {
         self.embeddings.is_empty()
     }
@@ -302,7 +305,7 @@ impl VectorIndex {
     }
 
     /// Cosine similarity search (expects embeddings to be L2 normalized)
-    #[must_use] 
+    #[must_use]
     pub fn search(&self, query_embedding: &[f32], limit: usize) -> Vec<(String, f32)> {
         if query_embedding.len() != self.dims {
             return Vec::new();
@@ -413,7 +416,10 @@ mod tests {
         // 1-char tokens like "C" should now be included
         let embedding = embedder.embed("a b c d");
         let norm = embedding.iter().map(|x| x * x).sum::<f32>().sqrt();
-        assert!(norm > 0.0, "Single-char tokens should produce non-zero embedding");
+        assert!(
+            norm > 0.0,
+            "Single-char tokens should produce non-zero embedding"
+        );
     }
 
     #[test]

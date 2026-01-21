@@ -91,7 +91,7 @@ impl Default for MeaningfulDescriptionRule {
 
 impl MeaningfulDescriptionRule {
     /// Create a rule with custom length bounds.
-    #[must_use] 
+    #[must_use]
     pub const fn with_bounds(min_length: usize, max_length: usize) -> Self {
         Self {
             min_length,
@@ -401,7 +401,9 @@ pub struct BalancedContentRule {
 
 impl Default for BalancedContentRule {
     fn default() -> Self {
-        Self { max_code_ratio: 0.8 }
+        Self {
+            max_code_ratio: 0.8,
+        }
     }
 }
 
@@ -441,10 +443,7 @@ impl ValidationRule for BalancedContentRule {
             diagnostics.push(
                 Diagnostic::info(
                     self.id(),
-                    format!(
-                        "Content is ~{}% code",
-                        (code_ratio * 100.0).round() as u32
-                    ),
+                    format!("Content is ~{}% code", (code_ratio * 100.0).round() as u32),
                 )
                 .with_suggestion("Add prose descriptions for better understanding and search")
                 .with_category(RuleCategory::Quality),
@@ -476,7 +475,7 @@ impl Default for TokenBudgetRule {
 
 impl TokenBudgetRule {
     /// Create a rule with custom thresholds.
-    #[must_use] 
+    #[must_use]
     pub const fn with_thresholds(warn: usize, error: usize) -> Self {
         Self {
             total_warn_threshold: warn,
@@ -626,7 +625,7 @@ impl ValidationRule for EmbeddingQualityRule {
 // =============================================================================
 
 /// Returns all quality validation rules.
-#[must_use] 
+#[must_use]
 pub fn quality_rules() -> Vec<Box<dyn ValidationRule>> {
     vec![
         Box::new(MeaningfulDescriptionRule::default()),
@@ -637,7 +636,7 @@ pub fn quality_rules() -> Vec<Box<dyn ValidationRule>> {
 }
 
 /// Returns all performance validation rules.
-#[must_use] 
+#[must_use]
 pub fn performance_rules() -> Vec<Box<dyn ValidationRule>> {
     vec![
         Box::new(TokenBudgetRule::default()),
@@ -646,7 +645,7 @@ pub fn performance_rules() -> Vec<Box<dyn ValidationRule>> {
 }
 
 /// Returns all quality and performance validation rules.
-#[must_use] 
+#[must_use]
 pub fn quality_and_performance_rules() -> Vec<Box<dyn ValidationRule>> {
     let mut rules = quality_rules();
     rules.extend(performance_rules());
@@ -663,7 +662,10 @@ mod tests {
     use crate::core::skill::{SkillBlock, SkillSection};
     use crate::lint::config::ValidationConfig;
 
-    fn make_context<'a>(skill: &'a SkillSpec, config: &'a ValidationConfig) -> ValidationContext<'a> {
+    fn make_context<'a>(
+        skill: &'a SkillSpec,
+        config: &'a ValidationConfig,
+    ) -> ValidationContext<'a> {
         ValidationContext::new(skill, config)
     }
 
@@ -706,7 +708,9 @@ mod tests {
     fn test_description_appropriate_length() {
         let rule = MeaningfulDescriptionRule::default();
         let config = ValidationConfig::new();
-        let skill = skill_with_description("This is a meaningful description that explains what the skill does and how it helps developers write better code.");
+        let skill = skill_with_description(
+            "This is a meaningful description that explains what the skill does and how it helps developers write better code.",
+        );
         let ctx = make_context(&skill, &config);
 
         let diagnostics = rule.validate(&ctx);
@@ -721,7 +725,11 @@ mod tests {
         let ctx = make_context(&skill, &config);
 
         let diagnostics = rule.validate(&ctx);
-        assert!(diagnostics.iter().any(|d| d.message.contains("placeholder")));
+        assert!(
+            diagnostics
+                .iter()
+                .any(|d| d.message.contains("placeholder"))
+        );
     }
 
     #[test]
@@ -733,9 +741,11 @@ mod tests {
         let ctx = make_context(&skill, &config);
 
         let diagnostics = rule.validate(&ctx);
-        assert!(diagnostics
-            .iter()
-            .any(|d| d.message.contains("same as the skill ID")));
+        assert!(
+            diagnostics
+                .iter()
+                .any(|d| d.message.contains("same as the skill ID"))
+        );
     }
 
     // ActionableRulesRule tests
@@ -876,9 +886,11 @@ mod tests {
 
         let diagnostics = rule.validate(&ctx);
         // Should be clean - has content, tags, and good description
-        assert!(diagnostics
-            .iter()
-            .all(|d| !d.message.contains("very little")));
+        assert!(
+            diagnostics
+                .iter()
+                .all(|d| !d.message.contains("very little"))
+        );
     }
 
     #[test]
@@ -901,9 +913,11 @@ mod tests {
         let ctx = make_context(&skill, &config);
 
         let diagnostics = rule.validate(&ctx);
-        assert!(diagnostics
-            .iter()
-            .any(|d| d.message.contains("few keywords")));
+        assert!(
+            diagnostics
+                .iter()
+                .any(|d| d.message.contains("few keywords"))
+        );
     }
 
     // BalancedContentRule tests

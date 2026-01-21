@@ -350,9 +350,7 @@ impl TestFixture {
         // Warn about slow operations (threshold: 5 seconds)
         const SLOW_THRESHOLD: Duration = Duration::from_secs(5);
         if elapsed > SLOW_THRESHOLD {
-            println!(
-                "[SLOW] ⚠ Command took {elapsed:?} (threshold: {SLOW_THRESHOLD:?})"
-            );
+            println!("[SLOW] ⚠ Command took {elapsed:?} (threshold: {SLOW_THRESHOLD:?})");
         }
 
         if !stdout.is_empty() {
@@ -403,9 +401,7 @@ impl TestFixture {
         // Warn about slow operations (threshold: 5 seconds)
         const SLOW_THRESHOLD: Duration = Duration::from_secs(5);
         if elapsed > SLOW_THRESHOLD {
-            println!(
-                "[SLOW] ⚠ Command took {elapsed:?} (threshold: {SLOW_THRESHOLD:?})"
-            );
+            println!("[SLOW] ⚠ Command took {elapsed:?} (threshold: {SLOW_THRESHOLD:?})");
         }
 
         if !stdout.is_empty() {
@@ -467,9 +463,7 @@ impl TestFixture {
 
             println!("[DB CHECK] {description} - PASSED");
         } else {
-            println!(
-                "[DB CHECK] Skipped (no database connection): {description}"
-            );
+            println!("[DB CHECK] Skipped (no database connection): {description}");
         }
     }
 
@@ -621,9 +615,7 @@ pub struct TestSkill {
 
 impl TestSkill {
     pub fn new(name: &str, description: &str) -> Self {
-        let content = format!(
-            "# {name}\n\n{description}\n\n## Overview\n\n{description}\n"
-        );
+        let content = format!("# {name}\n\n{description}\n\n## Overview\n\n{description}\n");
 
         Self {
             name: name.to_string(),

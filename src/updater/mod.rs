@@ -23,7 +23,6 @@ pub enum UpdateChannel {
     Nightly,
 }
 
-
 impl std::str::FromStr for UpdateChannel {
     type Err = MsError;
 
@@ -80,7 +79,7 @@ pub struct UpdateChecker {
 
 impl UpdateChecker {
     /// Create a new update checker.
-    #[must_use] 
+    #[must_use]
     pub fn new(current_version: Version, channel: UpdateChannel, repo: String) -> Self {
         Self {
             current_version,
@@ -91,7 +90,7 @@ impl UpdateChecker {
     }
 
     /// Set the GitHub token for authenticated requests.
-    #[must_use] 
+    #[must_use]
     pub fn with_token(mut self, token: Option<String>) -> Self {
         self.token = token;
         self
@@ -138,13 +137,13 @@ impl UpdateChecker {
     }
 
     /// Get the current version being checked against.
-    #[must_use] 
+    #[must_use]
     pub const fn current_version(&self) -> &Version {
         &self.current_version
     }
 
     /// Get the update channel.
-    #[must_use] 
+    #[must_use]
     pub const fn channel(&self) -> UpdateChannel {
         self.channel
     }
@@ -187,7 +186,7 @@ impl UpdateDownloader {
     }
 
     /// Set the GitHub token for authenticated downloads.
-    #[must_use] 
+    #[must_use]
     pub fn with_token(mut self, token: Option<String>) -> Self {
         self.token = token;
         self
@@ -345,7 +344,7 @@ impl UpdateInstaller {
     }
 
     /// Create an installer with explicit paths.
-    #[must_use] 
+    #[must_use]
     pub const fn with_paths(current_binary: PathBuf, backup_dir: PathBuf) -> Self {
         Self {
             current_binary,
@@ -554,7 +553,8 @@ impl GitHubRelease {
         let published_at = self
             .published_at
             .as_ref()
-            .and_then(|s| DateTime::parse_from_rfc3339(s).ok()).map_or_else(Utc::now, |dt| dt.with_timezone(&Utc));
+            .and_then(|s| DateTime::parse_from_rfc3339(s).ok())
+            .map_or_else(Utc::now, |dt| dt.with_timezone(&Utc));
 
         Some(ReleaseInfo {
             version,

@@ -4,8 +4,8 @@ use clap::Args;
 use serde::Serialize;
 
 use crate::app::AppContext;
-use crate::cli::output::OutputFormat;
 use crate::cli::commands::resolve_skill_markdown;
+use crate::cli::output::OutputFormat;
 use crate::cli::output::{HumanLayout, emit_human, emit_json};
 use crate::core::spec_lens::parse_markdown;
 use crate::core::validation::{ValidationWarning, validate, validate_with_ubs};
@@ -75,7 +75,11 @@ pub fn run(ctx: &AppContext, args: &ValidateArgs) -> Result<()> {
         }
     }
 
-    if warnings.is_empty() && ubs_result.as_ref().is_none_or(crate::quality::ubs::UbsResult::is_clean) {
+    if warnings.is_empty()
+        && ubs_result
+            .as_ref()
+            .is_none_or(crate::quality::ubs::UbsResult::is_clean)
+    {
         layout.section("Status");
         layout.bullet("OK");
     }
@@ -150,7 +154,8 @@ fn build_report(
         stderr: result.stderr.clone(),
         items: result.findings.iter().map(map_finding).collect::<Vec<_>>(),
     });
-    let clean = warning_items.is_empty() && ubs_result.is_none_or(crate::quality::ubs::UbsResult::is_clean);
+    let clean =
+        warning_items.is_empty() && ubs_result.is_none_or(crate::quality::ubs::UbsResult::is_clean);
 
     ValidateReport {
         skill: skill.to_string(),

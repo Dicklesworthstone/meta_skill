@@ -10,7 +10,7 @@ use serde::Deserialize;
 
 use crate::app::AppContext;
 use crate::cli::output::OutputFormat;
-use crate::context::collector::{ContextCollector, ContextCollectorConfig, CollectedContext};
+use crate::context::collector::{CollectedContext, ContextCollector, ContextCollectorConfig};
 use crate::context::scoring::{RankedSkill, RelevanceScorer, WorkingContext};
 use crate::core::dependencies::{
     DependencyGraph, DependencyLoadMode, DependencyResolver, DisclosureLevel as DepDisclosure,
@@ -18,7 +18,9 @@ use crate::core::dependencies::{
 use crate::core::disclosure::{
     DisclosedContent, DisclosureLevel, DisclosurePlan, PackMode, TokenBudget, disclose,
 };
-use crate::core::pack_contracts::{PackContractPreset, custom_contracts_path, find_custom_contract};
+use crate::core::pack_contracts::{
+    PackContractPreset, custom_contracts_path, find_custom_contract,
+};
 use crate::core::resolution::{DbSkillRepository, resolve_full};
 use crate::core::skill::{PackContract, SkillAssets, SkillMetadata};
 use crate::core::spec_lens::parse_markdown;
@@ -26,8 +28,7 @@ use crate::error::{MsError, Result};
 use crate::meta_skills::{ConditionContext, MetaSkillManager, MetaSkillRegistry};
 use crate::storage::sqlite::SkillRecord;
 use crate::suggestions::bandit::{
-    ContextualBandit, DefaultFeatureExtractor, FeatureExtractor,
-    SkillFeedback, UserHistory,
+    ContextualBandit, DefaultFeatureExtractor, FeatureExtractor, SkillFeedback, UserHistory,
 };
 
 /// Dependency loading strategy
@@ -250,15 +251,18 @@ fn run_auto_load(ctx: &AppContext, args: &LoadArgs) -> Result<()> {
     if skills.is_empty() {
         match ctx.output_format {
             OutputFormat::Json | OutputFormat::Jsonl => {
-                println!("{}", serde_json::to_string_pretty(&serde_json::json!({
-                    "status": "ok",
-                    "data": {
-                        "context": context_summary_to_json(&context_summary),
-                        "candidates": [],
-                        "loaded": [],
-                        "message": "No skills indexed"
-                    }
-                }))?);
+                println!(
+                    "{}",
+                    serde_json::to_string_pretty(&serde_json::json!({
+                        "status": "ok",
+                        "data": {
+                            "context": context_summary_to_json(&context_summary),
+                            "candidates": [],
+                            "loaded": [],
+                            "message": "No skills indexed"
+                        }
+                    }))?
+                );
             }
             _ => {
                 println!("{}", "No skills indexed. Run 'ms index' first.".yellow());
@@ -285,23 +289,33 @@ fn run_auto_load(ctx: &AppContext, args: &LoadArgs) -> Result<()> {
     }
 
     // Re-sort after blending bandit scores
-    candidates.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap_or(std::cmp::Ordering::Equal));
+    candidates.sort_by(|a, b| {
+        b.score
+            .partial_cmp(&a.score)
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
 
     if candidates.is_empty() {
         match ctx.output_format {
             OutputFormat::Json | OutputFormat::Jsonl => {
-                println!("{}", serde_json::to_string_pretty(&serde_json::json!({
-                    "status": "ok",
-                    "data": {
-                        "context": context_summary_to_json(&context_summary),
-                        "candidates": [],
-                        "loaded": [],
-                        "message": format!("No skills match threshold {}", args.threshold)
-                    }
-                }))?);
+                println!(
+                    "{}",
+                    serde_json::to_string_pretty(&serde_json::json!({
+                        "status": "ok",
+                        "data": {
+                            "context": context_summary_to_json(&context_summary),
+                            "candidates": [],
+                            "loaded": [],
+                            "message": format!("No skills match threshold {}", args.threshold)
+                        }
+                    }))?
+                );
             }
             _ => {
-                println!("{}", format!("No skills match threshold {}.", args.threshold).yellow());
+                println!(
+                    "{}",
+                    format!("No skills match threshold {}.", args.threshold).yellow()
+                );
                 println!("Try lowering the threshold with --threshold 0.1");
             }
         }
@@ -417,10 +431,7 @@ fn record_auto_load_events(
     config: &crate::config::AutoLoadConfig,
     verbosity: i32,
 ) {
-    use crate::suggestions::bandit::{
-        contextual::ContextualBanditConfig,
-        features::FEATURE_DIM,
-    };
+    use crate::suggestions::bandit::{contextual::ContextualBanditConfig, features::FEATURE_DIM};
 
     // Skip if persistence is disabled
     if !config.persist_state {
@@ -485,10 +496,7 @@ fn record_auto_load_events(
 ///
 /// This function samples from the contextual bandit to boost scores for
 /// skills that have historically performed well in similar contexts.
-fn get_bandit_scores(
-    collected: &CollectedContext,
-    skill_ids: &[String],
-) -> HashMap<String, f32> {
+fn get_bandit_scores(collected: &CollectedContext, skill_ids: &[String]) -> HashMap<String, f32> {
     let extractor = DefaultFeatureExtractor::new();
     let history = UserHistory::load(&UserHistory::default_path());
     let features = extractor.extract_from_collected(collected, &history);
@@ -557,21 +565,32 @@ fn skill_record_to_metadata(skill: &SkillRecord) -> SkillMetadata {
         tags: meta_json
             .get("tags")
             .and_then(|v| v.as_array())
-            .map(|arr| arr.iter().filter_map(|v| v.as_str().map(String::from)).collect())
+            .map(|arr| {
+                arr.iter()
+                    .filter_map(|v| v.as_str().map(String::from))
+                    .collect()
+            })
             .unwrap_or_default(),
         requires: meta_json
             .get("requires")
             .and_then(|v| v.as_array())
-            .map(|arr| arr.iter().filter_map(|v| v.as_str().map(String::from)).collect())
+            .map(|arr| {
+                arr.iter()
+                    .filter_map(|v| v.as_str().map(String::from))
+                    .collect()
+            })
             .unwrap_or_default(),
         provides: meta_json
             .get("provides")
             .and_then(|v| v.as_array())
-            .map(|arr| arr.iter().filter_map(|v| v.as_str().map(String::from)).collect())
+            .map(|arr| {
+                arr.iter()
+                    .filter_map(|v| v.as_str().map(String::from))
+                    .collect()
+            })
             .unwrap_or_default(),
-        context: serde_json::from_value(
-            meta_json.get("context").cloned().unwrap_or_default()
-        ).unwrap_or_default(),
+        context: serde_json::from_value(meta_json.get("context").cloned().unwrap_or_default())
+            .unwrap_or_default(),
         ..Default::default()
     }
 }
@@ -626,7 +645,10 @@ fn output_dry_run(
         OutputFormat::Tsv => {
             println!("skill_id\tname\tscore");
             for candidate in candidates {
-                println!("{}\t{}\t{:.2}", candidate.skill_id, candidate.skill_name, candidate.score);
+                println!(
+                    "{}\t{}\t{:.2}",
+                    candidate.skill_id, candidate.skill_name, candidate.score
+                );
             }
         }
         OutputFormat::Human => {
@@ -665,16 +687,16 @@ fn output_dry_run(
 }
 
 /// Output auto-load results in human-readable format
-fn output_auto_human(
-    ctx: &AppContext,
-    result: &AutoLoadResult,
-    _args: &LoadArgs,
-) -> Result<()> {
+fn output_auto_human(ctx: &AppContext, result: &AutoLoadResult, _args: &LoadArgs) -> Result<()> {
     // Context summary
     println!("{}", "Detecting context...".dimmed());
     if !result.context_summary.project_types.is_empty() {
         for (ptype, confidence) in &result.context_summary.project_types {
-            println!("  Project type: {} (confidence: {:.2})", ptype.cyan(), confidence);
+            println!(
+                "  Project type: {} (confidence: {:.2})",
+                ptype.cyan(),
+                confidence
+            );
         }
     }
     println!(
@@ -693,7 +715,11 @@ fn output_auto_human(
     if !result.candidates.is_empty() {
         println!("{}", "Relevant skills found:".bold());
         for candidate in &result.candidates {
-            let status = if result.loaded.iter().any(|l| l.skill_id == candidate.skill_id) {
+            let status = if result
+                .loaded
+                .iter()
+                .any(|l| l.skill_id == candidate.skill_id)
+            {
                 "✓".green().to_string()
             } else {
                 "⊘".dimmed().to_string()
@@ -711,11 +737,7 @@ fn output_auto_human(
 
     // Loaded skills content
     if !result.loaded.is_empty() {
-        println!(
-            "{} {} skills",
-            "Loading".bold(),
-            result.loaded.len()
-        );
+        println!("{} {} skills", "Loading".bold(), result.loaded.len());
         println!();
 
         for load_result in &result.loaded {
@@ -728,11 +750,7 @@ fn output_auto_human(
     }
 
     // Summary footer
-    println!(
-        "{} {} tokens",
-        "─".repeat(40).dimmed(),
-        result.total_tokens
-    );
+    println!("{} {} tokens", "─".repeat(40).dimmed(), result.total_tokens);
 
     if !result.skipped.is_empty() {
         println!("{} {}", "Skipped:".dimmed(), result.skipped.join(", "));
@@ -742,11 +760,7 @@ fn output_auto_human(
 }
 
 /// Output auto-load results in robot mode (JSON)
-fn output_auto_robot(
-    _ctx: &AppContext,
-    result: &AutoLoadResult,
-    args: &LoadArgs,
-) -> Result<()> {
+fn output_auto_robot(_ctx: &AppContext, result: &AutoLoadResult, args: &LoadArgs) -> Result<()> {
     let output = serde_json::json!({
         "status": "ok",
         "timestamp": chrono::Utc::now().to_rfc3339(),
@@ -788,9 +802,7 @@ pub(crate) fn load_skill(ctx: &AppContext, args: &LoadArgs, skill_ref: &str) -> 
         ));
     }
     if (args.contract.is_some() || args.contract_id.is_some()) && args.pack.is_none() {
-        return Err(MsError::Config(
-            "--contract requires --pack".to_string(),
-        ));
+        return Err(MsError::Config("--contract requires --pack".to_string()));
     }
 
     let contract = resolve_contract(ctx, args)?;
@@ -820,8 +832,7 @@ pub(crate) fn load_skill(ctx: &AppContext, args: &LoadArgs, skill_ref: &str) -> 
     let spec = resolved.spec;
 
     // Load assets from database
-    let assets: SkillAssets = serde_json::from_str(&skill.assets_json)
-        .unwrap_or_default();
+    let assets: SkillAssets = serde_json::from_str(&skill.assets_json).unwrap_or_default();
 
     // Apply disclosure
     let disclosed = disclose(&spec, &assets, &disclosure_plan);
@@ -842,7 +853,11 @@ pub(crate) fn load_skill(ctx: &AppContext, args: &LoadArgs, skill_ref: &str) -> 
         slices_included,
         inheritance_chain: resolved.inheritance_chain,
         included_from: resolved.included_from,
-        warnings: resolved.warnings.iter().map(|w| format!("{:?}", w)).collect(),
+        warnings: resolved
+            .warnings
+            .iter()
+            .map(|w| format!("{:?}", w))
+            .collect(),
     };
 
     record_usage(
@@ -888,7 +903,11 @@ pub struct MetaSkillLoadResultWrapper {
 }
 
 /// Try to load as a meta-skill. Returns None if not found as a meta-skill.
-fn try_load_meta_skill(ctx: &AppContext, args: &LoadArgs, skill_ref: &str) -> Result<Option<MetaSkillLoadResultWrapper>> {
+fn try_load_meta_skill(
+    ctx: &AppContext,
+    args: &LoadArgs,
+    skill_ref: &str,
+) -> Result<Option<MetaSkillLoadResultWrapper>> {
     let mut registry = MetaSkillRegistry::new();
     let meta_skill_paths = get_meta_skill_paths();
 
@@ -977,7 +996,11 @@ fn detect_tech_stacks(working_dir: &std::path::Path) -> Vec<String> {
     stacks
 }
 
-fn output_human_meta(_ctx: &AppContext, result: &MetaSkillLoadResultWrapper, _args: &LoadArgs) -> Result<()> {
+fn output_human_meta(
+    _ctx: &AppContext,
+    result: &MetaSkillLoadResultWrapper,
+    _args: &LoadArgs,
+) -> Result<()> {
     println!(
         "{} (meta-skill: {})",
         format!("# {}", result.meta_skill_name).bold(),
@@ -1001,7 +1024,11 @@ fn output_human_meta(_ctx: &AppContext, result: &MetaSkillLoadResultWrapper, _ar
     Ok(())
 }
 
-fn output_robot_meta(_ctx: &AppContext, result: &MetaSkillLoadResultWrapper, args: &LoadArgs) -> Result<()> {
+fn output_robot_meta(
+    _ctx: &AppContext,
+    result: &MetaSkillLoadResultWrapper,
+    args: &LoadArgs,
+) -> Result<()> {
     let output = serde_json::json!({
         "status": "ok",
         "timestamp": chrono::Utc::now().to_rfc3339(),
@@ -1061,9 +1088,7 @@ fn resolve_contract(ctx: &AppContext, args: &LoadArgs) -> Result<Option<PackCont
     if let Some(ref id) = args.contract_id {
         let path = custom_contracts_path(&ctx.ms_root);
         let Some(contract) = find_custom_contract(&path, id)? else {
-            return Err(MsError::SkillNotFound(format!(
-                "contract not found: {id}"
-            )));
+            return Err(MsError::SkillNotFound(format!("contract not found: {id}")));
         };
         return Ok(Some(contract));
     }
@@ -1086,12 +1111,12 @@ fn validate_experiment_usage(
         (Some(_), None) => {
             return Err(MsError::ValidationFailed(
                 "--variant-id is required when --experiment-id is set".to_string(),
-            ))
+            ));
         }
         (None, Some(_)) => {
             return Err(MsError::ValidationFailed(
                 "--experiment-id is required when --variant-id is set".to_string(),
-            ))
+            ));
         }
         (Some(experiment_id), Some(variant_id)) => {
             if experiment_id.trim().is_empty() {
@@ -1122,10 +1147,8 @@ fn validate_experiment_usage(
         )));
     }
 
-    let variants: Vec<ExperimentVariantRef> =
-        serde_json::from_str(&record.variants_json).map_err(|err| {
-            MsError::Serialization(format!("experiment variants parse: {err}"))
-        })?;
+    let variants: Vec<ExperimentVariantRef> = serde_json::from_str(&record.variants_json)
+        .map_err(|err| MsError::Serialization(format!("experiment variants parse: {err}")))?;
 
     if !variants.iter().any(|variant| variant.id == variant_id) {
         return Err(MsError::ValidationFailed(format!(
@@ -1133,7 +1156,10 @@ fn validate_experiment_usage(
         )));
     }
 
-    Ok((Some(experiment_id.to_string()), Some(variant_id.to_string())))
+    Ok((
+        Some(experiment_id.to_string()),
+        Some(variant_id.to_string()),
+    ))
 }
 
 fn record_usage(
@@ -1246,9 +1272,10 @@ fn load_dependencies(
         // Direct skill-id match (capability equals skill id).
         if let Some(dep_skill) = skill_index.get(&cap) {
             if add_dependency_node(&mut graph, dep_skill, &meta_cache, &cap, &mut queue)
-                && loaded_set.insert(dep_skill.id.clone()) {
-                    loaded_deps.push(dep_skill.id.clone());
-                }
+                && loaded_set.insert(dep_skill.id.clone())
+            {
+                loaded_deps.push(dep_skill.id.clone());
+            }
             continue;
         }
 
@@ -1257,9 +1284,10 @@ fn load_dependencies(
             for provider_id in provider_ids {
                 if let Some(dep_skill) = skill_index.get(provider_id) {
                     if add_dependency_node(&mut graph, dep_skill, &meta_cache, &cap, &mut queue)
-                        && loaded_set.insert(dep_skill.id.clone()) {
-                            loaded_deps.push(dep_skill.id.clone());
-                        }
+                        && loaded_set.insert(dep_skill.id.clone())
+                    {
+                        loaded_deps.push(dep_skill.id.clone());
+                    }
                 }
             }
         }
@@ -1359,13 +1387,7 @@ fn build_dependency_indexes(
                 .or_default()
                 .push(skill.id.clone());
         }
-        meta_cache.insert(
-            skill.id.clone(),
-            CachedMeta {
-                requires,
-                provides,
-            },
-        );
+        meta_cache.insert(skill.id.clone(), CachedMeta { requires, provides });
         skill_index.insert(skill.id.clone(), skill);
     }
 
@@ -1384,16 +1406,12 @@ fn add_dependency_node(
     }
 
     let meta = meta_cache.get(&skill.id);
-    let mut provides = meta
-        .map(|m| m.provides.clone())
-        .unwrap_or_default();
+    let mut provides = meta.map(|m| m.provides.clone()).unwrap_or_default();
     if provides.is_empty() {
         provides.push(fallback_capability.to_string());
     }
 
-    let requires = meta
-        .map(|m| m.requires.clone())
-        .unwrap_or_default();
+    let requires = meta.map(|m| m.requires.clone()).unwrap_or_default();
 
     for required in &requires {
         queue.push_back(required.clone());
@@ -1403,25 +1421,24 @@ fn add_dependency_node(
     true
 }
 
-pub(crate) fn output_human(
-    _ctx: &AppContext,
-    result: &LoadResult,
-    _args: &LoadArgs,
-) -> Result<()> {
+pub(crate) fn output_human(_ctx: &AppContext, result: &LoadResult, _args: &LoadArgs) -> Result<()> {
     let disclosed = &result.disclosed;
 
     // Header with skill name
     println!("{}", format!("# {}", disclosed.frontmatter.name).bold());
-    
+
     // Inheritance info
     if result.inheritance_chain.len() > 1 {
         let chain = result.inheritance_chain.join(" → ");
         println!("{}", format!("Inheritance: {}", chain).dimmed());
     }
     if !result.included_from.is_empty() {
-        println!("{}", format!("Includes: {}", result.included_from.join(", ")).dimmed());
+        println!(
+            "{}",
+            format!("Includes: {}", result.included_from.join(", ")).dimmed()
+        );
     }
-    
+
     println!();
 
     // Warnings

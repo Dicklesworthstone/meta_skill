@@ -4,8 +4,8 @@
 //! emits a structured report.
 
 use std::collections::HashMap;
-use std::path::{Path, PathBuf};
 use std::io::Read;
+use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
 
@@ -140,7 +140,7 @@ pub struct SimulationEngine<'a> {
 }
 
 impl<'a> SimulationEngine<'a> {
-    #[must_use] 
+    #[must_use]
     pub fn new(ctx: &'a AppContext) -> Self {
         Self {
             ctx,
@@ -198,7 +198,11 @@ impl<'a> SimulationEngine<'a> {
                     source,
                 } => self.run_code(&mut sandbox, &language, &code, &source)?,
                 SimElement::Unsupported { language, source } => ElementResult {
-                    element: format!("Code ({}) from {}", language.unwrap_or("unknown".to_string()), source),
+                    element: format!(
+                        "Code ({}) from {}",
+                        language.unwrap_or("unknown".to_string()),
+                        source
+                    ),
                     status: ElementStatus::Skipped,
                     duration_ms: 0,
                     stdout: None,
@@ -298,7 +302,8 @@ impl<'a> SimulationEngine<'a> {
         self.safety.enforce(&cmd, None)?;
 
         let start = Instant::now();
-        let result = sandbox.execute_command(&cmd, Some(path.parent().unwrap_or(Path::new("."))))?;
+        let result =
+            sandbox.execute_command(&cmd, Some(path.parent().unwrap_or(Path::new("."))))?;
         let duration_ms = start.elapsed().as_millis() as u64;
         let status = if result.exit_code == 0 {
             ElementStatus::Passed
@@ -472,7 +477,11 @@ impl SimulationSandbox {
         Ok(())
     }
 
-    fn prepare_code(&self, language: &str, code: &str) -> Result<(String, PathBuf, Option<String>)> {
+    fn prepare_code(
+        &self,
+        language: &str,
+        code: &str,
+    ) -> Result<(String, PathBuf, Option<String>)> {
         let ext = extension_for_language(language);
         let filename = format!("snippet_{}.{}", uuid::Uuid::new_v4(), ext);
         let path = self.workspace.path().join(filename);
@@ -504,7 +513,10 @@ impl SimulationSandbox {
     fn execute_command(&mut self, cmd: &str, cwd: Option<&Path>) -> Result<CommandResult> {
         let shell = if cfg!(windows) { "cmd" } else { "sh" };
         let shell_arg = if cfg!(windows) { "/C" } else { "-c" };
-        let working_dir = cwd.map_or_else(|| self.workspace.path().to_path_buf(), std::path::Path::to_path_buf);
+        let working_dir = cwd.map_or_else(
+            || self.workspace.path().to_path_buf(),
+            std::path::Path::to_path_buf,
+        );
 
         let mut command = Command::new(shell);
         command.arg(shell_arg).arg(cmd);
@@ -618,15 +630,20 @@ fn extension_for_language(lang: &str) -> &'static str {
 
 fn execute_with_timeout(command: &mut Command, timeout: Duration) -> Result<std::process::Output> {
     let mut child = command.spawn().map_err(|err| {
-        MsError::Config(format!("failed to execute command '{}': {err}", command_str(command)))
+        MsError::Config(format!(
+            "failed to execute command '{}': {err}",
+            command_str(command)
+        ))
     })?;
 
-    let stdout = child.stdout.take().ok_or_else(|| {
-        MsError::Config("failed to capture stdout for command".to_string())
-    })?;
-    let stderr = child.stderr.take().ok_or_else(|| {
-        MsError::Config("failed to capture stderr for command".to_string())
-    })?;
+    let stdout = child
+        .stdout
+        .take()
+        .ok_or_else(|| MsError::Config("failed to capture stdout for command".to_string()))?;
+    let stderr = child
+        .stderr
+        .take()
+        .ok_or_else(|| MsError::Config("failed to capture stderr for command".to_string()))?;
 
     let stdout_handle = std::thread::spawn(move || {
         let mut buf = Vec::new();
@@ -643,15 +660,12 @@ fn execute_with_timeout(command: &mut Command, timeout: Duration) -> Result<std:
 
     let start = Instant::now();
     loop {
-        if let Some(status) = child.try_wait().map_err(|err| {
-            MsError::Config(format!("failed to poll command: {err}"))
-        })? {
-            let stdout = stdout_handle
-                .join()
-                .unwrap_or_else(|_| Vec::new());
-            let stderr = stderr_handle
-                .join()
-                .unwrap_or_else(|_| Vec::new());
+        if let Some(status) = child
+            .try_wait()
+            .map_err(|err| MsError::Config(format!("failed to poll command: {err}")))?
+        {
+            let stdout = stdout_handle.join().unwrap_or_else(|_| Vec::new());
+            let stderr = stderr_handle.join().unwrap_or_else(|_| Vec::new());
             return Ok(std::process::Output {
                 status,
                 stdout,
@@ -695,11 +709,11 @@ fn command_str(command: &Command) -> String {
 }
 
 fn copy_dir_recursive(src: &Path, dst: &Path) -> Result<()> {
-    std::fs::create_dir_all(dst).map_err(|err| {
-        MsError::Config(format!("create fixtures dir {}: {err}", dst.display()))
-    })?;
+    std::fs::create_dir_all(dst)
+        .map_err(|err| MsError::Config(format!("create fixtures dir {}: {err}", dst.display())))?;
     for entry in std::fs::read_dir(src)
-        .map_err(|err| MsError::Config(format!("read fixtures dir: {err}")))? {
+        .map_err(|err| MsError::Config(format!("read fixtures dir: {err}")))?
+    {
         let entry = entry.map_err(|err| MsError::Config(format!("read fixtures entry: {err}")))?;
         let src_path = entry.path();
         let dst_path = dst.join(entry.file_name());
@@ -707,10 +721,7 @@ fn copy_dir_recursive(src: &Path, dst: &Path) -> Result<()> {
             copy_dir_recursive(&src_path, &dst_path)?;
         } else {
             std::fs::copy(&src_path, &dst_path).map_err(|err| {
-                MsError::Config(format!(
-                    "copy fixture {}: {err}",
-                    src_path.display()
-                ))
+                MsError::Config(format!("copy fixture {}: {err}", src_path.display()))
             })?;
         }
     }

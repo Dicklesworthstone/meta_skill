@@ -50,7 +50,7 @@ impl DcgDecision {
     /// This returns `allowed: false` (fail-closed) because when the safety
     /// system cannot evaluate a command, we must assume it could be dangerous.
     /// This is a fundamental security principle: fail-closed, not fail-open.
-    #[must_use] 
+    #[must_use]
     pub fn unavailable(reason: String) -> Self {
         Self {
             allowed: false,
@@ -72,7 +72,7 @@ pub struct DcgGuard {
 }
 
 impl DcgGuard {
-    #[must_use] 
+    #[must_use]
     pub const fn new(dcg_bin: PathBuf, packs: Vec<String>, explain_format: String) -> Self {
         Self {
             dcg_bin,
@@ -81,7 +81,7 @@ impl DcgGuard {
         }
     }
 
-    #[must_use] 
+    #[must_use]
     pub fn version(&self) -> Option<String> {
         let output = Command::new(&self.dcg_bin).arg("--version").output().ok()?;
         if !output.status.success() {
@@ -363,10 +363,10 @@ mod tests {
     #[test]
     fn dcg_guard_huge_command_rejected() {
         let guard = DcgGuard::new(PathBuf::from("/nonexistent"), vec![], "json".to_string());
-        
+
         let huge = "a".repeat(128 * 1024 + 1);
         let decision = guard.evaluate_command(&huge).unwrap();
-        
+
         assert!(!decision.allowed);
         assert_eq!(decision.tier, SafetyTier::Critical);
         assert!(decision.reason.contains("command too long"));

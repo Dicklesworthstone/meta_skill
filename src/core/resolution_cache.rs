@@ -6,7 +6,7 @@
 use std::collections::{HashMap, HashSet, VecDeque};
 
 use parking_lot::RwLock;
-use rusqlite::{params, Connection};
+use rusqlite::{Connection, params};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
@@ -205,9 +205,8 @@ impl DependencyGraph {
     pub fn load_from_db(conn: &Connection) -> Result<Self> {
         let mut graph = Self::new();
 
-        let mut stmt = conn.prepare(
-            "SELECT skill_id, depends_on, dependency_type FROM skill_dependency_graph",
-        )?;
+        let mut stmt = conn
+            .prepare("SELECT skill_id, depends_on, dependency_type FROM skill_dependency_graph")?;
 
         let rows = stmt.query_map([], |row| {
             Ok((
@@ -332,16 +331,29 @@ impl ResolutionCache {
 
         let mut memory = self.memory.write();
         for row in rows {
-            let (skill_id, resolved_json, cache_key_hash, chain_json, included_json, dep_hashes_json, warnings_json) = row?;
+            let (
+                skill_id,
+                resolved_json,
+                cache_key_hash,
+                chain_json,
+                included_json,
+                dep_hashes_json,
+                warnings_json,
+            ) = row?;
 
             let spec: SkillSpec = serde_json::from_str(&resolved_json)
                 .map_err(|e| MsError::Serialization(format!("failed to parse cached spec: {e}")))?;
-            let inheritance_chain: Vec<String> = serde_json::from_str(&chain_json)
-                .map_err(|e| MsError::Serialization(format!("failed to parse inheritance chain: {e}")))?;
-            let included_from: Vec<String> = serde_json::from_str(&included_json)
-                .map_err(|e| MsError::Serialization(format!("failed to parse included_from: {e}")))?;
+            let inheritance_chain: Vec<String> =
+                serde_json::from_str(&chain_json).map_err(|e| {
+                    MsError::Serialization(format!("failed to parse inheritance chain: {e}"))
+                })?;
+            let included_from: Vec<String> = serde_json::from_str(&included_json).map_err(|e| {
+                MsError::Serialization(format!("failed to parse included_from: {e}"))
+            })?;
             let dependency_hashes: HashMap<String, String> = serde_json::from_str(&dep_hashes_json)
-                .map_err(|e| MsError::Serialization(format!("failed to parse dependency hashes: {e}")))?;
+                .map_err(|e| {
+                    MsError::Serialization(format!("failed to parse dependency hashes: {e}"))
+                })?;
             let warnings: Vec<ResolutionWarning> = serde_json::from_str(&warnings_json)
                 .map_err(|e| MsError::Serialization(format!("failed to parse warnings: {e}")))?;
 
@@ -408,17 +420,33 @@ impl ResolutionCache {
         });
 
         match result {
-            Ok((resolved_json, cache_key_hash, chain_json, included_json, dep_hashes_json, warnings_json)) => {
-                let spec: SkillSpec = serde_json::from_str(&resolved_json)
-                    .map_err(|e| MsError::Serialization(format!("failed to parse cached spec: {e}")))?;
-                let inheritance_chain: Vec<String> = serde_json::from_str(&chain_json)
-                    .map_err(|e| MsError::Serialization(format!("failed to parse inheritance chain: {e}")))?;
-                let included_from: Vec<String> = serde_json::from_str(&included_json)
-                    .map_err(|e| MsError::Serialization(format!("failed to parse included_from: {e}")))?;
-                let dependency_hashes: HashMap<String, String> = serde_json::from_str(&dep_hashes_json)
-                    .map_err(|e| MsError::Serialization(format!("failed to parse dependency hashes: {e}")))?;
+            Ok((
+                resolved_json,
+                cache_key_hash,
+                chain_json,
+                included_json,
+                dep_hashes_json,
+                warnings_json,
+            )) => {
+                let spec: SkillSpec = serde_json::from_str(&resolved_json).map_err(|e| {
+                    MsError::Serialization(format!("failed to parse cached spec: {e}"))
+                })?;
+                let inheritance_chain: Vec<String> =
+                    serde_json::from_str(&chain_json).map_err(|e| {
+                        MsError::Serialization(format!("failed to parse inheritance chain: {e}"))
+                    })?;
+                let included_from: Vec<String> =
+                    serde_json::from_str(&included_json).map_err(|e| {
+                        MsError::Serialization(format!("failed to parse included_from: {e}"))
+                    })?;
+                let dependency_hashes: HashMap<String, String> =
+                    serde_json::from_str(&dep_hashes_json).map_err(|e| {
+                        MsError::Serialization(format!("failed to parse dependency hashes: {e}"))
+                    })?;
                 let warnings: Vec<ResolutionWarning> = serde_json::from_str(&warnings_json)
-                    .map_err(|e| MsError::Serialization(format!("failed to parse warnings: {e}")))?;
+                    .map_err(|e| {
+                        MsError::Serialization(format!("failed to parse warnings: {e}"))
+                    })?;
 
                 // Validate dependency hashes
                 if dependency_hashes != *current_dependency_hashes {
@@ -435,7 +463,9 @@ impl ResolutionCache {
                 };
 
                 // Update memory cache
-                self.memory.write().insert(skill_id.to_string(), entry.clone());
+                self.memory
+                    .write()
+                    .insert(skill_id.to_string(), entry.clone());
 
                 Ok(Some(entry))
             }
@@ -445,7 +475,12 @@ impl ResolutionCache {
     }
 
     /// Cache a resolved skill
-    pub fn put(&self, skill_id: &str, resolved: &ResolvedSkillSpec, dependency_hashes: HashMap<String, String>) {
+    pub fn put(
+        &self,
+        skill_id: &str,
+        resolved: &ResolvedSkillSpec,
+        dependency_hashes: HashMap<String, String>,
+    ) {
         let cache_key = CacheKey::new(skill_id, &dependency_hashes);
 
         let entry = CachedResolvedSkill {
@@ -480,7 +515,9 @@ impl ResolutionCache {
         };
 
         // Update memory
-        self.memory.write().insert(skill_id.to_string(), entry.clone());
+        self.memory
+            .write()
+            .insert(skill_id.to_string(), entry.clone());
 
         // Update SQLite
         let resolved_json = serde_json::to_string(&resolved.spec)?;
@@ -530,7 +567,10 @@ impl ResolutionCache {
 
     /// Invalidate a skill and all its dependents
     pub fn invalidate(&self, skill_id: &str) -> HashSet<String> {
-        let dependents = self.dependency_graph.read().get_transitive_dependents(skill_id);
+        let dependents = self
+            .dependency_graph
+            .read()
+            .get_transitive_dependents(skill_id);
 
         let mut memory = self.memory.write();
         memory.invalidate(skill_id);
@@ -678,7 +718,10 @@ mod tests {
     }
 
     fn make_dep_hashes(pairs: &[(&str, &str)]) -> HashMap<String, String> {
-        pairs.iter().map(|(k, v)| (k.to_string(), v.to_string())).collect()
+        pairs
+            .iter()
+            .map(|(k, v)| (k.to_string(), v.to_string()))
+            .collect()
     }
 
     // =========================================================================
@@ -903,9 +946,21 @@ mod tests {
 
         // Cache all three
         let dep_hashes = HashMap::new();
-        cache.put("parent", &make_resolved("parent", vec!["parent"], vec![]), dep_hashes.clone());
-        cache.put("child", &make_resolved("child", vec!["parent", "child"], vec![]), dep_hashes.clone());
-        cache.put("grandchild", &make_resolved("grandchild", vec!["parent", "child", "grandchild"], vec![]), dep_hashes.clone());
+        cache.put(
+            "parent",
+            &make_resolved("parent", vec!["parent"], vec![]),
+            dep_hashes.clone(),
+        );
+        cache.put(
+            "child",
+            &make_resolved("child", vec!["parent", "child"], vec![]),
+            dep_hashes.clone(),
+        );
+        cache.put(
+            "grandchild",
+            &make_resolved("grandchild", vec!["parent", "child", "grandchild"], vec![]),
+            dep_hashes.clone(),
+        );
 
         // Invalidate parent - should also invalidate child and grandchild
         let invalidated = cache.invalidate("parent");
@@ -927,8 +982,16 @@ mod tests {
         assert_eq!(stats.memory_entries, 0);
 
         let dep_hashes = HashMap::new();
-        cache.put("skill1", &make_resolved("skill1", vec!["skill1"], vec![]), dep_hashes.clone());
-        cache.put("skill2", &make_resolved("skill2", vec!["skill2"], vec![]), dep_hashes);
+        cache.put(
+            "skill1",
+            &make_resolved("skill1", vec!["skill1"], vec![]),
+            dep_hashes.clone(),
+        );
+        cache.put(
+            "skill2",
+            &make_resolved("skill2", vec!["skill2"], vec![]),
+            dep_hashes,
+        );
 
         let stats = cache.stats();
         assert_eq!(stats.memory_entries, 2);

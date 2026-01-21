@@ -13,15 +13,15 @@ use serde::Serialize;
 
 use crate::app::AppContext;
 use crate::cli::output::OutputFormat;
-use crate::cli::output::{emit_human, emit_json, HumanLayout};
+use crate::cli::output::{HumanLayout, emit_human, emit_json};
 use crate::core::spec_lens::compile_markdown;
 use crate::error::{MsError, Result};
 use crate::import::{
     ContentBlock, ContentBlockType, ContentParser, GeneratedSkill, GeneratorConfig, ImportHints,
     ImportStats, SkillGenerator, Suggestion, UnknownHandling, Warning,
 };
-use crate::lint::rules::all_rules;
 use crate::lint::ValidationEngine;
+use crate::lint::rules::all_rules;
 
 // =============================================================================
 // ARGUMENT TYPES
@@ -140,9 +140,8 @@ pub fn run(ctx: &AppContext, args: &ImportArgs) -> Result<()> {
 
 fn run_single(ctx: &AppContext, args: &ImportArgs) -> Result<()> {
     // Read input file
-    let content = std::fs::read_to_string(&args.path).map_err(|e| {
-        MsError::Config(format!("Failed to read {}: {e}", args.path.display()))
-    })?;
+    let content = std::fs::read_to_string(&args.path)
+        .map_err(|e| MsError::Config(format!("Failed to read {}: {e}", args.path.display())))?;
 
     // Parse content into blocks
     let parser = ContentParser::new();
@@ -258,10 +257,7 @@ fn run_single(ctx: &AppContext, args: &ImportArgs) -> Result<()> {
             );
         }
     } else if ctx.output_format == OutputFormat::Human {
-        println!(
-            "\n{} Dry run - no file written",
-            style("ℹ").blue()
-        );
+        println!("\n{} Dry run - no file written", style("ℹ").blue());
     }
 
     Ok(())
@@ -313,12 +309,7 @@ fn run_batch(ctx: &AppContext, args: &ImportArgs) -> Result<()> {
 
     for (i, file) in files.iter().enumerate() {
         if ctx.output_format == OutputFormat::Human {
-            println!(
-                "\n[{}/{}] {}",
-                i + 1,
-                total,
-                style(file.display()).bold()
-            );
+            println!("\n[{}/{}] {}", i + 1, total, style(file.display()).bold());
         }
 
         let result = import_single_for_batch(ctx, args, file, &output_dir);
@@ -354,17 +345,22 @@ fn run_batch(ctx: &AppContext, args: &ImportArgs) -> Result<()> {
     } else {
         let mut layout = HumanLayout::new();
         layout.section("Batch Import Summary");
-        layout.kv(
-            "Total files",
-            &results.len().to_string(),
-        );
+        layout.kv("Total files", &results.len().to_string());
         layout.kv(
             "Imported",
-            &results.iter().filter(|r| r.result.is_ok()).count().to_string(),
+            &results
+                .iter()
+                .filter(|r| r.result.is_ok())
+                .count()
+                .to_string(),
         );
         layout.kv(
             "Skipped",
-            &results.iter().filter(|r| r.result.is_err()).count().to_string(),
+            &results
+                .iter()
+                .filter(|r| r.result.is_err())
+                .count()
+                .to_string(),
         );
         emit_human(layout);
     }
@@ -389,9 +385,8 @@ fn import_single_for_batch(
     output_dir: &PathBuf,
 ) -> Result<BatchSuccess> {
     // Read input
-    let content = std::fs::read_to_string(file).map_err(|e| {
-        MsError::Config(format!("Failed to read {}: {e}", file.display()))
-    })?;
+    let content = std::fs::read_to_string(file)
+        .map_err(|e| MsError::Config(format!("Failed to read {}: {e}", file.display())))?;
 
     // Parse
     let parser = ContentParser::new();
@@ -456,7 +451,11 @@ fn import_single_for_batch(
     }
 
     Ok(BatchSuccess {
-        output_path: if args.dry_run { None } else { Some(output_path) },
+        output_path: if args.dry_run {
+            None
+        } else {
+            Some(output_path)
+        },
         stats: generated.stats,
     })
 }
@@ -469,7 +468,11 @@ fn build_hints(args: &ImportArgs) -> ImportHints {
     ImportHints {
         suggested_id: args.id.clone(),
         suggested_name: args.name.clone(),
-        source_filename: args.path.file_stem().and_then(|s| s.to_str()).map(String::from),
+        source_filename: args
+            .path
+            .file_stem()
+            .and_then(|s| s.to_str())
+            .map(String::from),
         domain: args.domain.clone(),
         tags: args.tags.clone().unwrap_or_default(),
     }
@@ -498,11 +501,15 @@ fn show_classification_preview(blocks: &[ContentBlock]) {
 
     for (block_type, label) in type_order {
         if let Some(type_blocks) = by_type.get(&block_type) {
-            let avg_conf: f32 = type_blocks.iter().map(|b| b.confidence).sum::<f32>()
-                / type_blocks.len() as f32;
+            let avg_conf: f32 =
+                type_blocks.iter().map(|b| b.confidence).sum::<f32>() / type_blocks.len() as f32;
             layout.kv(
                 label,
-                &format!("{} blocks (avg confidence: {:.2})", type_blocks.len(), avg_conf),
+                &format!(
+                    "{} blocks (avg confidence: {:.2})",
+                    type_blocks.len(),
+                    avg_conf
+                ),
             );
         }
     }
@@ -552,7 +559,10 @@ fn show_generation_stats(stats: &ImportStats) {
     layout.kv("Unknown", &stats.unknown_count.to_string());
     layout.kv("Avg confidence", &format!("{:.2}", stats.avg_confidence));
     if stats.low_confidence_skipped > 0 {
-        layout.kv("Skipped (low conf)", &stats.low_confidence_skipped.to_string());
+        layout.kv(
+            "Skipped (low conf)",
+            &stats.low_confidence_skipped.to_string(),
+        );
     }
     if stats.duplicates_skipped > 0 {
         layout.kv("Skipped (dupes)", &stats.duplicates_skipped.to_string());
@@ -562,10 +572,19 @@ fn show_generation_stats(stats: &ImportStats) {
 
 fn format_warning(warning: &Warning) -> String {
     match warning {
-        Warning::LowConfidence { content_preview, confidence } => {
-            format!("Low confidence ({:.2}): \"{}\"", confidence, content_preview)
+        Warning::LowConfidence {
+            content_preview,
+            confidence,
+        } => {
+            format!(
+                "Low confidence ({:.2}): \"{}\"",
+                confidence, content_preview
+            )
         }
-        Warning::Discarded { content_preview, reason } => {
+        Warning::Discarded {
+            content_preview,
+            reason,
+        } => {
             format!("Discarded: \"{}\" - {}", content_preview, reason)
         }
         Warning::Duplicate { content_preview } => {
@@ -579,7 +598,10 @@ fn format_warning(warning: &Warning) -> String {
 
 fn format_suggestion(suggestion: &Suggestion) -> String {
     match suggestion {
-        Suggestion::ClassifyBlock { content_preview, likely_types } => {
+        Suggestion::ClassifyBlock {
+            content_preview,
+            likely_types,
+        } => {
             let types: Vec<_> = likely_types.iter().map(|t| t.as_str()).collect();
             format!(
                 "Review classification for \"{}\": likely {}",
@@ -587,7 +609,10 @@ fn format_suggestion(suggestion: &Suggestion) -> String {
                 types.join(" or ")
             )
         }
-        Suggestion::ReviewMetadata { field, inferred_value } => {
+        Suggestion::ReviewMetadata {
+            field,
+            inferred_value,
+        } => {
             format!("Review inferred {}: \"{}\"", field, inferred_value)
         }
     }
@@ -598,11 +623,13 @@ fn format_skill(generated: &GeneratedSkill, format: SkillFormat) -> String {
         SkillFormat::Markdown => compile_markdown(&generated.skill),
         SkillFormat::Yaml => {
             // For YAML output, serialize the whole spec
-            serde_yaml::to_string(&generated.skill).unwrap_or_else(|_| compile_markdown(&generated.skill))
+            serde_yaml::to_string(&generated.skill)
+                .unwrap_or_else(|_| compile_markdown(&generated.skill))
         }
         SkillFormat::Toml => {
             // For TOML output
-            toml::to_string_pretty(&generated.skill).unwrap_or_else(|_| compile_markdown(&generated.skill))
+            toml::to_string_pretty(&generated.skill)
+                .unwrap_or_else(|_| compile_markdown(&generated.skill))
         }
     }
 }

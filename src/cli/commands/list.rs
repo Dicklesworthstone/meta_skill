@@ -135,7 +135,10 @@ fn display_list(ctx: &AppContext, skills: &[SkillRecord], args: &ListArgs) -> Re
                 "count": entries.len(),
                 "skills": entries
             });
-            println!("{}", serde_json::to_string_pretty(&output).unwrap_or_default());
+            println!(
+                "{}",
+                serde_json::to_string_pretty(&output).unwrap_or_default()
+            );
             Ok(())
         }
         OutputFormat::Jsonl => {
@@ -161,7 +164,11 @@ fn display_list(ctx: &AppContext, skills: &[SkillRecord], args: &ListArgs) -> Re
                     skill.version.as_deref().unwrap_or("-"),
                     skill.source_layer,
                     skill.quality_score,
-                    skill.modified_at.split('T').next().unwrap_or(&skill.modified_at),
+                    skill
+                        .modified_at
+                        .split('T')
+                        .next()
+                        .unwrap_or(&skill.modified_at),
                     skill.is_deprecated
                 );
             }

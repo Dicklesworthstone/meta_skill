@@ -9,9 +9,9 @@ use std::collections::HashMap;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
+use crate::suggestions::bandit::ContextualBandit;
 use crate::suggestions::bandit::features::ContextFeatures;
 use crate::suggestions::bandit::rewards::SkillFeedback;
-use crate::suggestions::bandit::ContextualBandit;
 
 /// Tracks skill loading sessions for implicit feedback.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -626,10 +626,7 @@ mod tests {
         let mut collector = FeedbackCollector::new();
 
         // Show suggestions
-        collector.on_suggestions_shown(
-            &["skill-a".to_string(), "skill-b".to_string()],
-            None,
-        );
+        collector.on_suggestions_shown(&["skill-a".to_string(), "skill-b".to_string()], None);
 
         // Load skill-a (marks as selected)
         collector.on_skill_load("skill-a");

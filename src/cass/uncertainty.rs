@@ -276,7 +276,7 @@ pub enum QueryType {
 
 impl QueryType {
     /// Get a human-readable description
-    #[must_use] 
+    #[must_use]
     pub const fn description(&self) -> &'static str {
         match self {
             Self::Positive => "Find positive examples supporting the pattern",
@@ -340,7 +340,7 @@ pub struct DefaultQueryGenerator {
 }
 
 impl DefaultQueryGenerator {
-    #[must_use] 
+    #[must_use]
     pub const fn new(queries_per_type: usize) -> Self {
         Self { queries_per_type }
     }
@@ -395,9 +395,7 @@ impl QueryGenerator for DefaultQueryGenerator {
         pattern: &ExtractedPattern,
         count: usize,
     ) -> Vec<SuggestedQuery> {
-        let description = pattern
-            .description.as_deref()
-            .unwrap_or("pattern");
+        let description = pattern.description.as_deref().unwrap_or("pattern");
 
         let tags_str = pattern.tags.join(" ");
         let mut queries = Vec::new();
@@ -406,9 +404,7 @@ impl QueryGenerator for DefaultQueryGenerator {
         queries.push(SuggestedQuery {
             id: Uuid::new_v4().to_string(),
             query_type: QueryType::Positive,
-            query: format!(
-                "Show sessions where I successfully applied {description} techniques"
-            ),
+            query: format!("Show sessions where I successfully applied {description} techniques"),
             cass_query: Some(format!("topic:{tags_str} AND outcome:success")),
             expected_evidence: "More positive examples supporting the pattern".into(),
             priority: 3,
@@ -441,9 +437,7 @@ impl QueryGenerator for DefaultQueryGenerator {
         pattern: &ExtractedPattern,
         count: usize,
     ) -> Vec<SuggestedQuery> {
-        let description = pattern
-            .description.as_deref()
-            .unwrap_or("pattern");
+        let description = pattern.description.as_deref().unwrap_or("pattern");
 
         let tags_str = pattern.tags.join(" ");
         let mut queries = Vec::new();
@@ -452,9 +446,7 @@ impl QueryGenerator for DefaultQueryGenerator {
         queries.push(SuggestedQuery {
             id: Uuid::new_v4().to_string(),
             query_type: QueryType::Negative,
-            query: format!(
-                "Show sessions where {description} failed or I had to retry"
-            ),
+            query: format!("Show sessions where {description} failed or I had to retry"),
             cass_query: Some(format!(
                 "topic:{tags_str} AND (outcome:failure OR action:retry)"
             )),
@@ -487,9 +479,7 @@ impl QueryGenerator for DefaultQueryGenerator {
         pattern: &ExtractedPattern,
         count: usize,
     ) -> Vec<SuggestedQuery> {
-        let description = pattern
-            .description.as_deref()
-            .unwrap_or("pattern");
+        let description = pattern.description.as_deref().unwrap_or("pattern");
 
         let tags_str = pattern.tags.join(" ");
         let mut queries = Vec::new();
@@ -498,9 +488,7 @@ impl QueryGenerator for DefaultQueryGenerator {
         queries.push(SuggestedQuery {
             id: Uuid::new_v4().to_string(),
             query_type: QueryType::Boundary,
-            query: format!(
-                "Show sessions with unusual or edge case {description} scenarios"
-            ),
+            query: format!("Show sessions with unusual or edge case {description} scenarios"),
             cass_query: Some(format!(
                 "topic:{tags_str} AND (edge_case:true OR unusual:true)"
             )),
@@ -574,7 +562,7 @@ pub struct DefaultResolver {
 }
 
 impl DefaultResolver {
-    #[must_use] 
+    #[must_use]
     pub const fn new(confidence_threshold: f32, max_attempts: usize) -> Self {
         Self {
             confidence_threshold,
@@ -721,12 +709,12 @@ impl Default for UncertaintyConfig {
 }
 
 impl UncertaintyConfig {
-    #[must_use] 
+    #[must_use]
     pub const fn queries_range(&self) -> RangeInclusive<u32> {
         self.queries_per_uncertainty.0..=self.queries_per_uncertainty.1
     }
 
-    #[must_use] 
+    #[must_use]
     pub const fn expiry_duration(&self) -> Duration {
         Duration::from_secs(self.expiry_seconds)
     }
@@ -760,7 +748,7 @@ pub struct UncertaintyQueue {
 
 impl UncertaintyQueue {
     /// Create a new uncertainty queue with the given configuration
-    #[must_use] 
+    #[must_use]
     pub fn new(config: UncertaintyConfig) -> Self {
         Self {
             items: Arc::new(RwLock::new(VecDeque::new())),
@@ -771,32 +759,35 @@ impl UncertaintyQueue {
     }
 
     /// Create with default configuration
-    #[must_use] 
+    #[must_use]
     pub fn with_defaults() -> Self {
         Self::new(UncertaintyConfig::default())
     }
 
     /// Set a custom query generator
-    #[must_use] 
+    #[must_use]
     pub fn with_query_generator(mut self, generator: Box<dyn QueryGenerator>) -> Self {
         self.query_generator = generator;
         self
     }
 
     /// Get the current configuration
-    #[must_use] 
+    #[must_use]
     pub const fn config(&self) -> &UncertaintyConfig {
         &self.config
     }
 
     /// Get the current queue length
-    #[must_use] 
+    #[must_use]
     pub fn len(&self) -> usize {
-        self.items.read().unwrap_or_else(std::sync::PoisonError::into_inner).len()
+        self.items
+            .read()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .len()
     }
 
     /// Check if queue is empty
-    #[must_use] 
+    #[must_use]
     pub fn is_empty(&self) -> bool {
         self.items
             .read()
@@ -805,7 +796,7 @@ impl UncertaintyQueue {
     }
 
     /// Add new uncertainty to queue
-    #[must_use] 
+    #[must_use]
     pub fn enqueue(&self, mut item: UncertaintyItem) -> UncertaintyId {
         let id = item.id.clone();
 
@@ -815,11 +806,17 @@ impl UncertaintyQueue {
             item.suggested_queries = self.query_generator.generate_queries(&item, max_queries);
         }
 
-        let mut items = self.items.write().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let mut items = self
+            .items
+            .write()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         items.push_back(item);
 
         // Update stats
-        let mut stats = self.stats.write().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let mut stats = self
+            .stats
+            .write()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         stats.total_queued += 1;
 
         // Check if we need to force resolution
@@ -839,9 +836,12 @@ impl UncertaintyQueue {
     }
 
     /// Get next item to process (FIFO)
-    #[must_use] 
+    #[must_use]
     pub fn next(&self) -> Option<UncertaintyItem> {
-        let items = self.items.read().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let items = self
+            .items
+            .read()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         items
             .iter()
             .find(|item| matches!(item.status, UncertaintyStatus::Pending))
@@ -849,16 +849,22 @@ impl UncertaintyQueue {
     }
 
     /// Get item by ID
-    #[must_use] 
+    #[must_use]
     pub fn get(&self, id: &str) -> Option<UncertaintyItem> {
-        let items = self.items.read().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let items = self
+            .items
+            .read()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         items.iter().find(|item| item.id == id).cloned()
     }
 
     /// Update an item in the queue
-    #[must_use] 
+    #[must_use]
     pub fn update(&self, updated: UncertaintyItem) -> bool {
-        let mut items = self.items.write().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let mut items = self
+            .items
+            .write()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         if let Some(item) = items.iter_mut().find(|item| item.id == updated.id) {
             *item = updated;
             return true;
@@ -868,7 +874,10 @@ impl UncertaintyQueue {
 
     /// Mark item as resolved
     pub fn mark_resolved(&self, id: &str, resolution: Resolution, new_confidence: f32) {
-        let mut items = self.items.write().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let mut items = self
+            .items
+            .write()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         if let Some(item) = items.iter_mut().find(|item| item.id == id) {
             item.status = UncertaintyStatus::Resolved {
                 new_confidence,
@@ -879,7 +888,10 @@ impl UncertaintyQueue {
             item.confidence = new_confidence;
 
             // Update stats
-            let mut stats = self.stats.write().unwrap_or_else(std::sync::PoisonError::into_inner);
+            let mut stats = self
+                .stats
+                .write()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
             stats.total_resolved += 1;
             let resolution_time = (item.updated_at - item.created_at).num_seconds() as f64;
             let total_resolved = stats.total_resolved as f64;
@@ -891,7 +903,10 @@ impl UncertaintyQueue {
 
     /// Mark item as rejected
     pub fn mark_rejected(&self, id: &str, reason: &str) {
-        let mut items = self.items.write().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let mut items = self
+            .items
+            .write()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         if let Some(item) = items.iter_mut().find(|item| item.id == id) {
             item.status = UncertaintyStatus::Rejected {
                 reason: reason.to_string(),
@@ -900,19 +915,25 @@ impl UncertaintyQueue {
             item.updated_at = Utc::now();
 
             // Update stats
-            let mut stats = self.stats.write().unwrap_or_else(std::sync::PoisonError::into_inner);
+            let mut stats = self
+                .stats
+                .write()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
             stats.total_rejected += 1;
         }
     }
 
     /// Prune expired items
-    #[must_use] 
+    #[must_use]
     pub fn prune_expired(&self) -> Vec<UncertaintyItem> {
         let expiry = self.config.expiry_duration();
         let now = Utc::now();
         let mut expired = Vec::new();
 
-        let mut items = self.items.write().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let mut items = self
+            .items
+            .write()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
 
         // Find and mark expired items
         for item in items.iter_mut() {
@@ -931,7 +952,10 @@ impl UncertaintyQueue {
 
         // Update stats
         if !expired.is_empty() {
-            let mut stats = self.stats.write().unwrap_or_else(std::sync::PoisonError::into_inner);
+            let mut stats = self
+                .stats
+                .write()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
             stats.total_expired += expired.len() as u64;
         }
 
@@ -939,15 +963,21 @@ impl UncertaintyQueue {
     }
 
     /// Get queue statistics
-    #[must_use] 
+    #[must_use]
     pub fn stats(&self) -> QueueStats {
-        self.stats.read().unwrap_or_else(std::sync::PoisonError::into_inner).clone()
+        self.stats
+            .read()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone()
     }
 
     /// List all items with optional status filter
-    #[must_use] 
+    #[must_use]
     pub fn list(&self, status_filter: Option<&str>) -> Vec<UncertaintyItem> {
-        let items = self.items.read().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let items = self
+            .items
+            .read()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
 
         items
             .iter()
@@ -971,9 +1001,12 @@ impl UncertaintyQueue {
     }
 
     /// Get counts by status
-    #[must_use] 
+    #[must_use]
     pub fn counts(&self) -> UncertaintyCounts {
-        let items = self.items.read().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let items = self
+            .items
+            .read()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
 
         let mut counts = UncertaintyCounts::default();
 
@@ -1004,7 +1037,7 @@ pub struct UncertaintyCounts {
 }
 
 impl UncertaintyCounts {
-    #[must_use] 
+    #[must_use]
     pub const fn total(&self) -> usize {
         self.pending
             + self.in_progress
@@ -1014,7 +1047,7 @@ impl UncertaintyCounts {
             + self.expired
     }
 
-    #[must_use] 
+    #[must_use]
     pub const fn active(&self) -> usize {
         self.pending + self.in_progress
     }

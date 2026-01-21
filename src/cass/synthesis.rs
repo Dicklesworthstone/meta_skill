@@ -23,7 +23,10 @@ pub fn synthesize_skill(patterns: &[Pattern]) -> Result<SkillDraft> {
     // Group patterns by type
     let mut by_type: HashMap<SimplePatternType, Vec<&Pattern>> = HashMap::new();
     for pattern in patterns {
-        by_type.entry(pattern.pattern_type).or_default().push(pattern);
+        by_type
+            .entry(pattern.pattern_type)
+            .or_default()
+            .push(pattern);
     }
 
     // Find dominant pattern type (most patterns)
@@ -42,10 +45,7 @@ pub fn synthesize_skill(patterns: &[Pattern]) -> Result<SkillDraft> {
     let content = generate_content(&by_type);
 
     // Extract tags from pattern types
-    let tags = by_type
-        .keys()
-        .map(|t| pattern_type_tag(*t))
-        .collect();
+    let tags = by_type.keys().map(|t| pattern_type_tag(*t)).collect();
 
     Ok(SkillDraft {
         name,

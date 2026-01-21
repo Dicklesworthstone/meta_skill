@@ -4,16 +4,20 @@ use std::path::PathBuf;
 use clap::Args;
 
 use crate::app::AppContext;
-use crate::cli::formatters::{ScorePercentageBreakdown, SuggestionContext, SuggestionItem, SuggestionOutput};
+use crate::cli::formatters::{
+    ScorePercentageBreakdown, SuggestionContext, SuggestionItem, SuggestionOutput,
+};
 use crate::cli::output::Formattable;
 use crate::context::collector::{CollectedContext, ContextCollector, ContextCollectorConfig};
 use crate::context::{ContextCapture, ContextFingerprint};
 use crate::error::Result;
 use crate::storage::sqlite::SkillRecord;
-use crate::suggestions::bandit::contextual::ContextualBandit;
-use crate::suggestions::bandit::features::{DefaultFeatureExtractor, FeatureExtractor, UserHistory, FEATURE_DIM};
-use crate::suggestions::tracking::SuggestionTracker;
 use crate::suggestions::SuggestionCooldownCache;
+use crate::suggestions::bandit::contextual::ContextualBandit;
+use crate::suggestions::bandit::features::{
+    DefaultFeatureExtractor, FEATURE_DIM, FeatureExtractor, UserHistory,
+};
+use crate::suggestions::tracking::SuggestionTracker;
 
 #[derive(Args, Debug)]
 pub struct SuggestArgs {
@@ -145,7 +149,8 @@ pub fn run(ctx: &AppContext, args: &SuggestArgs) -> Result<()> {
     // 5. Extract context features
     let feature_extractor = DefaultFeatureExtractor::new();
     let user_history = load_user_history();
-    let context_features = feature_extractor.extract_from_collected(&collected_context, &user_history);
+    let context_features =
+        feature_extractor.extract_from_collected(&collected_context, &user_history);
 
     // 6. Get all skills from database
     let all_skills = ctx.db.list_skills(1000, 0)?;
@@ -162,13 +167,17 @@ pub fn run(ctx: &AppContext, args: &SuggestArgs) -> Result<()> {
     let recommendations = contextual_bandit.recommend(&context_features, fetch_limit);
 
     // 8. Build suggestions with metadata
-    let skill_map: HashMap<String, &SkillRecord> = all_skills.iter().map(|s| (s.id.clone(), s)).collect();
+    let skill_map: HashMap<String, &SkillRecord> =
+        all_skills.iter().map(|s| (s.id.clone(), s)).collect();
     let mut suggestions: Vec<Suggestion> = recommendations
         .iter()
         .filter_map(|rec| {
             let skill = skill_map.get(&rec.skill_id)?;
             let tags = parse_tags_from_metadata(&skill.metadata_json);
-            let is_favorite = ctx.db.has_user_preference(&rec.skill_id, "favorite").unwrap_or(false);
+            let is_favorite = ctx
+                .db
+                .has_user_preference(&rec.skill_id, "favorite")
+                .unwrap_or(false);
 
             Some(Suggestion {
                 skill_id: rec.skill_id.clone(),
@@ -192,7 +201,9 @@ pub fn run(ctx: &AppContext, args: &SuggestArgs) -> Result<()> {
 
     // 9. Filter out hidden skills and boost favorites
     suggestions.retain(|s| {
-        !ctx.db.has_user_preference(&s.skill_id, "hidden").unwrap_or(false)
+        !ctx.db
+            .has_user_preference(&s.skill_id, "hidden")
+            .unwrap_or(false)
     });
 
     // Apply favorites boost (always, not just in personal mode)
@@ -204,13 +215,19 @@ pub fn run(ctx: &AppContext, args: &SuggestArgs) -> Result<()> {
         }
     }
     // Re-sort after favorites boost
-    suggestions.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap_or(std::cmp::Ordering::Equal));
+    suggestions.sort_by(|a, b| {
+        b.score
+            .partial_cmp(&a.score)
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
 
     // 10. Apply domain filter if specified
     if let Some(ref domain) = args.domain {
         let domain_lower = domain.to_lowercase();
         suggestions.retain(|s| {
-            s.tags.iter().any(|t| t.to_lowercase().contains(&domain_lower))
+            s.tags
+                .iter()
+                .any(|t| t.to_lowercase().contains(&domain_lower))
                 || s.name.to_lowercase().contains(&domain_lower)
                 || s.description.to_lowercase().contains(&domain_lower)
         });
@@ -226,16 +243,19 @@ pub fn run(ctx: &AppContext, args: &SuggestArgs) -> Result<()> {
             suggestion.score = (suggestion.score + personal_boost).clamp(0.0, 1.0);
         }
         // Re-sort after personal boost
-        suggestions.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap_or(std::cmp::Ordering::Equal));
+        suggestions.sort_by(|a, b| {
+            b.score
+                .partial_cmp(&a.score)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
     }
 
     // 12. Apply cooldown filter (unless ignored)
     let fp = fingerprint.as_u64();
     if !args.ignore_cooldowns {
         use crate::suggestions::CooldownStatus;
-        suggestions.retain(|s| {
-            !matches!(cache.status(fp, &s.skill_id), CooldownStatus::Active { .. })
-        });
+        suggestions
+            .retain(|s| !matches!(cache.status(fp, &s.skill_id), CooldownStatus::Active { .. }));
     }
 
     // 13. Truncate to limit
@@ -245,7 +265,8 @@ pub fn run(ctx: &AppContext, args: &SuggestArgs) -> Result<()> {
     let mut discovery_suggestions: Vec<Suggestion> = Vec::new();
     if args.discover {
         // Find skills not in main suggestions that are under-explored
-        let suggested_ids: std::collections::HashSet<_> = suggestions.iter().map(|s| &s.skill_id).collect();
+        let suggested_ids: std::collections::HashSet<_> =
+            suggestions.iter().map(|s| &s.skill_id).collect();
         let mut discovery_candidates: Vec<Suggestion> = all_skills
             .iter()
             .filter(|s| !suggested_ids.contains(&s.id))
@@ -262,7 +283,10 @@ pub fn run(ctx: &AppContext, args: &SuggestArgs) -> Result<()> {
                 }
 
                 let tags = parse_tags_from_metadata(&skill.metadata_json);
-                let is_favorite = ctx.db.has_user_preference(&skill.id, "favorite").unwrap_or(false);
+                let is_favorite = ctx
+                    .db
+                    .has_user_preference(&skill.id, "favorite")
+                    .unwrap_or(false);
                 let mut base_score = rec.map(|r| r.score).unwrap_or(0.3);
                 let mut personal_boost = 0.0;
 
@@ -295,9 +319,13 @@ pub fn run(ctx: &AppContext, args: &SuggestArgs) -> Result<()> {
 
         // Sort by exploration potential
         discovery_candidates.sort_by(|a, b| {
-            let a_potential = a.breakdown.exploration_bonus + (1.0 - a.breakdown.pull_count as f32 / 10.0).max(0.0) * 0.2;
-            let b_potential = b.breakdown.exploration_bonus + (1.0 - b.breakdown.pull_count as f32 / 10.0).max(0.0) * 0.2;
-            b_potential.partial_cmp(&a_potential).unwrap_or(std::cmp::Ordering::Equal)
+            let a_potential = a.breakdown.exploration_bonus
+                + (1.0 - a.breakdown.pull_count as f32 / 10.0).max(0.0) * 0.2;
+            let b_potential = b.breakdown.exploration_bonus
+                + (1.0 - b.breakdown.pull_count as f32 / 10.0).max(0.0) * 0.2;
+            b_potential
+                .partial_cmp(&a_potential)
+                .unwrap_or(std::cmp::Ordering::Equal)
         });
 
         discovery_suggestions = discovery_candidates.into_iter().take(3).collect();
@@ -320,7 +348,15 @@ pub fn run(ctx: &AppContext, args: &SuggestArgs) -> Result<()> {
     cache.save(&cache_path)?;
 
     // 16. Output results
-    output_suggestions(ctx, args, &fingerprint, &suggestions, &discovery_suggestions, &collected_context, &contextual_bandit)
+    output_suggestions(
+        ctx,
+        args,
+        &fingerprint,
+        &suggestions,
+        &discovery_suggestions,
+        &collected_context,
+        &contextual_bandit,
+    )
 }
 
 /// Output when no skills are available.
@@ -401,10 +437,7 @@ fn output_suggestions(
         }
 
         // Discovery-specific reason
-        reason_parts.push(format!(
-            "under-explored ({} uses)",
-            s.breakdown.pull_count
-        ));
+        reason_parts.push(format!("under-explored ({} uses)", s.breakdown.pull_count));
 
         // Calculate percentage breakdown if --explain flag is used
         let breakdown = if args.explain {
@@ -641,7 +674,11 @@ mod tests {
     // Suggestion reason tests
     // =========================================================================
 
-    fn make_test_suggestion(is_favorite: bool, contextual_score: f32, pull_count: u64) -> Suggestion {
+    fn make_test_suggestion(
+        is_favorite: bool,
+        contextual_score: f32,
+        pull_count: u64,
+    ) -> Suggestion {
         Suggestion {
             skill_id: "test-skill".to_string(),
             name: "Test Skill".to_string(),
@@ -693,7 +730,10 @@ mod tests {
     fn reason_all_factors() {
         let s = make_test_suggestion(true, 0.6, 20);
         let reason = build_suggestion_reason(&s);
-        assert_eq!(reason, Some("Favorite, context match 60%, 20 prior uses".to_string()));
+        assert_eq!(
+            reason,
+            Some("Favorite, context match 60%, 20 prior uses".to_string())
+        );
     }
 
     #[test]

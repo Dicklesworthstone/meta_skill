@@ -274,11 +274,7 @@ mod tests {
         // Set up mock Claude Code
         let claude_dir = temp.path().join(".claude");
         std::fs::create_dir_all(&claude_dir).unwrap();
-        std::fs::write(
-            claude_dir.join("config.json"),
-            r#"{"version": "1.0.0"}"#,
-        )
-        .unwrap();
+        std::fs::write(claude_dir.join("config.json"), r#"{"version": "1.0.0"}"#).unwrap();
 
         // Set up mock Cursor
         let cursor_dir = temp.path().join(".cursor");
@@ -301,11 +297,7 @@ mod tests {
         // Set up mock Claude Code
         let claude_dir = temp.path().join(".claude");
         std::fs::create_dir_all(&claude_dir).unwrap();
-        std::fs::write(
-            claude_dir.join("config.json"),
-            r#"{"version": "2.0.0"}"#,
-        )
-        .unwrap();
+        std::fs::write(claude_dir.join("config.json"), r#"{"version": "2.0.0"}"#).unwrap();
 
         let service = AgentDetectionService::with_home(temp.path());
 
@@ -350,7 +342,11 @@ mod tests {
             .map(|(_, p)| p);
         assert!(claude_paths.is_some());
         let claude_paths = claude_paths.unwrap();
-        assert!(claude_paths.iter().any(|p| p.to_string_lossy().contains("SKILL.md")));
+        assert!(
+            claude_paths
+                .iter()
+                .any(|p| p.to_string_lossy().contains("SKILL.md"))
+        );
     }
 
     #[test]

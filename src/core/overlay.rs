@@ -30,7 +30,7 @@ pub struct OverlayContext {
 
 impl OverlayContext {
     /// Create context from environment variables
-    #[must_use] 
+    #[must_use]
     pub fn from_env() -> Self {
         let environment = std::env::var("MS_ENVIRONMENT").ok();
         Self {
@@ -147,9 +147,7 @@ impl OverlayCondition {
     fn is_met(&self, context: &OverlayContext) -> bool {
         match self {
             Self::Environment(env) => context.environment.as_ref() == Some(env),
-            Self::UserSetting { key, value } => {
-                context.user_settings.get(key) == Some(value)
-            }
+            Self::UserSetting { key, value } => context.user_settings.get(key) == Some(value),
             Self::Always => true,
         }
     }
@@ -274,6 +272,11 @@ mod tests {
         assert_eq!(spec.metadata.name, "New Name");
         assert_eq!(spec.metadata.author.as_deref(), Some("New Author"));
         // Check that unknown key was logged but didn't crash
-        assert!(result.changes.iter().any(|c| c.contains("Set metadata unknown")));
+        assert!(
+            result
+                .changes
+                .iter()
+                .any(|c| c.contains("Set metadata unknown"))
+        );
     }
 }

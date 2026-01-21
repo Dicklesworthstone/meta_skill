@@ -78,9 +78,7 @@ fn test_rrf_fusion_performance_target() {
         )
     });
 
-    println!(
-        "[PERF] rrf_fusion (500+500 results): {per_op:?} per operation"
-    );
+    println!("[PERF] rrf_fusion (500+500 results): {per_op:?} per operation");
 
     // Target: < 10ms
     assert!(
@@ -109,9 +107,7 @@ fn test_vector_search_performance_target() {
 
     let per_op = measure_op(10, 100, || index.search(black_box(&query_embedding), 10));
 
-    println!(
-        "[PERF] vector_search (1000 embeddings): {per_op:?} per operation"
-    );
+    println!("[PERF] vector_search (1000 embeddings): {per_op:?} per operation");
 
     // Target: < 50ms p99 (we use mean, so target should be lower)
     assert!(
@@ -154,9 +150,7 @@ fn test_packing_performance_target() {
         )
     });
 
-    println!(
-        "[PERF] packing (100 slices, 5000 budget): {per_op:?} per operation"
-    );
+    println!("[PERF] packing (100 slices, 5000 budget): {per_op:?} per operation");
 
     // Target: < 50ms
     assert!(

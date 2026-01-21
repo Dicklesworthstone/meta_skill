@@ -6,8 +6,7 @@ fn backup_create_and_restore_roundtrip() {
     let init = fixture.init();
     assert!(init.success, "init failed: {}", init.stderr);
 
-    let original_config =
-        std::fs::read_to_string(&fixture.config_path).expect("read config");
+    let original_config = std::fs::read_to_string(&fixture.config_path).expect("read config");
 
     let backup = fixture.run_ms(&["--robot", "backup", "create", "--id", "roundtrip"]);
     assert!(backup.success, "backup create failed: {}", backup.stderr);
@@ -17,13 +16,7 @@ fn backup_create_and_restore_roundtrip() {
 
     std::fs::write(&fixture.config_path, "changed = true\n").expect("write config");
 
-    let restore = fixture.run_ms(&[
-        "--robot",
-        "backup",
-        "restore",
-        "roundtrip",
-        "--approve",
-    ]);
+    let restore = fixture.run_ms(&["--robot", "backup", "restore", "roundtrip", "--approve"]);
     assert!(restore.success, "backup restore failed: {}", restore.stderr);
 
     let restored_config =

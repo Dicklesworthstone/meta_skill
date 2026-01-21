@@ -50,7 +50,7 @@ pub enum RuExitCode {
 }
 
 impl RuExitCode {
-    #[must_use] 
+    #[must_use]
     pub const fn from_code(code: i32) -> Self {
         match code {
             0 => Self::Ok,
@@ -63,7 +63,7 @@ impl RuExitCode {
         }
     }
 
-    #[must_use] 
+    #[must_use]
     pub const fn is_success(self) -> bool {
         matches!(self, Self::Ok | Self::Partial)
     }
@@ -136,7 +136,7 @@ impl Default for RuClient {
 
 impl RuClient {
     /// Create a new `RuClient` with auto-detection
-    #[must_use] 
+    #[must_use]
     pub const fn new() -> Self {
         Self {
             ru_path: None,
@@ -145,7 +145,7 @@ impl RuClient {
     }
 
     /// Create an `RuClient` with explicit path
-    #[must_use] 
+    #[must_use]
     pub const fn with_path(path: PathBuf) -> Self {
         Self {
             ru_path: Some(path),
@@ -165,7 +165,7 @@ impl RuClient {
     }
 
     /// Get the ru binary path
-    #[must_use] 
+    #[must_use]
     pub fn ru_path(&self) -> &str {
         self.ru_path
             .as_ref()
@@ -174,9 +174,7 @@ impl RuClient {
 
     /// Detect if ru is installed and working
     fn detect_ru(&self) -> bool {
-        let output = Command::new(self.ru_path())
-            .arg("--version")
-            .output();
+        let output = Command::new(self.ru_path()).arg("--version").output();
 
         match output {
             Ok(out) => out.status.success(),
@@ -193,9 +191,7 @@ impl RuClient {
         }
 
         let mut cmd = Command::new(self.ru_path());
-        cmd.arg("sync")
-            .arg("--json")
-            .arg("--non-interactive");
+        cmd.arg("sync").arg("--json").arg("--non-interactive");
 
         if options.dry_run {
             cmd.arg("--dry-run");
@@ -219,9 +215,9 @@ impl RuClient {
             cmd.arg("--resume");
         }
 
-        let output = cmd.output().map_err(|err| {
-            MsError::Config(format!("failed to execute ru sync: {err}"))
-        })?;
+        let output = cmd
+            .output()
+            .map_err(|err| MsError::Config(format!("failed to execute ru sync: {err}")))?;
 
         let exit_code = output.status.code().unwrap_or(-1);
         let stdout = String::from_utf8_lossy(&output.stdout);
@@ -343,7 +339,9 @@ fn parse_sync_output(stdout: &str, exit_code: i32) -> RuSyncResult {
                         .map(|s| s.to_string_lossy().to_string())
                 }))
                 .unwrap_or_else(|| "unknown".to_string());
-            let status = repo.status.unwrap_or_else(|| repo.action.unwrap_or_default());
+            let status = repo
+                .status
+                .unwrap_or_else(|| repo.action.unwrap_or_default());
             let message = repo.message.unwrap_or_default();
 
             match status.as_str() {

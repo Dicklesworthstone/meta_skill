@@ -2,9 +2,9 @@
 
 use std::path::{Path, PathBuf};
 
-use std::sync::LazyLock;
 use regex::Regex;
 use serde::{Deserialize, Serialize};
+use std::sync::LazyLock;
 use uuid::Uuid;
 
 use crate::error::{MsError, Result};
@@ -18,7 +18,8 @@ static DISALLOWED_PATTERNS: LazyLock<Vec<Regex>> = LazyLock::new(|| {
         Regex::new("(?i)disregard\\s+(all|any|previous)\\s+instructions")
             .expect("ACIP: invalid regex for 'disregard instructions'"),
         Regex::new("(?i)system\\s+prompt").expect("ACIP: invalid regex for 'system prompt'"),
-        Regex::new("(?i)reveal\\s+(the\\s+)?system").expect("ACIP: invalid regex for 'reveal system'"),
+        Regex::new("(?i)reveal\\s+(the\\s+)?system")
+            .expect("ACIP: invalid regex for 'reveal system'"),
         Regex::new("(?i)exfiltrate").expect("ACIP: invalid regex for 'exfiltrate'"),
         Regex::new("(?i)leak\\s+(secrets|keys|tokens)")
             .expect("ACIP: invalid regex for 'leak secrets'"),
@@ -71,7 +72,7 @@ impl Default for TrustBoundaryConfig {
 }
 
 impl TrustBoundaryConfig {
-    #[must_use] 
+    #[must_use]
     pub const fn level_for(&self, source: ContentSource) -> TrustLevel {
         match source {
             ContentSource::User => self.user_messages,
@@ -175,13 +176,13 @@ impl AcipEngine {
         })
     }
 
-    #[must_use] 
+    #[must_use]
     pub const fn config(&self) -> &AcipConfig {
         &self.config
     }
 }
 
-#[must_use] 
+#[must_use]
 pub fn build_quarantine_record(
     analysis: &AcipAnalysis,
     session_id: &str,
@@ -260,13 +261,13 @@ fn detect_sensitive(content: &str) -> bool {
 }
 
 /// Check if content contains prompt injection patterns.
-#[must_use] 
+#[must_use]
 pub fn contains_injection_patterns(content: &str) -> bool {
     detect_disallowed(content)
 }
 
 /// Check if content contains sensitive data patterns (API keys, secrets, etc.).
-#[must_use] 
+#[must_use]
 pub fn contains_sensitive_data(content: &str) -> bool {
     detect_sensitive(content)
 }
@@ -331,6 +332,9 @@ mod tests {
         // "ignore  previous instructions" (two spaces) should also be caught
         let content = "ignore  previous instructions";
         let detected = detect_disallowed(content);
-        assert!(detected, "Failed to detect disallowed content with extra whitespace");
+        assert!(
+            detected,
+            "Failed to detect disallowed content with extra whitespace"
+        );
     }
 }

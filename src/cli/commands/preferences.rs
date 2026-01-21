@@ -163,7 +163,9 @@ fn run_unhide(ctx: &AppContext, args: &UnhideArgs) -> Result<()> {
 }
 
 fn run_list_favorites(ctx: &AppContext, args: &ListFavoritesArgs) -> Result<()> {
-    let records = ctx.db.list_user_preferences("favorite", args.limit, args.offset)?;
+    let records = ctx
+        .db
+        .list_user_preferences("favorite", args.limit, args.offset)?;
 
     if ctx.output_format != OutputFormat::Human {
         return emit_json(&serde_json::json!({
@@ -187,7 +189,9 @@ fn run_list_favorites(ctx: &AppContext, args: &ListFavoritesArgs) -> Result<()> 
 }
 
 fn run_list_hidden(ctx: &AppContext, args: &ListHiddenArgs) -> Result<()> {
-    let records = ctx.db.list_user_preferences("hidden", args.limit, args.offset)?;
+    let records = ctx
+        .db
+        .list_user_preferences("hidden", args.limit, args.offset)?;
 
     if ctx.output_format != OutputFormat::Human {
         return emit_json(&serde_json::json!({
@@ -253,13 +257,8 @@ mod tests {
 
     #[test]
     fn parse_favorite_remove() {
-        let parsed = TestCli::parse_from([
-            "test",
-            "preferences",
-            "favorite",
-            "my-skill",
-            "--remove",
-        ]);
+        let parsed =
+            TestCli::parse_from(["test", "preferences", "favorite", "my-skill", "--remove"]);
         let TestCommand::Preferences(args) = parsed.cmd;
         match args.command {
             PreferencesCommand::Favorite(f) => {

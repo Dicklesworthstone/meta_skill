@@ -226,7 +226,7 @@ impl Default for HumanLayout {
 }
 
 impl HumanLayout {
-    #[must_use] 
+    #[must_use]
     pub const fn new() -> Self {
         Self {
             lines: Vec::new(),
@@ -270,7 +270,7 @@ impl HumanLayout {
         self
     }
 
-    #[must_use] 
+    #[must_use]
     pub fn build(self) -> String {
         self.lines.join("\n")
     }

@@ -22,12 +22,12 @@ use std::time::{Duration, Instant};
 use serde::{Deserialize, Serialize};
 
 use crate::app::AppContext;
-use crate::cli::output::OutputFormat;
 use crate::beads::{BeadsClient, IssueStatus, UpdateIssueRequest};
 use crate::cass::{
     CassClient, QualityScorer,
     brenner::{BrennerConfig, BrennerWizard, WizardOutput, generate_skill_md, run_interactive},
 };
+use crate::cli::output::OutputFormat;
 use crate::cm::CmClient;
 use crate::core::recovery::Checkpoint;
 use crate::error::{MsError, Result};
@@ -58,7 +58,7 @@ pub enum BuildPhase {
 
 impl BuildPhase {
     /// Get the next phase in the pipeline.
-    #[must_use] 
+    #[must_use]
     pub const fn next(&self) -> Option<Self> {
         match self {
             Self::SearchSessions => Some(Self::QualityFilter),
@@ -136,8 +136,7 @@ impl Default for QualityGates {
 }
 
 /// Persistent state for resumable builds.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[derive(Default)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct BuildState {
     /// Session IDs that passed quality filter.
     pub qualified_session_ids: Vec<String>,
@@ -146,7 +145,6 @@ pub struct BuildState {
     /// Number of patterns after filtering.
     pub patterns_filtered: usize,
 }
-
 
 /// State machine for autonomous build execution.
 pub struct BuildSession {
@@ -176,7 +174,7 @@ pub struct BuildSession {
 
 impl BuildSession {
     /// Create a new build session.
-    #[must_use] 
+    #[must_use]
     pub fn new(query: &str, gates: QualityGates) -> Self {
         let session_id = format!("build-{}", chrono::Utc::now().format("%Y%m%d-%H%M%S"));
         let now = Instant::now();
@@ -198,21 +196,21 @@ impl BuildSession {
     }
 
     /// Set maximum duration for the build.
-    #[must_use] 
+    #[must_use]
     pub const fn with_max_duration(mut self, duration: Duration) -> Self {
         self.max_duration = Some(duration);
         self
     }
 
     /// Set checkpoint interval.
-    #[must_use] 
+    #[must_use]
     pub const fn with_checkpoint_interval(mut self, interval: Duration) -> Self {
         self.checkpoint_interval = Some(interval);
         self
     }
 
     /// Calculate overall progress (0.0-1.0).
-    #[must_use] 
+    #[must_use]
     pub fn overall_progress(&self) -> f64 {
         let base = self.phase.cumulative_weight();
         let phase_contribution = self.phase.weight() * self.phase_progress;
@@ -233,7 +231,7 @@ impl BuildSession {
     }
 
     /// Check if the build has timed out.
-    #[must_use] 
+    #[must_use]
     pub fn is_timed_out(&self) -> bool {
         if let Some(max_duration) = self.max_duration {
             self.started_at.elapsed() >= max_duration
@@ -243,7 +241,7 @@ impl BuildSession {
     }
 
     /// Check if a checkpoint should be saved.
-    #[must_use] 
+    #[must_use]
     pub fn should_checkpoint(&self) -> bool {
         if let Some(interval) = self.checkpoint_interval {
             self.last_checkpoint.elapsed() >= interval
@@ -303,7 +301,7 @@ impl BuildSession {
     }
 
     /// Get remaining time if duration is set.
-    #[must_use] 
+    #[must_use]
     pub fn remaining_time(&self) -> Option<Duration> {
         self.max_duration.map(|max| {
             let elapsed = self.started_at.elapsed();
@@ -515,7 +513,7 @@ pub struct BuildCompletion {
 }
 
 impl BuildCompletion {
-    #[must_use] 
+    #[must_use]
     pub const fn success(duration_secs: f64) -> Self {
         Self {
             duration_secs,
@@ -541,7 +539,7 @@ impl BuildCompletion {
     }
 
     /// Format as markdown for bead notes.
-    #[must_use] 
+    #[must_use]
     pub fn to_markdown(&self) -> String {
         let mut md = String::new();
 
@@ -556,9 +554,7 @@ impl BuildCompletion {
         if let (Some(p), Some(f), Some(s)) =
             (self.tests_passed, self.tests_failed, self.tests_skipped)
         {
-            md.push_str(&format!(
-                "**Tests:** {p} passed, {f} failed, {s} skipped\n"
-            ));
+            md.push_str(&format!("**Tests:** {p} passed, {f} failed, {s} skipped\n"));
         }
 
         if let Some(cov) = self.coverage_percent {
@@ -595,7 +591,7 @@ impl BeadsTracker {
     /// Create a new tracker for the given bead ID.
     ///
     /// Returns None if beads is not available.
-    #[must_use] 
+    #[must_use]
     pub fn new(bead_id: String, close_on_success: bool) -> Option<Self> {
         let client = BeadsClient::new();
         if !client.is_available() {
@@ -740,20 +736,23 @@ pub fn run(ctx: &AppContext, args: &BuildArgs) -> Result<()> {
     }
 
     // Warn about risky flags
-    if (args.no_redact || args.no_injection_filter) && !args.auto && !args.guided
-        && ctx.output_format == OutputFormat::Human {
-            eprintln!(
-                "{} Using --no-redact or --no-injection-filter bypasses safety filters.",
-                "Warning:".yellow()
-            );
-            eprint!("Continue? [y/N] ");
-            io::stdout().flush()?;
-            let mut input = String::new();
-            io::stdin().read_line(&mut input)?;
-            if !input.trim().eq_ignore_ascii_case("y") {
-                return Err(MsError::Config("Build cancelled".into()));
-            }
+    if (args.no_redact || args.no_injection_filter)
+        && !args.auto
+        && !args.guided
+        && ctx.output_format == OutputFormat::Human
+    {
+        eprintln!(
+            "{} Using --no-redact or --no-injection-filter bypasses safety filters.",
+            "Warning:".yellow()
+        );
+        eprint!("Continue? [y/N] ");
+        io::stdout().flush()?;
+        let mut input = String::new();
+        io::stdin().read_line(&mut input)?;
+        if !input.trim().eq_ignore_ascii_case("y") {
+            return Err(MsError::Config("Build cancelled".into()));
         }
+    }
 
     // Initialize CM client if --with-cm flag is set
     let cm_context = if args.with_cm {
@@ -1605,7 +1604,9 @@ fn run_resume(
     use crate::core::recovery::Checkpoint;
 
     // Try to load checkpoint
-    let checkpoint = if let Some(cp) = Checkpoint::load(&ctx.ms_root, session_id)? { cp } else {
+    let checkpoint = if let Some(cp) = Checkpoint::load(&ctx.ms_root, session_id)? {
+        cp
+    } else {
         if ctx.output_format != OutputFormat::Human {
             let output = json!({
                 "error": true,
@@ -1914,10 +1915,7 @@ fn run_resolve_uncertainties(ctx: &AppContext, args: &BuildArgs) -> Result<()> {
                             println!(
                                 "    Query '{}': {} sessions found",
                                 query.query.chars().take(40).collect::<String>(),
-                                query
-                                    .results
-                                    .as_ref()
-                                    .map_or(0, |r| r.sessions_found)
+                                query.results.as_ref().map_or(0, |r| r.sessions_found)
                             );
                         }
                     }

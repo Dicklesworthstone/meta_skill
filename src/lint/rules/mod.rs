@@ -40,31 +40,31 @@ pub use structural::{
 };
 
 /// Returns all structural validation rules.
-#[must_use] 
+#[must_use]
 pub fn structural_rules() -> Vec<BoxedRule> {
     structural::structural_rules()
 }
 
 /// Returns all reference validation rules.
-#[must_use] 
+#[must_use]
 pub fn reference_rules() -> Vec<BoxedRule> {
     reference::reference_rules()
 }
 
 /// Returns all security validation rules.
-#[must_use] 
+#[must_use]
 pub fn security_rules() -> Vec<BoxedRule> {
     security::security_rules()
 }
 
 /// Returns all quality validation rules.
-#[must_use] 
+#[must_use]
 pub fn quality_rules() -> Vec<BoxedRule> {
     quality::quality_rules()
 }
 
 /// Returns all performance validation rules.
-#[must_use] 
+#[must_use]
 pub fn performance_rules() -> Vec<BoxedRule> {
     quality::performance_rules()
 }
@@ -72,7 +72,7 @@ pub fn performance_rules() -> Vec<BoxedRule> {
 /// Returns all built-in validation rules.
 ///
 /// This is a convenience function that combines all rule categories.
-#[must_use] 
+#[must_use]
 pub fn all_rules() -> Vec<BoxedRule> {
     let mut rules = structural_rules();
     rules.extend(reference_rules());

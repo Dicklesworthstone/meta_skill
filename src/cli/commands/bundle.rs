@@ -8,7 +8,6 @@ use semver::Version;
 use serde::Serialize;
 
 use crate::app::AppContext;
-use crate::cli::output::OutputFormat;
 use crate::bundler::github::{GitHubConfig, download_bundle, download_url, publish_bundle};
 use crate::bundler::install::InstallReport;
 use crate::bundler::local_safety::{
@@ -16,6 +15,7 @@ use crate::bundler::local_safety::{
 };
 use crate::bundler::registry::{BundleRegistry, InstallSource, InstalledBundle, ParsedSource};
 use crate::bundler::{Bundle, BundleInfo, BundleManifest, BundlePackage, BundledSkill};
+use crate::cli::output::OutputFormat;
 use crate::cli::output::emit_json;
 use crate::error::{MsError, Result};
 use crate::storage::GlobalLock;
@@ -255,7 +255,10 @@ fn run_create(ctx: &AppContext, args: &BundleCreateArgs) -> Result<()> {
     let root = if let Some(ref dir) = args.from_dir {
         dir.canonicalize().unwrap_or(dir.clone())
     } else {
-        ctx.git.root().canonicalize().unwrap_or(ctx.git.root().to_path_buf())
+        ctx.git
+            .root()
+            .canonicalize()
+            .unwrap_or(ctx.git.root().to_path_buf())
     };
 
     let mut entries = Vec::new();
@@ -336,7 +339,9 @@ fn run_create(ctx: &AppContext, args: &BundleCreateArgs) -> Result<()> {
 
     // Sign the bundle if requested
     if args.sign {
-        let key_path = if let Some(path) = args.sign_key.clone() { path } else {
+        let key_path = if let Some(path) = args.sign_key.clone() {
+            path
+        } else {
             let home = dirs::home_dir().ok_or_else(|| {
                 MsError::Config(
                     "cannot find home directory for default SSH key; use --sign-key to specify"

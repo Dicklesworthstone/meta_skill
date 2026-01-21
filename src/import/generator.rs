@@ -3,13 +3,12 @@
 //! The generator takes parsed and classified content blocks and produces
 //! a well-formed SkillSpec with appropriate sections and metadata.
 
-use crate::core::skill::{BlockType, SkillBlock, SkillSection, SkillSpec};
 use super::formatting::{
-    self, extract_code_blocks, extract_description, extract_example_title,
-    extract_skill_id, format_pitfall, format_rule, infer_domain, infer_tags,
-    parse_checklist,
+    self, extract_code_blocks, extract_description, extract_example_title, extract_skill_id,
+    format_pitfall, format_rule, infer_domain, infer_tags, parse_checklist,
 };
 use super::types::{ContentBlock, ContentBlockType};
+use crate::core::skill::{BlockType, SkillBlock, SkillSection, SkillSpec};
 use std::collections::HashSet;
 
 // =============================================================================
@@ -101,13 +100,9 @@ pub enum Warning {
         reason: String,
     },
     /// Duplicate content detected
-    Duplicate {
-        content_preview: String,
-    },
+    Duplicate { content_preview: String },
     /// Missing expected content
-    MissingContent {
-        expected: String,
-    },
+    MissingContent { expected: String },
 }
 
 impl Warning {
@@ -437,7 +432,12 @@ impl SkillGenerator {
                     .filter(|b| b.block_type == ContentBlockType::Metadata)
                     .find_map(|b| extract_skill_id(&b.content))
             })
-            .or_else(|| hints.source_filename.as_ref().map(|f| formatting::slugify(f)))
+            .or_else(|| {
+                hints
+                    .source_filename
+                    .as_ref()
+                    .map(|f| formatting::slugify(f))
+            })
             .unwrap_or_else(|| "imported-skill".to_string());
 
         // Name: from hints or metadata blocks
@@ -601,13 +601,11 @@ mod tests {
     #[test]
     fn test_generator_with_examples() {
         let generator = SkillGenerator::new();
-        let blocks = vec![
-            make_block(
-                ContentBlockType::Example,
-                "## Good Example\n```rust\nfn main() {}\n```",
-                0.9,
-            ),
-        ];
+        let blocks = vec![make_block(
+            ContentBlockType::Example,
+            "## Good Example\n```rust\nfn main() {}\n```",
+            0.9,
+        )];
 
         let result = generator.generate(blocks, &ImportHints::default());
 
@@ -622,13 +620,11 @@ mod tests {
     #[test]
     fn test_generator_with_checklist() {
         let generator = SkillGenerator::new();
-        let blocks = vec![
-            make_block(
-                ContentBlockType::Checklist,
-                "- [ ] Check one\n- [x] Check two\n- [ ] Check three",
-                0.8,
-            ),
-        ];
+        let blocks = vec![make_block(
+            ContentBlockType::Checklist,
+            "- [ ] Check one\n- [x] Check two\n- [ ] Check three",
+            0.8,
+        )];
 
         let result = generator.generate(blocks, &ImportHints::default());
 
@@ -650,7 +646,12 @@ mod tests {
 
         assert_eq!(result.stats.rules_count, 1);
         assert_eq!(result.stats.low_confidence_skipped, 1);
-        assert!(result.warnings.iter().any(|w| matches!(w, Warning::LowConfidence { .. })));
+        assert!(
+            result
+                .warnings
+                .iter()
+                .any(|w| matches!(w, Warning::LowConfidence { .. }))
+        );
     }
 
     #[test]
@@ -673,9 +674,11 @@ mod tests {
         config.unknown_handling = UnknownHandling::AddToContext;
         let generator = SkillGenerator::with_config(config);
 
-        let blocks = vec![
-            make_block(ContentBlockType::Unknown, "Unknown content", 0.5),
-        ];
+        let blocks = vec![make_block(
+            ContentBlockType::Unknown,
+            "Unknown content",
+            0.5,
+        )];
 
         let result = generator.generate(blocks, &ImportHints::default());
 
@@ -689,14 +692,21 @@ mod tests {
         config.unknown_handling = UnknownHandling::Discard;
         let generator = SkillGenerator::with_config(config);
 
-        let blocks = vec![
-            make_block(ContentBlockType::Unknown, "Unknown content", 0.5),
-        ];
+        let blocks = vec![make_block(
+            ContentBlockType::Unknown,
+            "Unknown content",
+            0.5,
+        )];
 
         let result = generator.generate(blocks, &ImportHints::default());
 
         assert_eq!(result.stats.context_count, 0);
-        assert!(result.warnings.iter().any(|w| matches!(w, Warning::Discarded { .. })));
+        assert!(
+            result
+                .warnings
+                .iter()
+                .any(|w| matches!(w, Warning::Discarded { .. }))
+        );
     }
 
     #[test]
@@ -708,7 +718,11 @@ mod tests {
                 "---\nid: my-skill\nname: My Great Skill\n---",
                 0.9,
             ),
-            make_block(ContentBlockType::Context, "This skill helps with testing.", 0.7),
+            make_block(
+                ContentBlockType::Context,
+                "This skill helps with testing.",
+                0.7,
+            ),
             make_block(ContentBlockType::Rule, "Always test your code", 0.8),
         ];
 
@@ -723,13 +737,11 @@ mod tests {
     #[test]
     fn test_generator_hints_override_inference() {
         let generator = SkillGenerator::new();
-        let blocks = vec![
-            make_block(
-                ContentBlockType::Metadata,
-                "id: inferred-id\nname: Inferred Name",
-                0.9,
-            ),
-        ];
+        let blocks = vec![make_block(
+            ContentBlockType::Metadata,
+            "id: inferred-id\nname: Inferred Name",
+            0.9,
+        )];
 
         let hints = ImportHints {
             suggested_id: Some("hint-id".to_string()),
@@ -745,9 +757,11 @@ mod tests {
     #[test]
     fn test_generator_pitfalls() {
         let generator = SkillGenerator::new();
-        let blocks = vec![
-            make_block(ContentBlockType::Pitfall, "⚠️ Don't use eval in production", 0.85),
-        ];
+        let blocks = vec![make_block(
+            ContentBlockType::Pitfall,
+            "⚠️ Don't use eval in production",
+            0.85,
+        )];
 
         let result = generator.generate(blocks, &ImportHints::default());
 
@@ -761,13 +775,20 @@ mod tests {
     #[test]
     fn test_generator_missing_rules_warning() {
         let generator = SkillGenerator::new();
-        let blocks = vec![
-            make_block(ContentBlockType::Context, "Just some context", 0.7),
-        ];
+        let blocks = vec![make_block(
+            ContentBlockType::Context,
+            "Just some context",
+            0.7,
+        )];
 
         let result = generator.generate(blocks, &ImportHints::default());
 
-        assert!(result.warnings.iter().any(|w| matches!(w, Warning::MissingContent { .. })));
+        assert!(
+            result
+                .warnings
+                .iter()
+                .any(|w| matches!(w, Warning::MissingContent { .. }))
+        );
     }
 
     #[test]

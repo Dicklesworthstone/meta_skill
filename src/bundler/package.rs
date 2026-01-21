@@ -226,7 +226,7 @@ impl BundlePackage {
     }
 }
 
-#[must_use] 
+#[must_use]
 pub fn missing_blobs(manifest: &BundleManifest, store: &BlobStore) -> Vec<String> {
     manifest
         .skills

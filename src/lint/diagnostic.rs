@@ -69,7 +69,7 @@ pub struct SourceSpan {
 
 impl SourceSpan {
     /// Create a new source span
-    #[must_use] 
+    #[must_use]
     pub const fn new(start_line: usize, start_col: usize, end_line: usize, end_col: usize) -> Self {
         Self {
             start_line,
@@ -80,7 +80,7 @@ impl SourceSpan {
     }
 
     /// Create a span for a single line
-    #[must_use] 
+    #[must_use]
     pub const fn line(line: usize) -> Self {
         Self {
             start_line: line,
@@ -154,7 +154,7 @@ impl Diagnostic {
     }
 
     /// Set the span
-    #[must_use] 
+    #[must_use]
     pub const fn with_span(mut self, span: SourceSpan) -> Self {
         self.span = Some(span);
         self
@@ -167,14 +167,14 @@ impl Diagnostic {
     }
 
     /// Mark that a fix is available
-    #[must_use] 
+    #[must_use]
     pub const fn with_fix(mut self) -> Self {
         self.fix_available = true;
         self
     }
 
     /// Set the category
-    #[must_use] 
+    #[must_use]
     pub const fn with_category(mut self, category: RuleCategory) -> Self {
         self.category = category;
         self

@@ -4,17 +4,17 @@ use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 
 use clap::{Args, Subcommand};
-use rand::distr::Distribution;
 use rand::Rng;
+use rand::distr::Distribution;
 use rand_distr::Beta;
 use serde::{Deserialize, Serialize};
 
 use crate::app::AppContext;
-use crate::cli::output::OutputFormat;
 use crate::cli::commands::load::{
     CliPackContract, CliPackMode, DepsMode, LoadArgs, build_robot_payload, load_skill,
     output_human as output_load_human,
 };
+use crate::cli::output::OutputFormat;
 use crate::cli::output::{HumanLayout, emit_json};
 use crate::error::{MsError, Result};
 use crate::storage::sqlite::ExperimentEventRecord;
@@ -386,12 +386,14 @@ fn run_status(ctx: &AppContext, args: &ExperimentStatusArgs) -> Result<()> {
             .kv(
                 "Significance",
                 &analysis
-                    .significance.map_or_else(|| "-".to_string(), |s| format!("{s:.2}")),
+                    .significance
+                    .map_or_else(|| "-".to_string(), |s| format!("{s:.2}")),
             )
             .kv(
                 "p-value",
                 &analysis
-                    .p_value.map_or_else(|| "-".to_string(), |p| format!("{p:.4}")),
+                    .p_value
+                    .map_or_else(|| "-".to_string(), |p| format!("{p:.4}")),
             )
             .kv("Recommendation", &analysis.recommendation);
     }
@@ -854,7 +856,10 @@ fn parse_metric_value(raw: &str) -> serde_json::Value {
             if let Ok(number) = raw.parse::<i64>() {
                 serde_json::Value::Number(number.into())
             } else if let Ok(number) = raw.parse::<f64>() {
-                serde_json::Number::from_f64(number).map_or_else(|| serde_json::Value::String(raw.to_string()), serde_json::Value::Number)
+                serde_json::Number::from_f64(number).map_or_else(
+                    || serde_json::Value::String(raw.to_string()),
+                    serde_json::Value::Number,
+                )
             } else {
                 serde_json::Value::String(raw.to_string())
             }
@@ -862,10 +867,7 @@ fn parse_metric_value(raw: &str) -> serde_json::Value {
     }
 }
 
-fn resolve_metric_key(
-    explicit: Option<&str>,
-    events: &[ExperimentEventRecord],
-) -> Option<String> {
+fn resolve_metric_key(explicit: Option<&str>, events: &[ExperimentEventRecord]) -> Option<String> {
     if let Some(metric) = explicit {
         return Some(metric.to_string());
     }
@@ -916,9 +918,10 @@ fn compute_variant_stats(
             .count() as u64;
         let mut outcomes = 0u64;
         let mut successes = 0u64;
-        for event in events.iter().filter(|event| {
-            event.variant_id == variant.id && event.event_type == "outcome"
-        }) {
+        for event in events
+            .iter()
+            .filter(|event| event.variant_id == variant.id && event.event_type == "outcome")
+        {
             let Some(metrics_json) = event.metrics_json.as_deref() else {
                 continue;
             };
@@ -1038,7 +1041,10 @@ fn two_proportion_test(
 
     let se_diff = (p1 * (1.0 - p1) / n1 + p2 * (1.0 - p2) / n2).sqrt();
     let diff = p1 - p2;
-    let ci = [1.96f64.mul_add(-se_diff, diff), 1.96f64.mul_add(se_diff, diff)];
+    let ci = [
+        1.96f64.mul_add(-se_diff, diff),
+        1.96f64.mul_add(se_diff, diff),
+    ];
     (Some(p_value), Some(ci))
 }
 
@@ -1049,8 +1055,7 @@ fn normal_cdf(z: f64) -> f64 {
     let d = 0.398_942_3 * (-0.5 * z * z).exp();
     let prob = d
         * t
-        * (0.319_381_5
-            + t * (-0.356_563_8 + t * (1.781_478 + t * (-1.821_256 + t * 1.330_274))));
+        * (0.319_381_5 + t * (-0.356_563_8 + t * (1.781_478 + t * (-1.821_256 + t * 1.330_274))));
     1.0 - prob
 }
 
@@ -1328,8 +1333,7 @@ mod tests {
         assert!(allocation_json.contains("\"a\""));
 
         let weights = vec!["a=0.7".to_string(), "b=0.3".to_string()];
-        let (_, allocation_json) =
-            build_variants_payload(&variants, "weighted", &weights).unwrap();
+        let (_, allocation_json) = build_variants_payload(&variants, "weighted", &weights).unwrap();
         assert!(allocation_json.contains("\"strategy\":\"weighted\""));
     }
 }

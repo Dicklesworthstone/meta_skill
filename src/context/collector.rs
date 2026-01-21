@@ -77,7 +77,7 @@ pub struct CollectedContext {
 }
 
 impl CollectedContext {
-    #[must_use] 
+    #[must_use]
     pub fn fingerprint(&self) -> CollectorFingerprint {
         let mut hasher = std::collections::hash_map::DefaultHasher::new();
 
@@ -121,7 +121,7 @@ pub struct ContextCollector {
 }
 
 impl ContextCollector {
-    #[must_use] 
+    #[must_use]
     pub fn new(config: ContextCollectorConfig) -> Self {
         Self {
             config,
@@ -269,10 +269,7 @@ impl ContextCollector {
         let repo_root = repo.workdir()?.to_path_buf();
 
         // Simple check for uncommitted changes
-        let has_uncommitted_changes = repo
-            .statuses(None)
-            .map(|s| !s.is_empty())
-            .unwrap_or(false);
+        let has_uncommitted_changes = repo.statuses(None).map(|s| !s.is_empty()).unwrap_or(false);
 
         let mut recent_commits = Vec::new();
         if let Ok(mut revwalk) = repo.revwalk() {
@@ -295,7 +292,14 @@ impl ContextCollector {
     }
 
     fn collect_env_signals(&self) -> HashMap<String, String> {
-        let signals = ["RUST_LOG", "NODE_ENV", "PYTHON_ENV", "DEBUG", "CI", "EDITOR"];
+        let signals = [
+            "RUST_LOG",
+            "NODE_ENV",
+            "PYTHON_ENV",
+            "DEBUG",
+            "CI",
+            "EDITOR",
+        ];
 
         signals
             .iter()

@@ -28,7 +28,7 @@ pub struct StepExecutor<'a> {
 
 impl<'a> StepExecutor<'a> {
     /// Create a new step executor
-    #[must_use] 
+    #[must_use]
     pub fn new(ctx: &'a AppContext, verbose: bool) -> Self {
         Self {
             ctx,
@@ -42,7 +42,7 @@ impl<'a> StepExecutor<'a> {
     ///
     /// When enabled, all `run` steps will be validated through DCG
     /// before execution.
-    #[must_use] 
+    #[must_use]
     pub fn with_safety(mut self, gate: SafetyGate) -> Self {
         self.safety = Some(gate);
         self
@@ -54,7 +54,7 @@ impl<'a> StepExecutor<'a> {
     }
 
     /// Get a reference to the test context
-    #[must_use] 
+    #[must_use]
     pub const fn test_context(&self) -> &TestContext {
         &self.test_ctx
     }
@@ -89,7 +89,7 @@ pub struct LoadedSkillInfo {
 
 impl TestContext {
     /// Expand variables in a string (${var} syntax)
-    #[must_use] 
+    #[must_use]
     pub fn expand(&self, input: &str) -> String {
         let mut result = input.to_string();
         for (name, value) in &self.variables {
@@ -197,12 +197,14 @@ fn execute_run(
         }
     }
 
-    let stdout = child.stdout.take().ok_or_else(|| {
-        MsError::Config(format!("failed to capture stdout for '{cmd}'"))
-    })?;
-    let stderr = child.stderr.take().ok_or_else(|| {
-        MsError::Config(format!("failed to capture stderr for '{cmd}'"))
-    })?;
+    let stdout = child
+        .stdout
+        .take()
+        .ok_or_else(|| MsError::Config(format!("failed to capture stdout for '{cmd}'")))?;
+    let stderr = child
+        .stderr
+        .take()
+        .ok_or_else(|| MsError::Config(format!("failed to capture stderr for '{cmd}'")))?;
 
     let stdout_handle = std::thread::spawn(move || {
         let mut buf = Vec::new();
@@ -308,13 +310,12 @@ fn execute_assert(step: &Assertions, ctx: &mut TestContext, verbose: bool) -> Re
     }
 
     // Check stderr empty
-    if step.stderr_empty == Some(true)
-        && !ctx.last_stderr.trim().is_empty() {
-            failures.push(format!(
-                "stderr_empty: stderr is not empty: {}",
-                ctx.last_stderr.trim()
-            ));
-        }
+    if step.stderr_empty == Some(true) && !ctx.last_stderr.trim().is_empty() {
+        failures.push(format!(
+            "stderr_empty: stderr is not empty: {}",
+            ctx.last_stderr.trim()
+        ));
+    }
 
     // Check file exists
     if let Some(ref path) = step.file_exists {
@@ -343,10 +344,9 @@ fn execute_assert(step: &Assertions, ctx: &mut TestContext, verbose: bool) -> Re
     }
 
     // Check skill loaded
-    if step.skill_loaded == Some(true)
-        && ctx.loaded_skill.is_none() {
-            failures.push("skill_loaded: no skill was loaded".to_string());
-        }
+    if step.skill_loaded == Some(true) && ctx.loaded_skill.is_none() {
+        failures.push("skill_loaded: no skill was loaded".to_string());
+    }
 
     // Check sections present
     if let Some(ref expected_sections) = step.sections_present {

@@ -252,73 +252,155 @@ impl ErrorCode {
     pub const fn suggestion(&self) -> &'static str {
         match self {
             // Skill errors
-            Self::SkillNotFound => "Run `ms search <query>` to find similar skills, or `ms list` to see all available skills",
-            Self::SkillInvalid => "Check the skill file for syntax errors. Run `ms validate <skill>` for detailed diagnostics",
-            Self::SkillParseError => "Ensure the skill file follows SKILL.md format. Run `ms template show` for examples",
-            Self::SkillDependencyMissing => "Install the missing dependency with `ms bundle install` or create it manually",
-            Self::SkillCyclicDependency => "Review the dependency chain and break the cycle by removing one of the `extends` or `includes` references",
-            Self::SkillParentNotFound => "Ensure the parent skill exists before defining the child. Check `extends` field for typos",
+            Self::SkillNotFound => {
+                "Run `ms search <query>` to find similar skills, or `ms list` to see all available skills"
+            }
+            Self::SkillInvalid => {
+                "Check the skill file for syntax errors. Run `ms validate <skill>` for detailed diagnostics"
+            }
+            Self::SkillParseError => {
+                "Ensure the skill file follows SKILL.md format. Run `ms template show` for examples"
+            }
+            Self::SkillDependencyMissing => {
+                "Install the missing dependency with `ms bundle install` or create it manually"
+            }
+            Self::SkillCyclicDependency => {
+                "Review the dependency chain and break the cycle by removing one of the `extends` or `includes` references"
+            }
+            Self::SkillParentNotFound => {
+                "Ensure the parent skill exists before defining the child. Check `extends` field for typos"
+            }
 
             // Index errors
             Self::IndexEmpty => "Run `ms index <path>` to index skills from a directory",
             Self::IndexCorrupted => "Run `ms doctor --fix` to rebuild the index from source files",
-            Self::IndexBusy => "Wait for the current indexing operation to complete, or check for stale lock files",
-            Self::IndexVersionMismatch => "Run `ms migrate` to update the index to the current version",
+            Self::IndexBusy => {
+                "Wait for the current indexing operation to complete, or check for stale lock files"
+            }
+            Self::IndexVersionMismatch => {
+                "Run `ms migrate` to update the index to the current version"
+            }
 
             // Config errors
-            Self::ConfigNotFound => "Run `ms init` to create a new configuration, or specify --config <path>",
-            Self::ConfigInvalid => "Run `ms config` to see current values. Check TOML syntax in config file",
-            Self::ConfigPermissionDenied => "Check file permissions on the config file. You may need to run with different permissions",
-            Self::ConfigMissingRequired => "Set the required config value with `ms config <key> <value>`",
+            Self::ConfigNotFound => {
+                "Run `ms init` to create a new configuration, or specify --config <path>"
+            }
+            Self::ConfigInvalid => {
+                "Run `ms config` to see current values. Check TOML syntax in config file"
+            }
+            Self::ConfigPermissionDenied => {
+                "Check file permissions on the config file. You may need to run with different permissions"
+            }
+            Self::ConfigMissingRequired => {
+                "Set the required config value with `ms config <key> <value>`"
+            }
 
             // Search errors
-            Self::SearchQueryInvalid => "Check query syntax. Use quotes for phrases, AND/OR for boolean, * for wildcards",
+            Self::SearchQueryInvalid => {
+                "Check query syntax. Use quotes for phrases, AND/OR for boolean, * for wildcards"
+            }
             Self::SearchTimeout => "Try a simpler query or increase timeout with --timeout flag",
-            Self::SearchNoResults => "Try broader search terms, or run `ms list` to see all available skills",
+            Self::SearchNoResults => {
+                "Try broader search terms, or run `ms list` to see all available skills"
+            }
 
             // Network errors
-            Self::NetworkUnreachable => "Check your network connection and ensure the remote server is accessible",
-            Self::NetworkTimeout => "Check network connectivity. The remote server may be slow or unreachable",
-            Self::NetworkAuthFailed => "Verify your credentials. Check SSH keys or tokens in config",
+            Self::NetworkUnreachable => {
+                "Check your network connection and ensure the remote server is accessible"
+            }
+            Self::NetworkTimeout => {
+                "Check network connectivity. The remote server may be slow or unreachable"
+            }
+            Self::NetworkAuthFailed => {
+                "Verify your credentials. Check SSH keys or tokens in config"
+            }
 
             // Storage errors
-            Self::StorageReadError => "Check file permissions and ensure the storage path is accessible",
-            Self::StorageWriteError => "Check disk space and write permissions on the storage directory",
+            Self::StorageReadError => {
+                "Check file permissions and ensure the storage path is accessible"
+            }
+            Self::StorageWriteError => {
+                "Check disk space and write permissions on the storage directory"
+            }
             Self::StorageFull => "Free up disk space or configure a different storage location",
-            Self::DatabaseError => "Run `ms doctor` to check database health. May need to rebuild with `ms doctor --fix`",
-            Self::SerializationError => "The data format may be corrupted. Check input data for validity",
+            Self::DatabaseError => {
+                "Run `ms doctor` to check database health. May need to rebuild with `ms doctor --fix`"
+            }
+            Self::SerializationError => {
+                "The data format may be corrupted. Check input data for validity"
+            }
 
             // Git errors
-            Self::GitNotRepository => "Run `git init` to initialize a repository, or change to a directory with a git repo",
+            Self::GitNotRepository => {
+                "Run `git init` to initialize a repository, or change to a directory with a git repo"
+            }
             Self::GitConflict => "Resolve merge conflicts manually, then run `ms sync` again",
-            Self::GitRemoteError => "Check remote URL and credentials. Run `git remote -v` to verify",
-            Self::GitError => "Check git status with `git status`. There may be uncommitted changes or other issues",
+            Self::GitRemoteError => {
+                "Check remote URL and credentials. Run `git remote -v` to verify"
+            }
+            Self::GitError => {
+                "Check git status with `git status`. There may be uncommitted changes or other issues"
+            }
 
             // Validation errors
-            Self::ValidationFailed => "Review the validation errors and fix each issue. Run `ms validate <skill>` for details",
-            Self::ApprovalRequired => "This operation requires explicit approval. Set MS_APPROVE_COMMAND environment variable",
-            Self::SecurityViolation => "Review security policy. This content may contain disallowed patterns",
-            Self::AcipBlocked => "Content was blocked by ACIP. Run `ms security quarantine list` to review",
-            Self::DestructiveBlocked => "Destructive operations are blocked by DCG. Use --approve flag if intended",
+            Self::ValidationFailed => {
+                "Review the validation errors and fix each issue. Run `ms validate <skill>` for details"
+            }
+            Self::ApprovalRequired => {
+                "This operation requires explicit approval. Set MS_APPROVE_COMMAND environment variable"
+            }
+            Self::SecurityViolation => {
+                "Review security policy. This content may contain disallowed patterns"
+            }
+            Self::AcipBlocked => {
+                "Content was blocked by ACIP. Run `ms security quarantine list` to review"
+            }
+            Self::DestructiveBlocked => {
+                "Destructive operations are blocked by DCG. Use --approve flag if intended"
+            }
 
             // Lock/Transaction errors
-            Self::LockTimeout => "Another process may be holding the lock. Wait and retry, or check for stale locks",
-            Self::LockFailed => "Failed to acquire lock. Check for other ms processes or stale lock files",
-            Self::TransactionFailed => "The operation was rolled back. Check error details and retry",
-            Self::TwoPhaseCommitFailed => "Two-phase commit failed. Data may be partially committed. Run `ms doctor`",
+            Self::LockTimeout => {
+                "Another process may be holding the lock. Wait and retry, or check for stale locks"
+            }
+            Self::LockFailed => {
+                "Failed to acquire lock. Check for other ms processes or stale lock files"
+            }
+            Self::TransactionFailed => {
+                "The operation was rolled back. Check error details and retry"
+            }
+            Self::TwoPhaseCommitFailed => {
+                "Two-phase commit failed. Data may be partially committed. Run `ms doctor`"
+            }
 
             // Integration errors
-            Self::CassUnavailable => "CASS is not installed or not running. Install with `cargo install cass`",
-            Self::CmUnavailable => "CM (CASS Memory) is not available. Check installation and configuration",
-            Self::BeadsUnavailable => "Beads is not available. Install with `cargo install beads_viewer`",
-            Self::MiningFailed => "Session mining failed. Check CASS connection and query parameters",
-            Self::ImportFailed => "Import operation failed. Check the source format and permissions",
+            Self::CassUnavailable => {
+                "CASS is not installed or not running. Install with `cargo install cass`"
+            }
+            Self::CmUnavailable => {
+                "CM (CASS Memory) is not available. Check installation and configuration"
+            }
+            Self::BeadsUnavailable => {
+                "Beads is not available. Install with `cargo install beads_viewer`"
+            }
+            Self::MiningFailed => {
+                "Session mining failed. Check CASS connection and query parameters"
+            }
+            Self::ImportFailed => {
+                "Import operation failed. Check the source format and permissions"
+            }
 
             // Internal errors
-            Self::InternalError => "An unexpected error occurred. Please report this issue with full error output",
-            Self::NotImplemented => "This feature is not yet implemented. Check documentation for alternatives",
+            Self::InternalError => {
+                "An unexpected error occurred. Please report this issue with full error output"
+            }
+            Self::NotImplemented => {
+                "This feature is not yet implemented. Check documentation for alternatives"
+            }
             Self::Timeout => "Operation timed out. Try again or increase timeout settings",
-            Self::AssertionFailed => "Internal assertion failed. This is a bug. Please report with full context",
+            Self::AssertionFailed => {
+                "Internal assertion failed. This is a bug. Please report with full context"
+            }
             Self::NotFound => "The requested resource was not found. Check the path or identifier",
             Self::IoError => "File operation failed. Check path exists and permissions are correct",
         }

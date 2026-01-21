@@ -38,7 +38,6 @@ pub enum DisclosureLevel {
     Complete,
 }
 
-
 /// A node in the dependency graph
 #[derive(Debug, Clone)]
 pub struct DependencyNode {
@@ -74,7 +73,7 @@ pub struct DependencyGraph {
 
 impl DependencyGraph {
     /// Create a new empty dependency graph
-    #[must_use] 
+    #[must_use]
     pub fn new() -> Self {
         Self::default()
     }
@@ -136,19 +135,19 @@ impl DependencyGraph {
     }
 
     /// Get a specific node
-    #[must_use] 
+    #[must_use]
     pub fn get_node(&self, skill_id: &str) -> Option<&DependencyNode> {
         self.nodes.get(skill_id)
     }
 
     /// Get all edges
-    #[must_use] 
+    #[must_use]
     pub fn edges(&self) -> &[DependencyEdge] {
         &self.edges
     }
 
     /// Get direct dependencies of a skill
-    #[must_use] 
+    #[must_use]
     pub fn direct_dependencies(&self, skill_id: &str) -> Vec<&str> {
         self.edges
             .iter()
@@ -158,7 +157,7 @@ impl DependencyGraph {
     }
 
     /// Get skills that directly depend on this skill
-    #[must_use] 
+    #[must_use]
     pub fn direct_dependents(&self, skill_id: &str) -> Vec<&str> {
         self.edges
             .iter()
@@ -168,7 +167,7 @@ impl DependencyGraph {
     }
 
     /// Find providers for a capability
-    #[must_use] 
+    #[must_use]
     pub fn find_providers(&self, capability: &str) -> Option<&Vec<String>> {
         self.capability_providers.get(capability)
     }
@@ -207,13 +206,13 @@ pub struct MissingCapability {
 
 impl ResolvedDependencyPlan {
     /// Check if resolution was successful (no missing deps, no cycles)
-    #[must_use] 
+    #[must_use]
     pub fn is_ok(&self) -> bool {
         self.missing.is_empty() && self.cycles.is_empty()
     }
 
     /// Check if there are any issues
-    #[must_use] 
+    #[must_use]
     pub fn has_issues(&self) -> bool {
         !self.missing.is_empty() || !self.cycles.is_empty()
     }
@@ -227,7 +226,7 @@ pub struct DependencyResolver<'a> {
 
 impl<'a> DependencyResolver<'a> {
     /// Create a new resolver
-    #[must_use] 
+    #[must_use]
     pub const fn new(graph: &'a DependencyGraph) -> Self {
         Self {
             graph,
@@ -236,7 +235,7 @@ impl<'a> DependencyResolver<'a> {
     }
 
     /// Set maximum depth for dependency traversal
-    #[must_use] 
+    #[must_use]
     pub const fn with_max_depth(mut self, depth: usize) -> Self {
         self.max_depth = depth;
         self
@@ -303,7 +302,7 @@ impl<'a> DependencyResolver<'a> {
         while !queue.is_empty() && depth < self.max_depth {
             let level_size = queue.len();
 
-            // Collect level nodes to process them deterministically if needed, 
+            // Collect level nodes to process them deterministically if needed,
             // but BFS queue order is already determined by insertion order.
             // We just need to ensure insertion order is deterministic.
 
@@ -689,12 +688,16 @@ mod tests {
     fn test_edges_determinism() {
         let mut graph = DependencyGraph::new();
         // Add skills in arbitrary order (HashMap will randomize iteration anyway)
-        graph.add_skill("a".to_string(), vec!["cap-b".to_string(), "cap-c".to_string()], vec![]);
+        graph.add_skill(
+            "a".to_string(),
+            vec!["cap-b".to_string(), "cap-c".to_string()],
+            vec![],
+        );
         graph.add_skill("b".to_string(), vec![], vec!["cap-b".to_string()]);
         graph.add_skill("c".to_string(), vec![], vec!["cap-c".to_string()]);
-        
+
         graph.build_edges();
-        
+
         // Check that edges are sorted or at least consistent if we run this multiple times
         // Ideally edges should be sorted by (from, to, capability)
         // For now, we just assert that we can get a stable output if we implement sorting
@@ -707,25 +710,39 @@ mod tests {
         // B provides cap-b (needed by A)
         // C provides cap-c (needed by A)
         // D provides cap-d (needed by B and C)
-        graph.add_skill("a".to_string(), vec!["cap-b".to_string(), "cap-c".to_string()], vec![]);
-        graph.add_skill("b".to_string(), vec!["cap-d".to_string()], vec!["cap-b".to_string()]);
-        graph.add_skill("c".to_string(), vec!["cap-d".to_string()], vec!["cap-c".to_string()]);
+        graph.add_skill(
+            "a".to_string(),
+            vec!["cap-b".to_string(), "cap-c".to_string()],
+            vec![],
+        );
+        graph.add_skill(
+            "b".to_string(),
+            vec!["cap-d".to_string()],
+            vec!["cap-b".to_string()],
+        );
+        graph.add_skill(
+            "c".to_string(),
+            vec!["cap-d".to_string()],
+            vec!["cap-c".to_string()],
+        );
         graph.add_skill("d".to_string(), vec![], vec!["cap-d".to_string()]);
         graph.build_edges();
 
         let resolver = DependencyResolver::new(&graph);
-        
-        let plan1 = resolver.resolve("a", DisclosureLevel::Standard, DependencyLoadMode::Auto).unwrap();
-        
+
+        let plan1 = resolver
+            .resolve("a", DisclosureLevel::Standard, DependencyLoadMode::Auto)
+            .unwrap();
+
         // Re-create to test stability across runs (though hashmap iteration inside same process usually stable for small size)
         // Real determinism issue arises from hashmap iteration order varying by random seed between runs
         // But we can check if the output satisfies one of the valid topological sorts and stays consistent if we enforce it.
         // D must be first. A must be last. B and C can be in any order relative to each other, but should be deterministic.
-        
+
         let order: Vec<_> = plan1.ordered.iter().map(|p| p.skill_id.as_str()).collect();
         assert_eq!(order.first().unwrap(), &"d");
         assert_eq!(order.last().unwrap(), &"a");
-        
+
         // We enforce alphabetical for ties: B comes before C
         // So expected: D, B, C, A
         // If sorting isn't implemented, this might be D, C, B, A randomly.

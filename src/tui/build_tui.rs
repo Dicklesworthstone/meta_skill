@@ -20,7 +20,9 @@ use ratatui::{
     widgets::{Block, Borders, List, ListItem, ListState, Paragraph, Wrap},
 };
 
-use crate::cass::brenner::{BrennerConfig, BrennerWizard, MoveDecision, SelectedSession, WizardOutput, WizardState};
+use crate::cass::brenner::{
+    BrennerConfig, BrennerWizard, MoveDecision, SelectedSession, WizardOutput, WizardState,
+};
 use crate::cass::{CassClient, QualityScorer};
 use crate::error::Result;
 
@@ -359,7 +361,8 @@ impl BuildTui {
                     // Apply search filter
                     self.active_filter = self.search_query.clone().filter(|q| !q.is_empty());
                     if let Some(filter) = &self.active_filter {
-                        self.status_message = Some(format!("Filtering by: {filter} (press Esc to clear)"));
+                        self.status_message =
+                            Some(format!("Filtering by: {filter} (press Esc to clear)"));
                         // Reset selection to first item when filter changes
                         self.pattern_list_state.select(Some(0));
                     } else {
@@ -434,7 +437,14 @@ impl BuildTui {
                 results,
                 selected,
             } => {
-                self.handle_session_selection_key(key, &query, &results, &selected, client, quality_scorer)?;
+                self.handle_session_selection_key(
+                    key,
+                    &query,
+                    &results,
+                    &selected,
+                    client,
+                    quality_scorer,
+                )?;
             }
             WizardState::MoveExtraction { .. } => {
                 self.handle_move_extraction_key(key)?;
@@ -667,14 +677,12 @@ impl BuildTui {
 
     fn get_quality_score(&self) -> f32 {
         match self.wizard.state() {
-            WizardState::SkillFormalization { draft, .. } => draft
-                .validation
-                .as_ref()
-                .map_or(0.7, |v| v.confidence),
-            WizardState::MaterializationTest { draft, .. } => draft
-                .validation
-                .as_ref()
-                .map_or(0.7, |v| v.confidence),
+            WizardState::SkillFormalization { draft, .. } => {
+                draft.validation.as_ref().map_or(0.7, |v| v.confidence)
+            }
+            WizardState::MaterializationTest { draft, .. } => {
+                draft.validation.as_ref().map_or(0.7, |v| v.confidence)
+            }
             _ => 0.7,
         }
     }
@@ -887,11 +895,7 @@ impl TerminalGuard {
 impl Drop for TerminalGuard {
     fn drop(&mut self) {
         let _ = disable_raw_mode();
-        let _ = execute!(
-            io::stdout(),
-            LeaveAlternateScreen,
-            DisableMouseCapture
-        );
+        let _ = execute!(io::stdout(), LeaveAlternateScreen, DisableMouseCapture);
     }
 }
 

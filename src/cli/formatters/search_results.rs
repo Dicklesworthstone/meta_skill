@@ -210,7 +210,12 @@ impl SearchResults {
             let desc = r.skill.description.replace('\t', " ").replace('\n', " ");
             out.push_str(&format!(
                 "{}\t{}\t{}\t{:.4}\t{:.2}\t{}\n",
-                r.skill.id, r.skill.name, r.skill.source_layer, r.score, r.skill.quality_score, desc
+                r.skill.id,
+                r.skill.name,
+                r.skill.source_layer,
+                r.score,
+                r.skill.quality_score,
+                desc
             ));
         }
         out

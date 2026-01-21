@@ -94,7 +94,10 @@ fn inbox_human(
             .kv("From", &message.from)
             .kv("When", &message.created_ts)
             .kv("Importance", &message.importance)
-            .kv("Ack Required", if message.ack_required { "yes" } else { "no" })
+            .kv(
+                "Ack Required",
+                if message.ack_required { "yes" } else { "no" },
+            )
             .kv("Kind", &message.kind);
 
         if args.include_bodies {

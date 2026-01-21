@@ -19,7 +19,7 @@ pub struct LogStorage {
 }
 
 impl LogStorage {
-    #[must_use] 
+    #[must_use]
     pub const fn new(max_entries: usize) -> Self {
         Self {
             entries: VecDeque::new(),
@@ -34,7 +34,7 @@ impl LogStorage {
         self.entries.push_back(entry);
     }
 
-    #[must_use] 
+    #[must_use]
     pub const fn entries(&self) -> &VecDeque<LogEntry> {
         &self.entries
     }
@@ -43,32 +43,32 @@ impl LogStorage {
         self.entries.clear();
     }
 
-    #[must_use] 
+    #[must_use]
     pub fn contains_message(&self, message: &str) -> bool {
         self.entries.iter().any(|e| e.message.contains(message))
     }
 
-    #[must_use] 
+    #[must_use]
     pub fn contains_level(&self, level: Level) -> bool {
         self.entries.iter().any(|e| e.level == level)
     }
 
-    #[must_use] 
+    #[must_use]
     pub fn has_errors(&self) -> bool {
         self.contains_level(Level::ERROR)
     }
 
-    #[must_use] 
+    #[must_use]
     pub fn has_warnings(&self) -> bool {
         self.contains_level(Level::WARN)
     }
 
-    #[must_use] 
+    #[must_use]
     pub fn filter_by_level(&self, level: Level) -> Vec<&LogEntry> {
         self.entries.iter().filter(|e| e.level == level).collect()
     }
 
-    #[must_use] 
+    #[must_use]
     pub fn filter_by_message(&self, pattern: &str) -> Vec<&LogEntry> {
         self.entries
             .iter()
@@ -88,7 +88,7 @@ pub struct LogEntry {
 }
 
 impl LogEntry {
-    #[must_use] 
+    #[must_use]
     pub fn new(level: Level, target: &str, message: &str) -> Self {
         Self {
             level,
@@ -99,14 +99,14 @@ impl LogEntry {
         }
     }
 
-    #[must_use] 
+    #[must_use]
     pub fn with_field(mut self, key: &str, value: &str) -> Self {
         self.fields.push((key.to_string(), value.to_string()));
         self
     }
 
     /// Format as JSON for structured output.
-    #[must_use] 
+    #[must_use]
     pub fn to_json(&self) -> String {
         let fields_json: Vec<String> = self
             .fields
@@ -145,7 +145,7 @@ pub fn clear_logs() {
 }
 
 /// Get all captured log entries.
-#[must_use] 
+#[must_use]
 pub fn get_logs() -> Vec<LogEntry> {
     if let Ok(storage) = get_log_storage().lock() {
         storage.entries().iter().cloned().collect()
@@ -155,7 +155,7 @@ pub fn get_logs() -> Vec<LogEntry> {
 }
 
 /// Check if logs contain a message.
-#[must_use] 
+#[must_use]
 pub fn logs_contain(message: &str) -> bool {
     if let Ok(storage) = get_log_storage().lock() {
         storage.contains_message(message)
@@ -165,7 +165,7 @@ pub fn logs_contain(message: &str) -> bool {
 }
 
 /// Check if logs have any errors.
-#[must_use] 
+#[must_use]
 pub fn logs_have_errors() -> bool {
     if let Ok(storage) = get_log_storage().lock() {
         storage.has_errors()
@@ -175,7 +175,7 @@ pub fn logs_have_errors() -> bool {
 }
 
 /// Check if logs have any warnings.
-#[must_use] 
+#[must_use]
 pub fn logs_have_warnings() -> bool {
     if let Ok(storage) = get_log_storage().lock() {
         storage.has_warnings()
@@ -185,7 +185,7 @@ pub fn logs_have_warnings() -> bool {
 }
 
 /// Format logs for display on test failure.
-#[must_use] 
+#[must_use]
 pub fn format_logs_for_display() -> String {
     let logs = get_logs();
     if logs.is_empty() {
@@ -292,7 +292,7 @@ where
 ///
 /// Call this at the start of your test to enable log capture.
 /// Returns a guard that will print logs on drop if the test failed.
-#[must_use] 
+#[must_use]
 pub fn init_test_logging(level: &str) -> TestLoggingGuard {
     let storage = get_log_storage();
 
@@ -325,19 +325,19 @@ pub struct TestLoggingGuard {
 }
 
 impl TestLoggingGuard {
-    #[must_use] 
+    #[must_use]
     pub fn with_name(mut self, name: &str) -> Self {
         self.test_name = name.to_string();
         self
     }
 
-    #[must_use] 
+    #[must_use]
     pub const fn no_print_on_failure(mut self) -> Self {
         self.print_on_failure = false;
         self
     }
 
-    #[must_use] 
+    #[must_use]
     pub fn elapsed(&self) -> std::time::Duration {
         self.start_time.elapsed()
     }
@@ -435,7 +435,7 @@ pub struct TestLogger {
 }
 
 impl TestLogger {
-    #[must_use] 
+    #[must_use]
     pub fn new(test_name: &str) -> Self {
         let separator = "=".repeat(60);
         println!("\n{separator}");
@@ -473,7 +473,7 @@ impl TestLogger {
     }
 
     #[allow(dead_code)]
-    #[must_use] 
+    #[must_use]
     pub fn test_name(&self) -> &str {
         &self.test_name
     }
