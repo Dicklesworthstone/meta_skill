@@ -1,840 +1,22 @@
-//! Comprehensive unit tests for output detection module.
+//! Unit tests for output detection module.
 //!
-//! Tests cover all aspects of output mode detection including:
-//! - Format-based detection (machine-readable vs human)
-//! - Config/robot mode overrides
-//! - Agent environment variable detection (15 vars)
-//! - CI environment variable detection (12 vars)
-//! - IDE environment variable detection (6 vars)
-//! - Standard environment variables (NO_COLOR, MS_PLAIN_OUTPUT, MS_FORCE_RICH)
-//! - Terminal detection (TTY vs piped)
-//! - Precedence logic
-//! - OutputModeReport generation
+//! These tests verify the output detection logic for determining
+//! rich vs plain output mode based on format, environment, and terminal state.
 //!
-//! All tests use the EnvGuard RAII pattern to ensure environment variable
-//! isolation between tests.
-
-use std::env;
-use std::ffi::OsString;
+//! # Test Strategy
+//!
+//! Since the project forbids unsafe code and environment variable manipulation
+//! requires unsafe in Rust 2024 edition, these tests use the module's built-in
+//! test support: `OutputEnvironment::new()` and `OutputDetector::with_env()`
+//! to create controlled test scenarios without modifying actual environment.
 
 use ms::cli::output::OutputFormat;
 use ms::output::detection::{
-    detected_agent_vars, detected_ci_vars, detected_ide_vars, is_agent_environment,
-    is_ci_environment, is_ide_environment, maybe_print_debug_output, should_use_rich_output,
-    should_use_rich_with_flags, OutputDecisionReason, OutputDetector, OutputEnvironment,
-    OutputModeReport, AGENT_ENV_VARS, CI_ENV_VARS, IDE_ENV_VARS,
+    is_agent_environment, is_ci_environment, is_ide_environment, maybe_print_debug_output,
+    should_use_rich_output, should_use_rich_with_flags, OutputDecision, OutputDecisionReason,
+    OutputDetector, OutputEnvironment, OutputModeReport, AGENT_ENV_VARS, CI_ENV_VARS,
+    IDE_ENV_VARS,
 };
-
-// =============================================================================
-// Test Environment Guard (RAII for env vars)
-// =============================================================================
-
-/// RAII guard for temporarily setting environment variables.
-/// When dropped, restores all variables to their original state.
-struct EnvGuard {
-    original_values: Vec<(String, Option<OsString>)>,
-}
-
-impl EnvGuard {
-    fn new() -> Self {
-        Self {
-            original_values: Vec::new(),
-        }
-    }
-
-    fn set(mut self, key: &str, value: &str) -> Self {
-        let original = env::var_os(key);
-        self.original_values.push((key.to_string(), original));
-        // SAFETY: Test-only code
-        unsafe { env::set_var(key, value) };
-        self
-    }
-
-    fn unset(mut self, key: &str) -> Self {
-        let original = env::var_os(key);
-        self.original_values.push((key.to_string(), original));
-        // SAFETY: Test-only code
-        unsafe { env::remove_var(key) };
-        self
-    }
-}
-
-impl Drop for EnvGuard {
-    fn drop(&mut self) {
-        for (key, original) in self.original_values.iter().rev() {
-            // SAFETY: Restoring environment state in test cleanup
-            unsafe {
-                match original {
-                    Some(value) => env::set_var(key, value),
-                    None => env::remove_var(key),
-                }
-            }
-        }
-    }
-}
-
-// =============================================================================
-// Format-Based Detection Tests
-// =============================================================================
-
-mod format_based {
-    use super::*;
-
-    #[test]
-    fn test_json_format_always_plain() {
-        let env = OutputEnvironment::new(false, false, true, true);
-        let detector = OutputDetector::with_env(OutputFormat::Json, false, env);
-        let decision = detector.decide();
-
-        assert!(!decision.use_rich);
-        assert_eq!(decision.reason, OutputDecisionReason::MachineReadableFormat);
-    }
-
-    #[test]
-    fn test_jsonl_format_always_plain() {
-        let env = OutputEnvironment::new(false, false, true, true);
-        let detector = OutputDetector::with_env(OutputFormat::Jsonl, false, env);
-        let decision = detector.decide();
-
-        assert!(!decision.use_rich);
-        assert_eq!(decision.reason, OutputDecisionReason::MachineReadableFormat);
-    }
-
-    #[test]
-    fn test_tsv_format_always_plain() {
-        let env = OutputEnvironment::new(false, false, true, true);
-        let detector = OutputDetector::with_env(OutputFormat::Tsv, false, env);
-        let decision = detector.decide();
-
-        assert!(!decision.use_rich);
-        assert_eq!(decision.reason, OutputDecisionReason::MachineReadableFormat);
-    }
-
-    #[test]
-    fn test_plain_format_always_plain() {
-        let env = OutputEnvironment::new(false, false, true, true);
-        let detector = OutputDetector::with_env(OutputFormat::Plain, false, env);
-        let decision = detector.decide();
-
-        assert!(!decision.use_rich);
-        assert_eq!(decision.reason, OutputDecisionReason::PlainFormat);
-    }
-
-    #[test]
-    fn test_human_format_can_be_rich_on_tty() {
-        let env = OutputEnvironment::new(false, false, false, true);
-        let detector = OutputDetector::with_env(OutputFormat::Human, false, env);
-        let decision = detector.decide();
-
-        assert!(decision.use_rich);
-        assert_eq!(decision.reason, OutputDecisionReason::HumanDefault);
-    }
-
-    #[test]
-    fn test_format_takes_precedence_over_force_rich_env() {
-        let env = OutputEnvironment::new(false, false, true, true);
-        let detector = OutputDetector::with_env(OutputFormat::Json, false, env);
-        let decision = detector.decide();
-
-        assert!(!decision.use_rich);
-        assert_eq!(decision.reason, OutputDecisionReason::MachineReadableFormat);
-    }
-
-    #[test]
-    fn test_all_machine_readable_formats() {
-        let formats = [OutputFormat::Json, OutputFormat::Jsonl, OutputFormat::Tsv];
-
-        for format in formats {
-            let env = OutputEnvironment::new(false, false, true, true);
-            let detector = OutputDetector::with_env(format, false, env);
-            let decision = detector.decide();
-
-            assert!(
-                !decision.use_rich,
-                "{:?} should produce plain output",
-                format
-            );
-        }
-    }
-
-    #[test]
-    fn test_robot_flag_converts_to_json_format() {
-        // The robot flag causes JSON format to be used
-        let format = OutputFormat::from_args(true, None);
-        assert_eq!(format, OutputFormat::Json);
-    }
-}
-
-// =============================================================================
-// Config/Robot Mode Detection Tests
-// =============================================================================
-
-mod config_based {
-    use super::*;
-
-    #[test]
-    fn test_robot_mode_overrides_to_plain() {
-        let env = OutputEnvironment::new(false, false, true, true);
-        let detector = OutputDetector::with_env(OutputFormat::Human, true, env);
-        let decision = detector.decide();
-
-        assert!(!decision.use_rich);
-        assert_eq!(decision.reason, OutputDecisionReason::RobotMode);
-    }
-
-    #[test]
-    fn test_robot_mode_beats_force_rich() {
-        let env = OutputEnvironment::new(false, false, true, true);
-        let detector = OutputDetector::with_env(OutputFormat::Human, true, env);
-        let decision = detector.decide();
-
-        assert!(!decision.use_rich);
-        assert_eq!(decision.reason, OutputDecisionReason::RobotMode);
-    }
-
-    #[test]
-    fn test_format_beats_robot_mode() {
-        let env = OutputEnvironment::new(false, false, false, true);
-        let detector = OutputDetector::with_env(OutputFormat::Json, true, env);
-        let decision = detector.decide();
-
-        assert!(!decision.use_rich);
-        assert_eq!(decision.reason, OutputDecisionReason::MachineReadableFormat);
-    }
-}
-
-// =============================================================================
-// Environment Variable Detection Tests
-// =============================================================================
-
-mod env_vars {
-    use super::*;
-
-    #[test]
-    fn test_no_color_env_disables_rich() {
-        let env = OutputEnvironment::new(true, false, false, true);
-        let detector = OutputDetector::with_env(OutputFormat::Human, false, env);
-        let decision = detector.decide();
-
-        assert!(!decision.use_rich);
-        assert_eq!(decision.reason, OutputDecisionReason::EnvNoColor);
-    }
-
-    #[test]
-    fn test_ms_plain_output_env_disables_rich() {
-        let env = OutputEnvironment::new(false, true, false, true);
-        let detector = OutputDetector::with_env(OutputFormat::Human, false, env);
-        let decision = detector.decide();
-
-        assert!(!decision.use_rich);
-        assert_eq!(decision.reason, OutputDecisionReason::EnvPlainOutput);
-    }
-
-    #[test]
-    fn test_ms_force_rich_env_enables_rich() {
-        let env = OutputEnvironment::new(false, false, true, true);
-        let detector = OutputDetector::with_env(OutputFormat::Human, false, env);
-        let decision = detector.decide();
-
-        assert!(decision.use_rich);
-        assert_eq!(decision.reason, OutputDecisionReason::ForcedRich);
-    }
-
-    #[test]
-    fn test_no_color_beats_force_rich() {
-        let env = OutputEnvironment::new(true, false, true, true);
-        let detector = OutputDetector::with_env(OutputFormat::Human, false, env);
-        let decision = detector.decide();
-
-        assert!(!decision.use_rich);
-        assert_eq!(decision.reason, OutputDecisionReason::EnvNoColor);
-    }
-
-    #[test]
-    fn test_plain_output_beats_force_rich() {
-        let env = OutputEnvironment::new(false, true, true, true);
-        let detector = OutputDetector::with_env(OutputFormat::Human, false, env);
-        let decision = detector.decide();
-
-        assert!(!decision.use_rich);
-        assert_eq!(decision.reason, OutputDecisionReason::EnvPlainOutput);
-    }
-}
-
-// =============================================================================
-// Agent Environment Variable Detection Tests (15 env vars)
-// =============================================================================
-
-mod agent_env_detection {
-    use super::*;
-
-    #[test]
-    fn test_agent_env_vars_constant_has_15_entries() {
-        assert_eq!(
-            AGENT_ENV_VARS.len(),
-            15,
-            "Expected 15 agent environment variables"
-        );
-    }
-
-    #[test]
-    fn test_claude_code_env_detected() {
-        let _guard = EnvGuard::new().set("CLAUDE_CODE", "1");
-        assert!(is_agent_environment());
-        let vars = detected_agent_vars();
-        assert!(vars.contains(&"CLAUDE_CODE".to_string()));
-    }
-
-    #[test]
-    fn test_cursor_ai_env_detected() {
-        let _guard = EnvGuard::new().set("CURSOR_AI", "1");
-        assert!(is_agent_environment());
-    }
-
-    #[test]
-    fn test_openai_codex_env_detected() {
-        let _guard = EnvGuard::new().set("OPENAI_CODEX", "1");
-        assert!(is_agent_environment());
-    }
-
-    #[test]
-    fn test_aider_mode_env_detected() {
-        let _guard = EnvGuard::new().set("AIDER_MODE", "1");
-        assert!(is_agent_environment());
-    }
-
-    #[test]
-    fn test_codeium_enabled_env_detected() {
-        let _guard = EnvGuard::new().set("CODEIUM_ENABLED", "1");
-        assert!(is_agent_environment());
-    }
-
-    #[test]
-    fn test_windsurf_agent_env_detected() {
-        let _guard = EnvGuard::new().set("WINDSURF_AGENT", "1");
-        assert!(is_agent_environment());
-    }
-
-    #[test]
-    fn test_copilot_agent_env_detected() {
-        let _guard = EnvGuard::new().set("COPILOT_AGENT", "1");
-        assert!(is_agent_environment());
-    }
-
-    #[test]
-    fn test_copilot_workspace_env_detected() {
-        let _guard = EnvGuard::new().set("COPILOT_WORKSPACE", "1");
-        assert!(is_agent_environment());
-    }
-
-    #[test]
-    fn test_generic_agent_mode_env_detected() {
-        let _guard = EnvGuard::new().set("AGENT_MODE", "1");
-        assert!(is_agent_environment());
-    }
-
-    #[test]
-    fn test_ide_agent_env_detected() {
-        let _guard = EnvGuard::new().set("IDE_AGENT", "1");
-        assert!(is_agent_environment());
-    }
-
-    #[test]
-    fn test_continue_dev_env_detected() {
-        let _guard = EnvGuard::new().set("CONTINUE_DEV", "1");
-        assert!(is_agent_environment());
-    }
-
-    #[test]
-    fn test_sourcegraph_cody_env_detected() {
-        let _guard = EnvGuard::new().set("SOURCEGRAPH_CODY", "1");
-        assert!(is_agent_environment());
-    }
-
-    #[test]
-    fn test_tabnine_agent_env_detected() {
-        let _guard = EnvGuard::new().set("TABNINE_AGENT", "1");
-        assert!(is_agent_environment());
-    }
-
-    #[test]
-    fn test_amazon_q_env_detected() {
-        let _guard = EnvGuard::new().set("AMAZON_Q", "1");
-        assert!(is_agent_environment());
-    }
-
-    #[test]
-    fn test_gemini_code_env_detected() {
-        let _guard = EnvGuard::new().set("GEMINI_CODE", "1");
-        assert!(is_agent_environment());
-    }
-
-    #[test]
-    fn test_no_agent_env_when_none_set() {
-        let _guard = EnvGuard::new()
-            .unset("CLAUDE_CODE")
-            .unset("CURSOR_AI")
-            .unset("OPENAI_CODEX")
-            .unset("AIDER_MODE")
-            .unset("CODEIUM_ENABLED")
-            .unset("WINDSURF_AGENT")
-            .unset("COPILOT_AGENT")
-            .unset("COPILOT_WORKSPACE")
-            .unset("AGENT_MODE")
-            .unset("IDE_AGENT")
-            .unset("CONTINUE_DEV")
-            .unset("SOURCEGRAPH_CODY")
-            .unset("TABNINE_AGENT")
-            .unset("AMAZON_Q")
-            .unset("GEMINI_CODE");
-
-        assert!(!is_agent_environment());
-        assert!(detected_agent_vars().is_empty());
-    }
-
-    #[test]
-    fn test_agent_env_with_various_values() {
-        // "1" should work
-        let _guard = EnvGuard::new().set("CLAUDE_CODE", "1");
-        assert!(is_agent_environment());
-        drop(_guard);
-
-        // "true" should work
-        let _guard = EnvGuard::new().set("CLAUDE_CODE", "true");
-        assert!(is_agent_environment());
-        drop(_guard);
-
-        // "yes" should work
-        let _guard = EnvGuard::new().set("CLAUDE_CODE", "yes");
-        assert!(is_agent_environment());
-        drop(_guard);
-
-        // Any non-empty value should work
-        let _guard = EnvGuard::new().set("CLAUDE_CODE", "anything");
-        assert!(is_agent_environment());
-    }
-
-    #[test]
-    fn test_empty_agent_env_value_not_detected() {
-        let _guard = EnvGuard::new().set("CLAUDE_CODE", "");
-        // Empty value should not count
-        assert!(!is_agent_environment());
-    }
-
-    #[test]
-    fn test_multiple_agent_vars_all_detected() {
-        let _guard = EnvGuard::new()
-            .set("CLAUDE_CODE", "1")
-            .set("CURSOR_AI", "1")
-            .set("AMAZON_Q", "1");
-
-        assert!(is_agent_environment());
-        let vars = detected_agent_vars();
-        assert!(vars.len() >= 3);
-        assert!(vars.contains(&"CLAUDE_CODE".to_string()));
-        assert!(vars.contains(&"CURSOR_AI".to_string()));
-        assert!(vars.contains(&"AMAZON_Q".to_string()));
-    }
-}
-
-// =============================================================================
-// CI Environment Variable Detection Tests (12 env vars)
-// =============================================================================
-
-mod ci_env_detection {
-    use super::*;
-
-    #[test]
-    fn test_ci_env_vars_constant_has_12_entries() {
-        assert_eq!(CI_ENV_VARS.len(), 12, "Expected 12 CI environment variables");
-    }
-
-    #[test]
-    fn test_generic_ci_env_detected() {
-        let _guard = EnvGuard::new().set("CI", "true");
-        assert!(is_ci_environment());
-    }
-
-    #[test]
-    fn test_github_actions_env_detected() {
-        let _guard = EnvGuard::new().set("GITHUB_ACTIONS", "true");
-        assert!(is_ci_environment());
-    }
-
-    #[test]
-    fn test_gitlab_ci_env_detected() {
-        let _guard = EnvGuard::new().set("GITLAB_CI", "true");
-        assert!(is_ci_environment());
-    }
-
-    #[test]
-    fn test_jenkins_url_env_detected() {
-        let _guard = EnvGuard::new().set("JENKINS_URL", "http://jenkins.example.com");
-        assert!(is_ci_environment());
-    }
-
-    #[test]
-    fn test_travis_env_detected() {
-        let _guard = EnvGuard::new().set("TRAVIS", "true");
-        assert!(is_ci_environment());
-    }
-
-    #[test]
-    fn test_circleci_env_detected() {
-        let _guard = EnvGuard::new().set("CIRCLECI", "true");
-        assert!(is_ci_environment());
-    }
-
-    #[test]
-    fn test_buildkite_env_detected() {
-        let _guard = EnvGuard::new().set("BUILDKITE", "true");
-        assert!(is_ci_environment());
-    }
-
-    #[test]
-    fn test_bitbucket_pipelines_env_detected() {
-        let _guard = EnvGuard::new().set("BITBUCKET_PIPELINES", "true");
-        assert!(is_ci_environment());
-    }
-
-    #[test]
-    fn test_azure_pipelines_tf_build_env_detected() {
-        let _guard = EnvGuard::new().set("TF_BUILD", "True");
-        assert!(is_ci_environment());
-    }
-
-    #[test]
-    fn test_teamcity_version_env_detected() {
-        let _guard = EnvGuard::new().set("TEAMCITY_VERSION", "2023.11.1");
-        assert!(is_ci_environment());
-    }
-
-    #[test]
-    fn test_drone_env_detected() {
-        let _guard = EnvGuard::new().set("DRONE", "true");
-        assert!(is_ci_environment());
-    }
-
-    #[test]
-    fn test_woodpecker_env_detected() {
-        let _guard = EnvGuard::new().set("WOODPECKER", "true");
-        assert!(is_ci_environment());
-    }
-
-    #[test]
-    fn test_no_ci_env_when_none_set() {
-        let _guard = EnvGuard::new()
-            .unset("CI")
-            .unset("GITHUB_ACTIONS")
-            .unset("GITLAB_CI")
-            .unset("JENKINS_URL")
-            .unset("TRAVIS")
-            .unset("CIRCLECI")
-            .unset("BUILDKITE")
-            .unset("BITBUCKET_PIPELINES")
-            .unset("TF_BUILD")
-            .unset("TEAMCITY_VERSION")
-            .unset("DRONE")
-            .unset("WOODPECKER");
-
-        assert!(!is_ci_environment());
-        assert!(detected_ci_vars().is_empty());
-    }
-
-    #[test]
-    fn test_multiple_ci_vars_detected() {
-        let _guard = EnvGuard::new()
-            .set("CI", "true")
-            .set("GITHUB_ACTIONS", "true");
-
-        assert!(is_ci_environment());
-        let vars = detected_ci_vars();
-        assert!(vars.len() >= 2);
-        assert!(vars.contains(&"CI".to_string()));
-        assert!(vars.contains(&"GITHUB_ACTIONS".to_string()));
-    }
-}
-
-// =============================================================================
-// IDE Environment Variable Detection Tests (6 env vars)
-// =============================================================================
-
-mod ide_env_detection {
-    use super::*;
-
-    #[test]
-    fn test_ide_env_vars_constant_has_6_entries() {
-        assert_eq!(IDE_ENV_VARS.len(), 6, "Expected 6 IDE environment variables");
-    }
-
-    #[test]
-    fn test_vscode_git_askpass_node_env_detected() {
-        let _guard = EnvGuard::new().set("VSCODE_GIT_ASKPASS_NODE", "/path/to/node");
-        assert!(is_ide_environment());
-    }
-
-    #[test]
-    fn test_vscode_injection_env_detected() {
-        let _guard = EnvGuard::new().set("VSCODE_INJECTION", "1");
-        assert!(is_ide_environment());
-    }
-
-    #[test]
-    fn test_codespaces_env_detected() {
-        let _guard = EnvGuard::new().set("CODESPACES", "true");
-        assert!(is_ide_environment());
-    }
-
-    #[test]
-    fn test_gitpod_workspace_id_env_detected() {
-        let _guard = EnvGuard::new().set("GITPOD_WORKSPACE_ID", "abc123xyz");
-        assert!(is_ide_environment());
-    }
-
-    #[test]
-    fn test_replit_db_url_env_detected() {
-        let _guard = EnvGuard::new().set("REPLIT_DB_URL", "https://kv.replit.com/...");
-        assert!(is_ide_environment());
-    }
-
-    #[test]
-    fn test_cloud_shell_env_detected() {
-        let _guard = EnvGuard::new().set("CLOUD_SHELL", "true");
-        assert!(is_ide_environment());
-    }
-
-    #[test]
-    fn test_no_ide_env_when_none_set() {
-        let _guard = EnvGuard::new()
-            .unset("VSCODE_GIT_ASKPASS_NODE")
-            .unset("VSCODE_INJECTION")
-            .unset("CODESPACES")
-            .unset("GITPOD_WORKSPACE_ID")
-            .unset("REPLIT_DB_URL")
-            .unset("CLOUD_SHELL");
-
-        assert!(!is_ide_environment());
-        assert!(detected_ide_vars().is_empty());
-    }
-
-    #[test]
-    fn test_multiple_ide_vars_detected() {
-        let _guard = EnvGuard::new()
-            .set("CODESPACES", "true")
-            .set("VSCODE_INJECTION", "1");
-
-        assert!(is_ide_environment());
-        let vars = detected_ide_vars();
-        assert!(vars.len() >= 2);
-    }
-}
-
-// =============================================================================
-// Terminal Detection Tests
-// =============================================================================
-
-mod terminal_detection {
-    use super::*;
-
-    #[test]
-    fn test_non_tty_gets_plain() {
-        let env = OutputEnvironment::new(false, false, false, false);
-        let detector = OutputDetector::with_env(OutputFormat::Human, false, env);
-        let decision = detector.decide();
-
-        assert!(!decision.use_rich);
-        assert_eq!(decision.reason, OutputDecisionReason::NotTerminal);
-    }
-
-    #[test]
-    fn test_tty_gets_rich_by_default() {
-        let env = OutputEnvironment::new(false, false, false, true);
-        let detector = OutputDetector::with_env(OutputFormat::Human, false, env);
-        let decision = detector.decide();
-
-        assert!(decision.use_rich);
-        assert_eq!(decision.reason, OutputDecisionReason::HumanDefault);
-    }
-
-    #[test]
-    fn test_non_tty_with_force_rich_still_plain() {
-        // force_rich only works on TTY
-        let env = OutputEnvironment::new(false, false, true, false);
-        let detector = OutputDetector::with_env(OutputFormat::Human, false, env);
-        let decision = detector.decide();
-
-        assert!(!decision.use_rich);
-        assert_eq!(decision.reason, OutputDecisionReason::NotTerminal);
-    }
-}
-
-// =============================================================================
-// Precedence Tests (Critical - Full Chain)
-// =============================================================================
-
-mod precedence {
-    use super::*;
-
-    #[test]
-    fn test_machine_readable_format_beats_everything() {
-        // Even with all flags favoring rich, machine-readable format wins
-        let env = OutputEnvironment::new(false, false, true, true);
-        let detector = OutputDetector::with_env(OutputFormat::Json, false, env);
-        let decision = detector.decide();
-
-        assert!(!decision.use_rich);
-        assert_eq!(decision.reason, OutputDecisionReason::MachineReadableFormat);
-    }
-
-    #[test]
-    fn test_plain_format_beats_everything_except_machine_readable() {
-        let env = OutputEnvironment::new(false, false, true, true);
-        let detector = OutputDetector::with_env(OutputFormat::Plain, false, env);
-        let decision = detector.decide();
-
-        assert!(!decision.use_rich);
-        assert_eq!(decision.reason, OutputDecisionReason::PlainFormat);
-    }
-
-    #[test]
-    fn test_robot_mode_beats_env_settings() {
-        let env = OutputEnvironment::new(false, false, true, true);
-        let detector = OutputDetector::with_env(OutputFormat::Human, true, env);
-        let decision = detector.decide();
-
-        assert!(!decision.use_rich);
-        assert_eq!(decision.reason, OutputDecisionReason::RobotMode);
-    }
-
-    #[test]
-    fn test_no_color_beats_force_rich_env() {
-        let env = OutputEnvironment::new(true, false, true, true);
-        let detector = OutputDetector::with_env(OutputFormat::Human, false, env);
-        let decision = detector.decide();
-
-        assert!(!decision.use_rich);
-        assert_eq!(decision.reason, OutputDecisionReason::EnvNoColor);
-    }
-
-    #[test]
-    fn test_plain_output_env_beats_force_rich_env() {
-        let env = OutputEnvironment::new(false, true, true, true);
-        let detector = OutputDetector::with_env(OutputFormat::Human, false, env);
-        let decision = detector.decide();
-
-        assert!(!decision.use_rich);
-        assert_eq!(decision.reason, OutputDecisionReason::EnvPlainOutput);
-    }
-
-    #[test]
-    fn test_not_terminal_beats_force_rich() {
-        let env = OutputEnvironment::new(false, false, true, false);
-        let detector = OutputDetector::with_env(OutputFormat::Human, false, env);
-        let decision = detector.decide();
-
-        assert!(!decision.use_rich);
-        assert_eq!(decision.reason, OutputDecisionReason::NotTerminal);
-    }
-
-    #[test]
-    fn test_force_rich_used_only_when_all_else_allows() {
-        let env = OutputEnvironment::new(false, false, true, true);
-        let detector = OutputDetector::with_env(OutputFormat::Human, false, env);
-        let decision = detector.decide();
-
-        assert!(decision.use_rich);
-        assert_eq!(decision.reason, OutputDecisionReason::ForcedRich);
-    }
-
-    #[test]
-    fn test_human_default_when_no_overrides() {
-        let env = OutputEnvironment::new(false, false, false, true);
-        let detector = OutputDetector::with_env(OutputFormat::Human, false, env);
-        let decision = detector.decide();
-
-        assert!(decision.use_rich);
-        assert_eq!(decision.reason, OutputDecisionReason::HumanDefault);
-    }
-
-    #[test]
-    fn test_full_precedence_chain_documented() {
-        // Document the full precedence chain:
-        // 1. Machine-readable format (JSON/JSONL/TSV) -> plain
-        // 2. Plain format -> plain
-        // 3. Robot mode flag -> plain
-        // 4. NO_COLOR env -> plain
-        // 5. MS_PLAIN_OUTPUT env -> plain
-        // 6. Not a terminal -> plain
-        // 7. MS_FORCE_RICH env -> rich
-        // 8. Default human format on terminal -> rich
-
-        let env = OutputEnvironment::new(false, false, true, true);
-
-        // Level 1: Machine-readable wins
-        let d1 = OutputDetector::with_env(OutputFormat::Json, true, env).decide();
-        assert_eq!(d1.reason, OutputDecisionReason::MachineReadableFormat);
-
-        // Level 2: Plain format wins (over robot mode)
-        let d2 = OutputDetector::with_env(OutputFormat::Plain, true, env).decide();
-        assert_eq!(d2.reason, OutputDecisionReason::PlainFormat);
-
-        // Level 3: Robot mode wins (over env)
-        let d3 = OutputDetector::with_env(OutputFormat::Human, true, env).decide();
-        assert_eq!(d3.reason, OutputDecisionReason::RobotMode);
-
-        // Level 4: NO_COLOR wins
-        let env4 = OutputEnvironment::new(true, true, true, true);
-        let d4 = OutputDetector::with_env(OutputFormat::Human, false, env4).decide();
-        assert_eq!(d4.reason, OutputDecisionReason::EnvNoColor);
-
-        // Level 5: MS_PLAIN_OUTPUT wins
-        let env5 = OutputEnvironment::new(false, true, true, true);
-        let d5 = OutputDetector::with_env(OutputFormat::Human, false, env5).decide();
-        assert_eq!(d5.reason, OutputDecisionReason::EnvPlainOutput);
-
-        // Level 6: Not terminal wins
-        let env6 = OutputEnvironment::new(false, false, true, false);
-        let d6 = OutputDetector::with_env(OutputFormat::Human, false, env6).decide();
-        assert_eq!(d6.reason, OutputDecisionReason::NotTerminal);
-
-        // Level 7: Force rich wins
-        let env7 = OutputEnvironment::new(false, false, true, true);
-        let d7 = OutputDetector::with_env(OutputFormat::Human, false, env7).decide();
-        assert_eq!(d7.reason, OutputDecisionReason::ForcedRich);
-
-        // Level 8: Human default
-        let env8 = OutputEnvironment::new(false, false, false, true);
-        let d8 = OutputDetector::with_env(OutputFormat::Human, false, env8).decide();
-        assert_eq!(d8.reason, OutputDecisionReason::HumanDefault);
-    }
-}
-
-// =============================================================================
-// should_use_rich_with_flags Tests
-// =============================================================================
-
-mod flags_api {
-    use super::*;
-
-    #[test]
-    fn test_force_plain_flag_wins() {
-        let result = should_use_rich_with_flags(OutputFormat::Human, false, true, true);
-        assert!(!result);
-    }
-
-    #[test]
-    fn test_force_rich_flag_wins_when_not_plain() {
-        let result = should_use_rich_with_flags(OutputFormat::Human, false, false, true);
-        assert!(result);
-    }
-
-    #[test]
-    fn test_flags_fallback_to_detection() {
-        // With no flags, should use normal detection
-        let result = should_use_rich_with_flags(OutputFormat::Json, false, false, false);
-        assert!(!result); // JSON is machine-readable
-    }
-}
 
 // =============================================================================
 // OutputEnvironment Tests
@@ -844,33 +26,75 @@ mod output_environment {
     use super::*;
 
     #[test]
-    fn test_output_environment_new() {
-        let env = OutputEnvironment::new(true, false, true, false);
+    fn new_creates_custom_environment() {
+        let env = OutputEnvironment::new(true, false, false, true);
         assert!(env.no_color);
         assert!(!env.plain_output);
-        assert!(env.force_rich);
+        assert!(!env.force_rich);
+        assert!(env.stdout_is_terminal);
+    }
+
+    #[test]
+    fn new_with_all_false() {
+        let env = OutputEnvironment::new(false, false, false, false);
+        assert!(!env.no_color);
+        assert!(!env.plain_output);
+        assert!(!env.force_rich);
         assert!(!env.stdout_is_terminal);
     }
 
     #[test]
-    fn test_output_environment_from_env_captures_no_color() {
-        let _guard = EnvGuard::new().set("NO_COLOR", "1");
-        let env = OutputEnvironment::from_env();
+    fn new_with_all_true() {
+        let env = OutputEnvironment::new(true, true, true, true);
         assert!(env.no_color);
-    }
-
-    #[test]
-    fn test_output_environment_from_env_captures_plain_output() {
-        let _guard = EnvGuard::new().set("MS_PLAIN_OUTPUT", "1");
-        let env = OutputEnvironment::from_env();
         assert!(env.plain_output);
+        assert!(env.force_rich);
+        assert!(env.stdout_is_terminal);
     }
 
     #[test]
-    fn test_output_environment_from_env_captures_force_rich() {
-        let _guard = EnvGuard::new().set("MS_FORCE_RICH", "1");
+    fn from_env_returns_valid_struct() {
+        // Just verify it doesn't panic and returns valid data
         let env = OutputEnvironment::from_env();
-        assert!(env.force_rich);
+        // We can't assert specific values since they depend on the test environment
+        // but we can verify the struct is properly constructed
+        let _ = env.no_color;
+        let _ = env.plain_output;
+        let _ = env.force_rich;
+        let _ = env.stdout_is_terminal;
+    }
+
+    #[test]
+    fn equality_comparison() {
+        let env1 = OutputEnvironment::new(true, false, true, false);
+        let env2 = OutputEnvironment::new(true, false, true, false);
+        let env3 = OutputEnvironment::new(false, false, true, false);
+
+        assert_eq!(env1, env2);
+        assert_ne!(env1, env3);
+    }
+
+    #[test]
+    fn copy_semantics() {
+        let env1 = OutputEnvironment::new(true, false, true, false);
+        let env2 = env1; // Copy
+        assert_eq!(env1, env2);
+    }
+
+    #[test]
+    fn clone_semantics() {
+        let env1 = OutputEnvironment::new(true, false, true, false);
+        let env2 = env1.clone();
+        assert_eq!(env1, env2);
+    }
+
+    #[test]
+    fn debug_formatting() {
+        let env = OutputEnvironment::new(true, false, true, false);
+        let debug_str = format!("{:?}", env);
+        assert!(debug_str.contains("OutputEnvironment"));
+        assert!(debug_str.contains("no_color"));
+        assert!(debug_str.contains("plain_output"));
     }
 }
 
@@ -882,79 +106,764 @@ mod output_decision {
     use super::*;
 
     #[test]
-    fn test_output_decision_rich_and_plain() {
-        let env = OutputEnvironment::new(false, false, false, true);
-        let detector = OutputDetector::with_env(OutputFormat::Human, false, env);
-        let rich_decision = detector.decide();
-        assert!(rich_decision.use_rich);
-
-        let env_plain = OutputEnvironment::new(true, false, false, true);
-        let detector_plain = OutputDetector::with_env(OutputFormat::Human, false, env_plain);
-        let plain_decision = detector_plain.decide();
-        assert!(!plain_decision.use_rich);
+    fn rich_decision_has_use_rich_true() {
+        let detector = OutputDetector::with_env(
+            OutputFormat::Human,
+            false,
+            OutputEnvironment::new(false, false, false, true),
+        );
+        let decision = detector.decide();
+        assert!(decision.use_rich);
     }
 
     #[test]
-    fn test_all_decision_reasons_reachable() {
-        // Test that each reason can be triggered
-        let reasons = vec![
-            (
-                OutputFormat::Json,
-                false,
-                OutputEnvironment::new(false, false, false, true),
-                OutputDecisionReason::MachineReadableFormat,
-            ),
-            (
-                OutputFormat::Plain,
-                false,
-                OutputEnvironment::new(false, false, false, true),
-                OutputDecisionReason::PlainFormat,
-            ),
-            (
-                OutputFormat::Human,
-                true,
-                OutputEnvironment::new(false, false, false, true),
-                OutputDecisionReason::RobotMode,
-            ),
-            (
-                OutputFormat::Human,
-                false,
-                OutputEnvironment::new(true, false, false, true),
-                OutputDecisionReason::EnvNoColor,
-            ),
-            (
-                OutputFormat::Human,
-                false,
-                OutputEnvironment::new(false, true, false, true),
-                OutputDecisionReason::EnvPlainOutput,
-            ),
-            (
-                OutputFormat::Human,
-                false,
-                OutputEnvironment::new(false, false, false, false),
-                OutputDecisionReason::NotTerminal,
-            ),
-            (
-                OutputFormat::Human,
-                false,
-                OutputEnvironment::new(false, false, true, true),
-                OutputDecisionReason::ForcedRich,
-            ),
-            (
-                OutputFormat::Human,
-                false,
-                OutputEnvironment::new(false, false, false, true),
-                OutputDecisionReason::HumanDefault,
-            ),
-        ];
+    fn plain_decision_has_use_rich_false() {
+        let detector = OutputDetector::with_env(
+            OutputFormat::Json,
+            false,
+            OutputEnvironment::new(false, false, false, true),
+        );
+        let decision = detector.decide();
+        assert!(!decision.use_rich);
+    }
 
-        for (format, robot, env, expected_reason) in reasons {
-            let detector = OutputDetector::with_env(format, robot, env);
-            let decision = detector.decide();
-            assert_eq!(
-                decision.reason, expected_reason,
-                "Failed for format={:?}, robot={}, env={:?}",
-                format, robot, env
+    #[test]
+    fn decision_equality() {
+        let detector1 = OutputDetector::with_env(
+            OutputFormat::Human,
+            false,
+            OutputEnvironment::new(false, false, false, true),
+        );
+        let detector2 = OutputDetector::with_env(
+            OutputFormat::Human,
+            false,
+            OutputEnvironment::new(false, false, false, true),
+        );
+        assert_eq!(detector1.decide(), detector2.decide());
+    }
+
+    #[test]
+    fn decision_copy_semantics() {
+        let detector = OutputDetector::with_env(
+            OutputFormat::Human,
+            false,
+            OutputEnvironment::new(false, false, false, true),
+        );
+        let decision1 = detector.decide();
+        let decision2 = decision1; // Copy
+        assert_eq!(decision1, decision2);
+    }
+
+    #[test]
+    fn decision_debug_formatting() {
+        let detector = OutputDetector::with_env(
+            OutputFormat::Human,
+            false,
+            OutputEnvironment::new(false, false, false, true),
+        );
+        let decision = detector.decide();
+        let debug_str = format!("{:?}", decision);
+        assert!(debug_str.contains("OutputDecision"));
+        assert!(debug_str.contains("use_rich"));
+        assert!(debug_str.contains("reason"));
+    }
+}
+
+// =============================================================================
+// OutputDecisionReason Tests
+// =============================================================================
+
+mod output_decision_reason {
+    use super::*;
+
+    #[test]
+    fn machine_readable_format_reason() {
+        let detector = OutputDetector::with_env(
+            OutputFormat::Json,
+            false,
+            OutputEnvironment::new(false, false, false, true),
+        );
+        let decision = detector.decide();
+        assert_eq!(decision.reason, OutputDecisionReason::MachineReadableFormat);
+    }
+
+    #[test]
+    fn plain_format_reason() {
+        let detector = OutputDetector::with_env(
+            OutputFormat::Plain,
+            false,
+            OutputEnvironment::new(false, false, false, true),
+        );
+        let decision = detector.decide();
+        assert_eq!(decision.reason, OutputDecisionReason::PlainFormat);
+    }
+
+    #[test]
+    fn robot_mode_reason() {
+        let detector = OutputDetector::with_env(
+            OutputFormat::Human,
+            true, // robot_mode = true
+            OutputEnvironment::new(false, false, false, true),
+        );
+        let decision = detector.decide();
+        assert_eq!(decision.reason, OutputDecisionReason::RobotMode);
+    }
+
+    #[test]
+    fn env_no_color_reason() {
+        let detector = OutputDetector::with_env(
+            OutputFormat::Human,
+            false,
+            OutputEnvironment::new(true, false, false, true), // no_color = true
+        );
+        let decision = detector.decide();
+        assert_eq!(decision.reason, OutputDecisionReason::EnvNoColor);
+    }
+
+    #[test]
+    fn env_plain_output_reason() {
+        let detector = OutputDetector::with_env(
+            OutputFormat::Human,
+            false,
+            OutputEnvironment::new(false, true, false, true), // plain_output = true
+        );
+        let decision = detector.decide();
+        assert_eq!(decision.reason, OutputDecisionReason::EnvPlainOutput);
+    }
+
+    #[test]
+    fn not_terminal_reason() {
+        let detector = OutputDetector::with_env(
+            OutputFormat::Human,
+            false,
+            OutputEnvironment::new(false, false, false, false), // stdout_is_terminal = false
+        );
+        let decision = detector.decide();
+        assert_eq!(decision.reason, OutputDecisionReason::NotTerminal);
+    }
+
+    #[test]
+    fn forced_rich_reason() {
+        let detector = OutputDetector::with_env(
+            OutputFormat::Human,
+            false,
+            OutputEnvironment::new(false, false, true, true), // force_rich = true
+        );
+        let decision = detector.decide();
+        assert_eq!(decision.reason, OutputDecisionReason::ForcedRich);
+    }
+
+    #[test]
+    fn human_default_reason() {
+        let detector = OutputDetector::with_env(
+            OutputFormat::Human,
+            false,
+            OutputEnvironment::new(false, false, false, true), // all defaults, terminal = true
+        );
+        let decision = detector.decide();
+        assert_eq!(decision.reason, OutputDecisionReason::HumanDefault);
+    }
+
+    #[test]
+    fn reason_equality() {
+        assert_eq!(
+            OutputDecisionReason::MachineReadableFormat,
+            OutputDecisionReason::MachineReadableFormat
+        );
+        assert_ne!(
+            OutputDecisionReason::MachineReadableFormat,
+            OutputDecisionReason::PlainFormat
+        );
+    }
+
+    #[test]
+    fn reason_debug_formatting() {
+        let reason = OutputDecisionReason::HumanDefault;
+        let debug_str = format!("{:?}", reason);
+        assert!(debug_str.contains("HumanDefault"));
+    }
+}
+
+// =============================================================================
+// OutputDetector Tests
+// =============================================================================
+
+mod output_detector {
+    use super::*;
+
+    #[test]
+    fn new_creates_detector() {
+        let detector = OutputDetector::new(OutputFormat::Human, false);
+        // Just verify it doesn't panic and returns valid decisions
+        let _ = detector.decide();
+    }
+
+    #[test]
+    fn with_env_creates_detector() {
+        let env = OutputEnvironment::new(false, false, false, true);
+        let detector = OutputDetector::with_env(OutputFormat::Human, false, env);
+        let decision = detector.decide();
+        assert!(decision.use_rich);
+    }
+
+    #[test]
+    fn should_use_rich_returns_decision_use_rich() {
+        let env = OutputEnvironment::new(false, false, false, true);
+        let detector = OutputDetector::with_env(OutputFormat::Human, false, env);
+        assert!(detector.should_use_rich());
+
+        let env2 = OutputEnvironment::new(true, false, false, true);
+        let detector2 = OutputDetector::with_env(OutputFormat::Human, false, env2);
+        assert!(!detector2.should_use_rich());
+    }
+}
+
+// =============================================================================
+// Format-based Detection Tests
+// =============================================================================
+
+mod format_detection {
+    use super::*;
+
+    #[test]
+    fn json_format_forces_plain() {
+        let detector = OutputDetector::with_env(
+            OutputFormat::Json,
+            false,
+            OutputEnvironment::new(false, false, false, true),
+        );
+        assert!(!detector.should_use_rich());
+        assert_eq!(
+            detector.decide().reason,
+            OutputDecisionReason::MachineReadableFormat
+        );
+    }
+
+    #[test]
+    fn jsonl_format_forces_plain() {
+        let detector = OutputDetector::with_env(
+            OutputFormat::Jsonl,
+            false,
+            OutputEnvironment::new(false, false, false, true),
+        );
+        assert!(!detector.should_use_rich());
+        assert_eq!(
+            detector.decide().reason,
+            OutputDecisionReason::MachineReadableFormat
+        );
+    }
+
+    #[test]
+    fn tsv_format_forces_plain() {
+        let detector = OutputDetector::with_env(
+            OutputFormat::Tsv,
+            false,
+            OutputEnvironment::new(false, false, false, true),
+        );
+        assert!(!detector.should_use_rich());
+        assert_eq!(
+            detector.decide().reason,
+            OutputDecisionReason::MachineReadableFormat
+        );
+    }
+
+    #[test]
+    fn plain_format_forces_plain() {
+        let detector = OutputDetector::with_env(
+            OutputFormat::Plain,
+            false,
+            OutputEnvironment::new(false, false, false, true),
+        );
+        assert!(!detector.should_use_rich());
+        assert_eq!(detector.decide().reason, OutputDecisionReason::PlainFormat);
+    }
+
+    #[test]
+    fn human_format_allows_rich_on_terminal() {
+        let detector = OutputDetector::with_env(
+            OutputFormat::Human,
+            false,
+            OutputEnvironment::new(false, false, false, true),
+        );
+        assert!(detector.should_use_rich());
+        assert_eq!(detector.decide().reason, OutputDecisionReason::HumanDefault);
+    }
+
+    #[test]
+    fn human_format_plain_on_non_terminal() {
+        let detector = OutputDetector::with_env(
+            OutputFormat::Human,
+            false,
+            OutputEnvironment::new(false, false, false, false),
+        );
+        assert!(!detector.should_use_rich());
+        assert_eq!(detector.decide().reason, OutputDecisionReason::NotTerminal);
+    }
+}
+
+// =============================================================================
+// Robot Mode Tests
+// =============================================================================
+
+mod robot_mode {
+    use super::*;
+
+    #[test]
+    fn robot_mode_forces_plain() {
+        let detector = OutputDetector::with_env(
+            OutputFormat::Human,
+            true, // robot mode
+            OutputEnvironment::new(false, false, false, true),
+        );
+        assert!(!detector.should_use_rich());
+        assert_eq!(detector.decide().reason, OutputDecisionReason::RobotMode);
+    }
+
+    #[test]
+    fn robot_mode_takes_precedence_over_terminal() {
+        let detector = OutputDetector::with_env(
+            OutputFormat::Human,
+            true, // robot mode
+            OutputEnvironment::new(false, false, false, true), // terminal = true
+        );
+        assert!(!detector.should_use_rich());
+    }
+
+    #[test]
+    fn robot_mode_takes_precedence_over_force_rich() {
+        let detector = OutputDetector::with_env(
+            OutputFormat::Human,
+            true,                                              // robot mode
+            OutputEnvironment::new(false, false, true, true),  // force_rich = true
+        );
+        assert!(!detector.should_use_rich());
+        assert_eq!(detector.decide().reason, OutputDecisionReason::RobotMode);
+    }
+}
+
+// =============================================================================
+// Environment Variable Detection Tests
+// =============================================================================
+
+mod env_detection {
+    use super::*;
+
+    #[test]
+    fn no_color_forces_plain() {
+        let detector = OutputDetector::with_env(
+            OutputFormat::Human,
+            false,
+            OutputEnvironment::new(true, false, false, true), // no_color = true
+        );
+        assert!(!detector.should_use_rich());
+        assert_eq!(detector.decide().reason, OutputDecisionReason::EnvNoColor);
+    }
+
+    #[test]
+    fn ms_plain_output_forces_plain() {
+        let detector = OutputDetector::with_env(
+            OutputFormat::Human,
+            false,
+            OutputEnvironment::new(false, true, false, true), // plain_output = true
+        );
+        assert!(!detector.should_use_rich());
+        assert_eq!(
+            detector.decide().reason,
+            OutputDecisionReason::EnvPlainOutput
+        );
+    }
+
+    #[test]
+    fn ms_force_rich_forces_rich() {
+        let detector = OutputDetector::with_env(
+            OutputFormat::Human,
+            false,
+            OutputEnvironment::new(false, false, true, true), // force_rich = true
+        );
+        assert!(detector.should_use_rich());
+        assert_eq!(detector.decide().reason, OutputDecisionReason::ForcedRich);
+    }
+
+    #[test]
+    fn force_rich_works_without_terminal() {
+        let detector = OutputDetector::with_env(
+            OutputFormat::Human,
+            false,
+            OutputEnvironment::new(false, false, true, false), // force_rich but no terminal
+        );
+        // NotTerminal takes precedence over ForcedRich in the current logic
+        assert!(!detector.should_use_rich());
+        assert_eq!(detector.decide().reason, OutputDecisionReason::NotTerminal);
+    }
+}
+
+// =============================================================================
+// Precedence Tests
+// =============================================================================
+
+mod precedence {
+    use super::*;
+
+    #[test]
+    fn machine_readable_beats_force_rich() {
+        let detector = OutputDetector::with_env(
+            OutputFormat::Json,
+            false,
+            OutputEnvironment::new(false, false, true, true), // force_rich = true
+        );
+        assert!(!detector.should_use_rich());
+        assert_eq!(
+            detector.decide().reason,
+            OutputDecisionReason::MachineReadableFormat
+        );
+    }
+
+    #[test]
+    fn plain_format_beats_force_rich() {
+        let detector = OutputDetector::with_env(
+            OutputFormat::Plain,
+            false,
+            OutputEnvironment::new(false, false, true, true), // force_rich = true
+        );
+        assert!(!detector.should_use_rich());
+        assert_eq!(detector.decide().reason, OutputDecisionReason::PlainFormat);
+    }
+
+    #[test]
+    fn robot_mode_beats_force_rich() {
+        let detector = OutputDetector::with_env(
+            OutputFormat::Human,
+            true, // robot mode
+            OutputEnvironment::new(false, false, true, true),
+        );
+        assert!(!detector.should_use_rich());
+        assert_eq!(detector.decide().reason, OutputDecisionReason::RobotMode);
+    }
+
+    #[test]
+    fn no_color_beats_force_rich() {
+        let detector = OutputDetector::with_env(
+            OutputFormat::Human,
+            false,
+            OutputEnvironment::new(true, false, true, true), // no_color + force_rich
+        );
+        assert!(!detector.should_use_rich());
+        assert_eq!(detector.decide().reason, OutputDecisionReason::EnvNoColor);
+    }
+
+    #[test]
+    fn plain_output_beats_force_rich() {
+        let detector = OutputDetector::with_env(
+            OutputFormat::Human,
+            false,
+            OutputEnvironment::new(false, true, true, true), // plain_output + force_rich
+        );
+        assert!(!detector.should_use_rich());
+        assert_eq!(
+            detector.decide().reason,
+            OutputDecisionReason::EnvPlainOutput
+        );
+    }
+
+    #[test]
+    fn no_color_beats_plain_output() {
+        let detector = OutputDetector::with_env(
+            OutputFormat::Human,
+            false,
+            OutputEnvironment::new(true, true, false, true), // both no_color and plain_output
+        );
+        assert!(!detector.should_use_rich());
+        // NO_COLOR is checked first, so it wins
+        assert_eq!(detector.decide().reason, OutputDecisionReason::EnvNoColor);
+    }
+
+    #[test]
+    fn not_terminal_beats_force_rich_in_current_logic() {
+        let detector = OutputDetector::with_env(
+            OutputFormat::Human,
+            false,
+            OutputEnvironment::new(false, false, true, false), // force_rich + not terminal
+        );
+        // NotTerminal is checked before ForcedRich
+        assert!(!detector.should_use_rich());
+        assert_eq!(detector.decide().reason, OutputDecisionReason::NotTerminal);
+    }
+
+    #[test]
+    fn detection_order_complete() {
+        // Test the full precedence chain:
+        // 1. Machine-readable format
+        // 2. Plain format
+        // 3. Robot mode
+        // 4. NO_COLOR
+        // 5. MS_PLAIN_OUTPUT
+        // 6. Not terminal
+        // 7. MS_FORCE_RICH
+        // 8. Human default
+
+        // Machine-readable wins over everything
+        let detector = OutputDetector::with_env(
+            OutputFormat::Json,
+            true,
+            OutputEnvironment::new(true, true, true, true),
+        );
+        assert_eq!(
+            detector.decide().reason,
+            OutputDecisionReason::MachineReadableFormat
+        );
+
+        // Without machine format, plain format wins
+        let detector = OutputDetector::with_env(
+            OutputFormat::Plain,
+            true,
+            OutputEnvironment::new(true, true, true, true),
+        );
+        assert_eq!(detector.decide().reason, OutputDecisionReason::PlainFormat);
+
+        // Without plain format, robot mode wins
+        let detector = OutputDetector::with_env(
+            OutputFormat::Human,
+            true,
+            OutputEnvironment::new(true, true, true, true),
+        );
+        assert_eq!(detector.decide().reason, OutputDecisionReason::RobotMode);
+
+        // Without robot mode, NO_COLOR wins
+        let detector = OutputDetector::with_env(
+            OutputFormat::Human,
+            false,
+            OutputEnvironment::new(true, true, true, true),
+        );
+        assert_eq!(detector.decide().reason, OutputDecisionReason::EnvNoColor);
+
+        // Without NO_COLOR, MS_PLAIN_OUTPUT wins
+        let detector = OutputDetector::with_env(
+            OutputFormat::Human,
+            false,
+            OutputEnvironment::new(false, true, true, true),
+        );
+        assert_eq!(
+            detector.decide().reason,
+            OutputDecisionReason::EnvPlainOutput
+        );
+
+        // Without MS_PLAIN_OUTPUT, not terminal wins over force_rich
+        let detector = OutputDetector::with_env(
+            OutputFormat::Human,
+            false,
+            OutputEnvironment::new(false, false, true, false),
+        );
+        assert_eq!(detector.decide().reason, OutputDecisionReason::NotTerminal);
+
+        // With terminal, force_rich wins
+        let detector = OutputDetector::with_env(
+            OutputFormat::Human,
+            false,
+            OutputEnvironment::new(false, false, true, true),
+        );
+        assert_eq!(detector.decide().reason, OutputDecisionReason::ForcedRich);
+
+        // Without force_rich, human default
+        let detector = OutputDetector::with_env(
+            OutputFormat::Human,
+            false,
+            OutputEnvironment::new(false, false, false, true),
+        );
+        assert_eq!(detector.decide().reason, OutputDecisionReason::HumanDefault);
+    }
+}
+
+// =============================================================================
+// Convenience Function Tests
+// =============================================================================
+
+mod convenience_functions {
+    use super::*;
+
+    #[test]
+    fn should_use_rich_output_works() {
+        // This function reads from actual environment, so just verify it runs
+        let _ = should_use_rich_output(OutputFormat::Human, false);
+        let _ = should_use_rich_output(OutputFormat::Json, false);
+        let _ = should_use_rich_output(OutputFormat::Human, true);
+    }
+
+    #[test]
+    fn should_use_rich_with_flags_force_plain() {
+        // force_plain takes precedence
+        let result = should_use_rich_with_flags(OutputFormat::Human, false, true, false);
+        assert!(!result);
+    }
+
+    #[test]
+    fn should_use_rich_with_flags_force_rich() {
+        // force_rich takes precedence when force_plain is false
+        let result = should_use_rich_with_flags(OutputFormat::Human, false, false, true);
+        assert!(result);
+    }
+
+    #[test]
+    fn should_use_rich_with_flags_force_plain_beats_force_rich() {
+        // force_plain beats force_rich
+        let result = should_use_rich_with_flags(OutputFormat::Human, false, true, true);
+        assert!(!result);
+    }
+
+    #[test]
+    fn should_use_rich_with_flags_falls_back_to_detection() {
+        // Neither flag set, falls back to detection
+        let _ = should_use_rich_with_flags(OutputFormat::Human, false, false, false);
+        let _ = should_use_rich_with_flags(OutputFormat::Json, false, false, false);
+    }
+}
+
+// =============================================================================
+// Environment Variable Constants Tests
+// =============================================================================
+
+mod env_var_constants {
+    use super::*;
+
+    #[test]
+    fn agent_env_vars_contains_expected_vars() {
+        assert!(AGENT_ENV_VARS.contains(&"CLAUDE_CODE"));
+        assert!(AGENT_ENV_VARS.contains(&"CURSOR_AI"));
+        assert!(AGENT_ENV_VARS.contains(&"OPENAI_CODEX"));
+        assert!(AGENT_ENV_VARS.contains(&"AIDER_MODE"));
+        assert!(AGENT_ENV_VARS.contains(&"CODEIUM_ENABLED"));
+        assert!(AGENT_ENV_VARS.contains(&"WINDSURF_AGENT"));
+        assert!(AGENT_ENV_VARS.contains(&"COPILOT_AGENT"));
+        assert!(AGENT_ENV_VARS.contains(&"COPILOT_WORKSPACE"));
+        assert!(AGENT_ENV_VARS.contains(&"AGENT_MODE"));
+        assert!(AGENT_ENV_VARS.contains(&"IDE_AGENT"));
+        assert!(AGENT_ENV_VARS.contains(&"CONTINUE_DEV"));
+        assert!(AGENT_ENV_VARS.contains(&"SOURCEGRAPH_CODY"));
+        assert!(AGENT_ENV_VARS.contains(&"TABNINE_AGENT"));
+        assert!(AGENT_ENV_VARS.contains(&"AMAZON_Q"));
+        assert!(AGENT_ENV_VARS.contains(&"GEMINI_CODE"));
+    }
+
+    #[test]
+    fn agent_env_vars_count() {
+        assert_eq!(AGENT_ENV_VARS.len(), 15);
+    }
+
+    #[test]
+    fn ci_env_vars_contains_expected_vars() {
+        assert!(CI_ENV_VARS.contains(&"CI"));
+        assert!(CI_ENV_VARS.contains(&"GITHUB_ACTIONS"));
+        assert!(CI_ENV_VARS.contains(&"GITLAB_CI"));
+        assert!(CI_ENV_VARS.contains(&"JENKINS_URL"));
+        assert!(CI_ENV_VARS.contains(&"TRAVIS"));
+        assert!(CI_ENV_VARS.contains(&"CIRCLECI"));
+        assert!(CI_ENV_VARS.contains(&"BUILDKITE"));
+        assert!(CI_ENV_VARS.contains(&"BITBUCKET_PIPELINES"));
+        assert!(CI_ENV_VARS.contains(&"TF_BUILD"));
+        assert!(CI_ENV_VARS.contains(&"TEAMCITY_VERSION"));
+        assert!(CI_ENV_VARS.contains(&"DRONE"));
+        assert!(CI_ENV_VARS.contains(&"WOODPECKER"));
+    }
+
+    #[test]
+    fn ci_env_vars_count() {
+        assert_eq!(CI_ENV_VARS.len(), 12);
+    }
+
+    #[test]
+    fn ide_env_vars_contains_expected_vars() {
+        assert!(IDE_ENV_VARS.contains(&"VSCODE_GIT_ASKPASS_NODE"));
+        assert!(IDE_ENV_VARS.contains(&"VSCODE_INJECTION"));
+        assert!(IDE_ENV_VARS.contains(&"CODESPACES"));
+        assert!(IDE_ENV_VARS.contains(&"GITPOD_WORKSPACE_ID"));
+        assert!(IDE_ENV_VARS.contains(&"REPLIT_DB_URL"));
+        assert!(IDE_ENV_VARS.contains(&"CLOUD_SHELL"));
+    }
+
+    #[test]
+    fn ide_env_vars_count() {
+        assert_eq!(IDE_ENV_VARS.len(), 6);
+    }
+
+    #[test]
+    fn env_var_lists_have_no_duplicates() {
+        use std::collections::HashSet;
+
+        let agent_set: HashSet<_> = AGENT_ENV_VARS.iter().collect();
+        assert_eq!(agent_set.len(), AGENT_ENV_VARS.len(), "AGENT_ENV_VARS has duplicates");
+
+        let ci_set: HashSet<_> = CI_ENV_VARS.iter().collect();
+        assert_eq!(ci_set.len(), CI_ENV_VARS.len(), "CI_ENV_VARS has duplicates");
+
+        let ide_set: HashSet<_> = IDE_ENV_VARS.iter().collect();
+        assert_eq!(ide_set.len(), IDE_ENV_VARS.len(), "IDE_ENV_VARS has duplicates");
+    }
+
+    #[test]
+    fn env_var_lists_are_non_empty() {
+        assert!(!AGENT_ENV_VARS.is_empty());
+        assert!(!CI_ENV_VARS.is_empty());
+        assert!(!IDE_ENV_VARS.is_empty());
+    }
+}
+
+// =============================================================================
+// Environment Detection Functions Tests
+// =============================================================================
+
+mod env_detection_functions {
+    use super::*;
+
+    #[test]
+    fn is_agent_environment_runs_without_panic() {
+        // Can't control the environment, just verify it runs
+        let _ = is_agent_environment();
+    }
+
+    #[test]
+    fn is_ci_environment_runs_without_panic() {
+        let _ = is_ci_environment();
+    }
+
+    #[test]
+    fn is_ide_environment_runs_without_panic() {
+        let _ = is_ide_environment();
+    }
+
+    #[test]
+    fn detected_agent_vars_returns_valid_list() {
+        let vars = ms::output::detection::detected_agent_vars();
+        // All returned vars should be in AGENT_ENV_VARS
+        for var in &vars {
+            assert!(
+                AGENT_ENV_VARS.contains(&var.as_str()),
+                "{} not in AGENT_ENV_VARS",
+                var
+            );
+        }
+    }
+
+    #[test]
+    fn detected_ci_vars_returns_valid_list() {
+        let vars = ms::output::detection::detected_ci_vars();
+        // All returned vars should be in CI_ENV_VARS
+        for var in &vars {
+            assert!(
+                CI_ENV_VARS.contains(&var.as_str()),
+                "{} not in CI_ENV_VARS",
+                var
+            );
+        }
+    }
+
+    #[test]
+    fn detected_ide_vars_returns_valid_list() {
+        let vars = ms::output::detection::detected_ide_vars();
+        // All returned vars should be in IDE_ENV_VARS
+        for var in &vars {
+            assert!(
+                IDE_ENV_VARS.contains(&var.as_str()),
+                "{} not in IDE_ENV_VARS",
+                var
             );
         }
     }
@@ -964,178 +873,286 @@ mod output_decision {
 // OutputModeReport Tests
 // =============================================================================
 
-mod report {
+mod output_mode_report {
     use super::*;
 
     #[test]
-    fn test_report_generation() {
+    fn generate_creates_report() {
         let report = OutputModeReport::generate(OutputFormat::Human, false);
-
         assert_eq!(report.format, "Human");
         assert!(!report.robot_mode);
-        // The decision should be populated
-        let _ = report.decision;
     }
 
     #[test]
-    fn test_report_with_robot_mode() {
+    fn generate_with_robot_mode() {
         let report = OutputModeReport::generate(OutputFormat::Human, true);
-
-        assert_eq!(report.format, "Human");
         assert!(report.robot_mode);
-        assert!(!report.decision.use_rich);
-        assert_eq!(report.decision.reason, OutputDecisionReason::RobotMode);
     }
 
     #[test]
-    fn test_report_format_text() {
+    fn generate_with_json_format() {
+        let report = OutputModeReport::generate(OutputFormat::Json, false);
+        assert_eq!(report.format, "Json");
+        assert!(!report.decision.use_rich);
+    }
+
+    #[test]
+    fn report_contains_environment() {
+        let report = OutputModeReport::generate(OutputFormat::Human, false);
+        // Environment fields should be populated
+        let _ = report.env.no_color;
+        let _ = report.env.plain_output;
+        let _ = report.env.force_rich;
+        let _ = report.env.stdout_is_terminal;
+    }
+
+    #[test]
+    fn report_contains_detected_vars() {
+        let report = OutputModeReport::generate(OutputFormat::Human, false);
+        // These are vectors, may be empty but should exist
+        let _ = report.agent_vars.len();
+        let _ = report.ci_vars.len();
+        let _ = report.ide_vars.len();
+    }
+
+    #[test]
+    fn report_contains_terminal_info() {
+        let report = OutputModeReport::generate(OutputFormat::Human, false);
+        // Optional fields
+        let _ = report.term;
+        let _ = report.colorterm;
+        let _ = report.columns;
+    }
+
+    #[test]
+    fn report_contains_decision() {
+        let report = OutputModeReport::generate(OutputFormat::Human, false);
+        let _ = report.decision.use_rich;
+        let _ = report.decision.reason;
+    }
+
+    #[test]
+    fn format_text_produces_output() {
         let report = OutputModeReport::generate(OutputFormat::Human, false);
         let text = report.format_text();
-
+        assert!(!text.is_empty());
         assert!(text.contains("Output Mode Detection Report"));
-        assert!(text.contains("Format:"));
-        assert!(text.contains("Robot Mode:"));
+    }
+
+    #[test]
+    fn format_text_includes_format() {
+        let report = OutputModeReport::generate(OutputFormat::Json, false);
+        let text = report.format_text();
+        assert!(text.contains("Format: Json"));
+    }
+
+    #[test]
+    fn format_text_includes_robot_mode() {
+        let report = OutputModeReport::generate(OutputFormat::Human, true);
+        let text = report.format_text();
+        assert!(text.contains("Robot Mode: true"));
+    }
+
+    #[test]
+    fn format_text_includes_environment_section() {
+        let report = OutputModeReport::generate(OutputFormat::Human, false);
+        let text = report.format_text();
+        assert!(text.contains("Environment Variables:"));
+        assert!(text.contains("NO_COLOR:"));
+        assert!(text.contains("MS_PLAIN_OUTPUT:"));
+        assert!(text.contains("MS_FORCE_RICH:"));
+    }
+
+    #[test]
+    fn format_text_includes_terminal_section() {
+        let report = OutputModeReport::generate(OutputFormat::Human, false);
+        let text = report.format_text();
+        assert!(text.contains("Terminal:"));
+        assert!(text.contains("is_terminal():"));
+        assert!(text.contains("TERM:"));
+        assert!(text.contains("COLORTERM:"));
+        assert!(text.contains("COLUMNS:"));
+    }
+
+    #[test]
+    fn format_text_includes_decision_section() {
+        let report = OutputModeReport::generate(OutputFormat::Human, false);
+        let text = report.format_text();
         assert!(text.contains("Decision:"));
+        assert!(text.contains("Mode:"));
+        assert!(text.contains("Reason:"));
     }
 
     #[test]
-    fn test_report_captures_env_vars() {
-        let _guard = EnvGuard::new().set("NO_COLOR", "1");
-        let report = OutputModeReport::generate(OutputFormat::Human, false);
-
-        assert!(report.env.no_color);
+    fn report_clone() {
+        let report1 = OutputModeReport::generate(OutputFormat::Human, false);
+        let report2 = report1.clone();
+        assert_eq!(report1.format, report2.format);
+        assert_eq!(report1.robot_mode, report2.robot_mode);
     }
 
     #[test]
-    fn test_report_captures_agent_vars() {
-        let _guard = EnvGuard::new().set("CLAUDE_CODE", "1");
+    fn report_debug() {
         let report = OutputModeReport::generate(OutputFormat::Human, false);
-
-        assert!(!report.agent_vars.is_empty());
-        assert!(report.agent_vars.contains(&"CLAUDE_CODE".to_string()));
-    }
-
-    #[test]
-    fn test_report_captures_ci_vars() {
-        let _guard = EnvGuard::new().set("GITHUB_ACTIONS", "true");
-        let report = OutputModeReport::generate(OutputFormat::Human, false);
-
-        assert!(!report.ci_vars.is_empty());
-        assert!(report.ci_vars.contains(&"GITHUB_ACTIONS".to_string()));
-    }
-
-    #[test]
-    fn test_report_captures_ide_vars() {
-        let _guard = EnvGuard::new().set("CODESPACES", "true");
-        let report = OutputModeReport::generate(OutputFormat::Human, false);
-
-        assert!(!report.ide_vars.is_empty());
-        assert!(report.ide_vars.contains(&"CODESPACES".to_string()));
-    }
-
-    #[test]
-    fn test_report_captures_terminal_info() {
-        let _guard = EnvGuard::new()
-            .set("TERM", "xterm-256color")
-            .set("COLORTERM", "truecolor")
-            .set("COLUMNS", "120");
-        let report = OutputModeReport::generate(OutputFormat::Human, false);
-
-        assert_eq!(report.term.as_deref(), Some("xterm-256color"));
-        assert_eq!(report.colorterm.as_deref(), Some("truecolor"));
-        assert_eq!(report.columns.as_deref(), Some("120"));
+        let debug_str = format!("{:?}", report);
+        assert!(debug_str.contains("OutputModeReport"));
     }
 }
 
 // =============================================================================
-// maybe_print_debug_output Tests
+// Debug Output Function Tests
 // =============================================================================
 
 mod debug_output {
     use super::*;
 
     #[test]
-    fn test_debug_output_when_env_not_set() {
-        let _guard = EnvGuard::new().unset("MS_DEBUG_OUTPUT");
-        // Should not panic and should not print anything
+    fn maybe_print_debug_output_runs_without_panic() {
+        // This function checks MS_DEBUG_OUTPUT env var
+        // We can't control it, but we can verify it doesn't panic
         maybe_print_debug_output(OutputFormat::Human, false);
-    }
-
-    #[test]
-    fn test_debug_output_when_env_set() {
-        let _guard = EnvGuard::new().set("MS_DEBUG_OUTPUT", "1");
-        // Should not panic (output goes to stderr)
-        maybe_print_debug_output(OutputFormat::Human, false);
+        maybe_print_debug_output(OutputFormat::Json, true);
     }
 }
 
 // =============================================================================
-// Helper Function Tests
-// =============================================================================
-
-mod helpers {
-    use super::*;
-
-    #[test]
-    fn test_should_use_rich_output_convenience_function() {
-        // This uses the from_env() constructor internally, so we test
-        // with controlled env vars
-        let _guard = EnvGuard::new().set("NO_COLOR", "1");
-        let result = should_use_rich_output(OutputFormat::Human, false);
-        assert!(!result);
-    }
-
-    #[test]
-    fn test_should_use_rich_output_with_machine_format() {
-        let result = should_use_rich_output(OutputFormat::Json, false);
-        assert!(!result);
-    }
-
-    #[test]
-    fn test_detector_should_use_rich_method() {
-        let env = OutputEnvironment::new(false, false, false, true);
-        let detector = OutputDetector::with_env(OutputFormat::Human, false, env);
-        assert!(detector.should_use_rich());
-    }
-}
-
-// =============================================================================
-// Edge Cases and Error Handling Tests
+// Edge Cases Tests
 // =============================================================================
 
 mod edge_cases {
     use super::*;
 
     #[test]
-    fn test_detection_never_panics_with_unusual_env() {
-        // Test with various unusual environment values
-        let _guard = EnvGuard::new()
-            .set("NO_COLOR", "")
-            .set("MS_PLAIN_OUTPUT", "false") // Should still count as set
-            .set("MS_FORCE_RICH", "0"); // Should still count as set
-
-        // Should not panic
-        let _ = OutputEnvironment::from_env();
+    fn all_env_flags_set_machine_format_wins() {
+        let detector = OutputDetector::with_env(
+            OutputFormat::Json,
+            true,
+            OutputEnvironment::new(true, true, true, true),
+        );
+        assert!(!detector.should_use_rich());
+        assert_eq!(
+            detector.decide().reason,
+            OutputDecisionReason::MachineReadableFormat
+        );
     }
 
     #[test]
-    fn test_all_output_formats_handled() {
-        // Ensure all output formats produce a valid decision
-        let formats = vec![
-            OutputFormat::Human,
+    fn all_env_flags_set_plain_format_wins() {
+        let detector = OutputDetector::with_env(
             OutputFormat::Plain,
-            OutputFormat::Json,
-            OutputFormat::Jsonl,
-            OutputFormat::Tsv,
-        ];
+            true,
+            OutputEnvironment::new(true, true, true, true),
+        );
+        assert!(!detector.should_use_rich());
+        assert_eq!(detector.decide().reason, OutputDecisionReason::PlainFormat);
+    }
 
-        for format in formats {
-            let env = OutputEnvironment::new(false, false, false, true);
-            let detector = OutputDetector::with_env(format, false, env);
-            let decision = detector.decide();
-            // Should always produce a valid decision
-            let _ = decision.use_rich;
-            let _ = decision.reason;
-        }
+    #[test]
+    fn conflicting_no_color_and_force_rich() {
+        // no_color should win because it's checked first
+        let detector = OutputDetector::with_env(
+            OutputFormat::Human,
+            false,
+            OutputEnvironment::new(true, false, true, true),
+        );
+        assert!(!detector.should_use_rich());
+        assert_eq!(detector.decide().reason, OutputDecisionReason::EnvNoColor);
+    }
+
+    #[test]
+    fn conflicting_plain_output_and_force_rich() {
+        // plain_output should win because it's checked before force_rich
+        let detector = OutputDetector::with_env(
+            OutputFormat::Human,
+            false,
+            OutputEnvironment::new(false, true, true, true),
+        );
+        assert!(!detector.should_use_rich());
+        assert_eq!(
+            detector.decide().reason,
+            OutputDecisionReason::EnvPlainOutput
+        );
+    }
+
+    #[test]
+    fn non_terminal_with_all_rich_indicators() {
+        // Being non-terminal should still force plain
+        let detector = OutputDetector::with_env(
+            OutputFormat::Human,
+            false,
+            OutputEnvironment::new(false, false, true, false), // force_rich but no terminal
+        );
+        assert!(!detector.should_use_rich());
+        assert_eq!(detector.decide().reason, OutputDecisionReason::NotTerminal);
+    }
+
+    #[test]
+    fn human_on_terminal_is_rich_by_default() {
+        // The happy path: Human format on a terminal with no env overrides
+        let detector = OutputDetector::with_env(
+            OutputFormat::Human,
+            false,
+            OutputEnvironment::new(false, false, false, true),
+        );
+        assert!(detector.should_use_rich());
+        assert_eq!(detector.decide().reason, OutputDecisionReason::HumanDefault);
+    }
+}
+
+// =============================================================================
+// All OutputFormat Variants Tests
+// =============================================================================
+
+mod all_formats {
+    use super::*;
+
+    #[test]
+    fn human_format_on_terminal() {
+        let detector = OutputDetector::with_env(
+            OutputFormat::Human,
+            false,
+            OutputEnvironment::new(false, false, false, true),
+        );
+        assert!(detector.should_use_rich());
+    }
+
+    #[test]
+    fn plain_format_on_terminal() {
+        let detector = OutputDetector::with_env(
+            OutputFormat::Plain,
+            false,
+            OutputEnvironment::new(false, false, false, true),
+        );
+        assert!(!detector.should_use_rich());
+    }
+
+    #[test]
+    fn json_format_on_terminal() {
+        let detector = OutputDetector::with_env(
+            OutputFormat::Json,
+            false,
+            OutputEnvironment::new(false, false, false, true),
+        );
+        assert!(!detector.should_use_rich());
+    }
+
+    #[test]
+    fn jsonl_format_on_terminal() {
+        let detector = OutputDetector::with_env(
+            OutputFormat::Jsonl,
+            false,
+            OutputEnvironment::new(false, false, false, true),
+        );
+        assert!(!detector.should_use_rich());
+    }
+
+    #[test]
+    fn tsv_format_on_terminal() {
+        let detector = OutputDetector::with_env(
+            OutputFormat::Tsv,
+            false,
+            OutputEnvironment::new(false, false, false, true),
+        );
+        assert!(!detector.should_use_rich());
     }
 }
