@@ -15,8 +15,8 @@
 use std::str::FromStr;
 
 use ms::output::{
-    BoxChars, BoxStyle, ProgressChars, ProgressStyle, TerminalBackground, TerminalCapabilities,
-    Theme, ThemeColors, ThemeError, ThemeIcons, ThemePreset, TreeChars, TreeGuides,
+    BoxStyle, ProgressStyle, TerminalBackground, TerminalCapabilities, Theme, ThemeColors,
+    ThemeError, ThemeIcons, ThemePreset, TreeGuides,
 };
 use rich_rust::color::ColorSystem;
 use rich_rust::style::Style;
