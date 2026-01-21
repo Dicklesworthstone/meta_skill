@@ -9,6 +9,7 @@ use colored::Colorize;
 use crate::app::AppContext;
 use crate::core::recovery::{RecoveryManager, RecoveryReport};
 use crate::error::Result;
+use crate::output::{OutputModeReport, is_agent_environment, is_ci_environment, is_ide_environment};
 use crate::security::{SafetyGate, scan_secrets_summary};
 use crate::storage::tx::GlobalLock;
 
@@ -89,9 +90,10 @@ pub fn run(ctx: &AppContext, args: &DoctorArgs) -> Result<()> {
             "security" => check_security(ctx, verbose)?,
             "recovery" => run_comprehensive_check(ctx, args.fix, verbose, &mut issues_fixed)?,
             "perf" => check_perf(ctx, verbose)?,
+            "output" | "output-mode" => check_output_mode(ctx, verbose)?,
             other => {
                 println!("{} Unknown check: {}", "!".yellow(), other);
-                println!("  Available checks: safety, security, recovery, perf");
+                println!("  Available checks: safety, security, recovery, perf, output");
                 1
             }
         };
@@ -619,6 +621,167 @@ fn print_recovery_report(report: &RecoveryReport, verbose: bool) {
     }
 }
 
+/// Check output mode detection and explain the decision
+fn check_output_mode(ctx: &AppContext, verbose: bool) -> Result<usize> {
+    println!("{}", "Output Mode Detection Report".bold());
+    println!("{}", "═".repeat(28));
+    println!();
+
+    // Get the output format from context
+    let output_format = ctx.output_format;
+    let robot_mode = ctx.robot_mode;
+
+    // Generate comprehensive report
+    let report = OutputModeReport::generate(output_format, robot_mode);
+
+    // Print format and mode settings
+    println!("{} Configuration", "▸".cyan());
+    println!("  Format:     {}", report.format);
+    println!("  Robot Mode: {}", report.robot_mode);
+    println!();
+
+    // Print environment variable status
+    println!("{} Environment Variables", "▸".cyan());
+    println!(
+        "  NO_COLOR:        {}",
+        if report.env.no_color {
+            "set".yellow()
+        } else {
+            "not set".dimmed()
+        }
+    );
+    println!(
+        "  MS_PLAIN_OUTPUT: {}",
+        if report.env.plain_output {
+            "set".yellow()
+        } else {
+            "not set".dimmed()
+        }
+    );
+    println!(
+        "  MS_FORCE_RICH:   {}",
+        if report.env.force_rich {
+            "set".green()
+        } else {
+            "not set".dimmed()
+        }
+    );
+    println!();
+
+    // Print terminal information
+    println!("{} Terminal", "▸".cyan());
+    println!(
+        "  is_terminal(): {}",
+        if report.env.stdout_is_terminal {
+            "true".green()
+        } else {
+            "false".yellow()
+        }
+    );
+    println!(
+        "  TERM:          {}",
+        report.term.as_deref().unwrap_or("not set")
+    );
+    println!(
+        "  COLORTERM:     {}",
+        report.colorterm.as_deref().unwrap_or("not set")
+    );
+    println!(
+        "  COLUMNS:       {}",
+        report.columns.as_deref().unwrap_or("not set")
+    );
+    println!();
+
+    // Print agent detection
+    println!("{} Agent Detection", "▸".cyan());
+    if is_agent_environment() {
+        println!("  Status: {} Agent environment detected", "!".yellow());
+        for var in &report.agent_vars {
+            if let Ok(value) = std::env::var(var) {
+                println!("    {} = {:?}", var.yellow(), value);
+            }
+        }
+    } else {
+        println!("  Status: {} No agent environment", "✓".green());
+        if verbose {
+            println!("  (Checked {} agent env vars)", crate::output::AGENT_ENV_VARS.len());
+        }
+    }
+    println!();
+
+    // Print CI detection
+    println!("{} CI Detection", "▸".cyan());
+    if is_ci_environment() {
+        println!("  Status: {} CI environment detected", "!".yellow());
+        for var in &report.ci_vars {
+            if let Ok(value) = std::env::var(var) {
+                println!("    {} = {:?}", var.yellow(), value);
+            }
+        }
+    } else {
+        println!("  Status: {} No CI environment", "✓".green());
+        if verbose {
+            println!("  (Checked {} CI env vars)", crate::output::CI_ENV_VARS.len());
+        }
+    }
+    println!();
+
+    // Print IDE detection
+    println!("{} IDE Detection", "▸".cyan());
+    if is_ide_environment() {
+        println!("  Status: {} IDE environment detected", "!".yellow());
+        for var in &report.ide_vars {
+            if let Ok(value) = std::env::var(var) {
+                println!("    {} = {:?}", var.yellow(), value);
+            }
+        }
+    } else {
+        println!("  Status: {} No special IDE environment", "✓".green());
+        if verbose {
+            println!("  (Checked {} IDE env vars)", crate::output::IDE_ENV_VARS.len());
+        }
+    }
+    println!();
+
+    // Print final decision
+    println!("{} Decision", "▸".cyan());
+    let mode = if report.decision.use_rich {
+        "RICH OUTPUT".green().bold()
+    } else {
+        "PLAIN OUTPUT".yellow().bold()
+    };
+    println!("  Mode:   {}", mode);
+    println!("  Reason: {:?}", report.decision.reason);
+    println!();
+
+    // Print summary
+    if report.decision.use_rich {
+        println!(
+            "{} Rich terminal output is enabled",
+            "✓".green().bold()
+        );
+        println!("  Colors, Unicode box drawing, and styling will be used.");
+    } else {
+        println!(
+            "{} Plain text output is enabled",
+            "!".yellow().bold()
+        );
+        println!("  No ANSI codes or fancy Unicode will be emitted.");
+    }
+
+    // Hints for debugging
+    if verbose {
+        println!();
+        println!("{} Debug Tips", "▸".cyan());
+        println!("  • Set MS_DEBUG_OUTPUT=1 to see detection info on every command");
+        println!("  • Set MS_FORCE_RICH=1 to force rich output (if terminal supports it)");
+        println!("  • Set NO_COLOR=1 to disable all colors");
+        println!("  • Use --output-format=plain for plain text output");
+    }
+
+    Ok(0)
+}
+
 /// Check performance metrics
 fn check_perf(ctx: &AppContext, verbose: bool) -> Result<usize> {
     print!("Checking performance... ");
@@ -828,7 +991,7 @@ mod tests {
     #[test]
     fn available_checks_are_documented() {
         // This test documents the available check types
-        let available_checks = ["safety", "security", "recovery", "perf"];
+        let available_checks = ["safety", "security", "recovery", "perf", "output", "output-mode"];
 
         for check in &available_checks {
             let cli = TestCli::try_parse_from(["test", "--check", check]).unwrap();

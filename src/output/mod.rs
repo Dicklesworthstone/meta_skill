@@ -44,7 +44,9 @@ pub mod test_utils;
 // Re-export detection types
 pub use detection::{
     OutputDecision, OutputDecisionReason, OutputDetector, OutputEnvironment,
-    should_use_rich_output,
+    OutputModeReport, should_use_rich_output, is_agent_environment, is_ci_environment,
+    is_ide_environment, detected_agent_vars, detected_ci_vars, detected_ide_vars,
+    maybe_print_debug_output, AGENT_ENV_VARS, CI_ENV_VARS, IDE_ENV_VARS,
 };
 
 // Re-export rich output types
