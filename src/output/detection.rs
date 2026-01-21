@@ -560,3 +560,149 @@ pub fn maybe_print_debug_output(output_format: OutputFormat, robot_mode: bool) {
         );
     }
 }
+
+// =============================================================================
+// Tests
+// =============================================================================
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::output::test_utils::EnvGuard;
+
+    static ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    fn guard_clear_env() -> EnvGuard {
+        AGENT_ENV_VARS
+            .iter()
+            .chain(CI_ENV_VARS.iter())
+            .chain(IDE_ENV_VARS.iter())
+            .fold(EnvGuard::new(), |guard, key| guard.unset(key))
+    }
+
+    #[test]
+    fn test_output_decision_machine_readable() {
+        let env = OutputEnvironment::new(false, false, true, true);
+        let detector = OutputDetector::with_env(OutputFormat::Json, false, env);
+        let decision = detector.decide();
+        assert!(!decision.use_rich);
+        assert_eq!(decision.reason, OutputDecisionReason::MachineReadableFormat);
+    }
+
+    #[test]
+    fn test_output_decision_plain_format() {
+        let env = OutputEnvironment::new(false, false, true, true);
+        let detector = OutputDetector::with_env(OutputFormat::Plain, false, env);
+        let decision = detector.decide();
+        assert!(!decision.use_rich);
+        assert_eq!(decision.reason, OutputDecisionReason::PlainFormat);
+    }
+
+    #[test]
+    fn test_output_decision_robot_mode() {
+        let env = OutputEnvironment::new(false, false, true, true);
+        let detector = OutputDetector::with_env(OutputFormat::Human, true, env);
+        let decision = detector.decide();
+        assert!(!decision.use_rich);
+        assert_eq!(decision.reason, OutputDecisionReason::RobotMode);
+    }
+
+    #[test]
+    fn test_output_decision_no_color() {
+        let env = OutputEnvironment::new(true, false, false, true);
+        let detector = OutputDetector::with_env(OutputFormat::Human, false, env);
+        let decision = detector.decide();
+        assert!(!decision.use_rich);
+        assert_eq!(decision.reason, OutputDecisionReason::EnvNoColor);
+    }
+
+    #[test]
+    fn test_output_decision_plain_env() {
+        let env = OutputEnvironment::new(false, true, false, true);
+        let detector = OutputDetector::with_env(OutputFormat::Human, false, env);
+        let decision = detector.decide();
+        assert!(!decision.use_rich);
+        assert_eq!(decision.reason, OutputDecisionReason::EnvPlainOutput);
+    }
+
+    #[test]
+    fn test_output_decision_not_terminal() {
+        let env = OutputEnvironment::new(false, false, true, false);
+        let detector = OutputDetector::with_env(OutputFormat::Human, false, env);
+        let decision = detector.decide();
+        assert!(!decision.use_rich);
+        assert_eq!(decision.reason, OutputDecisionReason::NotTerminal);
+    }
+
+    #[test]
+    fn test_output_decision_force_rich() {
+        let env = OutputEnvironment::new(false, false, true, true);
+        let detector = OutputDetector::with_env(OutputFormat::Human, false, env);
+        let decision = detector.decide();
+        assert!(decision.use_rich);
+        assert_eq!(decision.reason, OutputDecisionReason::ForcedRich);
+    }
+
+    #[test]
+    fn test_output_decision_human_default() {
+        let env = OutputEnvironment::new(false, false, false, true);
+        let detector = OutputDetector::with_env(OutputFormat::Human, false, env);
+        let decision = detector.decide();
+        assert!(decision.use_rich);
+        assert_eq!(decision.reason, OutputDecisionReason::HumanDefault);
+    }
+
+    #[test]
+    fn test_should_use_rich_with_flags_force_plain() {
+        let decision = should_use_rich_with_flags(OutputFormat::Human, false, true, true);
+        assert!(!decision);
+    }
+
+    #[test]
+    fn test_should_use_rich_with_flags_force_rich() {
+        let decision = should_use_rich_with_flags(OutputFormat::Human, false, false, true);
+        assert!(decision);
+    }
+
+    #[test]
+    fn test_agent_environment_detection() {
+        let _lock = ENV_LOCK.lock().unwrap();
+        let _guard = guard_clear_env().set("CLAUDE_CODE", "1");
+        assert!(is_agent_environment());
+        assert!(detected_agent_vars().iter().any(|v| v == "CLAUDE_CODE"));
+    }
+
+    #[test]
+    fn test_agent_environment_none() {
+        let _lock = ENV_LOCK.lock().unwrap();
+        let _guard = guard_clear_env();
+        assert!(!is_agent_environment());
+        assert!(detected_agent_vars().is_empty());
+    }
+
+    #[test]
+    fn test_ci_environment_detection() {
+        let _lock = ENV_LOCK.lock().unwrap();
+        let _guard = guard_clear_env().set("CI", "true");
+        assert!(is_ci_environment());
+        assert!(detected_ci_vars().iter().any(|v| v == "CI"));
+    }
+
+    #[test]
+    fn test_ide_environment_detection() {
+        let _lock = ENV_LOCK.lock().unwrap();
+        let _guard = guard_clear_env().set("CODESPACES", "1");
+        assert!(is_ide_environment());
+        assert!(detected_ide_vars().iter().any(|v| v == "CODESPACES"));
+    }
+
+    #[test]
+    fn test_output_mode_report_machine_readable() {
+        let _lock = ENV_LOCK.lock().unwrap();
+        let _guard = guard_clear_env();
+        let report = OutputModeReport::generate(OutputFormat::Json, false);
+        assert!(!report.decision.use_rich);
+        assert_eq!(report.decision.reason, OutputDecisionReason::MachineReadableFormat);
+        assert_eq!(report.format, "Json");
+    }
+}
