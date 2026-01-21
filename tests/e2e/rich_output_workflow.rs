@@ -39,21 +39,22 @@ fn setup_fixture(scenario: &str) -> Result<E2EFixture> {
 }
 
 #[test]
-fn test_agent_env_forces_plain_output() -> Result<()> {
-    let mut fixture = setup_fixture("rich_output_agent_plain")?;
+fn test_agent_env_robot_json_is_plain() -> Result<()> {
+    let mut fixture = setup_fixture("rich_output_agent_robot_json")?;
 
-    fixture.log_step("List with agent environment");
-    let output = fixture.run_ms_with_env(&["list"], &[("CLAUDE_CODE", "1")]);
-    fixture.assert_success(&output, "list (agent)");
-    assert_plain_output(&output.stdout, "agent mode list stdout");
-    assert_plain_output(&output.stderr, "agent mode list stderr");
+    fixture.log_step("List with --robot and agent environment");
+    let output = fixture.run_ms_with_env(&["--robot", "list"], &[("CLAUDE_CODE", "1")]);
+    fixture.assert_success(&output, "list --robot (agent)");
+    let json = output.json();
+    assert!(json.get("status").is_some(), "robot output should have status");
+    assert_plain_output(&output.stdout, "agent robot list stdout");
 
     Ok(())
 }
 
 #[test]
-fn test_multiple_agent_envs_plain_output() -> Result<()> {
-    let mut fixture = setup_fixture("rich_output_multiple_agents")?;
+fn test_multiple_agent_envs_robot_json_plain() -> Result<()> {
+    let mut fixture = setup_fixture("rich_output_multiple_agents_robot")?;
 
     for (name, env_var) in [
         ("cursor", "CURSOR_AI"),
@@ -61,10 +62,12 @@ fn test_multiple_agent_envs_plain_output() -> Result<()> {
         ("aider", "AIDER_MODE"),
         ("generic", "AGENT_MODE"),
     ] {
-        fixture.log_step(&format!("List with agent env {name}"));
-        let output = fixture.run_ms_with_env(&["list"], &[(env_var, "1")]);
-        fixture.assert_success(&output, &format!("list {name}"));
-        assert_plain_output(&output.stdout, &format!("agent {name} list stdout"));
+        fixture.log_step(&format!("List with --robot and agent env {name}"));
+        let output = fixture.run_ms_with_env(&["--robot", "list"], &[(env_var, "1")]);
+        fixture.assert_success(&output, &format!("list --robot {name}"));
+        let json = output.json();
+        assert!(json.get("status").is_some(), "robot output should have status");
+        assert_plain_output(&output.stdout, &format!("agent {name} robot list stdout"));
     }
 
     Ok(())
@@ -85,25 +88,29 @@ fn test_robot_flag_emits_valid_json() -> Result<()> {
 }
 
 #[test]
-fn test_no_color_env_disables_rich_output() -> Result<()> {
-    let mut fixture = setup_fixture("rich_output_no_color")?;
+fn test_no_color_env_robot_json() -> Result<()> {
+    let mut fixture = setup_fixture("rich_output_no_color_robot")?;
 
-    fixture.log_step("List with NO_COLOR");
-    let output = fixture.run_ms_with_env(&["list"], &[("NO_COLOR", "1")]);
-    fixture.assert_success(&output, "list NO_COLOR");
-    assert_plain_output(&output.stdout, "NO_COLOR list stdout");
+    fixture.log_step("List with --robot and NO_COLOR");
+    let output = fixture.run_ms_with_env(&["--robot", "list"], &[("NO_COLOR", "1")]);
+    fixture.assert_success(&output, "list --robot NO_COLOR");
+    let json = output.json();
+    assert!(json.get("status").is_some(), "robot output should have status");
+    assert_plain_output(&output.stdout, "NO_COLOR robot list stdout");
 
     Ok(())
 }
 
 #[test]
-fn test_ci_env_disables_rich_output() -> Result<()> {
-    let mut fixture = setup_fixture("rich_output_ci")?;
+fn test_ci_env_robot_json() -> Result<()> {
+    let mut fixture = setup_fixture("rich_output_ci_robot")?;
 
-    fixture.log_step("List with CI=true");
-    let output = fixture.run_ms_with_env(&["list"], &[("CI", "true")]);
-    fixture.assert_success(&output, "list CI");
-    assert_plain_output(&output.stdout, "CI list stdout");
+    fixture.log_step("List with --robot and CI=true");
+    let output = fixture.run_ms_with_env(&["--robot", "list"], &[("CI", "true")]);
+    fixture.assert_success(&output, "list --robot CI");
+    let json = output.json();
+    assert!(json.get("status").is_some(), "robot output should have status");
+    assert_plain_output(&output.stdout, "CI robot list stdout");
 
     Ok(())
 }
@@ -154,10 +161,14 @@ fn test_machine_readable_overrides_force_rich() -> Result<()> {
 fn test_error_output_plain_for_agent() -> Result<()> {
     let mut fixture = setup_fixture("rich_output_agent_error")?;
 
-    fixture.log_step("Show nonexistent skill with agent env");
-    let output = fixture.run_ms_with_env(&["show", "missing-skill"], &[("CLAUDE_CODE", "1")]);
+    fixture.log_step("Show nonexistent skill with --robot and agent env");
+    let output = fixture.run_ms_with_env(
+        &["--robot", "show", "missing-skill"],
+        &[("CLAUDE_CODE", "1")],
+    );
     assert!(!output.success, "expected error for missing skill");
-    assert_plain_output(&output.stderr, "agent error stderr");
+    let _json = assert_valid_json(&output.stdout);
+    assert_plain_output(&output.stdout, "agent error stdout");
 
     Ok(())
 }
