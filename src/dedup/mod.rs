@@ -1174,4 +1174,492 @@ let user_name = "test";
         assert!(adapted.contains("cfg"));
         assert!(!adaptations.is_empty());
     }
+
+    // ============================================================================
+    // Additional tests for comprehensive coverage
+    // ============================================================================
+
+    // Cosine similarity edge cases
+
+    #[test]
+    fn test_cosine_similarity_empty_vectors() {
+        let a: Vec<f32> = vec![];
+        let b: Vec<f32> = vec![];
+        let sim = cosine_similarity(&a, &b);
+        assert_eq!(sim, 0.0);
+    }
+
+    #[test]
+    fn test_cosine_similarity_different_lengths() {
+        let a = vec![1.0, 2.0, 3.0];
+        let b = vec![1.0, 2.0];
+        let sim = cosine_similarity(&a, &b);
+        assert_eq!(sim, 0.0);
+    }
+
+    #[test]
+    fn test_cosine_similarity_zero_vector_a() {
+        let a = vec![0.0, 0.0, 0.0];
+        let b = vec![1.0, 2.0, 3.0];
+        let sim = cosine_similarity(&a, &b);
+        assert_eq!(sim, 0.0);
+    }
+
+    #[test]
+    fn test_cosine_similarity_zero_vector_b() {
+        let a = vec![1.0, 2.0, 3.0];
+        let b = vec![0.0, 0.0, 0.0];
+        let sim = cosine_similarity(&a, &b);
+        assert_eq!(sim, 0.0);
+    }
+
+    #[test]
+    fn test_cosine_similarity_partial() {
+        // Vectors at 45-degree angle (cos(45°) ≈ 0.707)
+        let a = vec![1.0, 0.0];
+        let b = vec![1.0, 1.0];
+        let sim = cosine_similarity(&a, &b);
+        let expected = 1.0 / 2.0_f32.sqrt();
+        assert!((sim - expected).abs() < 1e-6);
+    }
+
+    #[test]
+    fn test_cosine_similarity_large_vectors() {
+        let a: Vec<f32> = (0..384).map(|i| i as f32).collect();
+        let b: Vec<f32> = (0..384).map(|i| (i * 2) as f32).collect();
+        let sim = cosine_similarity(&a, &b);
+        // Similar direction vectors should have high similarity
+        assert!(sim > 0.9);
+    }
+
+    // Extract tags edge cases
+
+    #[test]
+    fn test_extract_tags_empty_json() {
+        let json = "{}";
+        let tags = extract_tags(json);
+        assert!(tags.is_empty());
+    }
+
+    #[test]
+    fn test_extract_tags_invalid_json() {
+        let json = "not valid json";
+        let tags = extract_tags(json);
+        assert!(tags.is_empty());
+    }
+
+    #[test]
+    fn test_extract_tags_missing_tags_field() {
+        let json = r#"{"name": "test", "version": "1.0"}"#;
+        let tags = extract_tags(json);
+        assert!(tags.is_empty());
+    }
+
+    #[test]
+    fn test_extract_tags_empty_array() {
+        let json = r#"{"tags": []}"#;
+        let tags = extract_tags(json);
+        assert!(tags.is_empty());
+    }
+
+    #[test]
+    fn test_extract_tags_case_insensitive() {
+        let json = r#"{"tags": ["Rust", "ERROR", "Handling"]}"#;
+        let tags = extract_tags(json);
+        assert!(tags.contains("rust"));
+        assert!(tags.contains("error"));
+        assert!(tags.contains("handling"));
+        // Should not contain original case versions
+        assert!(!tags.contains("Rust"));
+    }
+
+    #[test]
+    fn test_extract_tags_non_string_values() {
+        let json = r#"{"tags": ["rust", 123, null, "error"]}"#;
+        let tags = extract_tags(json);
+        assert_eq!(tags.len(), 2);
+        assert!(tags.contains("rust"));
+        assert!(tags.contains("error"));
+    }
+
+    // Extract requires edge cases
+
+    #[test]
+    fn test_extract_requires_empty_json() {
+        let json = "{}";
+        let reqs = extract_requires(json);
+        assert!(reqs.is_empty());
+    }
+
+    #[test]
+    fn test_extract_requires_invalid_json() {
+        let json = "invalid";
+        let reqs = extract_requires(json);
+        assert!(reqs.is_empty());
+    }
+
+    #[test]
+    fn test_extract_requires_with_values() {
+        let json = r#"{"requires": ["tokio", "serde", "anyhow"]}"#;
+        let reqs = extract_requires(json);
+        assert_eq!(reqs.len(), 3);
+        assert!(reqs.contains("tokio"));
+        assert!(reqs.contains("serde"));
+        assert!(reqs.contains("anyhow"));
+    }
+
+    #[test]
+    fn test_extract_requires_case_insensitive() {
+        let json = r#"{"requires": ["TOKIO", "Serde"]}"#;
+        let reqs = extract_requires(json);
+        assert!(reqs.contains("tokio"));
+        assert!(reqs.contains("serde"));
+    }
+
+    // Word overlap similarity edge cases
+
+    #[test]
+    fn test_word_overlap_empty_strings() {
+        let sim = word_overlap_similarity("", "");
+        assert_eq!(sim, 0.0);
+    }
+
+    #[test]
+    fn test_word_overlap_one_empty() {
+        let sim = word_overlap_similarity("hello world", "");
+        assert_eq!(sim, 0.0);
+    }
+
+    #[test]
+    fn test_word_overlap_short_words_filtered() {
+        // Words < 3 chars are filtered
+        let sim = word_overlap_similarity("a b c", "a b c");
+        assert_eq!(sim, 0.0);
+    }
+
+    #[test]
+    fn test_word_overlap_identical() {
+        let sim = word_overlap_similarity("rust error handling", "rust error handling");
+        assert!((sim - 1.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn test_word_overlap_no_match() {
+        let sim = word_overlap_similarity("apple banana cherry", "dog elephant fox");
+        assert_eq!(sim, 0.0);
+    }
+
+    #[test]
+    fn test_word_overlap_case_insensitive() {
+        let sim = word_overlap_similarity("Rust Error HANDLING", "rust error handling");
+        assert!((sim - 1.0).abs() < 1e-6);
+    }
+
+    // DedupConfig tests
+
+    #[test]
+    fn test_dedup_config_custom_values() {
+        let config = DedupConfig {
+            similarity_threshold: 0.90,
+            semantic_weight: 0.8,
+            structural_weight: 0.2,
+            max_candidates: 50,
+            tag_overlap_threshold: 0.6,
+        };
+        assert!((config.similarity_threshold - 0.90).abs() < 1e-6);
+        assert!((config.semantic_weight - 0.8).abs() < 1e-6);
+        assert!((config.structural_weight - 0.2).abs() < 1e-6);
+        assert_eq!(config.max_candidates, 50);
+    }
+
+    #[test]
+    fn test_dedup_config_serialization() {
+        let config = DedupConfig::default();
+        let json = serde_json::to_string(&config).unwrap();
+        let parsed: DedupConfig = serde_json::from_str(&json).unwrap();
+        assert!((parsed.similarity_threshold - config.similarity_threshold).abs() < 1e-6);
+    }
+
+    // Deduplication action tests
+
+    #[test]
+    fn test_dedup_action_all_variants() {
+        let actions = vec![
+            (DeduplicationAction::KeepBoth, "\"keep_both\""),
+            (DeduplicationAction::Review, "\"review\""),
+            (DeduplicationAction::Merge, "\"merge\""),
+            (DeduplicationAction::Alias, "\"alias\""),
+            (DeduplicationAction::Deprecate, "\"deprecate\""),
+        ];
+
+        for (action, expected) in actions {
+            let json = serde_json::to_string(&action).unwrap();
+            assert_eq!(json, expected);
+        }
+    }
+
+    // StructuralDetails tests
+
+    #[test]
+    fn test_structural_details_default() {
+        let details = StructuralDetails::default();
+        assert_eq!(details.tag_overlap, 0);
+        assert_eq!(details.primary_tags, 0);
+        assert_eq!(details.candidate_tags, 0);
+        assert_eq!(details.tag_jaccard, 0.0);
+        assert!(!details.similar_description);
+        assert!(!details.requirements_overlap);
+    }
+
+    #[test]
+    fn test_structural_details_serialization() {
+        let details = StructuralDetails {
+            tag_overlap: 3,
+            primary_tags: 5,
+            candidate_tags: 4,
+            tag_jaccard: 0.5,
+            similar_description: true,
+            requirements_overlap: true,
+        };
+        let json = serde_json::to_string(&details).unwrap();
+        let parsed: StructuralDetails = serde_json::from_str(&json).unwrap();
+        assert_eq!(parsed.tag_overlap, 3);
+        assert!(parsed.similar_description);
+    }
+
+    // DuplicateMatch tests
+
+    #[test]
+    fn test_duplicate_match_serialization() {
+        let m = DuplicateMatch {
+            skill_id: "skill-123".to_string(),
+            skill_name: "Test Skill".to_string(),
+            similarity: 0.92,
+            semantic_score: 0.95,
+            structural_score: 0.85,
+            structural_details: StructuralDetails::default(),
+            recommendation: DeduplicationAction::Review,
+        };
+        let json = serde_json::to_string(&m).unwrap();
+        assert!(json.contains("skill-123"));
+        assert!(json.contains("Test Skill"));
+
+        let parsed: DuplicateMatch = serde_json::from_str(&json).unwrap();
+        assert_eq!(parsed.skill_id, "skill-123");
+        assert_eq!(parsed.recommendation, DeduplicationAction::Review);
+    }
+
+    // DuplicatePair tests
+
+    #[test]
+    fn test_duplicate_pair_serialization() {
+        let pair = DuplicatePair {
+            skill_a_id: "a".to_string(),
+            skill_a_name: "Skill A".to_string(),
+            skill_b_id: "b".to_string(),
+            skill_b_name: "Skill B".to_string(),
+            similarity: 0.88,
+            semantic_score: 0.90,
+            structural_score: 0.82,
+            structural_details: StructuralDetails::default(),
+            recommendation: DeduplicationAction::Review,
+        };
+        let json = serde_json::to_string(&pair).unwrap();
+        let parsed: DuplicatePair = serde_json::from_str(&json).unwrap();
+        assert_eq!(parsed.skill_a_id, "a");
+        assert_eq!(parsed.skill_b_id, "b");
+    }
+
+    // DeduplicationSummary edge cases
+
+    #[test]
+    fn test_deduplication_summary_empty() {
+        let summary = DeduplicationSummary::from_pairs(0, vec![], 10);
+        assert_eq!(summary.total_skills, 0);
+        assert_eq!(summary.duplicate_pairs, 0);
+        assert!(summary.by_recommendation.is_empty());
+        assert!(summary.top_duplicates.is_empty());
+    }
+
+    #[test]
+    fn test_deduplication_summary_truncation() {
+        // Create more pairs than the limit
+        let pairs: Vec<DuplicatePair> = (0..20)
+            .map(|i| DuplicatePair {
+                skill_a_id: format!("a{}", i),
+                skill_a_name: format!("Skill A{}", i),
+                skill_b_id: format!("b{}", i),
+                skill_b_name: format!("Skill B{}", i),
+                similarity: 0.9 - (i as f32 * 0.01),
+                semantic_score: 0.9,
+                structural_score: 0.8,
+                structural_details: StructuralDetails::default(),
+                recommendation: DeduplicationAction::Review,
+            })
+            .collect();
+
+        let summary = DeduplicationSummary::from_pairs(100, pairs, 5);
+        assert_eq!(summary.duplicate_pairs, 20);
+        assert_eq!(summary.top_duplicates.len(), 5); // Truncated to limit
+    }
+
+    // Personalization additional tests
+
+    #[test]
+    fn test_personalizer_snake_to_camel_preserves_double_underscore() {
+        let profile = StyleProfile {
+            naming: NamingConvention {
+                variable_case: CaseStyle::CamelCase,
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let personalizer = Personalizer::new(profile);
+
+        // Double underscore should be handled
+        let result = personalizer.snake_to_camel("let __private_var = 1;");
+        // __private remains (underscore followed by underscore, not letter)
+        assert!(result.contains("_"));
+    }
+
+    #[test]
+    fn test_personalizer_snake_to_camel_trailing_underscore() {
+        let profile = StyleProfile {
+            naming: NamingConvention {
+                variable_case: CaseStyle::CamelCase,
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let personalizer = Personalizer::new(profile);
+
+        let result = personalizer.snake_to_camel("let user_");
+        // Trailing underscore should remain
+        assert!(result.ends_with("_"));
+    }
+
+    #[test]
+    fn test_personalizer_adapt_code_no_code_blocks() {
+        let profile = StyleProfile {
+            naming: NamingConvention {
+                variable_case: CaseStyle::CamelCase,
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let personalizer = Personalizer::new(profile);
+
+        let content = "This is plain text with user_name in it.";
+        let (adapted, adaptations) = personalizer.adapt_code_examples(content);
+        // No code blocks, so no conversion
+        assert!(adapted.contains("user_name"));
+        assert!(adaptations.is_empty());
+    }
+
+    #[test]
+    fn test_personalizer_adapt_terminology_no_abbreviations() {
+        let profile = StyleProfile {
+            naming: NamingConvention {
+                use_abbreviations: false,
+                abbreviations: vec![("msg".to_string(), "message".to_string())],
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let personalizer = Personalizer::new(profile);
+
+        let content = "The message is important.";
+        let (adapted, adaptations) = personalizer.adapt_terminology(content);
+        // Abbreviations disabled, no changes
+        assert!(adapted.contains("message"));
+        assert!(adaptations.is_empty());
+    }
+
+    #[test]
+    fn test_inline_comment_style_serialization() {
+        let styles = vec![
+            (InlineCommentStyle::DoubleSlash, "\"double_slash\""),
+            (InlineCommentStyle::BlockComment, "\"block_comment\""),
+        ];
+
+        for (style, expected) in styles {
+            let json = serde_json::to_string(&style).unwrap();
+            assert_eq!(json, expected);
+        }
+    }
+
+    #[test]
+    fn test_comment_style_default() {
+        let style = CommentStyle::default();
+        assert!(!style.use_doc_comments);
+        assert_eq!(style.inline_style, InlineCommentStyle::DoubleSlash);
+        assert!(!style.use_todo_markers);
+    }
+
+    #[test]
+    fn test_language_prefs_default() {
+        let prefs = LanguagePrefs::default();
+        assert!(prefs.error_handling.is_none());
+        assert!(prefs.async_patterns.is_none());
+        assert!(prefs.test_framework.is_none());
+    }
+
+    #[test]
+    fn test_code_pattern_serialization() {
+        let pattern = CodePattern {
+            name: "guard_clause".to_string(),
+            description: "Early exit on invalid input".to_string(),
+            example: Some("if !valid { return; }".to_string()),
+            preference_strength: 0.85,
+        };
+        let json = serde_json::to_string(&pattern).unwrap();
+        let parsed: CodePattern = serde_json::from_str(&json).unwrap();
+        assert_eq!(parsed.name, "guard_clause");
+        assert!((parsed.preference_strength - 0.85).abs() < 1e-6);
+    }
+
+    #[test]
+    fn test_naming_convention_serialization() {
+        let naming = NamingConvention {
+            variable_case: CaseStyle::CamelCase,
+            function_case: CaseStyle::CamelCase,
+            use_abbreviations: true,
+            abbreviations: vec![("msg".to_string(), "message".to_string())],
+        };
+        let json = serde_json::to_string(&naming).unwrap();
+        let parsed: NamingConvention = serde_json::from_str(&json).unwrap();
+        assert_eq!(parsed.variable_case, CaseStyle::CamelCase);
+        assert!(parsed.use_abbreviations);
+    }
+
+    #[test]
+    fn test_personalized_skill_serialization() {
+        let ps = PersonalizedSkill {
+            original_id: "skill-1".to_string(),
+            original_name: "Original Skill".to_string(),
+            adapted_content: "Adapted content here".to_string(),
+            adaptations_applied: vec!["converted to camelCase".to_string()],
+        };
+        let json = serde_json::to_string(&ps).unwrap();
+        let parsed: PersonalizedSkill = serde_json::from_str(&json).unwrap();
+        assert_eq!(parsed.original_id, "skill-1");
+        assert_eq!(parsed.adaptations_applied.len(), 1);
+    }
+
+    #[test]
+    fn test_personalizer_preserve_escaped_strings() {
+        let profile = StyleProfile {
+            naming: NamingConvention {
+                variable_case: CaseStyle::CamelCase,
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let personalizer = Personalizer::new(profile);
+
+        // Escaped quotes in strings should be handled
+        let result = personalizer.snake_to_camel(r#"let s = "hello\"world_test";"#);
+        // The string content should be preserved
+        assert!(result.contains("world_test"));
+    }
 }
