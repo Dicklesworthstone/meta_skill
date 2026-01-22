@@ -2,6 +2,7 @@
 
 pub mod config;
 pub mod engine;
+pub mod jfp;
 pub mod machine;
 pub mod ru;
 pub mod state;

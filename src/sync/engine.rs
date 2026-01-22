@@ -7,6 +7,7 @@ use chrono::{DateTime, Utc};
 use git2::{Cred, RemoteCallbacks, Repository, build::CheckoutBuilder};
 use serde::Serialize;
 use sha2::{Digest, Sha256};
+use tracing::{info, warn};
 
 use crate::config::RuConfig;
 use crate::core::SkillSpec;
@@ -15,6 +16,10 @@ use crate::storage::{Database, GitArchive, TxManager};
 
 use super::SyncConfig;
 use super::config::{ConflictStrategy, RemoteAuth, RemoteConfig, RemoteType, validate_remote_name};
+use super::jfp::{
+    JfpCloudClient, JfpCloudState, JfpDeviceInfo, JfpPushStatus, JfpSkillPayload,
+    create_push_item, payload_to_skill_spec,
+};
 use super::machine::MachineIdentity;
 use super::ru::{RuClient, RuExitCode, RuSyncOptions};
 use super::state::{SkillSyncState, SkillSyncStatus, SyncState};
@@ -150,6 +155,9 @@ impl SyncEngine {
             RemoteType::Ru => {
                 self.sync_ru(&remote, options, &mut report)?;
             }
+            RemoteType::JfpCloud => {
+                self.sync_jfp_cloud(&remote, options, &mut report)?;
+            }
         }
 
         if !options.dry_run {
@@ -228,6 +236,557 @@ impl SyncEngine {
                 "ru sync failed; check ru output for details".to_string(),
             )),
         }
+    }
+
+    fn sync_jfp_cloud(
+        &mut self,
+        remote: &RemoteConfig,
+        options: &SyncOptions,
+        report: &mut SyncReport,
+    ) -> Result<()> {
+        let allow_push = remote.direction.allows_push() && !options.pull_only;
+        let allow_pull = remote.direction.allows_pull() && !options.push_only;
+
+        // Get token from environment
+        let token_env = match &remote.auth {
+            Some(RemoteAuth::Token { token_env, .. }) => token_env.clone(),
+            _ => "JFP_CLOUD_TOKEN".to_string(),
+        };
+        let token = std::env::var(&token_env).map_err(|_| {
+            MsError::Config(format!(
+                "JFP Cloud requires auth token; set {} env var",
+                token_env
+            ))
+        })?;
+
+        // Create device info from machine identity
+        let device = JfpDeviceInfo::from_system(
+            &self.machine.machine_id,
+            &self.machine.machine_name,
+        );
+
+        // Create client
+        let base_url = if remote.url.is_empty() {
+            None
+        } else {
+            Some(remote.url.as_str())
+        };
+        let mut client = JfpCloudClient::new(base_url, &token, device)?;
+
+        // Load cloud state
+        let state_path = self.ms_root.join("sync").join("jfp-cloud-state.json");
+        let mut cloud_state = load_jfp_cloud_state(&state_path);
+
+        // Perform handshake
+        let handshake = client.handshake()?;
+        info!(
+            server_time = %handshake.server_time,
+            protocol = %handshake.protocol_version,
+            "JFP Cloud handshake successful"
+        );
+
+        // Pull changes if allowed
+        if allow_pull {
+            self.jfp_pull_changes(
+                &mut client,
+                remote,
+                &mut cloud_state,
+                options,
+                report,
+                allow_push,
+            )?;
+        }
+
+        // Push changes if allowed
+        if allow_push && !options.pull_only {
+            self.jfp_push_changes(
+                &mut client,
+                remote,
+                &mut cloud_state,
+                options,
+                report,
+            )?;
+        }
+
+        // Save cloud state
+        if !options.dry_run {
+            save_jfp_cloud_state(&state_path, &cloud_state)?;
+        }
+
+        Ok(())
+    }
+
+    fn jfp_pull_changes(
+        &mut self,
+        client: &mut JfpCloudClient,
+        remote: &RemoteConfig,
+        cloud_state: &mut JfpCloudState,
+        options: &SyncOptions,
+        report: &mut SyncReport,
+        allow_push: bool,
+    ) -> Result<()> {
+        let tx_mgr = TxManager::new(self.db.clone(), self.git.clone(), self.ms_root.clone())?;
+        let mut cursor = cloud_state.last_cursor.clone();
+        let mut total_pulled = 0;
+
+        loop {
+            let pull_response = client.pull_changes(
+                cursor.as_deref(),
+                Some(100), // Page size
+                cloud_state.last_etag.as_deref(),
+            )?;
+
+            // Process skills
+            for payload in &pull_response.skills {
+                let skill_id = &payload.ms_skill_id;
+                let local_exists = self.git.skill_exists(skill_id);
+
+                let base_hash = self
+                    .state
+                    .skill_states
+                    .get(skill_id)
+                    .and_then(|state| state.remote_hashes.get(&remote.name))
+                    .cloned();
+
+                let local_hash = if local_exists {
+                    match self.git.read_skill(skill_id) {
+                        Ok(spec) => match hash_skill_spec(&spec) {
+                            Ok(hash) => Some(hash),
+                            Err(e) => {
+                                report
+                                    .errors
+                                    .push(format!("Failed to hash skill {}: {}", skill_id, e));
+                                None
+                            }
+                        },
+                        Err(e) => {
+                            report
+                                .errors
+                                .push(format!("Failed to read skill {}: {}", skill_id, e));
+                            None
+                        }
+                    }
+                } else {
+                    None
+                };
+
+                if let Some(local_hash) = &local_hash {
+                    if local_hash == &payload.content_hash {
+                        report.skipped.push(skill_id.clone());
+                        continue;
+                    }
+                }
+
+                let has_conflict = if local_exists {
+                    match base_hash.as_ref() {
+                        Some(base) => {
+                            let local_diverged =
+                                local_hash.as_ref().map(|h| h != base).unwrap_or(true);
+                            let remote_diverged = payload.content_hash != *base;
+                            local_diverged
+                                && remote_diverged
+                                && local_hash.as_deref() != Some(payload.content_hash.as_str())
+                        }
+                        None => local_hash.as_deref() != Some(payload.content_hash.as_str()),
+                    }
+                } else {
+                    false
+                };
+
+                if has_conflict {
+                    if !options.force {
+                        report.conflicts.push(skill_id.clone());
+                        continue;
+                    }
+
+                    let mut strategy = self
+                        .config
+                        .conflict_strategies
+                        .get(skill_id)
+                        .copied()
+                        .unwrap_or(self.config.sync.default_conflict_strategy);
+
+                    if matches!(strategy, ConflictStrategy::PreferNewest) {
+                        let local_time = self.local_skill_modified_at(skill_id);
+                        let remote_time = Self::parse_remote_updated_at(payload);
+                        strategy = if local_time >= remote_time {
+                            ConflictStrategy::PreferLocal
+                        } else {
+                            ConflictStrategy::PreferRemote
+                        };
+                    }
+
+                    match strategy {
+                        ConflictStrategy::PreferLocal => {
+                            if allow_push {
+                                report.resolved.push(skill_id.clone());
+                            } else {
+                                report.conflicts.push(skill_id.clone());
+                            }
+                            continue;
+                        }
+                        ConflictStrategy::PreferRemote => {
+                            self.apply_jfp_payload(remote, payload, options, &tx_mgr, report)?;
+                            report.resolved.push(skill_id.clone());
+                            total_pulled += 1;
+                            continue;
+                        }
+                        ConflictStrategy::KeepBoth => {
+                            let mut spec = match payload_to_skill_spec(payload) {
+                                Ok(spec) => spec,
+                                Err(e) => {
+                                    report
+                                        .errors
+                                        .push(format!("Failed to process skill {}: {}", skill_id, e));
+                                    continue;
+                                }
+                            };
+                            let fork_id = unique_fork_id(&self.git, skill_id)?;
+                            spec.metadata.id = fork_id.clone();
+                            spec.metadata.name = format!("{} (cloud)", spec.metadata.name);
+                            if !options.dry_run {
+                                tx_mgr.write_skill_locked(&spec)?;
+                            }
+                            report.forked.push(fork_id.clone());
+                            report.resolved.push(skill_id.clone());
+
+                            let fork_state = SkillSyncState {
+                                skill_id: fork_id.clone(),
+                                local_hash: Some(payload.content_hash.clone()),
+                                remote_hashes: HashMap::new(),
+                                local_modified: None,
+                                remote_modified: HashMap::new(),
+                                status: SkillSyncStatus::LocalOnly,
+                                last_modified_by: None,
+                            };
+                            self.state.skill_states.insert(fork_id, fork_state);
+                            continue;
+                        }
+                        ConflictStrategy::PreferNewest => {}
+                    }
+                }
+
+                self.apply_jfp_payload(remote, payload, options, &tx_mgr, report)?;
+                total_pulled += 1;
+            }
+
+            // Process tombstones (deletions)
+            for tombstone in &pull_response.tombstones {
+                let skill_id = &tombstone.ms_skill_id;
+                if self.git.skill_exists(skill_id) {
+                    if !options.dry_run {
+                        // Remove the skill
+                        if let Some(skill_path) = self.git.skill_path(skill_id) {
+                            std::fs::remove_dir_all(&skill_path).ok();
+                        }
+                    }
+                    report.pulled.push(format!("{} (deleted)", skill_id));
+                    self.state.skill_states.remove(skill_id);
+                }
+            }
+
+            // Update cursor
+            if let Some(next) = &pull_response.next_cursor {
+                cursor = Some(next.value.clone());
+            } else {
+                cursor = None;
+            }
+
+            // Save cursor and etag
+            cloud_state.last_cursor = cursor.clone();
+            if let Some(etag) = &pull_response.etag {
+                cloud_state.last_etag = Some(etag.clone());
+            }
+            cloud_state.last_server_time = Some(pull_response.server_time.clone());
+
+            if !pull_response.has_more {
+                break;
+            }
+        }
+
+        info!(pulled = total_pulled, "JFP Cloud pull completed");
+        Ok(())
+    }
+
+    fn jfp_push_changes(
+        &mut self,
+        client: &mut JfpCloudClient,
+        remote: &RemoteConfig,
+        cloud_state: &mut JfpCloudState,
+        options: &SyncOptions,
+        report: &mut SyncReport,
+    ) -> Result<()> {
+        // Collect skills that need pushing (including queued offline changes)
+        let mut push_items: Vec<(String, JfpPushItem, JfpChangeType, Option<i64>, bool)> =
+            Vec::new();
+        let mut next_pending: Vec<JfpPendingChange> = Vec::new();
+
+        let queued = std::mem::take(&mut cloud_state.pending_queue);
+        let mut queued_ids = HashSet::new();
+
+        for pending in queued {
+            queued_ids.insert(pending.skill_id.clone());
+
+            let item = match pending.change_type {
+                JfpChangeType::Delete => JfpPushItem {
+                    ms_skill_id: pending.skill_id.clone(),
+                    content_hash: pending.content_hash.clone(),
+                    base_revision_id: pending.base_revision_id,
+                    spec: None,
+                    skill_md: None,
+                    deleted: Some(true),
+                },
+                JfpChangeType::Create | JfpChangeType::Update => {
+                    let spec = match self.git.read_skill(&pending.skill_id) {
+                        Ok(s) => s,
+                        Err(e) => {
+                            report.errors.push(format!(
+                                "Failed to read queued skill {}: {}",
+                                pending.skill_id, e
+                            ));
+                            continue;
+                        }
+                    };
+                    match create_push_item(&spec, pending.base_revision_id, false) {
+                        Ok(item) => item,
+                        Err(e) => {
+                            report.errors.push(format!(
+                                "Failed to create queued push item for {}: {}",
+                                pending.skill_id, e
+                            ));
+                            continue;
+                        }
+                    }
+                }
+            };
+
+            push_items.push((
+                pending.skill_id.clone(),
+                item,
+                pending.change_type,
+                pending.base_revision_id,
+                true,
+            ));
+        }
+
+        let skill_ids = self.git.list_skill_ids()?;
+
+        for skill_id in &skill_ids {
+            if queued_ids.contains(skill_id) {
+                continue;
+            }
+
+            // Check if skill has changed since last sync
+            let local_state = self.state.skill_states.get(skill_id);
+            let base_revision = cloud_state.skill_revisions.get(skill_id).copied();
+
+            // Read current skill
+            let spec = match self.git.read_skill(skill_id) {
+                Ok(s) => s,
+                Err(e) => {
+                    report.errors.push(format!("Failed to read skill {}: {}", skill_id, e));
+                    continue;
+                }
+            };
+
+            // Create hash and check if changed
+            let current_hash = hash_skill_spec(&spec)?;
+
+            // Check against remote hash in state
+            let remote_hash = local_state
+                .and_then(|s| s.remote_hashes.get(&remote.name))
+                .map(|h| h.as_str());
+
+            if remote_hash == Some(&current_hash) {
+                // Already synced
+                continue;
+            }
+
+            // Create push item
+            match create_push_item(&spec, base_revision, false) {
+                Ok(item) => push_items.push((
+                    skill_id.clone(),
+                    item,
+                    if base_revision.is_some() {
+                        JfpChangeType::Update
+                    } else {
+                        JfpChangeType::Create
+                    },
+                    base_revision,
+                    false,
+                )),
+                Err(e) => {
+                    report.errors.push(format!("Failed to create push item for {}: {}", skill_id, e));
+                }
+            }
+        }
+
+        if push_items.is_empty() {
+            return Ok(());
+        }
+
+        // Push in batches of 50
+        const BATCH_SIZE: usize = 50;
+        for chunk in push_items.chunks(BATCH_SIZE) {
+            let items: Vec<_> = chunk.iter().map(|(_, item, ..)| item.clone()).collect();
+            let push_response = match client.push_changes(items, options.dry_run) {
+                Ok(response) => response,
+                Err(err) => {
+                    report.errors.push(format!("JFP Cloud push failed: {}", err));
+                    if !options.dry_run {
+                        for (skill_id, item, change_type, base_revision_id, _) in chunk {
+                            next_pending.push(JfpPendingChange {
+                                skill_id: skill_id.clone(),
+                                change_type: *change_type,
+                                content_hash: item.content_hash.clone(),
+                                queued_at: Utc::now().to_rfc3339(),
+                                base_revision_id: *base_revision_id,
+                            });
+                        }
+                    }
+                    continue;
+                }
+            };
+
+            // Process results
+            for (result, (skill_id, item, change_type, base_revision_id, _from_queue)) in
+                push_response.results.iter().zip(chunk.iter())
+            {
+                match result.status {
+                    JfpPushStatus::Applied => {
+                        report.pushed.push(skill_id.clone());
+
+                        // Update revision tracking
+                        if let Some(rev) = result.revision_id {
+                            cloud_state.skill_revisions.insert(skill_id.clone(), rev);
+                        }
+
+                        let mut state_entry = self
+                            .state
+                            .skill_states
+                            .get(skill_id)
+                            .cloned()
+                            .unwrap_or_else(|| SkillSyncState {
+                                skill_id: skill_id.clone(),
+                                local_hash: None,
+                                remote_hashes: HashMap::new(),
+                                local_modified: None,
+                                remote_modified: HashMap::new(),
+                                status: SkillSyncStatus::Synced,
+                                last_modified_by: None,
+                            });
+
+                        state_entry.local_hash = Some(item.content_hash.clone());
+                        state_entry
+                            .remote_hashes
+                            .insert(remote.name.clone(), item.content_hash.clone());
+                        state_entry.status = SkillSyncStatus::Synced;
+                        self.state.skill_states.insert(skill_id.clone(), state_entry);
+                    }
+                    JfpPushStatus::Skipped => {
+                        report.skipped.push(skill_id.clone());
+                    }
+                    JfpPushStatus::Conflict => {
+                        report.conflicts.push(skill_id.clone());
+                        if let Some(conflict) = &result.conflict {
+                            warn!(
+                                skill_id = %skill_id,
+                                reason = ?conflict.reason,
+                                "Push conflict detected"
+                            );
+                        }
+                    }
+                    JfpPushStatus::Rejected => {
+                        let error_msg = result.error.as_deref().unwrap_or("Unknown error");
+                        report.errors.push(format!("{}: {}", skill_id, error_msg));
+                    }
+                }
+
+                if matches!(result.status, JfpPushStatus::Conflict | JfpPushStatus::Rejected)
+                    && !options.dry_run
+                {
+                    // Do not requeue conflicts or rejected items.
+                    continue;
+                }
+
+                if matches!(result.status, JfpPushStatus::Skipped) && !options.dry_run {
+                    // Treat skipped items as synced; no requeue.
+                    let _ = (change_type, base_revision_id);
+                }
+            }
+        }
+
+        if !options.dry_run {
+            cloud_state.pending_queue = next_pending;
+        }
+
+        Ok(())
+    }
+
+    fn apply_jfp_payload(
+        &mut self,
+        remote: &RemoteConfig,
+        payload: &JfpSkillPayload,
+        options: &SyncOptions,
+        tx_mgr: &TxManager,
+        report: &mut SyncReport,
+    ) -> Result<()> {
+        let skill_id = &payload.ms_skill_id;
+        let spec = payload_to_skill_spec(payload)?;
+
+        if !options.dry_run {
+            tx_mgr.write_skill_locked(&spec)?;
+        }
+        report.pulled.push(skill_id.clone());
+
+        let remote_time = Self::parse_remote_updated_at(payload);
+
+        let mut state_entry = self
+            .state
+            .skill_states
+            .get(skill_id)
+            .cloned()
+            .unwrap_or_else(|| SkillSyncState {
+                skill_id: skill_id.clone(),
+                local_hash: None,
+                remote_hashes: HashMap::new(),
+                local_modified: None,
+                remote_modified: HashMap::new(),
+                status: SkillSyncStatus::Synced,
+                last_modified_by: None,
+            });
+        state_entry.local_hash = Some(payload.content_hash.clone());
+        state_entry
+            .remote_hashes
+            .insert(remote.name.clone(), payload.content_hash.clone());
+        if let Some(remote_time) = remote_time {
+            state_entry
+                .remote_modified
+                .insert(remote.name.clone(), remote_time);
+        }
+        if !options.dry_run {
+            state_entry.local_modified = self.local_skill_modified_at(skill_id);
+        }
+        state_entry.status = SkillSyncStatus::Synced;
+        self.state.skill_states.insert(skill_id.clone(), state_entry);
+
+        Ok(())
+    }
+
+    fn local_skill_modified_at(&self, skill_id: &str) -> Option<DateTime<Utc>> {
+        let skill_path = self.git.skill_path(skill_id)?;
+        let spec_path = skill_path.join("skill.spec.json");
+        let metadata = std::fs::metadata(&spec_path).ok()?;
+        let modified = metadata.modified().ok()?;
+        Some(DateTime::<Utc>::from(modified))
+    }
+
+    fn parse_remote_updated_at(payload: &JfpSkillPayload) -> Option<DateTime<Utc>> {
+        payload
+            .updated_at
+            .as_ref()
+            .and_then(|value| DateTime::parse_from_rfc3339(value).ok())
+            .map(|dt| dt.with_timezone(&Utc))
     }
 
     fn sync_with_archive(
@@ -875,6 +1434,31 @@ fn determine_sync_status(
         (None, Some(_)) => SkillSyncStatus::RemoteOnly,
         (None, None) => SkillSyncStatus::Synced,
     }
+}
+
+/// Load JFP Cloud state from disk.
+fn load_jfp_cloud_state(path: &Path) -> JfpCloudState {
+    if path.exists() {
+        match std::fs::read_to_string(path) {
+            Ok(contents) => serde_json::from_str(&contents).unwrap_or_default(),
+            Err(_) => JfpCloudState::default(),
+        }
+    } else {
+        JfpCloudState::default()
+    }
+}
+
+/// Save JFP Cloud state to disk.
+fn save_jfp_cloud_state(path: &Path, state: &JfpCloudState) -> Result<()> {
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)
+            .map_err(|e| MsError::Config(format!("create jfp state dir: {e}")))?;
+    }
+    let json = serde_json::to_string_pretty(state)
+        .map_err(|e| MsError::Config(format!("serialize jfp state: {e}")))?;
+    std::fs::write(path, json)
+        .map_err(|e| MsError::Config(format!("write jfp state: {e}")))?;
+    Ok(())
 }
 
 #[cfg(test)]

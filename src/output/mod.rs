@@ -5,6 +5,7 @@
 //! - Terminal capability detection
 //! - Theme system for semantic colors and icons
 //! - Rich output abstraction layer
+//! - Safe output wrapper with graceful degradation
 //! - Plain format specification for machine-parseable output
 //! - Test utilities for output testing (test-only)
 //!
@@ -21,8 +22,31 @@
 //! 3. **RichOutput** (`rich_output`): Main abstraction that provides output
 //!    methods adapting to the current mode (rich, plain, or JSON).
 //!
-//! 4. **PlainFormat** (`plain_format`): Specification and utilities for
+//! 4. **SafeRichOutput** (`safe`): Wrapper around `RichOutput` with graceful
+//!    degradation - catches panics and falls back to simpler output modes.
+//!
+//! 5. **Fallback** (`fallback`): Minimal fallback renderers for when rich
+//!    output fails completely.
+//!
+//! 6. **PlainFormat** (`plain_format`): Specification and utilities for
 //!    machine-parseable plain text and JSON output formats.
+//!
+//! # Graceful Degradation
+//!
+//! Rich output is a NICE-TO-HAVE feature. The application MUST work perfectly
+//! even if rich output completely fails. Use `SafeRichOutput` to ensure this:
+//!
+//! ```rust,ignore
+//! use ms::output::SafeRichOutput;
+//!
+//! // Auto-detect with graceful degradation
+//! let output = SafeRichOutput::new(&config, &format, robot_mode);
+//!
+//! // All methods are safe - they never panic
+//! output.success("Operation completed");
+//! output.print_table_safe(&table);
+//! output.print_markdown_safe(markdown_content);
+//! ```
 //!
 //! # Example
 //!
@@ -41,9 +65,11 @@
 pub mod builders;
 pub mod detection;
 pub mod errors;
+pub mod fallback;
 pub mod plain_format;
 pub mod progress;
 pub mod rich_output;
+pub mod safe;
 pub mod theme;
 
 #[cfg(test)]
@@ -59,6 +85,12 @@ pub use detection::{
 
 // Re-export rich output types
 pub use rich_output::{OutputMode, RichOutput, SpinnerHandle};
+
+// Re-export safe output types
+pub use safe::{RichOutputError, RichOutputErrorKind, SafeRichOutput, get_width_safe};
+
+// Re-export fallback types
+pub use fallback::{FallbackLevel, FallbackRenderer};
 
 // Re-export theme types
 pub use theme::{

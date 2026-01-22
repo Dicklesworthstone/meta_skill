@@ -272,7 +272,7 @@ impl ProgressBar {
     #[must_use]
     pub fn message(mut self, message: impl Into<String>) -> Self {
         self.message = message.into();
-        self.inner = std::mem::take(&mut self.inner).description(&self.message);
+        self.inner = std::mem::take(&mut self.inner).description(self.message.as_str());
         self
     }
 

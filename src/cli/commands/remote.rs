@@ -37,7 +37,7 @@ pub struct RemoteAddArgs {
     pub name: String,
     pub url: String,
 
-    /// Remote type (filesystem|git|ru)
+    /// Remote type (filesystem|git|ru|jfp-cloud)
     #[arg(long, default_value = "filesystem")]
     pub remote_type: String,
 
@@ -45,7 +45,7 @@ pub struct RemoteAddArgs {
     #[arg(long)]
     pub branch: Option<String>,
 
-    /// Auth method for git remotes (token|ssh)
+    /// Auth method for git remotes (token|ssh) or JFP cloud (token)
     #[arg(long)]
     pub auth: Option<String>,
 
@@ -120,7 +120,7 @@ pub struct RemoteSetUrlArgs {
     #[arg(long)]
     pub clear_branch: bool,
 
-    /// Auth method for git remotes (token|ssh)
+    /// Auth method for git remotes (token|ssh) or JFP cloud (token)
     #[arg(long)]
     pub auth: Option<String>,
 
@@ -187,6 +187,7 @@ fn add(ctx: &AppContext, args: &RemoteAddArgs) -> Result<()> {
         args.ssh_pubkey.as_ref(),
         args.ssh_passphrase_env.as_ref(),
     )?;
+    validate_auth_for_remote(&remote_type, auth.as_ref())?;
     let remote = RemoteConfig {
         name: args.name.clone(),
         remote_type,
@@ -345,7 +346,7 @@ fn set_url(ctx: &AppContext, args: &RemoteSetUrlArgs) -> Result<()> {
     if args.clear_auth {
         remote.auth = None;
     } else if has_auth || args.auth.is_some() {
-        remote.auth = parse_auth_from(
+        let auth = parse_auth_from(
             args.auth.as_deref(),
             args.token_env.as_ref(),
             args.username.as_ref(),
@@ -353,6 +354,8 @@ fn set_url(ctx: &AppContext, args: &RemoteSetUrlArgs) -> Result<()> {
             args.ssh_pubkey.as_ref(),
             args.ssh_passphrase_env.as_ref(),
         )?;
+        validate_auth_for_remote(&remote.remote_type, auth.as_ref())?;
+        remote.auth = auth;
     }
     config.save()?;
 
@@ -461,9 +464,22 @@ fn validate_remote_flags(
                 "--branch is only valid for git remotes".to_string(),
             ));
         }
+    }
+    if !matches!(remote_type, RemoteType::Git | RemoteType::JfpCloud) {
         if has_auth || clear_auth {
             return Err(MsError::Config(
-                "auth flags are only valid for git remotes".to_string(),
+                "auth flags are only valid for git or jfp-cloud remotes".to_string(),
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn validate_auth_for_remote(remote_type: &RemoteType, auth: Option<&RemoteAuth>) -> Result<()> {
+    if matches!(remote_type, RemoteType::JfpCloud) {
+        if matches!(auth, Some(RemoteAuth::SshKey { .. })) {
+            return Err(MsError::Config(
+                "jfp-cloud remotes only support token auth".to_string(),
             ));
         }
     }
@@ -536,6 +552,34 @@ mod tests {
                 assert_eq!(add.branch.as_deref(), Some("main"));
                 assert_eq!(add.auth.as_deref(), Some("token"));
                 assert_eq!(add.token_env.as_deref(), Some("GIT_TOKEN"));
+            } else {
+                panic!("expected add subcommand");
+            }
+        } else {
+            panic!("expected remote command");
+        }
+    }
+
+    #[test]
+    fn parse_remote_add_jfp_cloud_token() {
+        let args = crate::cli::Cli::parse_from([
+            "ms",
+            "remote",
+            "add",
+            "cloud",
+            "https://pro.jeffreysprompts.com/api/ms/sync",
+            "--remote-type",
+            "jfp-cloud",
+            "--auth",
+            "token",
+            "--token-env",
+            "JFP_CLOUD_TOKEN",
+        ]);
+        if let crate::cli::Commands::Remote(remote) = args.command {
+            if let RemoteCommand::Add(add) = remote.command {
+                assert_eq!(add.remote_type, "jfp-cloud");
+                assert_eq!(add.auth.as_deref(), Some("token"));
+                assert_eq!(add.token_env.as_deref(), Some("JFP_CLOUD_TOKEN"));
             } else {
                 panic!("expected add subcommand");
             }

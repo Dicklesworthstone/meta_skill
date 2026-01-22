@@ -914,6 +914,63 @@ pub fn run_build_tui(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crossterm::event::{KeyCode, KeyModifiers};
+
+    fn make_session_match(id: &str, score: f32) -> crate::cass::client::SessionMatch {
+        crate::cass::client::SessionMatch {
+            session_id: id.to_string(),
+            path: format!("/tmp/{id}.jsonl"),
+            score,
+            snippet: Some(format!("Snippet for {id}")),
+            content_hash: Some(format!("hash-{id}")),
+            project: Some("demo".to_string()),
+            timestamp: None,
+        }
+    }
+
+    fn make_session(id: &str) -> crate::cass::client::Session {
+        crate::cass::client::Session {
+            id: id.to_string(),
+            path: format!("/tmp/{id}.jsonl"),
+            messages: vec![crate::cass::client::SessionMessage {
+                index: 0,
+                role: "user".to_string(),
+                content: "Hello".to_string(),
+                tool_calls: Vec::new(),
+                tool_results: Vec::new(),
+            }],
+            metadata: crate::cass::client::SessionMetadata::default(),
+            content_hash: format!("hash-{id}"),
+        }
+    }
+
+    fn make_selected_session(id: &str) -> SelectedSession {
+        let session = make_session(id);
+        let quality = QualityScorer::with_defaults().score(&session);
+        SelectedSession {
+            match_data: make_session_match(id, 0.9),
+            session,
+            quality,
+            confirmed: true,
+        }
+    }
+
+    fn make_move(id: &str, tag: CognitiveMoveTag, confidence: f32) -> CognitiveMove {
+        CognitiveMove {
+            id: id.to_string(),
+            tag,
+            description: format!("Move {id}"),
+            evidence: MoveEvidence {
+                session_id: "sess-1".to_string(),
+                message_indices: vec![0],
+                excerpt: "Evidence excerpt".to_string(),
+                notes: None,
+            },
+            confidence,
+            reviewed: false,
+            decision: None,
+        }
+    }
 
     #[test]
     fn test_focus_cycle() {
@@ -938,5 +995,223 @@ mod tests {
         assert_eq!(tui.quality_color(0.9), Color::Green);
         assert_eq!(tui.quality_color(0.6), Color::Yellow);
         assert_eq!(tui.quality_color(0.3), Color::Red);
+    }
+
+    #[test]
+    fn test_phase_name_initial() {
+        let wizard = BrennerWizard::new("query", BrennerConfig::default());
+        let tui = BuildTui::new(wizard);
+        assert_eq!(tui.get_phase_name(), "Session Selection");
+    }
+
+    #[test]
+    fn test_search_mode_input_and_filter_apply() {
+        let wizard = BrennerWizard::new("query", BrennerConfig::default());
+        let mut tui = BuildTui::new(wizard);
+        let client = CassClient::new();
+        let scorer = QualityScorer::with_defaults();
+
+        tui.handle_key(KeyCode::Char('/'), KeyModifiers::empty(), &client, &scorer)
+            .unwrap();
+        tui.handle_key(KeyCode::Char('r'), KeyModifiers::empty(), &client, &scorer)
+            .unwrap();
+        tui.handle_key(KeyCode::Char('s'), KeyModifiers::empty(), &client, &scorer)
+            .unwrap();
+        tui.handle_key(KeyCode::Enter, KeyModifiers::empty(), &client, &scorer)
+            .unwrap();
+
+        assert!(!tui.search_mode);
+        assert_eq!(tui.active_filter.as_deref(), Some("rs"));
+        assert_eq!(
+            tui.status_message.as_deref(),
+            Some("Filtering by: rs (press Esc to clear)")
+        );
+    }
+
+    #[test]
+    fn test_search_mode_escape_clears_query() {
+        let wizard = BrennerWizard::new("query", BrennerConfig::default());
+        let mut tui = BuildTui::new(wizard);
+        let client = CassClient::new();
+        let scorer = QualityScorer::with_defaults();
+
+        tui.handle_key(KeyCode::Char('/'), KeyModifiers::empty(), &client, &scorer)
+            .unwrap();
+        tui.handle_key(KeyCode::Char('x'), KeyModifiers::empty(), &client, &scorer)
+            .unwrap();
+        tui.handle_key(KeyCode::Esc, KeyModifiers::empty(), &client, &scorer)
+            .unwrap();
+
+        assert!(!tui.search_mode);
+        assert!(tui.search_query.is_none());
+    }
+
+    #[test]
+    fn test_escape_clears_active_filter() {
+        let wizard = BrennerWizard::new("query", BrennerConfig::default());
+        let mut tui = BuildTui::new(wizard);
+        let client = CassClient::new();
+        let scorer = QualityScorer::with_defaults();
+
+        tui.active_filter = Some("rust".to_string());
+        tui.pattern_list_state.select(Some(2));
+
+        tui.handle_key(KeyCode::Esc, KeyModifiers::empty(), &client, &scorer)
+            .unwrap();
+
+        assert!(tui.active_filter.is_none());
+        assert_eq!(tui.status_message.as_deref(), Some("Filter cleared"));
+        assert_eq!(tui.pattern_list_state.selected(), Some(0));
+    }
+
+    #[test]
+    fn test_focus_tab_and_backtab() {
+        let wizard = BrennerWizard::new("query", BrennerConfig::default());
+        let mut tui = BuildTui::new(wizard);
+        let client = CassClient::new();
+        let scorer = QualityScorer::with_defaults();
+
+        tui.handle_key(KeyCode::Tab, KeyModifiers::empty(), &client, &scorer)
+            .unwrap();
+        assert_eq!(tui.focus, FocusPanel::Details);
+
+        tui.handle_key(KeyCode::BackTab, KeyModifiers::empty(), &client, &scorer)
+            .unwrap();
+        assert_eq!(tui.focus, FocusPanel::Patterns);
+    }
+
+    #[test]
+    fn test_available_actions_session_selection() {
+        let wizard = BrennerWizard::new("query", BrennerConfig::default());
+        let tui = BuildTui::new(wizard);
+        let actions = tui.get_available_actions();
+
+        assert!(actions.contains(&"Space: toggle".to_string()));
+        assert!(actions.contains(&"n: next phase".to_string()));
+        assert!(actions.contains(&"d: demo data".to_string()));
+    }
+
+    #[test]
+    fn test_pattern_items_with_selected_marker() {
+        let mut wizard = BrennerWizard::new("query", BrennerConfig::default());
+        let results = vec![make_session_match("s1", 0.9), make_session_match("s2", 0.8)];
+        wizard.set_session_results(results);
+        wizard.toggle_session(1);
+        let tui = BuildTui::new(wizard);
+
+        let items = tui.get_pattern_items();
+        assert!(items[1].0.starts_with("[x]"));
+    }
+
+    #[test]
+    fn test_pattern_items_filtering_active_filter() {
+        let mut wizard = BrennerWizard::new("query", BrennerConfig::default());
+        wizard.set_session_results(vec![
+            make_session_match("rust-1", 0.9),
+            make_session_match("python-1", 0.8),
+        ]);
+        let mut tui = BuildTui::new(wizard);
+        tui.active_filter = Some("rust".to_string());
+
+        let items = tui.get_pattern_items();
+        assert_eq!(items.len(), 1);
+        assert!(items[0].0.to_lowercase().contains("rust"));
+    }
+
+    #[test]
+    fn test_selected_detail_default_message() {
+        let wizard = BrennerWizard::new("query", BrennerConfig::default());
+        let tui = BuildTui::new(wizard);
+
+        let detail = tui.get_selected_detail();
+        assert_eq!(detail.lines.len(), 1);
+        assert_eq!(detail.lines[0].spans[0].content, "Select an item to view details");
+    }
+
+    #[test]
+    fn test_draft_preview_placeholder_and_token_count() {
+        let wizard = BrennerWizard::new("query", BrennerConfig::default());
+        let mut tui = BuildTui::new(wizard);
+
+        let preview = tui.get_draft_preview();
+        assert!(preview.contains("Draft will appear here"));
+        assert_eq!(tui.draft_token_count, 0);
+    }
+
+    #[test]
+    fn test_pattern_items_in_move_extraction() {
+        let mut wizard = BrennerWizard::new("query", BrennerConfig::default());
+        wizard
+            .confirm_sessions(vec![make_selected_session("s1")])
+            .unwrap();
+        wizard.add_move(make_move("m1", CognitiveMoveTag::InnerTruth, 0.9));
+        wizard.add_move(make_move("m2", CognitiveMoveTag::HypothesisSlate, 0.7));
+        let tui = BuildTui::new(wizard);
+
+        let items = tui.get_pattern_items();
+        assert_eq!(items.len(), 2);
+        assert!(items[0].0.contains("Move m1"));
+    }
+
+    #[test]
+    fn test_handle_key_quit_sets_flag() {
+        let wizard = BrennerWizard::new("query", BrennerConfig::default());
+        let mut tui = BuildTui::new(wizard);
+        let client = CassClient::new();
+        let scorer = QualityScorer::with_defaults();
+
+        tui.handle_key(KeyCode::Char('q'), KeyModifiers::empty(), &client, &scorer)
+            .unwrap();
+        assert!(tui.should_quit);
+    }
+
+    #[test]
+    fn test_handle_session_selection_navigation_bounds() {
+        let mut wizard = BrennerWizard::new("query", BrennerConfig::default());
+        wizard.set_session_results(vec![
+            make_session_match("s1", 0.9),
+            make_session_match("s2", 0.8),
+        ]);
+        let mut tui = BuildTui::new(wizard);
+        let client = CassClient::new();
+        let scorer = QualityScorer::with_defaults();
+
+        tui.pattern_list_state.select(Some(0));
+        tui.handle_key(KeyCode::Up, KeyModifiers::empty(), &client, &scorer)
+            .unwrap();
+        assert_eq!(tui.pattern_list_state.selected(), Some(0));
+
+        tui.handle_key(KeyCode::Down, KeyModifiers::empty(), &client, &scorer)
+            .unwrap();
+        assert_eq!(tui.pattern_list_state.selected(), Some(1));
+    }
+
+    #[test]
+    fn test_get_pattern_items_from_selected_set() {
+        let mut wizard = BrennerWizard::new("query", BrennerConfig::default());
+        wizard.set_session_results(vec![make_session_match("s1", 0.9)]);
+        wizard.toggle_session(0);
+
+        let tui = BuildTui::new(wizard);
+        let items = tui.get_pattern_items();
+        assert!(items[0].0.starts_with("[x]"));
+    }
+
+    #[test]
+    fn test_active_filter_is_case_insensitive() {
+        let mut wizard = BrennerWizard::new("query", BrennerConfig::default());
+        wizard.set_session_results(vec![make_session_match("Rust-1", 0.9)]);
+        let mut tui = BuildTui::new(wizard);
+        tui.active_filter = Some("rUsT".to_string());
+
+        let items = tui.get_pattern_items();
+        assert_eq!(items.len(), 1);
+    }
+
+    #[test]
+    fn test_quality_score_default_value() {
+        let wizard = BrennerWizard::new("query", BrennerConfig::default());
+        let tui = BuildTui::new(wizard);
+        assert!((tui.get_quality_score() - 0.7).abs() < f32::EPSILON);
     }
 }

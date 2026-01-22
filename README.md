@@ -239,7 +239,17 @@ Bundles are verified with checksums and per-file hashes. Updates are gated by lo
 Pull skills from configured remotes:
 
 ```bash
-ms remote add origin git@github.com:team/skills.git --type git --auth ssh
+ms remote add origin git@github.com:team/skills.git --remote-type git --auth ssh
+ms sync
+```
+
+Sync with JeffreysPrompts Premium Cloud:
+
+```bash
+ms remote add jfp https://pro.jeffreysprompts.com/api/ms/sync \
+  --remote-type jfp-cloud \
+  --auth token \
+  --token-env JFP_CLOUD_TOKEN
 ms sync
 ```
 

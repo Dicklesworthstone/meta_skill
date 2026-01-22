@@ -848,6 +848,7 @@ fn quality_color(quality: f64) -> Color {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crossterm::event::{KeyCode, KeyModifiers};
 
     fn make_test_skill(
         id: &str,
@@ -1008,5 +1009,142 @@ mod tests {
         assert_eq!(normalize_layer("global"), "org");
         assert_eq!(normalize_layer("local"), "user");
         assert_eq!(normalize_layer("project"), "project");
+    }
+
+    #[test]
+    fn test_parse_special_filters_extracts_filters() {
+        let (query, filters) = Filters::parse_special_filters(
+            "layer:base tag:rust tag:cli quality:>0.8 remaining",
+        );
+
+        assert_eq!(query, "remaining");
+        assert_eq!(filters.layer.as_deref(), Some("base"));
+        assert_eq!(filters.tags, vec!["rust", "cli"]);
+        assert_eq!(filters.min_quality, Some(0.8));
+    }
+
+    #[test]
+    fn test_apply_filters_empty_resets_selection() {
+        let skills = vec![make_test_skill("s1", "Skill 1", "base", 0.9, vec!["rust"])];
+        let mut app = BrowseTui::with_test_skills(skills);
+
+        app.set_search_query("tag:missing");
+
+        assert_eq!(app.filtered_count(), 0);
+        assert_eq!(app.selected(), None);
+    }
+
+    #[test]
+    fn test_apply_filters_resets_scroll_and_selects_first() {
+        let skills = vec![
+            make_test_skill("s1", "Skill 1", "base", 0.9, vec![]),
+            make_test_skill("s2", "Skill 2", "base", 0.8, vec![]),
+        ];
+        let mut app = BrowseTui::with_test_skills(skills);
+        app.detail_scroll = 12;
+
+        app.set_search_query("Skill");
+
+        assert_eq!(app.selected(), Some(0));
+        assert_eq!(app.detail_scroll, 0);
+    }
+
+    #[test]
+    fn test_handle_key_quit_shortcuts() {
+        let skills = vec![make_test_skill("s1", "Skill 1", "base", 0.9, vec![])];
+        let mut app = BrowseTui::with_test_skills(skills);
+
+        assert_eq!(
+            app.handle_key(KeyCode::Char('q'), KeyModifiers::empty()),
+            Action::Quit
+        );
+        assert_eq!(
+            app.handle_key(KeyCode::Char('c'), KeyModifiers::CONTROL),
+            Action::Quit
+        );
+    }
+
+    #[test]
+    fn test_handle_key_tab_toggles_focus() {
+        let skills = vec![make_test_skill("s1", "Skill 1", "base", 0.9, vec![])];
+        let mut app = BrowseTui::with_test_skills(skills);
+
+        assert_eq!(app.focus, FocusPanel::List);
+        app.handle_key(KeyCode::Tab, KeyModifiers::empty());
+        assert_eq!(app.focus, FocusPanel::Detail);
+    }
+
+    #[test]
+    fn test_handle_key_slash_enters_search_mode() {
+        let skills = vec![make_test_skill("s1", "Skill 1", "base", 0.9, vec![])];
+        let mut app = BrowseTui::with_test_skills(skills);
+
+        app.handle_key(KeyCode::Char('/'), KeyModifiers::empty());
+        assert!(app.search_focused);
+    }
+
+    #[test]
+    fn test_handle_key_escape_clears_filters() {
+        let skills = vec![make_test_skill("s1", "Skill 1", "base", 0.9, vec![])];
+        let mut app = BrowseTui::with_test_skills(skills);
+        app.set_search_query("layer:base");
+
+        app.handle_key(KeyCode::Esc, KeyModifiers::empty());
+
+        assert!(app.search_query.is_empty());
+        assert_eq!(app.filters.layer, None);
+        assert_eq!(app.status_message.as_deref(), Some("Filters cleared"));
+    }
+
+    #[test]
+    fn test_handle_search_key_updates_query_and_applies() {
+        let skills = vec![
+            make_test_skill("s1", "Skill 1", "base", 0.9, vec![]),
+            make_test_skill("s2", "Skill 2", "base", 0.8, vec![]),
+        ];
+        let mut app = BrowseTui::with_test_skills(skills);
+        app.search_focused = true;
+
+        app.handle_key(KeyCode::Char('s'), KeyModifiers::empty());
+        app.handle_key(KeyCode::Char('k'), KeyModifiers::empty());
+        app.handle_key(KeyCode::Enter, KeyModifiers::empty());
+
+        assert!(!app.search_focused);
+        assert_eq!(app.search_query, "sk");
+        assert_eq!(app.status_message.as_deref(), Some("Searching: sk"));
+    }
+
+    #[test]
+    fn test_handle_list_key_jump_to_end_and_start() {
+        let skills = vec![
+            make_test_skill("s1", "Skill 1", "base", 0.9, vec![]),
+            make_test_skill("s2", "Skill 2", "base", 0.85, vec![]),
+            make_test_skill("s3", "Skill 3", "base", 0.8, vec![]),
+        ];
+        let mut app = BrowseTui::with_test_skills(skills);
+
+        app.handle_list_key(KeyCode::Char('G'));
+        assert_eq!(app.selected(), Some(2));
+
+        app.handle_list_key(KeyCode::Char('g'));
+        assert_eq!(app.selected(), Some(0));
+    }
+
+    #[test]
+    fn test_handle_detail_key_scrolls_and_resets() {
+        let skills = vec![make_test_skill("s1", "Skill 1", "base", 0.9, vec![])];
+        let mut app = BrowseTui::with_test_skills(skills);
+
+        app.handle_detail_key(KeyCode::Down);
+        assert!(app.detail_scroll > 0);
+
+        app.handle_detail_key(KeyCode::Char('g'));
+        assert_eq!(app.detail_scroll, 0);
+    }
+
+    #[test]
+    fn test_load_selected_returns_continue_when_empty() {
+        let mut app = BrowseTui::with_test_skills(Vec::new());
+        assert_eq!(app.load_selected(), Action::Continue);
     }
 }

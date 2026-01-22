@@ -22,6 +22,7 @@ pub enum RemoteType {
     FileSystem,
     Git,
     Ru,
+    JfpCloud,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -47,8 +48,9 @@ impl RemoteType {
             "filesystem" | "fs" => Ok(Self::FileSystem),
             "git" => Ok(Self::Git),
             "ru" | "repo-updater" | "repo_updater" => Ok(Self::Ru),
+            "jfp-cloud" | "jfp_cloud" | "jfp" | "cloud" => Ok(Self::JfpCloud),
             _ => Err(MsError::Config(format!(
-                "unknown remote type: {value} (use filesystem|git|ru)"
+                "unknown remote type: {value} (use filesystem|git|ru|jfp-cloud)"
             ))),
         }
     }
