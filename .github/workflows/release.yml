@@ -93,10 +93,12 @@ jobs:
           #   os: ubuntu-latest
           #   archive: tar.gz
           #   cross: true
-          - target: x86_64-apple-darwin
-            os: macos-14
-            archive: tar.gz
-            cross: false
+          # DISABLED: x86_64-apple-darwin requires Intel runner (macos-13 retired)
+          # or vendored OpenSSL for cross-compilation from ARM
+          # - target: x86_64-apple-darwin
+          #   os: macos-13
+          #   archive: tar.gz
+          #   cross: false
           - target: aarch64-apple-darwin
             os: macos-latest
             archive: tar.gz
