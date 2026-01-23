@@ -145,6 +145,8 @@ pub enum ErrorCode {
     MiningFailed,
     /// E885: Import operation failed
     ImportFailed,
+    /// E886: Authentication failed
+    AuthenticationFailed,
 
     // ========================================
     // Internal errors (9xx)
@@ -230,6 +232,7 @@ impl ErrorCode {
             Self::BeadsUnavailable => 883,
             Self::MiningFailed => 884,
             Self::ImportFailed => 885,
+            Self::AuthenticationFailed => 886,
 
             // Internal errors (9xx)
             Self::InternalError => 901,
@@ -389,6 +392,9 @@ impl ErrorCode {
             Self::ImportFailed => {
                 "Import operation failed. Check the source format and permissions"
             }
+            Self::AuthenticationFailed => {
+                "Authentication failed. Check your credentials or try logging in again"
+            }
 
             // Internal errors
             Self::InternalError => {
@@ -450,6 +456,7 @@ impl ErrorCode {
             | Self::BeadsUnavailable
             | Self::MiningFailed
             | Self::ImportFailed
+            | Self::AuthenticationFailed
             | Self::Timeout
             | Self::NotFound
             | Self::IoError => true,

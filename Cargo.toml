@@ -1,6 +1,6 @@
 [package]
 name = "ms"
-version = "0.1.0"
+version = "0.1.1"
 edition = "2024"
 resolver = "2"
 authors = ["Jeffrey Emanuel <jeff@jeffreyemanuel.dev>"]
@@ -48,8 +48,8 @@ rusqlite = { version = "0.38.0", features = ["bundled", "modern_sqlite"] }
 # Search
 tantivy = "0.25.0"
 
-# Git
-git2 = "0.20.3"
+# Git (use vendored-openssl for musl cross-compilation)
+git2 = { version = "0.20.3", features = ["vendored-openssl"] }
 
 # Terminal output
 colored = "3.0.0"
@@ -81,6 +81,11 @@ parking_lot = "0.12.5"
 # Logging
 tracing = "0.1.44"
 tracing-subscriber = { version = "0.3.22", features = ["env-filter", "fmt", "ansi", "json"] }
+
+# Authentication
+keyring = "3.6.1"
+atty = "0.2.14"
+open = "5.3.2"
 
 # Utilities
 chrono = { version = "0.4.43", default-features = false, features = ["std", "clock", "serde"] }
