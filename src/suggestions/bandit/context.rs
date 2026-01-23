@@ -50,6 +50,25 @@ impl ContextModifier {
         }
         adjusted.max(0.0)
     }
+
+    pub fn update(&mut self, signal: SignalType, reward: crate::suggestions::bandit::Reward) {
+        // Learning rate for context updates
+        const LEARNING_RATE: f64 = 0.05;
+
+        let bonus = self.probability_bonus.entry(signal).or_insert(0.0);
+        
+        match reward {
+            crate::suggestions::bandit::Reward::Success => {
+                *bonus += LEARNING_RATE;
+            }
+            crate::suggestions::bandit::Reward::Failure => {
+                *bonus -= LEARNING_RATE;
+            }
+        }
+
+        // Clamp bonus to prevent extreme skewing (-0.5 to 0.5)
+        *bonus = bonus.clamp(-0.5, 0.5);
+    }
 }
 
 /// Context used by the bandit to adjust weights.

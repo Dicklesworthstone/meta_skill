@@ -55,6 +55,24 @@ impl OutputFormat {
     }
 }
 
+/// Legacy robot response format.
+///
+/// # Deprecated
+///
+/// This type is deprecated in favor of [`crate::output::JsonResponse`] which provides
+/// a cleaner, more consistent API for machine-readable output. New code should use:
+///
+/// ```rust,ignore
+/// use ms::output::{JsonResponse, JsonEnvelope};
+///
+/// // For success:
+/// let response = JsonResponse::success(data);
+///
+/// // For errors:
+/// let response = JsonResponse::error("NOT_FOUND", "Skill not found");
+/// ```
+///
+/// `RobotResponse` is maintained for backward compatibility with existing integrations.
 #[derive(Serialize)]
 pub struct RobotResponse<T> {
     pub status: RobotStatus,
@@ -212,6 +230,106 @@ pub fn emit_json<T: Serialize>(value: &T) -> Result<()> {
         .map_err(|err| MsError::Config(format!("serialize output: {err}")))?;
     println!("{payload}");
     Ok(())
+}
+
+// =============================================================================
+// Migration Helpers: RobotResponse -> JsonResponse
+// =============================================================================
+
+use crate::output::{JsonEnvelope, JsonMeta, JsonResponse, JsonStructuredErrorResponse};
+
+/// Emit a success response using the new JsonResponse format.
+///
+/// This is the recommended way to emit JSON responses for new code.
+/// It produces output compatible with the unified response schema.
+pub fn emit_success<T: Serialize>(data: T) -> Result<()> {
+    let envelope = JsonEnvelope::success(data).with_timestamp();
+    emit_json(&envelope)
+}
+
+/// Emit a success response with metadata.
+pub fn emit_success_with_meta<T: Serialize>(data: T, meta: JsonMeta) -> Result<()> {
+    let envelope = JsonEnvelope::success_with_meta(data, meta);
+    emit_json(&envelope)
+}
+
+/// Emit an error response using the new JsonResponse format.
+pub fn emit_error_response(code: impl Into<String>, message: impl Into<String>) -> Result<()> {
+    let response: JsonResponse<()> = JsonResponse::error(code, message);
+    emit_json(&response)
+}
+
+/// Emit a structured error response with full error details.
+pub fn emit_structured_error(err: &MsError) -> Result<()> {
+    let structured = err.to_structured();
+    let response = JsonStructuredErrorResponse::from_structured(structured);
+    emit_json(&response)
+}
+
+/// Convert a RobotResponse to the new JsonResponse format.
+///
+/// This helper allows gradual migration from the legacy format.
+/// Returns a serde_json::Value that matches the new schema.
+pub fn robot_to_json_response<T: Serialize>(robot: &RobotResponse<T>) -> serde_json::Value {
+    match &robot.status {
+        RobotStatus::Ok => {
+            let meta = JsonMeta {
+                timestamp: Some(robot.timestamp.to_rfc3339()),
+                ..Default::default()
+            };
+            serde_json::json!({
+                "success": true,
+                "data": robot.data,
+                "meta": meta,
+            })
+        }
+        RobotStatus::Error { code, message } => {
+            serde_json::json!({
+                "success": false,
+                "error": {
+                    "code": code,
+                    "message": message,
+                }
+            })
+        }
+        RobotStatus::StructuredError {
+            code,
+            numeric_code,
+            message,
+            suggestion,
+            context,
+            recoverable,
+            category,
+            help_url,
+        } => {
+            serde_json::json!({
+                "success": false,
+                "error": {
+                    "code": code,
+                    "numeric_code": numeric_code,
+                    "message": message,
+                    "suggestion": suggestion,
+                    "context": context,
+                    "recoverable": recoverable,
+                    "category": category,
+                    "help_url": help_url,
+                }
+            })
+        }
+        RobotStatus::Partial { completed, failed } => {
+            serde_json::json!({
+                "success": false,
+                "error": {
+                    "code": "PARTIAL_FAILURE",
+                    "message": format!("Partial completion: {} succeeded, {} failed", completed, failed),
+                },
+                "meta": {
+                    "completed": completed,
+                    "failed": failed,
+                }
+            })
+        }
+    }
 }
 
 pub struct HumanLayout {

@@ -69,13 +69,16 @@ impl SignalBandit {
         let mut weights = HashMap::new();
 
         for signal in SignalType::all() {
-            let mut sample = self.prior.sample(&mut rng).max(0.0);
+            let mut sample;
             if let Some(arm) = self.arms.get(signal) {
                 let prior = BetaDistribution {
                     alpha: self.prior.alpha + arm.successes,
                     beta: self.prior.beta + arm.failures,
                 };
                 sample = prior.sample(&mut rng).max(0.0);
+            } else {
+                // Fallback (should not happen with correct initialization)
+                sample = self.prior.sample(&mut rng).max(0.0);
             }
 
             if self.config.use_context {
@@ -138,6 +141,7 @@ impl SignalBandit {
                         observation_count: 0,
                     });
                 entry.observation_count += 1;
+                entry.update(signal, reward);
             }
         }
     }

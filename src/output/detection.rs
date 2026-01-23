@@ -27,6 +27,10 @@ pub enum OutputDecisionReason {
     PlainFormat,
     /// Explicit robot flag was set.
     RobotMode,
+    /// AI agent environment detected (CLAUDE_CODE, CURSOR_AI, etc.).
+    AgentEnvironment,
+    /// CI environment detected (GITHUB_ACTIONS, CI, etc.).
+    CiEnvironment,
     /// NO_COLOR disables all styling.
     EnvNoColor,
     /// MS_PLAIN_OUTPUT forces plain output.
@@ -179,6 +183,32 @@ impl OutputDetector {
                 use_rich = decision.use_rich,
                 reason = ?decision.reason,
                 "Output mode: robot mode enabled"
+            );
+            return decision;
+        }
+
+        // Auto-detect AI agent environments (CLAUDE_CODE, CURSOR_AI, etc.)
+        if is_agent_environment() {
+            let decision = OutputDecision::plain(OutputDecisionReason::AgentEnvironment);
+            let vars = detected_agent_vars();
+            info!(
+                use_rich = decision.use_rich,
+                reason = ?decision.reason,
+                detected_vars = ?vars,
+                "Output mode: AI agent environment detected"
+            );
+            return decision;
+        }
+
+        // Auto-detect CI environments (GITHUB_ACTIONS, CI, etc.)
+        if is_ci_environment() {
+            let decision = OutputDecision::plain(OutputDecisionReason::CiEnvironment);
+            let vars = detected_ci_vars();
+            info!(
+                use_rich = decision.use_rich,
+                reason = ?decision.reason,
+                detected_vars = ?vars,
+                "Output mode: CI environment detected"
             );
             return decision;
         }
@@ -704,5 +734,123 @@ mod tests {
         assert!(!report.decision.use_rich);
         assert_eq!(report.decision.reason, OutputDecisionReason::MachineReadableFormat);
         assert_eq!(report.format, "Json");
+    }
+
+    // ==========================================================================
+    // Agent/CI Environment Auto-Detection Tests
+    // ==========================================================================
+
+    #[test]
+    fn test_detector_auto_detects_agent_environment() {
+        let _lock = ENV_LOCK.lock().unwrap();
+        let _guard = guard_clear_env().set("CLAUDE_CODE", "1");
+
+        // Use detector (not with_env, so it reads actual env)
+        let detector = OutputDetector::new(OutputFormat::Human, false);
+        let decision = detector.decide();
+
+        assert!(!decision.use_rich);
+        assert_eq!(decision.reason, OutputDecisionReason::AgentEnvironment);
+    }
+
+    #[test]
+    fn test_detector_auto_detects_ci_environment() {
+        let _lock = ENV_LOCK.lock().unwrap();
+        let _guard = guard_clear_env().set("CI", "true");
+
+        let detector = OutputDetector::new(OutputFormat::Human, false);
+        let decision = detector.decide();
+
+        assert!(!decision.use_rich);
+        assert_eq!(decision.reason, OutputDecisionReason::CiEnvironment);
+    }
+
+    #[test]
+    fn test_robot_mode_takes_priority_over_agent_env() {
+        let _lock = ENV_LOCK.lock().unwrap();
+        let _guard = guard_clear_env().set("CLAUDE_CODE", "1");
+
+        // Robot mode should take priority over agent environment
+        let detector = OutputDetector::new(OutputFormat::Human, true);
+        let decision = detector.decide();
+
+        assert!(!decision.use_rich);
+        assert_eq!(decision.reason, OutputDecisionReason::RobotMode);
+    }
+
+    #[test]
+    fn test_agent_env_takes_priority_over_ci_env() {
+        let _lock = ENV_LOCK.lock().unwrap();
+        let _guard = guard_clear_env()
+            .set("CLAUDE_CODE", "1")
+            .set("CI", "true");
+
+        let detector = OutputDetector::new(OutputFormat::Human, false);
+        let decision = detector.decide();
+
+        // Agent environment should be checked first
+        assert!(!decision.use_rich);
+        assert_eq!(decision.reason, OutputDecisionReason::AgentEnvironment);
+    }
+
+    #[test]
+    fn test_machine_format_takes_priority_over_agent_env() {
+        let _lock = ENV_LOCK.lock().unwrap();
+        let _guard = guard_clear_env().set("CLAUDE_CODE", "1");
+
+        // JSON format should take priority over agent environment
+        let detector = OutputDetector::new(OutputFormat::Json, false);
+        let decision = detector.decide();
+
+        assert!(!decision.use_rich);
+        assert_eq!(decision.reason, OutputDecisionReason::MachineReadableFormat);
+    }
+
+    #[test]
+    fn test_all_agent_vars_trigger_plain_output() {
+        let _lock = ENV_LOCK.lock().unwrap();
+
+        for agent_var in AGENT_ENV_VARS {
+            let _guard = guard_clear_env().set(agent_var, "1");
+
+            let detector = OutputDetector::new(OutputFormat::Human, false);
+            let decision = detector.decide();
+
+            assert!(
+                !decision.use_rich,
+                "{} should trigger plain output",
+                agent_var
+            );
+            assert_eq!(
+                decision.reason,
+                OutputDecisionReason::AgentEnvironment,
+                "{} should be detected as agent environment",
+                agent_var
+            );
+        }
+    }
+
+    #[test]
+    fn test_all_ci_vars_trigger_plain_output() {
+        let _lock = ENV_LOCK.lock().unwrap();
+
+        for ci_var in CI_ENV_VARS {
+            let _guard = guard_clear_env().set(ci_var, "1");
+
+            let detector = OutputDetector::new(OutputFormat::Human, false);
+            let decision = detector.decide();
+
+            assert!(
+                !decision.use_rich,
+                "{} should trigger plain output",
+                ci_var
+            );
+            assert_eq!(
+                decision.reason,
+                OutputDecisionReason::CiEnvironment,
+                "{} should be detected as CI environment",
+                ci_var
+            );
+        }
     }
 }

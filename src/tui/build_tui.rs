@@ -914,6 +914,7 @@ pub fn run_build_tui(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::cass::{CognitiveMove, CognitiveMoveTag, MoveEvidence};
     use crossterm::event::{KeyCode, KeyModifiers};
 
     fn make_session_match(id: &str, score: f32) -> crate::cass::client::SessionMatch {

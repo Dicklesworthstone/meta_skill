@@ -112,8 +112,9 @@ pub use builders::{
 
 // Re-export plain format types
 pub use plain_format::{
-    JsonEnvelope, JsonError, JsonErrorDetail, JsonMeta, PlainCheckResult, PlainCheckResults,
-    PlainDone, PlainError, PlainFormatter, PlainKeyValue, PlainProgress, PlainStatus,
+    JsonEnvelope, JsonError, JsonErrorDetail, JsonMeta, JsonResponse, JsonStructuredError,
+    JsonStructuredErrorResponse, PlainCheckResult, PlainCheckResults, PlainDone, PlainError,
+    PlainFormatter, PlainKeyValue, PlainProgress, PlainStatus,
 };
 
 // Re-export error display types

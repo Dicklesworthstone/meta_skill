@@ -75,7 +75,9 @@
 //! DONE: Processed 100 files in 2.3s
 //! ```
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
+
+use crate::error::{ErrorCode, StructuredError};
 
 /// Trait for types that can format themselves for plain text output.
 ///
@@ -238,6 +240,156 @@ impl JsonError {
     #[must_use]
     pub fn with_location(mut self, location: impl Into<String>) -> Self {
         self.error.location = Some(location.into());
+        self
+    }
+}
+
+// =============================================================================
+// Unified JSON Response (Success or Error)
+// =============================================================================
+
+/// Unified JSON response that can represent either success or error.
+///
+/// This is the recommended response format for all new API endpoints.
+/// It provides a consistent structure for agents to parse:
+///
+/// Success:
+/// ```json
+/// {
+///   "success": true,
+///   "data": { ... },
+///   "meta": { "duration_ms": 42 }
+/// }
+/// ```
+///
+/// Error:
+/// ```json
+/// {
+///   "success": false,
+///   "error": {
+///     "code": "SKILL_NOT_FOUND",
+///     "message": "Skill not found: xyz",
+///     "hint": "Did you mean: abc?"
+///   }
+/// }
+/// ```
+#[derive(Debug, Clone, Serialize)]
+#[serde(untagged)]
+pub enum JsonResponse<T: Serialize> {
+    /// Successful response with data
+    Success(JsonEnvelope<T>),
+    /// Error response
+    Error(JsonError),
+}
+
+impl<T: Serialize> JsonResponse<T> {
+    /// Create a success response.
+    pub fn success(data: T) -> Self {
+        Self::Success(JsonEnvelope::success(data))
+    }
+
+    /// Create a success response with metadata.
+    pub fn success_with_meta(data: T, meta: JsonMeta) -> Self {
+        Self::Success(JsonEnvelope::success_with_meta(data, meta))
+    }
+
+    /// Create an error response.
+    pub fn error(code: impl Into<String>, message: impl Into<String>) -> Self {
+        Self::Error(JsonError::new(code, message))
+    }
+
+    /// Create an error response with hint.
+    pub fn error_with_hint(
+        code: impl Into<String>,
+        message: impl Into<String>,
+        hint: impl Into<String>,
+    ) -> Self {
+        Self::Error(JsonError::new(code, message).with_hint(hint))
+    }
+
+    /// Check if this is a success response.
+    #[must_use]
+    pub const fn is_success(&self) -> bool {
+        matches!(self, Self::Success(_))
+    }
+
+    /// Check if this is an error response.
+    #[must_use]
+    pub const fn is_error(&self) -> bool {
+        matches!(self, Self::Error(_))
+    }
+}
+
+/// Rich error detail with full structured error information.
+///
+/// This mirrors the StructuredError from the error module but is
+/// designed for JSON serialization in API responses.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct JsonStructuredError {
+    /// Error code enum value (e.g., "SKILL_NOT_FOUND")
+    pub code: ErrorCode,
+    /// Numeric error code (e.g., 101)
+    pub numeric_code: u16,
+    /// Human-readable error message
+    pub message: String,
+    /// Actionable suggestion for recovery
+    pub suggestion: String,
+    /// Additional context for debugging
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub context: Option<serde_json::Value>,
+    /// Whether this error is recoverable by the user
+    pub recoverable: bool,
+    /// Error category (e.g., "skill", "config")
+    pub category: String,
+    /// URL to documentation about this error
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub help_url: Option<String>,
+}
+
+impl From<StructuredError> for JsonStructuredError {
+    fn from(err: StructuredError) -> Self {
+        Self {
+            code: err.code,
+            numeric_code: err.numeric_code,
+            message: err.message,
+            suggestion: err.suggestion,
+            context: err.context,
+            recoverable: err.recoverable,
+            category: err.category,
+            help_url: err.help_url,
+        }
+    }
+}
+
+/// Full JSON error response with structured error details.
+///
+/// This is the richest error format, providing all available information
+/// for AI agents to understand and potentially recover from errors.
+#[derive(Debug, Clone, Serialize)]
+pub struct JsonStructuredErrorResponse {
+    /// Always false for errors
+    pub success: bool,
+    /// Structured error details
+    pub error: JsonStructuredError,
+    /// Metadata about the operation
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub meta: Option<JsonMeta>,
+}
+
+impl JsonStructuredErrorResponse {
+    /// Create from a StructuredError.
+    pub fn from_structured(err: StructuredError) -> Self {
+        Self {
+            success: false,
+            error: err.into(),
+            meta: None,
+        }
+    }
+
+    /// Add metadata to the error response.
+    #[must_use]
+    pub fn with_meta(mut self, meta: JsonMeta) -> Self {
+        self.meta = Some(meta);
         self
     }
 }

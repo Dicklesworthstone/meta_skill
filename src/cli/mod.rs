@@ -20,14 +20,20 @@ pub mod progress;
 #[command(author, version, about, long_about = None)]
 #[command(propagate_version = true)]
 pub struct Cli {
-    /// Enable robot mode (JSON output to stdout, logs to stderr)
-    /// Deprecated: use --output-format=json instead
-    #[arg(long, global = true)]
+    /// [DEPRECATED] Enable JSON output for machine consumption.
+    /// Use --output-format=json or -m instead.
+    /// This flag is maintained for backward compatibility with existing integrations.
+    #[arg(long, global = true, hide = true)]
     pub robot: bool,
 
     /// Output format (human, json, jsonl, plain, tsv)
     #[arg(long, short = 'O', global = true, value_enum)]
     pub output_format: Option<OutputFormat>,
+
+    /// Enable machine-readable JSON output (shorthand for --output-format=json).
+    /// Ideal for AI agents and scripts that need structured output.
+    #[arg(long, short = 'm', global = true)]
+    pub machine: bool,
 
     /// Force plain output (no colors, no Unicode)
     #[arg(long, global = true)]
@@ -69,14 +75,38 @@ pub enum ColorMode {
 }
 
 impl Cli {
-    /// Get the effective output format, considering --robot flag for backward compatibility
+    /// Get the effective output format, considering flags for backward compatibility.
+    ///
+    /// Priority order:
+    /// 1. `--plain` → Plain format
+    /// 2. `--output-format` → Explicit format (highest explicit priority)
+    /// 3. `--machine` → JSON format (shorthand)
+    /// 4. `--robot` → JSON format (deprecated, backward compat)
+    /// 5. Default → Human format
     #[must_use]
     pub fn output_format(&self) -> OutputFormat {
         // --plain takes precedence
         if self.plain {
             return OutputFormat::Plain;
         }
-        OutputFormat::from_args(self.robot, self.output_format)
+
+        // Explicit --output-format takes next priority
+        if let Some(fmt) = self.output_format {
+            return fmt;
+        }
+
+        // --machine is shorthand for JSON
+        if self.machine {
+            return OutputFormat::Json;
+        }
+
+        // --robot (deprecated) maps to JSON for backward compat
+        if self.robot {
+            return OutputFormat::Json;
+        }
+
+        // Default
+        OutputFormat::Human
     }
 
     /// Check if plain mode is forced via CLI flags or color mode.
