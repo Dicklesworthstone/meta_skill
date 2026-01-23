@@ -639,8 +639,8 @@ impl E2EFixture {
         }
     }
 
-    /// Create and log an event.
-    fn emit_event(
+    /// Create and log an event. Public for use in tests.
+    pub fn emit_event(
         &mut self,
         level: LogLevel,
         category: &str,

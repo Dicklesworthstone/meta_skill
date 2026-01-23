@@ -10,6 +10,7 @@ mod layer_conflict;
 mod rich_output_workflow;
 mod safety_workflow;
 mod search_workflow;
+mod security_workflow;
 mod skill_creation;
 mod skill_discovery;
 mod sync_workflow;
