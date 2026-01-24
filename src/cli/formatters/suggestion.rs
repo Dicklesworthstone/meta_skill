@@ -382,6 +382,11 @@ impl Formattable for SuggestionOutput {
             OutputFormat::Jsonl => self.format_jsonl(),
             OutputFormat::Plain => self.format_plain(),
             OutputFormat::Tsv => self.format_tsv(),
+            OutputFormat::Toon => {
+                let json_response = self.to_json_response();
+                let json = serde_json::to_value(&json_response).unwrap_or_default();
+                toon_rust::encode(json, None)
+            }
         }
     }
 }

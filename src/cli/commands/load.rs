@@ -196,7 +196,9 @@ pub fn run(ctx: &AppContext, args: &LoadArgs) -> Result<()> {
     // First try to load as meta-skill
     if let Some(meta_result) = try_load_meta_skill(ctx, args, skill_ref)? {
         return match ctx.output_format {
-            OutputFormat::Json | OutputFormat::Jsonl => output_robot_meta(ctx, &meta_result, args),
+            OutputFormat::Json | OutputFormat::Jsonl | OutputFormat::Toon => {
+                output_robot_meta(ctx, &meta_result, args)
+            }
             _ => output_human_meta(ctx, &meta_result, args),
         };
     }
@@ -205,7 +207,9 @@ pub fn run(ctx: &AppContext, args: &LoadArgs) -> Result<()> {
     let result = load_skill(ctx, args, skill_ref)?;
 
     match ctx.output_format {
-        OutputFormat::Json | OutputFormat::Jsonl => output_robot(ctx, &result, args),
+        OutputFormat::Json | OutputFormat::Jsonl | OutputFormat::Toon => {
+            output_robot(ctx, &result, args)
+        }
         OutputFormat::Plain => output_plain(&result),
         OutputFormat::Tsv => output_tsv(&result),
         OutputFormat::Human => output_human(ctx, &result, args),
@@ -250,19 +254,27 @@ fn run_auto_load(ctx: &AppContext, args: &LoadArgs) -> Result<()> {
 
     if skills.is_empty() {
         match ctx.output_format {
-            OutputFormat::Json | OutputFormat::Jsonl => {
-                println!(
-                    "{}",
-                    serde_json::to_string_pretty(&serde_json::json!({
-                        "status": "ok",
-                        "data": {
-                            "context": context_summary_to_json(&context_summary),
-                            "candidates": [],
-                            "loaded": [],
-                            "message": "No skills indexed"
-                        }
-                    }))?
-                );
+            OutputFormat::Json | OutputFormat::Jsonl | OutputFormat::Toon => {
+                let output = serde_json::json!({
+                    "status": "ok",
+                    "data": {
+                        "context": context_summary_to_json(&context_summary),
+                        "candidates": [],
+                        "loaded": [],
+                        "message": "No skills indexed"
+                    }
+                });
+                match ctx.output_format {
+                    OutputFormat::Toon => {
+                        println!("{}", toon_rust::encode(output, None));
+                    }
+                    OutputFormat::Jsonl => {
+                        println!("{}", serde_json::to_string(&output)?);
+                    }
+                    _ => {
+                        println!("{}", serde_json::to_string_pretty(&output)?);
+                    }
+                }
             }
             _ => {
                 println!("{}", "No skills indexed. Run 'ms index' first.".yellow());
@@ -297,19 +309,27 @@ fn run_auto_load(ctx: &AppContext, args: &LoadArgs) -> Result<()> {
 
     if candidates.is_empty() {
         match ctx.output_format {
-            OutputFormat::Json | OutputFormat::Jsonl => {
-                println!(
-                    "{}",
-                    serde_json::to_string_pretty(&serde_json::json!({
-                        "status": "ok",
-                        "data": {
-                            "context": context_summary_to_json(&context_summary),
-                            "candidates": [],
-                            "loaded": [],
-                            "message": format!("No skills match threshold {}", args.threshold)
-                        }
-                    }))?
-                );
+            OutputFormat::Json | OutputFormat::Jsonl | OutputFormat::Toon => {
+                let output = serde_json::json!({
+                    "status": "ok",
+                    "data": {
+                        "context": context_summary_to_json(&context_summary),
+                        "candidates": [],
+                        "loaded": [],
+                        "message": format!("No skills match threshold {}", args.threshold)
+                    }
+                });
+                match ctx.output_format {
+                    OutputFormat::Toon => {
+                        println!("{}", toon_rust::encode(output, None));
+                    }
+                    OutputFormat::Jsonl => {
+                        println!("{}", serde_json::to_string(&output)?);
+                    }
+                    _ => {
+                        println!("{}", serde_json::to_string_pretty(&output)?);
+                    }
+                }
             }
             _ => {
                 println!(
@@ -391,7 +411,9 @@ fn run_auto_load(ctx: &AppContext, args: &LoadArgs) -> Result<()> {
     };
 
     match ctx.output_format {
-        OutputFormat::Json | OutputFormat::Jsonl => output_auto_robot(ctx, &auto_result, args),
+        OutputFormat::Json | OutputFormat::Jsonl | OutputFormat::Toon => {
+            output_auto_robot(ctx, &auto_result, args)
+        }
         _ => output_auto_human(ctx, &auto_result, args),
     }
 }
@@ -613,7 +635,7 @@ fn output_dry_run(
     args: &LoadArgs,
 ) -> Result<()> {
     match ctx.output_format {
-        OutputFormat::Json | OutputFormat::Jsonl => {
+        OutputFormat::Json | OutputFormat::Jsonl | OutputFormat::Toon => {
             let output = serde_json::json!({
                 "status": "ok",
                 "dry_run": true,
@@ -635,7 +657,17 @@ fn output_dry_run(
                     "threshold": args.threshold
                 }
             });
-            println!("{}", serde_json::to_string_pretty(&output)?);
+            match ctx.output_format {
+                OutputFormat::Toon => {
+                    println!("{}", toon_rust::encode(output, None));
+                }
+                OutputFormat::Jsonl => {
+                    println!("{}", serde_json::to_string(&output)?);
+                }
+                _ => {
+                    println!("{}", serde_json::to_string_pretty(&output)?);
+                }
+            }
         }
         OutputFormat::Plain => {
             for candidate in candidates {
@@ -759,8 +791,8 @@ fn output_auto_human(ctx: &AppContext, result: &AutoLoadResult, _args: &LoadArgs
     Ok(())
 }
 
-/// Output auto-load results in robot mode (JSON)
-fn output_auto_robot(_ctx: &AppContext, result: &AutoLoadResult, args: &LoadArgs) -> Result<()> {
+/// Output auto-load results in robot mode (JSON/TOON)
+fn output_auto_robot(ctx: &AppContext, result: &AutoLoadResult, args: &LoadArgs) -> Result<()> {
     let output = serde_json::json!({
         "status": "ok",
         "timestamp": chrono::Utc::now().to_rfc3339(),
@@ -788,7 +820,17 @@ fn output_auto_robot(_ctx: &AppContext, result: &AutoLoadResult, args: &LoadArgs
         },
         "warnings": []
     });
-    println!("{}", serde_json::to_string_pretty(&output)?);
+    match ctx.output_format {
+        OutputFormat::Toon => {
+            println!("{}", toon_rust::encode(output, None));
+        }
+        OutputFormat::Jsonl => {
+            println!("{}", serde_json::to_string(&output)?);
+        }
+        _ => {
+            println!("{}", serde_json::to_string_pretty(&output)?);
+        }
+    }
     Ok(())
 }
 
@@ -1025,7 +1067,7 @@ fn output_human_meta(
 }
 
 fn output_robot_meta(
-    _ctx: &AppContext,
+    ctx: &AppContext,
     result: &MetaSkillLoadResultWrapper,
     args: &LoadArgs,
 ) -> Result<()> {
@@ -1045,7 +1087,17 @@ fn output_robot_meta(
         },
         "warnings": []
     });
-    println!("{}", serde_json::to_string_pretty(&output)?);
+    match ctx.output_format {
+        OutputFormat::Toon => {
+            println!("{}", toon_rust::encode(output, None));
+        }
+        OutputFormat::Jsonl => {
+            println!("{}", serde_json::to_string(&output)?);
+        }
+        _ => {
+            println!("{}", serde_json::to_string_pretty(&output)?);
+        }
+    }
     Ok(())
 }
 
@@ -1501,9 +1553,19 @@ pub(crate) fn output_human(_ctx: &AppContext, result: &LoadResult, _args: &LoadA
     Ok(())
 }
 
-fn output_robot(_ctx: &AppContext, result: &LoadResult, args: &LoadArgs) -> Result<()> {
+fn output_robot(ctx: &AppContext, result: &LoadResult, args: &LoadArgs) -> Result<()> {
     let output = build_robot_payload(result, args);
-    println!("{}", serde_json::to_string_pretty(&output)?);
+    match ctx.output_format {
+        OutputFormat::Toon => {
+            println!("{}", toon_rust::encode(output, None));
+        }
+        OutputFormat::Jsonl => {
+            println!("{}", serde_json::to_string(&output)?);
+        }
+        _ => {
+            println!("{}", serde_json::to_string_pretty(&output)?);
+        }
+    }
     Ok(())
 }
 

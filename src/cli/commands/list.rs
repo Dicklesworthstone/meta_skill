@@ -202,6 +202,17 @@ fn display_list(ctx: &AppContext, skills: &[SkillRecord], args: &ListArgs) -> Re
             }
             Ok(())
         }
+        OutputFormat::Toon => {
+            let entries: Vec<SkillEntry> = skills.iter().map(SkillEntry::from).collect();
+            let output = serde_json::json!({
+                "status": "ok",
+                "count": entries.len(),
+                "skills": entries
+            });
+            let toon = toon_rust::encode(output, None);
+            println!("{toon}");
+            Ok(())
+        }
     }
 }
 

@@ -286,7 +286,7 @@ impl RichOutput {
         config: &Config,
     ) -> Self {
         let mode = match format {
-            OutputFormat::Json | OutputFormat::Jsonl => OutputMode::Json,
+            OutputFormat::Json | OutputFormat::Jsonl | OutputFormat::Toon => OutputMode::Json,
             OutputFormat::Plain | OutputFormat::Tsv => OutputMode::Plain,
             OutputFormat::Human => {
                 if decision.use_rich {

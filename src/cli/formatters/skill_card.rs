@@ -192,6 +192,11 @@ impl Formattable for SkillCard<'_> {
             OutputFormat::Jsonl => serde_json::to_string(&self.to_summary()).unwrap_or_default(),
             OutputFormat::Plain => self.format_plain(),
             OutputFormat::Tsv => self.format_tsv(),
+            OutputFormat::Toon => {
+                let summary = self.to_summary();
+                let json = serde_json::to_value(&summary).unwrap_or_default();
+                toon_rust::encode(json, None)
+            }
         }
     }
 }

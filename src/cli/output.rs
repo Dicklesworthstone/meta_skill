@@ -26,6 +26,8 @@ pub enum OutputFormat {
     Plain,
     /// Tab-separated values (for shell scripting)
     Tsv,
+    /// Token-optimized output notation (40-60% fewer tokens than JSON)
+    Toon,
 }
 
 impl OutputFormat {
@@ -50,7 +52,7 @@ impl OutputFormat {
     pub const fn is_machine_readable(&self) -> bool {
         matches!(
             self,
-            OutputFormat::Json | OutputFormat::Jsonl | OutputFormat::Tsv
+            OutputFormat::Json | OutputFormat::Jsonl | OutputFormat::Tsv | OutputFormat::Toon
         )
     }
 }
@@ -229,6 +231,18 @@ pub fn emit_json<T: Serialize>(value: &T) -> Result<()> {
     let payload = serde_json::to_string_pretty(value)
         .map_err(|err| MsError::Config(format!("serialize output: {err}")))?;
     println!("{payload}");
+    Ok(())
+}
+
+/// Emit a value in TOON format (Token-Optimized Object Notation).
+///
+/// TOON provides 40-60% token savings compared to JSON, making it ideal
+/// for AI agent workflows where token efficiency matters.
+pub fn emit_toon<T: Serialize>(value: &T) -> Result<()> {
+    let json = serde_json::to_value(value)
+        .map_err(|e| MsError::Config(format!("serialize for TOON: {e}")))?;
+    let toon = toon_rust::encode(json, None);
+    println!("{toon}");
     Ok(())
 }
 
@@ -431,6 +445,7 @@ pub fn emit_formatted<T: Serialize>(
         }
         OutputFormat::Plain => println!("{}", plain_fn(value)),
         OutputFormat::Tsv => println!("{}", tsv_fn(value)),
+        OutputFormat::Toon => emit_toon(value)?,
     }
     Ok(())
 }
@@ -491,6 +506,7 @@ mod tests {
         assert!(!OutputFormat::Jsonl.use_colors());
         assert!(!OutputFormat::Plain.use_colors());
         assert!(!OutputFormat::Tsv.use_colors());
+        assert!(!OutputFormat::Toon.use_colors());
     }
 
     #[test]
@@ -500,6 +516,7 @@ mod tests {
         assert!(OutputFormat::Jsonl.is_machine_readable());
         assert!(!OutputFormat::Plain.is_machine_readable());
         assert!(OutputFormat::Tsv.is_machine_readable());
+        assert!(OutputFormat::Toon.is_machine_readable());
     }
 
     #[test]

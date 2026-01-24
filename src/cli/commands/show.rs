@@ -50,6 +50,7 @@ fn display_skill(ctx: &AppContext, skill: &SkillRecord, args: &ShowArgs) -> Resu
         OutputFormat::Jsonl => show_json(skill, args, false),
         OutputFormat::Plain => show_plain(skill),
         OutputFormat::Tsv => show_tsv(skill),
+        OutputFormat::Toon => show_toon(skill, args),
     }
 }
 
@@ -307,6 +308,53 @@ fn show_tsv(skill: &SkillRecord) -> Result<()> {
         skill.quality_score,
         skill.is_deprecated
     );
+    Ok(())
+}
+
+fn show_toon(skill: &SkillRecord, args: &ShowArgs) -> Result<()> {
+    let mut output = serde_json::json!({
+        "status": "ok",
+        "skill": {
+            "id": skill.id,
+            "name": skill.name,
+            "version": skill.version,
+            "description": skill.description,
+            "author": skill.author,
+            "layer": skill.source_layer,
+            "source_path": skill.source_path,
+            "git_remote": skill.git_remote,
+            "git_commit": skill.git_commit,
+            "content_hash": skill.content_hash,
+            "token_count": skill.token_count,
+            "quality_score": skill.quality_score,
+            "indexed_at": skill.indexed_at,
+            "modified_at": skill.modified_at,
+            "is_deprecated": skill.is_deprecated,
+            "deprecation_reason": skill.deprecation_reason,
+        }
+    });
+
+    if args.meta || args.full {
+        if let Ok(meta) = serde_json::from_str::<serde_json::Value>(&skill.metadata_json) {
+            output["skill"]["metadata"] = meta;
+        }
+    }
+
+    if args.full {
+        output["skill"]["body"] = serde_json::Value::String(skill.body.clone());
+    }
+
+    if args.deps {
+        if let Ok(meta) = serde_json::from_str::<serde_json::Value>(&skill.metadata_json) {
+            output["skill"]["dependencies"] = meta
+                .get("requires")
+                .cloned()
+                .unwrap_or(serde_json::Value::Array(vec![]));
+        }
+    }
+
+    let toon = toon_rust::encode(output, None);
+    println!("{toon}");
     Ok(())
 }
 
