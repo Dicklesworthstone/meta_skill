@@ -12,7 +12,7 @@ use std::io::{self, Write};
 use std::time::{Duration, Instant};
 
 use crate::app::AppContext;
-use crate::auth::{self, JfpAuthClient, JfpAuthConfig, device_code, token_storage};
+use crate::auth::{JfpAuthClient, JfpAuthConfig, device_code, token_storage};
 use crate::cli::output::{HumanLayout, OutputFormat, emit_human, emit_json};
 use crate::error::{MsError, Result};
 
