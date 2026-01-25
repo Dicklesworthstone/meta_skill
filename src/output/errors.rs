@@ -40,7 +40,7 @@ use rich_rust::prelude::*;
 use rich_rust::renderables::Panel;
 use serde::Serialize;
 
-use crate::error::{ErrorCode, MsError, StructuredError};
+use crate::error::{MsError, StructuredError};
 
 use super::plain_format::{JsonError, PlainError};
 use super::rich_output::{OutputMode, RichOutput};
@@ -754,6 +754,7 @@ pub fn error_to_plain(error: &StructuredError) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::error::ErrorCode;
 
     fn plain_output() -> RichOutput {
         RichOutput::plain()
