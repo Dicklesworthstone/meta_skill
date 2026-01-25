@@ -42,7 +42,7 @@ use serde::Serialize;
 
 use crate::error::{ErrorCode, MsError, StructuredError};
 
-use super::plain_format::{JsonError, JsonErrorDetail, PlainError};
+use super::plain_format::{JsonError, PlainError};
 use super::rich_output::{OutputMode, RichOutput};
 
 // =============================================================================

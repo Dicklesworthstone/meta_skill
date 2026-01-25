@@ -49,9 +49,7 @@ use parking_lot::{Mutex, RwLock};
 use rich_rust::renderables::progress::{
     BarStyle as RichBarStyle, ProgressBar as RichProgressBar, Spinner as RichSpinner,
 };
-use rich_rust::style::Style;
 use serde::Serialize;
-use tracing::trace;
 
 use super::OutputMode;
 use super::detection::is_agent_environment;
@@ -780,7 +778,7 @@ impl MultiProgress {
 
         MultiProgressHandle {
             bar,
-            agent_mode: self.agent_mode,
+            _agent_mode: self.agent_mode,
         }
     }
 
@@ -860,7 +858,8 @@ impl Default for MultiProgress {
 /// Handle to a progress bar within a `MultiProgress`.
 pub struct MultiProgressHandle {
     bar: Arc<Mutex<ProgressBar>>,
-    agent_mode: bool,
+    /// Reserved for future use (e.g., agent-specific output formatting)
+    _agent_mode: bool,
 }
 
 impl MultiProgressHandle {
