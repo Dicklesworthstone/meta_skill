@@ -1315,8 +1315,8 @@ mod tests {
         let item1 = make_test_item();
         let item2 = make_test_item();
 
-        queue.enqueue(item1.clone());
-        queue.enqueue(item2.clone());
+        let _ = queue.enqueue(item1.clone());
+        let _ = queue.enqueue(item2.clone());
 
         let next = queue.next().unwrap();
         assert_eq!(next.id, item1.id);
@@ -1328,7 +1328,7 @@ mod tests {
         let item = make_test_item();
         let id = item.id.clone();
 
-        queue.enqueue(item);
+        let _ = queue.enqueue(item);
         queue.mark_resolved(
             &id,
             Resolution::EvidenceGathered {
@@ -1351,7 +1351,7 @@ mod tests {
         let item = make_test_item();
         let id = item.id.clone();
 
-        queue.enqueue(item);
+        let _ = queue.enqueue(item);
         queue.mark_rejected(&id, "Pattern too vague");
 
         let retrieved = queue.get(&id).unwrap();
@@ -1365,8 +1365,8 @@ mod tests {
     fn test_queue_counts() {
         let queue = UncertaintyQueue::with_defaults();
 
-        queue.enqueue(make_test_item());
-        queue.enqueue(make_test_item());
+        let _ = queue.enqueue(make_test_item());
+        let _ = queue.enqueue(make_test_item());
 
         let counts = queue.counts();
         assert_eq!(counts.pending, 2);
@@ -1379,10 +1379,10 @@ mod tests {
 
         let item1 = make_test_item();
         let id1 = item1.id.clone();
-        queue.enqueue(item1);
+        let _ = queue.enqueue(item1);
 
         let item2 = make_test_item();
-        queue.enqueue(item2);
+        let _ = queue.enqueue(item2);
 
         queue.mark_rejected(&id1, "test");
 
@@ -1572,7 +1572,7 @@ mod tests {
 
         let item = make_test_item();
         let id = item.id.clone();
-        queue.enqueue(item);
+        let _ = queue.enqueue(item);
 
         queue.mark_resolved(
             &id,
