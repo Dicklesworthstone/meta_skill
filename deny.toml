@@ -17,7 +17,9 @@ db-urls = ["https://github.com/rustsec/advisory-db"]
 # Check for yanked crates
 yanked = "warn"
 # Ignore specific advisories (keep this list minimal!)
-ignore = []
+# yaml-rust is unmaintained but is pulled in transitively via syntect -> rich_rust
+# No upgrade path available until syntect migrates to yaml-rust2
+ignore = ["RUSTSEC-2024-0320"]
 
 [licenses]
 # Allow these licenses

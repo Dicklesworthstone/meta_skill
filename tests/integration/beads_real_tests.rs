@@ -39,8 +39,7 @@ use std::thread;
 use std::time::Duration;
 
 use ms::beads::{
-    BeadsClient, BeadsOperations, CreateIssueRequest, IssueStatus, IssueType, UpdateIssueRequest,
-    WorkFilter,
+    BeadsClient, CreateIssueRequest, IssueStatus, IssueType, UpdateIssueRequest, WorkFilter,
 };
 use tempfile::TempDir;
 

@@ -1143,7 +1143,7 @@ mod tests {
 
     #[test]
     fn test_load_selected_returns_continue_when_empty() {
-        let mut app = BrowseTui::with_test_skills(Vec::new());
+        let app = BrowseTui::with_test_skills(Vec::new());
         assert_eq!(app.load_selected(), Action::Continue);
     }
 }

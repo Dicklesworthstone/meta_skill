@@ -580,7 +580,7 @@ mod relevance_scorer_tests {
     #[test]
     fn score_signal_pattern_matching() {
         let scorer = RelevanceScorer::default();
-        let mut skill = SkillMetadata {
+        let skill = SkillMetadata {
             id: "async-skill".to_string(),
             name: "Async Skill".to_string(),
             context: ContextTags {

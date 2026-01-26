@@ -113,6 +113,7 @@ macro_rules! assert_command_success {
 }
 
 /// Integration test fixture providing isolated environment
+#[allow(dead_code)]
 pub struct TestFixture {
     /// Root temp directory
     pub temp_dir: TempDir,
@@ -134,6 +135,7 @@ pub struct TestFixture {
     test_name: String,
 }
 
+#[allow(dead_code)]
 impl TestFixture {
     /// Create a fresh test fixture
     pub fn new(test_name: &str) -> Self {
@@ -672,12 +674,14 @@ impl TestSkill {
 }
 
 /// Test bundle definition
+#[allow(dead_code)]
 pub struct TestBundle {
     pub name: String,
     pub manifest: String,
     pub skills: Vec<(String, String)>,
 }
 
+#[allow(dead_code)]
 impl TestBundle {
     /// Create a minimal test bundle
     pub fn new(name: &str, description: &str) -> Self {
@@ -730,6 +734,7 @@ impl TestBundle {
 }
 
 /// Sample bundles for testing
+#[allow(dead_code)]
 pub mod sample_bundles {
     use super::TestBundle;
 
@@ -770,6 +775,7 @@ pub mod sample_bundles {
 }
 
 /// Sample skills for testing
+#[allow(dead_code)]
 pub mod sample_skills {
     use super::TestSkill;
 
@@ -863,6 +869,7 @@ Good tests are fast, isolated, and readable.
 }
 
 /// Command output structure
+#[allow(dead_code)]
 pub struct CommandOutput {
     pub success: bool,
     pub exit_code: i32,
@@ -871,6 +878,7 @@ pub struct CommandOutput {
     pub elapsed: std::time::Duration,
 }
 
+#[allow(dead_code)]
 impl CommandOutput {
     /// Check if stdout contains expected text
     pub fn stdout_contains(&self, expected: &str) -> bool {
