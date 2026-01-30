@@ -245,7 +245,7 @@ main() {
     # Create temp directory
     local temp_dir
     temp_dir=$(mktemp -d)
-    trap 'rm -rf "$temp_dir"' EXIT
+    trap 'rm -rf "${temp_dir:-}"' EXIT
 
     # Build download URLs
     # Adjust version for URL (strip 'v' prefix if present)
