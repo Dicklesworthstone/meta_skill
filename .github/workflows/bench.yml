@@ -48,7 +48,7 @@ jobs:
           cache-on-failure: true
 
       - name: Download baseline (if exists)
-        uses: dawidd6/action-download-artifact@v6
+        uses: dawidd6/action-download-artifact@v13
         with:
           workflow: bench.yml
           branch: main
