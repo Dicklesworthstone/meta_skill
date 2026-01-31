@@ -108,7 +108,7 @@ rand = "0.9.2"
 rand_distr = "0.5.1"
 which = "8.0.0"
 humantime-serde = "1.1.1"
-lru = "0.14"
+lru = "0.16"
 
 [build-dependencies]
 vergen-gix = { version = "1.0.9", features = ["build", "cargo", "rustc"] }
