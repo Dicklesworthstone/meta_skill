@@ -117,7 +117,7 @@ vergen-gix = { version = "1.0.9", features = ["build", "cargo", "rustc"] }
 tempfile = "3.24.0"
 assert_cmd = "2.1.2"
 predicates = "3.1.3"
-insta = { version = "1.46.0", features = ["json", "yaml"] }
+insta = { version = "1.46.3", features = ["json", "yaml"] }
 criterion = { version = "0.8.1", features = ["html_reports"] }
 proptest = "1.9.0"
 proptest-derive = "0.7.0"
