@@ -177,7 +177,7 @@ jobs:
           Compress-Archive -Path dist/* -DestinationPath ${{ env.BINARY_NAME }}-${{ needs.validate.outputs.version }}-${{ matrix.target }}.zip
 
       - name: Upload artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: ${{ env.BINARY_NAME }}-${{ matrix.target }}
           path: ${{ env.BINARY_NAME }}-${{ needs.validate.outputs.version }}-${{ matrix.target }}.${{ matrix.archive }}
