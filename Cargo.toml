@@ -121,7 +121,7 @@ insta = { version = "1.46.0", features = ["json", "yaml"] }
 criterion = { version = "0.8.1", features = ["html_reports"] }
 proptest = "1.9.0"
 proptest-derive = "0.7.0"
-httpmock = "0.8.2"
+httpmock = "0.8.3"
 
 [features]
 default = []
