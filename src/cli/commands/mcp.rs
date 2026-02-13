@@ -777,17 +777,33 @@ fn handle_request(ctx: &AppContext, line: &str, debug: bool) -> Option<JsonRpcRe
     // Dispatch method
     match request.method.as_str() {
         "initialize" => Some(handle_initialize(request.id, &request.params)),
-        "initialized" => handle_initialized(request.id),
+        "initialized" | "notifications/initialized" => handle_initialized(request.id),
         "tools/list" => Some(handle_tools_list(request.id)),
         "tools/call" => Some(handle_tools_call(ctx, request.id, &request.params, debug)),
         "ping" => Some(handle_ping(request.id)),
         "shutdown" => Some(handle_shutdown(request.id)),
-        _ => Some(JsonRpcResponse::error(
+        // Return empty results for resource endpoints we don't support
+        "resources/list" => Some(JsonRpcResponse::success(
             request.id,
-            METHOD_NOT_FOUND,
-            format!("Method not found: {}", request.method),
-            None,
+            serde_json::json!({"resources": []}),
         )),
+        "resources/templates/list" => Some(JsonRpcResponse::success(
+            request.id,
+            serde_json::json!({"resourceTemplates": []}),
+        )),
+        _ => {
+            // JSON-RPC 2.0: notifications (no id) MUST NOT receive a response
+            if request.id.is_none() {
+                None
+            } else {
+                Some(JsonRpcResponse::error(
+                    request.id,
+                    METHOD_NOT_FOUND,
+                    format!("Method not found: {}", request.method),
+                    None,
+                ))
+            }
+        }
     }
 }
 

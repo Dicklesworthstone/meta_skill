@@ -20,7 +20,7 @@ use crate::storage::sqlite::SkillRecord;
 pub struct Bm25Index {
     index: Index,
     reader: IndexReader,
-    writer: RwLock<IndexWriter>,
+    writer: Option<RwLock<IndexWriter>>,
     // Field handles for fast access
     fields: BM25Fields,
 }
@@ -80,7 +80,36 @@ impl Bm25Index {
         Ok(Self {
             index,
             reader,
-            writer: RwLock::new(writer),
+            writer: Some(RwLock::new(writer)),
+            fields,
+        })
+    }
+
+    /// Open an existing index in read-only mode (no write lock acquired).
+    ///
+    /// This allows concurrent readers without blocking on the Tantivy write lock,
+    /// making it suitable for the MCP server and other read-only access patterns.
+    pub fn open_readonly(path: impl AsRef<Path>) -> Result<Self> {
+        let path = path.as_ref();
+        if !path.join("meta.json").exists() {
+            return Err(MsError::SearchIndex(tantivy::TantivyError::InternalError(
+                format!("Index directory does not exist or is empty: {}", path.display()),
+            )));
+        }
+
+        let schema = build_schema();
+        let fields = extract_fields(&schema)?;
+        let index = Index::open_in_dir(path)?;
+
+        let reader = index
+            .reader_builder()
+            .reload_policy(ReloadPolicy::OnCommitWithDelay)
+            .try_into()?;
+
+        Ok(Self {
+            index,
+            reader,
+            writer: None,
             fields,
         })
     }
@@ -100,8 +129,21 @@ impl Bm25Index {
         Ok(Self {
             index,
             reader,
-            writer: RwLock::new(writer),
+            writer: Some(RwLock::new(writer)),
             fields,
+        })
+    }
+
+    /// Returns true if this index was opened in read-only mode.
+    pub fn is_readonly(&self) -> bool {
+        self.writer.is_none()
+    }
+
+    fn require_writer(&self) -> Result<&RwLock<IndexWriter>> {
+        self.writer.as_ref().ok_or_else(|| {
+            MsError::SearchIndex(tantivy::TantivyError::InternalError(
+                "Index opened in read-only mode; write operations are not available".to_string(),
+            ))
         })
     }
 
@@ -130,7 +172,7 @@ impl Bm25Index {
         // Delete any existing document with this ID first
         let id_term = tantivy::Term::from_field_text(self.fields.id, &skill.id);
 
-        let writer = self.writer.write().map_err(|e| {
+        let writer = self.require_writer()?.write().map_err(|e| {
             MsError::SearchIndex(tantivy::TantivyError::InternalError(format!(
                 "Failed to acquire write lock: {e}"
             )))
@@ -159,7 +201,7 @@ impl Bm25Index {
 
     /// Commit pending changes and reload the reader
     pub fn commit(&self) -> Result<()> {
-        let mut writer = self.writer.write().map_err(|e| {
+        let mut writer = self.require_writer()?.write().map_err(|e| {
             MsError::SearchIndex(tantivy::TantivyError::InternalError(format!(
                 "Failed to acquire write lock: {e}"
             )))
@@ -176,7 +218,7 @@ impl Bm25Index {
     pub fn delete_skill(&self, skill_id: &str) -> Result<()> {
         let id_term = tantivy::Term::from_field_text(self.fields.id, skill_id);
 
-        let writer = self.writer.write().map_err(|e| {
+        let writer = self.require_writer()?.write().map_err(|e| {
             MsError::SearchIndex(tantivy::TantivyError::InternalError(format!(
                 "Failed to acquire write lock: {e}"
             )))
@@ -188,7 +230,7 @@ impl Bm25Index {
 
     /// Clear the entire index
     pub fn clear(&self) -> Result<()> {
-        let mut writer = self.writer.write().map_err(|e| {
+        let mut writer = self.require_writer()?.write().map_err(|e| {
             MsError::SearchIndex(tantivy::TantivyError::InternalError(format!(
                 "Failed to acquire write lock: {e}"
             )))

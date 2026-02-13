@@ -35,7 +35,13 @@ impl AppContext {
             config,
             db: Arc::new(Database::open(ms_root.join("ms.db"))?),
             git: Arc::new(GitArchive::open(ms_root.join("archive"))?),
-            search: Arc::new(SearchIndex::open(ms_root.join("index"))?),
+            search: Arc::new({
+                let index_path = ms_root.join("index");
+                // Try writable first; if the write lock is busy (another process),
+                // fall back to read-only mode so concurrent MCP servers and CLI
+                // commands can coexist without "LockBusy" errors.
+                SearchIndex::open(&index_path).or_else(|_| SearchIndex::open_readonly(&index_path))?
+            }),
             robot_mode: cli.robot,
             output_format: cli.output_format(),
             verbosity: cli.verbose,
