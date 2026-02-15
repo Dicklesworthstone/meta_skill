@@ -56,7 +56,7 @@ git2 = { version = "0.20.3", features = ["vendored-openssl"] }
 colored = "3.0.0"
 indicatif = "0.18.3"
 console = "0.16.2"
-rich_rust = { git = "https://github.com/Dicklesworthstone/rich_rust", features = ["full"] }
+rich_rust = { version = "0.2.0", features = ["full"] }
 
 # TUI
 ratatui = "0.30.0"
