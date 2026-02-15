@@ -50,7 +50,7 @@ rusqlite = { version = "0.38.0", features = ["bundled", "modern_sqlite"] }
 tantivy = "0.25.0"
 
 # Git (use vendored-openssl for musl cross-compilation)
-git2 = { version = "0.20.3", features = ["vendored-openssl"] }
+git2 = { version = "0.20.4", features = ["vendored-openssl"] }
 
 # Terminal output
 colored = "3.0.0"
