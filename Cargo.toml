@@ -34,7 +34,7 @@ tokio = { version = "1.49.0", features = ["rt-multi-thread", "macros", "fs", "io
 
 # Error handling
 thiserror = "2.0.17"
-anyhow = "1.0.100"
+anyhow = "1.0.102"
 
 # Serialization
 serde = { version = "1.0.228", features = ["derive"] }
