@@ -22,11 +22,9 @@ If I tell you to do something, even if it goes against what follows below, YOU M
 
 **SQLite + WAL = DATA LOSS RISK.** The beads system uses SQLite with Write-Ahead Logging. Improper handling WILL destroy uncommitted data.
 
-**Note:** `br` (beads_rust) is non-invasive—it has NO daemon and NEVER executes git commands automatically. You must manually run `git add .beads/ && git commit` after `br sync --flush-only`.
-
 ### BEFORE Running Parallel Agents That Use `br`
 
-You MUST complete this checklist BEFORE launching any parallel agents/subagents that will run `br update`, `br create`, or any br write operations:
+You MUST complete this checklist BEFORE launching any parallel agents/subagents that will run `bd update`, `bd create`, or any br write operations:
 
 ```bash
 # 1. Check for stale br processes
@@ -38,7 +36,7 @@ br doctor 2>&1 | grep -E "(✖|FAIL|Error)"
 # If any failures, STOP. Ask user.
 
 # 3. Verify sync status
-br sync --status 2>&1
+bd sync --status 2>&1
 # Check if DB and JSONL are in sync
 ```
 
@@ -46,7 +44,7 @@ br sync --status 2>&1
 
 ### DURING Parallel Agent Work
 
-- **FLUSH AFTER EACH BATCH**: Run `br sync --flush-only` after each agent completes
+- **FLUSH AFTER EACH BATCH**: Run `bd sync` after each agent completes
 - **COMMIT PERIODICALLY**: Run `git add .beads/ && git commit` to persist changes
 - **Monitor for failures**: If any `br` command fails, STOP ALL AGENTS
 
@@ -62,14 +60,14 @@ br sync --status 2>&1
 
 3. **NEVER run `rm .beads/beads.db*` to "fix" issues**
 
-### When `br sync` Fails
+### When `bd sync` Fails
 
 **STOP IMMEDIATELY. Ask the user.** Do not attempt to:
 - Kill processes
 - Delete database files
 - Delete WAL files
 
-The correct response is: "br sync is failing with [error]. I need your guidance before proceeding."
+The correct response is: "bd sync is failing with [error]. I need your guidance before proceeding."
 
 ### Recovery After Disaster
 
@@ -455,8 +453,6 @@ A mail-like layer that lets coding agents coordinate asynchronously via MCP tool
 
 Beads provides a lightweight, dependency-aware issue database and CLI (`br` - beads_rust) for selecting "ready work," setting priorities, and tracking status. It complements MCP Agent Mail's messaging and file reservations.
 
-**Important:** `br` is non-invasive—it NEVER runs git commands automatically. You must manually commit changes after `br sync --flush-only`.
-
 ### Conventions
 
 - **Single source of truth:** Beads for task status/priority/dependencies; Agent Mail for conversation and audit
@@ -467,7 +463,7 @@ Beads provides a lightweight, dependency-aware issue database and CLI (`br` - be
 
 1. **Pick ready work (Beads):**
    ```bash
-   br ready --json  # Choose highest priority, no blockers
+   bd ready --json  # Choose highest priority, no blockers
    ```
 
 2. **Reserve edit surface (Mail):**
@@ -484,8 +480,8 @@ Beads provides a lightweight, dependency-aware issue database and CLI (`br` - be
 
 5. **Complete and release:**
    ```bash
-   br close 123 --reason "Completed"
-   br sync --flush-only  # Export to JSONL (no git operations)
+   bd close 123 --reason "Completed"
+   bd sync  # Export to JSONL (no git operations)
    ```
    ```
    release_file_reservations(project_key, agent_name, paths=["src/**"])
@@ -935,99 +931,6 @@ ru list --paths            # Repo paths (stdout)
 - **Workarounds**:
   - If `drizzle-kit generate` fails on `pgPolicy`, remove the policy definitions from `schema.ts` and implement RLS via raw SQL migrations or manual migration files.
   - Always provide `--name` to `drizzle-kit generate` to avoid interactive prompts.
-
-<!-- bv-agent-instructions-v1 -->
-
----
-
-## Beads Workflow Integration
-
-This project uses [beads_rust](https://github.com/Dicklesworthstone/beads_rust) (`br`) for issue tracking. Issues are stored in `.beads/` and tracked in git.
-
-**Important:** `br` is non-invasive—it NEVER executes git commands. After `br sync --flush-only`, you must manually run `git add .beads/ && git commit`.
-
-### Essential Commands
-
-```bash
-# View issues (launches TUI - avoid in automated sessions)
-bv
-
-# CLI commands for agents (use these instead)
-br ready              # Show issues ready to work (no blockers)
-br list --status=open # All open issues
-br show <id>          # Full issue details with dependencies
-br create --title="..." --type=task --priority=2
-br update <id> --status=in_progress
-br close <id> --reason="Completed"
-br close <id1> <id2>  # Close multiple issues at once
-br sync --flush-only  # Export to JSONL (NO git operations)
-```
-
-### Workflow Pattern
-
-1. **Start**: Run `br ready` to find actionable work
-2. **Claim**: Use `br update <id> --status=in_progress`
-3. **Work**: Implement the task
-4. **Complete**: Use `br close <id>`
-5. **Sync**: Run `br sync --flush-only` then manually commit
-
-### Key Concepts
-
-- **Dependencies**: Issues can block other issues. `br ready` shows only unblocked work.
-- **Priority**: P0=critical, P1=high, P2=medium, P3=low, P4=backlog (use numbers, not words)
-- **Types**: task, bug, feature, epic, question, docs
-- **Blocking**: `br dep add <issue> <depends-on>` to add dependencies
-
-### Session Protocol
-
-**Before ending any session, run this checklist:**
-
-```bash
-git status              # Check what changed
-git add <files>         # Stage code changes
-br sync --flush-only    # Export beads to JSONL
-git add .beads/         # Stage beads changes
-git commit -m "..."     # Commit everything together
-git push                # Push to remote
-```
-
-### Best Practices
-
-- Check `br ready` at session start to find available work
-- Update status as you work (in_progress -> closed)
-- Create new issues with `br create` when you discover tasks
-- Use descriptive titles and set appropriate priority/type
-- Always `br sync --flush-only && git add .beads/` before ending session
-
-### CRITICAL: Parallel Agent Safety
-
-**READ RULE 2 ABOVE BEFORE RUNNING PARALLEL AGENTS.**
-
-When running multiple agents that use `br update`:
-
-1. **Pre-flight checks are MANDATORY** (see Rule 2 checklist)
-2. **Flush and commit after EACH agent completes** - not at the end
-3. **If br sync fails: STOP ALL WORK and ask user**
-
-```bash
-# WRONG - may lose data if something fails at end
-for agent in 1 2 3 4 5 6; do
-  run_agent $agent  # Each does br update
-done
-br sync --flush-only  # If this fails, work not persisted to JSONL
-
-# RIGHT - flush and commit after each batch
-run_agent 1
-br sync --flush-only && git add .beads/ && git commit -m "Agent 1 work"
-run_agent 2
-br sync --flush-only && git add .beads/ && git commit -m "Agent 2 work"
-# ... etc
-```
-
-**The SQLite WAL can hold uncommitted data. Always flush to JSONL and commit to git to persist changes.**
-
-<!-- end-bv-agent-instructions -->
-
 ---
 
 ## Landing the Plane (Session Completion)
@@ -1039,7 +942,7 @@ br sync --flush-only && git add .beads/ && git commit -m "Agent 2 work"
 1. **File issues for remaining work** - Create issues for anything that needs follow-up
 2. **Run quality gates** (if code changed) - Tests, linters, builds
 3. **Update issue status** - Close finished work, update in-progress items
-4. **Sync beads** - `br sync --flush-only` to export to JSONL
+4. **Sync beads** - `bd sync` to export to JSONL
 5. **Hand off** - Provide context for next session
 
 ---
@@ -1065,3 +968,66 @@ NEVER EVER DO THAT AGAIN. The answer is literally ALWAYS the same: those are cha
 ## Note on Built-in TODO Functionality
 
 Also, if I ask you to explicitly use your built-in TODO functionality, don't complain about this and say you need to use beads. You can use built-in TODOs if I tell you specifically to do so. Always comply with such orders.
+
+<!-- beads-agent-instructions-v2 -->
+
+---
+
+## Beads Workflow Integration
+
+This project uses [beads](https://github.com/steveyegge/beads) for issue tracking. Issues live in `.beads/` and are tracked in git.
+
+Two CLIs: **bd** (issue CRUD) and **bv** (graph-aware triage, read-only).
+
+### bd: Issue Management
+
+```bash
+bd ready              # Unblocked issues ready to work
+bd list --status=open # All open issues
+bd show <id>          # Full details with dependencies
+bd create --title="..." --type=task --priority=2
+bd update <id> --status=in_progress
+bd close <id>         # Mark complete
+bd close <id1> <id2>  # Close multiple
+bd dep add <a> <b>    # a depends on b
+bd sync               # Sync with git
+```
+
+### bv: Graph Analysis (read-only)
+
+**NEVER run bare `bv`** — it launches interactive TUI. Always use `--robot-*` flags:
+
+```bash
+bv --robot-triage     # Ranked picks, quick wins, blockers, health
+bv --robot-next       # Single top pick + claim command
+bv --robot-plan       # Parallel execution tracks
+bv --robot-alerts     # Stale issues, cascades, mismatches
+bv --robot-insights   # Full graph metrics: PageRank, betweenness, cycles
+```
+
+### Workflow
+
+1. **Start**: `bd ready` (or `bv --robot-triage` for graph analysis)
+2. **Claim**: `bd update <id> --status=in_progress`
+3. **Work**: Implement the task
+4. **Complete**: `bd close <id>`
+5. **Sync**: `bd sync` at session end
+
+### Session Close Protocol
+
+```bash
+git status            # Check what changed
+git add <files>       # Stage code changes
+bd sync               # Commit beads changes
+git commit -m "..."   # Commit code
+bd sync               # Commit any new beads changes
+git push              # Push to remote
+```
+
+### Key Concepts
+
+- **Priority**: P0=critical, P1=high, P2=medium, P3=low, P4=backlog (numbers only)
+- **Types**: task, bug, feature, epic, question, docs
+- **Dependencies**: `bd ready` shows only unblocked work
+
+<!-- end-beads-agent-instructions -->
