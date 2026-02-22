@@ -6,6 +6,7 @@
 #   --install-dir DIR  Install directory (default: ~/.local/bin)
 #   --version VER      Version to install (default: latest)
 #   --no-verify        Skip checksum verification
+#   --easy-mode        Non-interactive, auto-configure PATH
 #   --help             Show this help message
 #
 # Environment variables:
@@ -53,6 +54,7 @@ Options:
   --install-dir DIR  Install directory (default: ~/.local/bin)
   --version VER      Version to install (default: latest)
   --no-verify        Skip checksum verification
+  --easy-mode        Non-interactive, auto-configure PATH
   --help             Show this help message
 
 Environment variables:
@@ -64,6 +66,9 @@ Environment variables:
 Examples:
   # Install latest version
   curl -sSL https://raw.githubusercontent.com/Dicklesworthstone/meta_skill/main/scripts/install.sh | bash
+
+  # Non-interactive install with auto PATH configuration
+  curl -sSL https://raw.githubusercontent.com/Dicklesworthstone/meta_skill/main/scripts/install.sh | bash -s -- --easy-mode
 
   # Install specific version
   curl -sSL https://raw.githubusercontent.com/Dicklesworthstone/meta_skill/main/scripts/install.sh | VERSION=v0.1.5 bash
@@ -198,6 +203,7 @@ parse_args() {
     INSTALL_DIR="${INSTALL_DIR:-$DEFAULT_INSTALL_DIR}"
     VERSION="${VERSION:-latest}"
     VERIFY="${VERIFY:-true}"
+    EASY_MODE=0
 
     while [[ $# -gt 0 ]]; do
         case "$1" in
@@ -211,6 +217,10 @@ parse_args() {
                 ;;
             --no-verify)
                 VERIFY="false"
+                shift
+                ;;
+            --easy-mode)
+                EASY_MODE=1
                 shift
                 ;;
             --help|-h)
@@ -293,18 +303,36 @@ main() {
 
     # Check PATH
     if ! echo "$PATH" | tr ':' '\n' | grep -q "^${INSTALL_DIR}$"; then
-        echo ""
-        warn "Add ${INSTALL_DIR} to your PATH:"
-        echo ""
-        echo "  For bash (add to ~/.bashrc):"
-        echo "    export PATH=\"\$PATH:${INSTALL_DIR}\""
-        echo ""
-        echo "  For zsh (add to ~/.zshrc):"
-        echo "    export PATH=\"\$PATH:${INSTALL_DIR}\""
-        echo ""
-        echo "  For fish (run once):"
-        echo "    fish_add_path ${INSTALL_DIR}"
-        echo ""
+        if [[ "$EASY_MODE" -eq 1 ]]; then
+            # Auto-add to PATH in easy mode (matches ACFS installer convention)
+            local updated=0
+            for rc in "$HOME/.zshrc" "$HOME/.bashrc"; do
+                if [[ -e "$rc" ]] && [[ -w "$rc" ]]; then
+                    if ! grep -F "$INSTALL_DIR" "$rc" >/dev/null 2>&1; then
+                        echo "export PATH=\"\$PATH:${INSTALL_DIR}\"" >> "$rc"
+                    fi
+                    updated=1
+                fi
+            done
+            if [[ "$updated" -eq 1 ]]; then
+                warn "PATH updated in shell rc files; restart shell to use ms"
+            else
+                warn "Add ${INSTALL_DIR} to PATH to use ms"
+            fi
+        else
+            echo ""
+            warn "Add ${INSTALL_DIR} to your PATH:"
+            echo ""
+            echo "  For bash (add to ~/.bashrc):"
+            echo "    export PATH=\"\$PATH:${INSTALL_DIR}\""
+            echo ""
+            echo "  For zsh (add to ~/.zshrc):"
+            echo "    export PATH=\"\$PATH:${INSTALL_DIR}\""
+            echo ""
+            echo "  For fish (run once):"
+            echo "    fish_add_path ${INSTALL_DIR}"
+            echo ""
+        fi
     fi
 
     # Run version check
