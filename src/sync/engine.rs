@@ -854,7 +854,14 @@ impl SyncEngine {
                     if allow_push {
                         if !options.dry_run {
                             let spec = self.git.read_skill(&id)?;
-                            remote_git.write_skill(&spec)?;
+                            let assets = self.git.read_skill_assets(&id).unwrap_or_default();
+                            let assets_ref =
+                                if assets.references.is_empty() && assets.scripts.is_empty() {
+                                    None
+                                } else {
+                                    Some(&assets)
+                                };
+                            remote_git.write_skill_with_assets(&spec, assets_ref)?;
                             if remote.remote_type == RemoteType::Git {
                                 needs_git_push = true;
                             }
@@ -870,6 +877,14 @@ impl SyncEngine {
                         if !options.dry_run {
                             let spec = remote_git.read_skill(&id)?;
                             tx_mgr.write_skill_locked(&spec)?;
+                            // Persist assets from remote to local DB and archive
+                            let assets = remote_git.read_skill_assets(&id).unwrap_or_default();
+                            if !assets.references.is_empty() || !assets.scripts.is_empty() {
+                                let assets_json = serde_json::to_string(&assets)
+                                    .unwrap_or_else(|_| "{}".to_string());
+                                self.db.update_skill_assets(&id, &assets_json)?;
+                                self.git.write_skill_assets(&id, &assets)?;
+                            }
                         }
                         report.pulled.push(id.clone());
                         final_status = SkillSyncStatus::Synced;
@@ -993,7 +1008,14 @@ impl SyncEngine {
                 if allow_push {
                     if !options.dry_run {
                         let spec = self.git.read_skill(id)?;
-                        remote_git.write_skill(&spec)?;
+                        let assets = self.git.read_skill_assets(id).unwrap_or_default();
+                        let assets_ref =
+                            if assets.references.is_empty() && assets.scripts.is_empty() {
+                                None
+                            } else {
+                                Some(&assets)
+                            };
+                        remote_git.write_skill_with_assets(&spec, assets_ref)?;
                         if remote_is_git {
                             *needs_git_push = true;
                         }
@@ -1010,6 +1032,14 @@ impl SyncEngine {
                     if !options.dry_run {
                         let spec = remote_git.read_skill(id)?;
                         tx_mgr.write_skill_locked(&spec)?;
+                        // Persist assets from remote to local DB and archive
+                        let assets = remote_git.read_skill_assets(id).unwrap_or_default();
+                        if !assets.references.is_empty() || !assets.scripts.is_empty() {
+                            let assets_json =
+                                serde_json::to_string(&assets).unwrap_or_else(|_| "{}".to_string());
+                            self.db.update_skill_assets(id, &assets_json)?;
+                            self.git.write_skill_assets(id, &assets)?;
+                        }
                     }
                     report.pulled.push(id.to_string());
                     Ok(SkillSyncStatus::Synced)
@@ -1065,13 +1095,28 @@ impl SyncEngine {
                     spec.metadata.id = fork_id.clone();
                     spec.metadata.name = format!("{} (remote)", spec.metadata.name);
                     tx_mgr.write_skill_locked(&spec)?;
+                    // Persist remote assets to the forked skill
+                    let assets = remote_git.read_skill_assets(id).unwrap_or_default();
+                    if !assets.references.is_empty() || !assets.scripts.is_empty() {
+                        let assets_json =
+                            serde_json::to_string(&assets).unwrap_or_else(|_| "{}".to_string());
+                        self.db.update_skill_assets(&fork_id, &assets_json)?;
+                        self.git.write_skill_assets(&fork_id, &assets)?;
+                    }
                 }
                 report.forked.push(fork_id);
 
                 if allow_push {
                     if !options.dry_run {
                         let spec = self.git.read_skill(id)?;
-                        remote_git.write_skill(&spec)?;
+                        let assets = self.git.read_skill_assets(id).unwrap_or_default();
+                        let assets_ref =
+                            if assets.references.is_empty() && assets.scripts.is_empty() {
+                                None
+                            } else {
+                                Some(&assets)
+                            };
+                        remote_git.write_skill_with_assets(&spec, assets_ref)?;
                         if remote_is_git {
                             *needs_git_push = true;
                         }

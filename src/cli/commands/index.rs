@@ -380,9 +380,11 @@ fn index_skill_file(
     let new_hash = compute_spec_hash(&spec)?;
     if !force {
         if let Ok(Some(existing)) = ctx.db.get_skill(&spec.metadata.id) {
-            // Check content hash to skip unchanged skills
+            // Check content hash AND assets to skip unchanged skills
             let same_layer = existing.source_layer == skill.layer.as_str();
-            if existing.content_hash == new_hash && same_layer {
+            let new_assets_json = scan_skill_assets_json(&skill.path);
+            let assets_unchanged = existing.assets_json == new_assets_json;
+            if existing.content_hash == new_hash && same_layer && assets_unchanged {
                 return Ok(()); // Skip unchanged
             }
         }

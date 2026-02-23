@@ -8,7 +8,7 @@ use chrono::{DateTime, Utc};
 use git2::{Commit, ErrorCode, Oid, Repository, Signature};
 use serde::{Deserialize, Serialize};
 
-use crate::core::skill::SkillAssets;
+use crate::core::skill::{ReferenceFile, ScriptFile, SkillAssets};
 use crate::core::{SkillMetadata, SkillSpec};
 use crate::error::{MsError, Result};
 
@@ -360,6 +360,103 @@ impl GitArchive {
         let contents = fs::read_to_string(metadata_path)?;
         let metadata = serde_yaml::from_str(&contents)?;
         Ok(metadata)
+    }
+
+    /// Read skill assets (references/ and scripts/) from the archive filesystem.
+    pub fn read_skill_assets(&self, skill_id: &str) -> Result<SkillAssets> {
+        let skill_path = self.skill_path(skill_id).ok_or_else(|| {
+            MsError::ValidationFailed("skill id contains path traversal sequences".to_string())
+        })?;
+
+        let mut assets = SkillAssets::default();
+
+        // Scan references/ (one level deep)
+        let refs_dir = skill_path.join("references");
+        if refs_dir.is_dir() {
+            if let Ok(entries) = fs::read_dir(&refs_dir) {
+                for entry in entries.flatten() {
+                    if entry.file_type().map(|t| t.is_file()).unwrap_or(false) {
+                        let path = entry.path();
+                        let content = fs::read_to_string(&path).ok();
+                        let file_type = path
+                            .extension()
+                            .and_then(|e| e.to_str())
+                            .unwrap_or("unknown")
+                            .to_string();
+                        assets.references.push(ReferenceFile {
+                            path: PathBuf::from(entry.file_name()),
+                            file_type,
+                            content,
+                        });
+                    }
+                }
+            }
+        }
+
+        // Scan scripts/ (one level deep)
+        let scripts_dir = skill_path.join("scripts");
+        if scripts_dir.is_dir() {
+            if let Ok(entries) = fs::read_dir(&scripts_dir) {
+                for entry in entries.flatten() {
+                    if entry.file_type().map(|t| t.is_file()).unwrap_or(false) {
+                        let path = entry.path();
+                        let content = fs::read_to_string(&path).ok();
+                        let language = match path.extension().and_then(|e| e.to_str()) {
+                            Some("sh" | "bash") => "bash",
+                            Some("py") => "python",
+                            Some("rb") => "ruby",
+                            Some("js") => "javascript",
+                            Some("ts") => "typescript",
+                            Some("rs") => "rust",
+                            Some("go") => "go",
+                            Some(ext) => ext,
+                            None => "unknown",
+                        }
+                        .to_string();
+                        assets.scripts.push(ScriptFile {
+                            path: PathBuf::from(entry.file_name()),
+                            language,
+                            description: None,
+                            content,
+                        });
+                    }
+                }
+            }
+        }
+
+        Ok(assets)
+    }
+
+    /// Write asset files to a skill directory without creating a git commit.
+    /// Used to persist supplementary asset files after a 2PC write.
+    pub fn write_skill_assets(&self, skill_id: &str, assets: &SkillAssets) -> Result<()> {
+        let skill_dir = self.skill_path(skill_id).ok_or_else(|| {
+            MsError::ValidationFailed("skill id contains path traversal sequences".to_string())
+        })?;
+
+        if !assets.references.is_empty() {
+            let refs_dir = skill_dir.join("references");
+            fs::create_dir_all(&refs_dir)?;
+            for reference in &assets.references {
+                if let Some(content) = &reference.content {
+                    let ref_path = refs_dir.join(&reference.path);
+                    fs::write(&ref_path, content)?;
+                }
+            }
+        }
+
+        if !assets.scripts.is_empty() {
+            let scripts_dir = skill_dir.join("scripts");
+            fs::create_dir_all(&scripts_dir)?;
+            for script in &assets.scripts {
+                if let Some(content) = &script.content {
+                    let script_path = scripts_dir.join(&script.path);
+                    fs::write(&script_path, content)?;
+                }
+            }
+        }
+
+        Ok(())
     }
 
     /// Delete a skill directory and commit the removal.
