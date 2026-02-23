@@ -369,6 +369,9 @@ pub struct ScriptFile {
     /// Brief description
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub description: Option<String>,
+    /// File content (populated during indexing)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub content: Option<String>,
 }
 
 /// A reference file (examples, templates)
@@ -378,6 +381,9 @@ pub struct ReferenceFile {
     pub path: std::path::PathBuf,
     /// File type
     pub file_type: String,
+    /// File content (populated during indexing)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub content: Option<String>,
 }
 
 /// A test file for the skill

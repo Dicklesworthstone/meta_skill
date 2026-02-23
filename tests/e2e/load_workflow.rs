@@ -133,11 +133,7 @@ fn test_load_skill_by_id() -> Result<()> {
 
     // Verify JSON structure
     let json = output.json();
-    assert_eq!(
-        json["status"].as_str(),
-        Some("ok"),
-        "Status should be ok"
-    );
+    assert_eq!(json["status"].as_str(), Some("ok"), "Status should be ok");
 
     let data = &json["data"];
     assert_eq!(
@@ -185,10 +181,7 @@ fn test_load_nonexistent_skill() -> Result<()> {
     let output = fixture.run_ms(&["--robot", "load", "this-skill-does-not-exist"]);
 
     // The command should fail
-    assert!(
-        !output.success,
-        "Loading a non-existent skill should fail"
-    );
+    assert!(!output.success, "Loading a non-existent skill should fail");
 
     // stderr or stdout should mention not found
     let combined = format!("{}{}", output.stdout, output.stderr);
@@ -384,10 +377,7 @@ fn test_load_deps_off() -> Result<()> {
         .as_array()
         .map(|a| a.len())
         .unwrap_or(0);
-    assert_eq!(
-        deps, 0,
-        "Dependencies should not be loaded with --deps off"
-    );
+    assert_eq!(deps, 0, "Dependencies should not be loaded with --deps off");
 
     fixture.emit_event(
         super::fixture::LogLevel::Info,
@@ -479,7 +469,13 @@ fn test_load_explicit_level() -> Result<()> {
     let mut fixture = setup_load_fixture("load_explicit_level")?;
 
     fixture.log_step("Load skill with --level overview");
-    let output = fixture.run_ms(&["--robot", "load", "rust-error-handling", "--level", "overview"]);
+    let output = fixture.run_ms(&[
+        "--robot",
+        "load",
+        "rust-error-handling",
+        "--level",
+        "overview",
+    ]);
     fixture.assert_success(&output, "load --level overview");
 
     let json = output.json();
@@ -491,7 +487,8 @@ fn test_load_explicit_level() -> Result<()> {
 
     // Load again with a higher level and compare token counts
     fixture.log_step("Load skill with --level full");
-    let output_full = fixture.run_ms(&["--robot", "load", "rust-error-handling", "--level", "full"]);
+    let output_full =
+        fixture.run_ms(&["--robot", "load", "rust-error-handling", "--level", "full"]);
     fixture.assert_success(&output_full, "load --level full");
 
     let json_full = output_full.json();

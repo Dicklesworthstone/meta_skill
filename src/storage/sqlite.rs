@@ -407,6 +407,15 @@ impl Database {
         Ok(())
     }
 
+    /// Update the assets_json column for a skill.
+    pub fn update_skill_assets(&self, skill_id: &str, assets_json: &str) -> Result<()> {
+        self.conn.execute(
+            "UPDATE skills SET assets_json = ?, modified_at = datetime('now') WHERE id = ?",
+            params![assets_json, skill_id],
+        )?;
+        Ok(())
+    }
+
     pub fn delete_skill(&self, id: &str) -> Result<()> {
         self.conn.execute("DELETE FROM skills WHERE id = ?", [id])?;
         Ok(())

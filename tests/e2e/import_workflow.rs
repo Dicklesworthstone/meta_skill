@@ -121,8 +121,8 @@ fn test_import_markdown_file() -> Result<()> {
     fixture.assert_success(&output, "import markdown");
 
     // Verify JSON output from robot mode
-    let json: serde_json::Value = serde_json::from_str(&output.stdout)
-        .expect("Import robot output should be valid JSON");
+    let json: serde_json::Value =
+        serde_json::from_str(&output.stdout).expect("Import robot output should be valid JSON");
 
     // Check stats are present
     let stats = &json["stats"];
@@ -186,12 +186,9 @@ fn test_import_system_prompt() -> Result<()> {
     );
 
     // Read the generated skill and verify it has content
-    let generated = std::fs::read_to_string(&expected_output)
-        .expect("Should read generated skill file");
-    assert!(
-        !generated.is_empty(),
-        "Generated skill should not be empty"
-    );
+    let generated =
+        std::fs::read_to_string(&expected_output).expect("Should read generated skill file");
+    assert!(!generated.is_empty(), "Generated skill should not be empty");
 
     fixture.emit_event(
         super::fixture::LogLevel::Info,
@@ -230,8 +227,8 @@ fn test_import_with_hints() -> Result<()> {
     fixture.assert_success(&output, "import with hints");
 
     // Check JSON output for metadata
-    let json: serde_json::Value = serde_json::from_str(&output.stdout)
-        .expect("Import robot output should be valid JSON");
+    let json: serde_json::Value =
+        serde_json::from_str(&output.stdout).expect("Import robot output should be valid JSON");
 
     let metadata = &json["metadata"];
     assert_eq!(
@@ -248,20 +245,10 @@ fn test_import_with_hints() -> Result<()> {
     // Tags should include the provided ones
     let tags = metadata["tags"]
         .as_array()
-        .map(|arr| {
-            arr.iter()
-                .filter_map(|v| v.as_str())
-                .collect::<Vec<_>>()
-        })
+        .map(|arr| arr.iter().filter_map(|v| v.as_str()).collect::<Vec<_>>())
         .unwrap_or_default();
-    assert!(
-        tags.contains(&"git"),
-        "Tags should include 'git'"
-    );
-    assert!(
-        tags.contains(&"workflow"),
-        "Tags should include 'workflow'"
-    );
+    assert!(tags.contains(&"git"), "Tags should include 'git'");
+    assert!(tags.contains(&"workflow"), "Tags should include 'workflow'");
 
     fixture.emit_event(
         super::fixture::LogLevel::Info,
@@ -339,10 +326,7 @@ fn test_import_nonexistent_file() -> Result<()> {
     ]);
 
     // The command should fail
-    assert!(
-        !output.success,
-        "Importing a non-existent file should fail"
-    );
+    assert!(!output.success, "Importing a non-existent file should fail");
 
     // Error output should mention the file or a read error
     let combined = format!("{}{}", output.stdout, output.stderr);
@@ -416,12 +400,9 @@ fn test_import_batch() -> Result<()> {
     let source_dir = fixture.root.join("import-sources");
     std::fs::create_dir_all(&source_dir).expect("create source dir");
 
-    std::fs::write(source_dir.join("doc1.md"), MARKDOWN_DOC)
-        .expect("write doc1");
-    std::fs::write(source_dir.join("doc2.md"), PLAINTEXT_DOC)
-        .expect("write doc2");
-    std::fs::write(source_dir.join("doc3.md"), MINIMAL_DOC)
-        .expect("write doc3");
+    std::fs::write(source_dir.join("doc1.md"), MARKDOWN_DOC).expect("write doc1");
+    std::fs::write(source_dir.join("doc2.md"), PLAINTEXT_DOC).expect("write doc2");
+    std::fs::write(source_dir.join("doc3.md"), MINIMAL_DOC).expect("write doc3");
 
     let output_dir = fixture.root.join("batch-output");
     std::fs::create_dir_all(&output_dir).expect("create output dir");
@@ -569,8 +550,8 @@ fn test_import_with_domain_hint() -> Result<()> {
     fixture.assert_success(&output, "import --domain devops");
 
     // Verify the domain is reflected in the JSON output
-    let json: serde_json::Value = serde_json::from_str(&output.stdout)
-        .expect("Import robot output should be valid JSON");
+    let json: serde_json::Value =
+        serde_json::from_str(&output.stdout).expect("Import robot output should be valid JSON");
 
     let domain = json["metadata"]["domain"].as_str();
     assert_eq!(

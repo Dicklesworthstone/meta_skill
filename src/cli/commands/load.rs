@@ -1623,16 +1623,27 @@ pub(crate) fn build_robot_payload(result: &LoadResult, args: &LoadArgs) -> serde
             "inheritance_chain": result.inheritance_chain,
             "included_from": result.included_from,
             "scripts": disclosed.scripts.iter().map(|s| {
-                serde_json::json!({
+                let mut obj = serde_json::json!({
                     "path": s.path.to_string_lossy(),
                     "language": s.language,
-                })
+                });
+                if let Some(desc) = &s.description {
+                    obj["description"] = serde_json::Value::String(desc.clone());
+                }
+                if let Some(content) = &s.content {
+                    obj["content"] = serde_json::Value::String(content.clone());
+                }
+                obj
             }).collect::<Vec<_>>(),
             "references": disclosed.references.iter().map(|r| {
-                serde_json::json!({
+                let mut obj = serde_json::json!({
                     "path": r.path.to_string_lossy(),
                     "file_type": r.file_type,
-                })
+                });
+                if let Some(content) = &r.content {
+                    obj["content"] = serde_json::Value::String(content.clone());
+                }
+                obj
             }).collect::<Vec<_>>(),
         },
         "warnings": result.warnings

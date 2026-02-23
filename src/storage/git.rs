@@ -8,6 +8,7 @@ use chrono::{DateTime, Utc};
 use git2::{Commit, ErrorCode, Oid, Repository, Signature};
 use serde::{Deserialize, Serialize};
 
+use crate::core::skill::SkillAssets;
 use crate::core::{SkillMetadata, SkillSpec};
 use crate::error::{MsError, Result};
 
@@ -248,6 +249,15 @@ impl GitArchive {
 
     /// Write a skill spec + compiled markdown into the archive and commit.
     pub fn write_skill(&self, spec: &SkillSpec) -> Result<SkillCommit> {
+        self.write_skill_with_assets(spec, None)
+    }
+
+    /// Write a skill spec + compiled markdown + asset files into the archive and commit.
+    pub fn write_skill_with_assets(
+        &self,
+        spec: &SkillSpec,
+        assets: Option<&SkillAssets>,
+    ) -> Result<SkillCommit> {
         let skill_id = spec.metadata.id.trim();
         if skill_id.is_empty() {
             return Err(MsError::ValidationFailed(
@@ -290,6 +300,33 @@ impl GitArchive {
         add_path(&mut index, &self.root, &evidence_path)?;
         add_path(&mut index, &self.root, &slices_path)?;
         add_path(&mut index, &self.root, &usage_log_path)?;
+
+        // Write reference and script asset files
+        if let Some(assets) = assets {
+            if !assets.references.is_empty() {
+                let refs_dir = skill_dir.join("references");
+                fs::create_dir_all(&refs_dir)?;
+                for reference in &assets.references {
+                    if let Some(content) = &reference.content {
+                        let ref_path = refs_dir.join(&reference.path);
+                        write_string(&ref_path, content)?;
+                        add_path(&mut index, &self.root, &ref_path)?;
+                    }
+                }
+            }
+            if !assets.scripts.is_empty() {
+                let scripts_dir = skill_dir.join("scripts");
+                fs::create_dir_all(&scripts_dir)?;
+                for script in &assets.scripts {
+                    if let Some(content) = &script.content {
+                        let script_path = scripts_dir.join(&script.path);
+                        write_string(&script_path, content)?;
+                        add_path(&mut index, &self.root, &script_path)?;
+                    }
+                }
+            }
+        }
+
         index.write()?;
 
         let tree_id = index.write_tree()?;

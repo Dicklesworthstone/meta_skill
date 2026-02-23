@@ -186,11 +186,7 @@ fn test_show_skill_by_id() -> Result<()> {
     let json = output.json();
 
     // Top-level status
-    assert_eq!(
-        json["status"].as_str(),
-        Some("ok"),
-        "Status should be 'ok'"
-    );
+    assert_eq!(json["status"].as_str(), Some("ok"), "Status should be 'ok'");
 
     // Skill object presence
     let skill = &json["skill"];
@@ -318,10 +314,7 @@ fn test_show_skill_meta() -> Result<()> {
     let metadata = &skill["metadata"];
     if let Some(tags) = metadata.get("tags").and_then(|t| t.as_array()) {
         let tag_strings: Vec<&str> = tags.iter().filter_map(|v| v.as_str()).collect();
-        assert!(
-            tag_strings.contains(&"rust"),
-            "Tags should contain 'rust'"
-        );
+        assert!(tag_strings.contains(&"rust"), "Tags should contain 'rust'");
         assert!(
             tag_strings.contains(&"errors"),
             "Tags should contain 'errors'"
@@ -625,13 +618,7 @@ fn test_show_full_with_deps() -> Result<()> {
     let mut fixture = setup_show_fixture("show_full_with_deps")?;
 
     fixture.log_step("Show skill with --full --deps combined");
-    let output = fixture.run_ms(&[
-        "--robot",
-        "show",
-        "full-stack-web",
-        "--full",
-        "--deps",
-    ]);
+    let output = fixture.run_ms(&["--robot", "show", "full-stack-web", "--full", "--deps"]);
     fixture.assert_success(&output, "show --full --deps");
 
     let json = output.json();
@@ -657,10 +644,7 @@ fn test_show_full_with_deps() -> Result<()> {
         .get("dependencies")
         .and_then(|d| d.as_array())
         .expect("dependencies should be present with --deps");
-    assert!(
-        !deps.is_empty(),
-        "full-stack-web should have dependencies"
-    );
+    assert!(!deps.is_empty(), "full-stack-web should have dependencies");
 
     fixture.emit_event(
         super::fixture::LogLevel::Info,

@@ -267,10 +267,7 @@ fn test_graph_cycles() -> Result<()> {
 
     // Our test skills form a DAG (no cycles), so we expect 0 cycles
     // However, the graph analysis may process differently, so we just verify structure
-    assert!(
-        json["cycles"].is_array(),
-        "Cycles should be an array"
-    );
+    assert!(json["cycles"].is_array(), "Cycles should be an array");
 
     // Checkpoint: post-cycles
     fixture.checkpoint("graph:post-cycles");
@@ -436,10 +433,7 @@ fn test_graph_without_bv() -> Result<()> {
     ]);
 
     // This should fail because bv is not found at the given path
-    assert!(
-        !output.success,
-        "Graph with invalid bv path should fail"
-    );
+    assert!(!output.success, "Graph with invalid bv path should fail");
 
     let combined = format!("{}{}", output.stdout, output.stderr);
     assert!(

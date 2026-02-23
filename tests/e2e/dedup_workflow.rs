@@ -313,10 +313,7 @@ fn test_dedup_scan_reporting() -> Result<()> {
         json.get("displayed_pairs").is_some(),
         "Response should have 'displayed_pairs'"
     );
-    assert!(
-        json.get("pairs").is_some(),
-        "Response should have 'pairs'"
-    );
+    assert!(json.get("pairs").is_some(), "Response should have 'pairs'");
 
     let displayed = json["displayed_pairs"].as_u64().unwrap_or(0);
     assert!(
@@ -354,10 +351,7 @@ fn test_dedup_review_nonexistent_skill() -> Result<()> {
     ]);
 
     // This should fail because the skill does not exist
-    assert!(
-        !output.success,
-        "Reviewing a nonexistent skill should fail"
-    );
+    assert!(!output.success, "Reviewing a nonexistent skill should fail");
 
     fixture.emit_event(
         super::fixture::LogLevel::Info,
