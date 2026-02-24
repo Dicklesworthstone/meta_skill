@@ -180,6 +180,8 @@ pub struct LoadResult {
     pub inheritance_chain: Vec<String>,
     pub included_from: Vec<String>,
     pub warnings: Vec<String>,
+    /// Source path of the SKILL.md file (for resolving relative asset paths)
+    pub source_path: Option<String>,
 }
 
 pub fn run(ctx: &AppContext, args: &LoadArgs) -> Result<()> {
@@ -900,6 +902,7 @@ pub(crate) fn load_skill(ctx: &AppContext, args: &LoadArgs, skill_ref: &str) -> 
             .iter()
             .map(|w| format!("{:?}", w))
             .collect(),
+        source_path: Some(skill.source_path.clone()),
     };
 
     record_usage(
@@ -1476,6 +1479,9 @@ fn add_dependency_node(
 pub(crate) fn output_human(_ctx: &AppContext, result: &LoadResult, _args: &LoadArgs) -> Result<()> {
     let disclosed = &result.disclosed;
 
+    // Skill directory for resolving relative asset paths
+    let skill_dir: Option<&str> = result.source_path.as_deref();
+
     // Header with skill name
     println!("{}", format!("# {}", disclosed.frontmatter.name).bold());
 
@@ -1528,7 +1534,11 @@ pub(crate) fn output_human(_ctx: &AppContext, result: &LoadResult, _args: &LoadA
         println!();
         println!("{}", "## Scripts".bold());
         for script in &disclosed.scripts {
-            println!("- {} ({})", script.path.display(), script.language);
+            let rel_path = skill_dir
+                .as_ref()
+                .map(|d| format!("{}/scripts/{}", d, script.path.display()))
+                .unwrap_or_else(|| format!("scripts/{}", script.path.display()));
+            println!("- {} ({})", rel_path, script.language);
         }
     }
 
@@ -1537,7 +1547,11 @@ pub(crate) fn output_human(_ctx: &AppContext, result: &LoadResult, _args: &LoadA
         println!();
         println!("{}", "## References".bold());
         for reference in &disclosed.references {
-            println!("- {} ({})", reference.path.display(), reference.file_type);
+            let rel_path = skill_dir
+                .as_ref()
+                .map(|d| format!("{}/references/{}", d, reference.path.display()))
+                .unwrap_or_else(|| format!("references/{}", reference.path.display()));
+            println!("- {} ({})", rel_path, reference.file_type);
         }
     }
 
@@ -1682,6 +1696,7 @@ mod tests {
             inheritance_chain: vec!["test-skill".to_string()],
             included_from: vec![],
             warnings: vec![],
+            source_path: None,
         };
 
         assert_eq!(result.skill_id, "test-skill");
