@@ -1165,11 +1165,26 @@ impl SyncEngine {
                 }
             };
 
-            let hash = match hash_skill_spec(&spec) {
+            let spec_hash = match hash_skill_spec(&spec) {
                 Ok(h) => h,
                 Err(e) => {
                     errors.push(format!("Failed to hash skill {id}: {e}"));
                     continue;
+                }
+            };
+
+            // Include asset content in hash so asset-only changes trigger sync
+            let hash = {
+                let assets = archive.read_skill_assets(&id).unwrap_or_default();
+                if assets.references.is_empty() && assets.scripts.is_empty() {
+                    spec_hash
+                } else {
+                    let mut hasher = Sha256::new();
+                    hasher.update(spec_hash.as_bytes());
+                    if let Ok(assets_json) = serde_json::to_vec(&assets) {
+                        hasher.update(&assets_json);
+                    }
+                    format!("{:x}", hasher.finalize())
                 }
             };
 
