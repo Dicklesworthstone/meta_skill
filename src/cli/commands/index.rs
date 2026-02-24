@@ -376,14 +376,17 @@ fn index_skill_file(
         )));
     }
 
+    // Scan assets once and reuse throughout
+    let skill_assets = scan_skill_assets(&skill.path);
+    let assets_json = serde_json::to_string(&skill_assets).unwrap_or_else(|_| "{}".to_string());
+
     // Check if already indexed (unless force)
     let new_hash = compute_spec_hash(&spec)?;
     if !force {
         if let Ok(Some(existing)) = ctx.db.get_skill(&spec.metadata.id) {
             // Check content hash AND assets to skip unchanged skills
             let same_layer = existing.source_layer == skill.layer.as_str();
-            let new_assets_json = scan_skill_assets_json(&skill.path);
-            let assets_unchanged = existing.assets_json == new_assets_json;
+            let assets_unchanged = existing.assets_json == assets_json;
             if existing.content_hash == new_hash && same_layer && assets_unchanged {
                 return Ok(()); // Skip unchanged
             }
@@ -393,10 +396,13 @@ fn index_skill_file(
     // Write using 2PC transaction manager (stores raw spec)
     tx_mgr.write_skill_with_layer(&spec, skill.layer)?;
 
-    // Scan and persist skill assets (references/, scripts/)
-    let assets_json = scan_skill_assets_json(&skill.path);
+    // Persist skill assets to SQLite
     ctx.db
         .update_skill_assets(&spec.metadata.id, &assets_json)?;
+
+    // Write asset files to git archive (for sync to pick up)
+    ctx.git
+        .write_skill_assets(&spec.metadata.id, &skill_assets)?;
 
     // Compute and persist quality score
     let scorer = crate::quality::QualityScorer::with_defaults();
@@ -432,7 +438,8 @@ fn index_skill_file(
         )?;
 
         // Build a SkillRecord from the resolved spec for search indexing
-        let resolved_record = build_skill_record_from_resolved(&resolved.spec, skill, &new_hash);
+        let resolved_record =
+            build_skill_record_from_resolved(&resolved.spec, skill, &new_hash, &assets_json);
         ctx.search.index_skill(&resolved_record)?;
     } else {
         // No resolution needed - index the raw spec directly
@@ -444,11 +451,12 @@ fn index_skill_file(
     Ok(())
 }
 
-/// Build a SkillRecord from a resolved SkillSpec for search indexing
+/// Build a `SkillRecord` from a resolved `SkillSpec` for search indexing
 fn build_skill_record_from_resolved(
     spec: &crate::core::SkillSpec,
     discovered: &DiscoveredSkill,
     content_hash: &str,
+    assets_json: &str,
 ) -> SkillRecord {
     // Concatenate all section content for the body field
     let body = spec
@@ -482,7 +490,7 @@ fn build_skill_record_from_resolved(
         content_hash: content_hash.to_string(),
         body,
         metadata_json,
-        assets_json: scan_skill_assets_json(&discovered.path),
+        assets_json: assets_json.to_string(),
         token_count: 0,     // Will be computed separately if needed
         quality_score: 0.0, // Will be updated by quality scorer
         indexed_at: chrono::Utc::now().to_rfc3339(),
@@ -492,77 +500,76 @@ fn build_skill_record_from_resolved(
     }
 }
 
-/// Scan the skill directory for references/ and scripts/ subdirectories,
-/// returning a SkillAssets populated with file contents.
+/// Scan the skill directory for `references/` and `scripts/` subdirectories,
+/// returning a `SkillAssets` populated with file contents.
 fn scan_skill_assets(skill_md_path: &Path) -> SkillAssets {
-    let skill_dir = match skill_md_path.parent() {
-        Some(dir) => dir,
-        None => return SkillAssets::default(),
+    let Some(skill_dir) = skill_md_path.parent() else {
+        return SkillAssets::default();
     };
 
     let mut assets = SkillAssets::default();
 
-    // Scan references/ (one level deep)
+    // Scan references/ (one level deep, sorted for deterministic JSON)
     let refs_dir = skill_dir.join("references");
     if refs_dir.is_dir() {
         if let Ok(entries) = std::fs::read_dir(&refs_dir) {
-            for entry in entries.flatten() {
-                if entry.file_type().map(|t| t.is_file()).unwrap_or(false) {
-                    let path = entry.path();
-                    let content = std::fs::read_to_string(&path).ok();
-                    let file_type = path
-                        .extension()
-                        .and_then(|e| e.to_str())
-                        .unwrap_or("unknown")
-                        .to_string();
-                    assets.references.push(ReferenceFile {
-                        path: PathBuf::from(entry.file_name()),
-                        file_type,
-                        content,
-                    });
-                }
+            let mut file_entries: Vec<_> = entries
+                .flatten()
+                .filter(|e| e.file_type().is_ok_and(|t| t.is_file()))
+                .collect();
+            file_entries.sort_by_key(std::fs::DirEntry::file_name);
+            for entry in file_entries {
+                let path = entry.path();
+                let content = std::fs::read_to_string(&path).ok();
+                let file_type = path
+                    .extension()
+                    .and_then(|e| e.to_str())
+                    .unwrap_or("unknown")
+                    .to_string();
+                assets.references.push(ReferenceFile {
+                    path: PathBuf::from(entry.file_name()),
+                    file_type,
+                    content,
+                });
             }
         }
     }
 
-    // Scan scripts/ (one level deep)
+    // Scan scripts/ (one level deep, sorted for deterministic JSON)
     let scripts_dir = skill_dir.join("scripts");
     if scripts_dir.is_dir() {
         if let Ok(entries) = std::fs::read_dir(&scripts_dir) {
-            for entry in entries.flatten() {
-                if entry.file_type().map(|t| t.is_file()).unwrap_or(false) {
-                    let path = entry.path();
-                    let content = std::fs::read_to_string(&path).ok();
-                    let language = match path.extension().and_then(|e| e.to_str()) {
-                        Some("sh" | "bash") => "bash",
-                        Some("py") => "python",
-                        Some("rb") => "ruby",
-                        Some("js") => "javascript",
-                        Some("ts") => "typescript",
-                        Some("rs") => "rust",
-                        Some("go") => "go",
-                        Some(ext) => ext,
-                        None => "unknown",
-                    }
-                    .to_string();
-                    assets.scripts.push(ScriptFile {
-                        path: PathBuf::from(entry.file_name()),
-                        language,
-                        description: None,
-                        content,
-                    });
+            let mut file_entries: Vec<_> = entries
+                .flatten()
+                .filter(|e| e.file_type().is_ok_and(|t| t.is_file()))
+                .collect();
+            file_entries.sort_by_key(std::fs::DirEntry::file_name);
+            for entry in file_entries {
+                let path = entry.path();
+                let content = std::fs::read_to_string(&path).ok();
+                let language = match path.extension().and_then(|e| e.to_str()) {
+                    Some("sh" | "bash") => "bash",
+                    Some("py") => "python",
+                    Some("rb") => "ruby",
+                    Some("js") => "javascript",
+                    Some("ts") => "typescript",
+                    Some("rs") => "rust",
+                    Some("go") => "go",
+                    Some(ext) => ext,
+                    None => "unknown",
                 }
+                .to_string();
+                assets.scripts.push(ScriptFile {
+                    path: PathBuf::from(entry.file_name()),
+                    language,
+                    description: None,
+                    content,
+                });
             }
         }
     }
 
     assets
-}
-
-/// Scan skill assets and serialize to JSON string for the assets_json field.
-fn scan_skill_assets_json(skill_md_path: &Path) -> String {
-    let assets = scan_skill_assets(skill_md_path);
-    serde_json::to_string(&assets).unwrap_or_else(|_| "[]".to_string())
 }
 
 fn compute_spec_hash(spec: &crate::core::SkillSpec) -> Result<String> {

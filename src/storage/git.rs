@@ -308,7 +308,7 @@ impl GitArchive {
                 fs::create_dir_all(&refs_dir)?;
                 for reference in &assets.references {
                     if let Some(content) = &reference.content {
-                        let ref_path = refs_dir.join(&reference.path);
+                        let ref_path = safe_asset_path(&refs_dir, &reference.path)?;
                         write_string(&ref_path, content)?;
                         add_path(&mut index, &self.root, &ref_path)?;
                     }
@@ -319,7 +319,7 @@ impl GitArchive {
                 fs::create_dir_all(&scripts_dir)?;
                 for script in &assets.scripts {
                     if let Some(content) = &script.content {
-                        let script_path = scripts_dir.join(&script.path);
+                        let script_path = safe_asset_path(&scripts_dir, &script.path)?;
                         write_string(&script_path, content)?;
                         add_path(&mut index, &self.root, &script_path)?;
                     }
@@ -370,56 +370,62 @@ impl GitArchive {
 
         let mut assets = SkillAssets::default();
 
-        // Scan references/ (one level deep)
+        // Scan references/ (one level deep, sorted for deterministic output)
         let refs_dir = skill_path.join("references");
         if refs_dir.is_dir() {
             if let Ok(entries) = fs::read_dir(&refs_dir) {
-                for entry in entries.flatten() {
-                    if entry.file_type().map(|t| t.is_file()).unwrap_or(false) {
-                        let path = entry.path();
-                        let content = fs::read_to_string(&path).ok();
-                        let file_type = path
-                            .extension()
-                            .and_then(|e| e.to_str())
-                            .unwrap_or("unknown")
-                            .to_string();
-                        assets.references.push(ReferenceFile {
-                            path: PathBuf::from(entry.file_name()),
-                            file_type,
-                            content,
-                        });
-                    }
+                let mut file_entries: Vec<_> = entries
+                    .flatten()
+                    .filter(|e| e.file_type().is_ok_and(|t| t.is_file()))
+                    .collect();
+                file_entries.sort_by_key(std::fs::DirEntry::file_name);
+                for entry in file_entries {
+                    let path = entry.path();
+                    let content = fs::read_to_string(&path).ok();
+                    let file_type = path
+                        .extension()
+                        .and_then(|e| e.to_str())
+                        .unwrap_or("unknown")
+                        .to_string();
+                    assets.references.push(ReferenceFile {
+                        path: PathBuf::from(entry.file_name()),
+                        file_type,
+                        content,
+                    });
                 }
             }
         }
 
-        // Scan scripts/ (one level deep)
+        // Scan scripts/ (one level deep, sorted for deterministic output)
         let scripts_dir = skill_path.join("scripts");
         if scripts_dir.is_dir() {
             if let Ok(entries) = fs::read_dir(&scripts_dir) {
-                for entry in entries.flatten() {
-                    if entry.file_type().map(|t| t.is_file()).unwrap_or(false) {
-                        let path = entry.path();
-                        let content = fs::read_to_string(&path).ok();
-                        let language = match path.extension().and_then(|e| e.to_str()) {
-                            Some("sh" | "bash") => "bash",
-                            Some("py") => "python",
-                            Some("rb") => "ruby",
-                            Some("js") => "javascript",
-                            Some("ts") => "typescript",
-                            Some("rs") => "rust",
-                            Some("go") => "go",
-                            Some(ext) => ext,
-                            None => "unknown",
-                        }
-                        .to_string();
-                        assets.scripts.push(ScriptFile {
-                            path: PathBuf::from(entry.file_name()),
-                            language,
-                            description: None,
-                            content,
-                        });
+                let mut file_entries: Vec<_> = entries
+                    .flatten()
+                    .filter(|e| e.file_type().is_ok_and(|t| t.is_file()))
+                    .collect();
+                file_entries.sort_by_key(std::fs::DirEntry::file_name);
+                for entry in file_entries {
+                    let path = entry.path();
+                    let content = fs::read_to_string(&path).ok();
+                    let language = match path.extension().and_then(|e| e.to_str()) {
+                        Some("sh" | "bash") => "bash",
+                        Some("py") => "python",
+                        Some("rb") => "ruby",
+                        Some("js") => "javascript",
+                        Some("ts") => "typescript",
+                        Some("rs") => "rust",
+                        Some("go") => "go",
+                        Some(ext) => ext,
+                        None => "unknown",
                     }
+                    .to_string();
+                    assets.scripts.push(ScriptFile {
+                        path: PathBuf::from(entry.file_name()),
+                        language,
+                        description: None,
+                        content,
+                    });
                 }
             }
         }
@@ -439,7 +445,7 @@ impl GitArchive {
             fs::create_dir_all(&refs_dir)?;
             for reference in &assets.references {
                 if let Some(content) = &reference.content {
-                    let ref_path = refs_dir.join(&reference.path);
+                    let ref_path = safe_asset_path(&refs_dir, &reference.path)?;
                     fs::write(&ref_path, content)?;
                 }
             }
@@ -450,7 +456,7 @@ impl GitArchive {
             fs::create_dir_all(&scripts_dir)?;
             for script in &assets.scripts {
                 if let Some(content) = &script.content {
-                    let script_path = scripts_dir.join(&script.path);
+                    let script_path = safe_asset_path(&scripts_dir, &script.path)?;
                     fs::write(&script_path, content)?;
                 }
             }
@@ -563,6 +569,21 @@ fn ensure_file(path: &Path) -> Result<()> {
         write_string(path, "")?;
     }
     Ok(())
+}
+
+/// Validate that an asset path is a safe filename (no traversal) and return the joined path.
+fn safe_asset_path(parent_dir: &Path, asset_path: &Path) -> Result<PathBuf> {
+    let file_name = asset_path
+        .file_name()
+        .ok_or_else(|| MsError::ValidationFailed("asset path has no filename".to_string()))?;
+    // Reject if the original path has directory components (e.g., "../evil" or "sub/file")
+    if asset_path.components().count() != 1 || asset_path != Path::new(file_name) {
+        return Err(MsError::ValidationFailed(format!(
+            "asset path contains directory components: {}",
+            asset_path.display()
+        )));
+    }
+    Ok(parent_dir.join(file_name))
 }
 
 fn add_path(index: &mut git2::Index, root: &Path, path: &Path) -> Result<()> {
