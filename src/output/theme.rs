@@ -1291,23 +1291,61 @@ pub fn detect_terminal_background() -> TerminalBackground {
 pub struct TerminalCapabilities {
     pub color_system: Option<ColorSystem>,
     pub supports_unicode: bool,
+    pub supports_hyperlinks: bool,
 }
 
 #[must_use]
 pub fn detect_terminal_capabilities() -> TerminalCapabilities {
     let color_system = rich_rust::terminal::detect_color_system();
     let supports_unicode = detect_unicode_support();
+    let supports_hyperlinks = detect_hyperlink_support();
 
     trace!(
         color_system = ?color_system,
         supports_unicode = supports_unicode,
+        supports_hyperlinks = supports_hyperlinks,
         "Terminal capabilities detected"
     );
 
     TerminalCapabilities {
         color_system,
         supports_unicode,
+        supports_hyperlinks,
     }
+}
+
+/// Detect whether the terminal supports OSC 8 clickable hyperlinks.
+///
+/// Checks for known terminals with hyperlink support via environment variables.
+/// Returns `false` if `MS_NO_HYPERLINKS` is set.
+#[must_use]
+pub fn detect_hyperlink_support() -> bool {
+    // Allow explicit opt-out
+    if env_flag("MS_NO_HYPERLINKS") {
+        return false;
+    }
+
+    // Known terminals with hyperlink support
+    if env_flag("WT_SESSION")              // Windows Terminal
+        || env_flag("ITERM_SESSION_ID")    // iTerm2
+        || env_flag("KITTY_WINDOW_ID")     // Kitty
+        || env_flag("KONSOLE_VERSION")     // Konsole
+        || env_flag("WEZTERM_EXECUTABLE")  // WezTerm
+        || env_flag("GHOSTTY_RESOURCES_DIR") // Ghostty
+    {
+        return true;
+    }
+
+    // Check VTE version (GNOME Terminal, etc.) - VTE 0.50+ supports hyperlinks
+    if let Ok(version) = std::env::var("VTE_VERSION") {
+        if let Ok(v) = version.parse::<i32>() {
+            if v >= 5000 {
+                return true;
+            }
+        }
+    }
+
+    false
 }
 
 fn detect_unicode_support() -> bool {
@@ -1455,5 +1493,114 @@ mod style_serde {
     {
         let value = String::deserialize(deserializer)?;
         Style::parse(&value).map_err(D::Error::custom)
+    }
+}
+
+// ============================================================================
+// Tests
+// ============================================================================
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::output::test_utils::EnvGuard;
+
+    static ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    /// Known hyperlink env vars to clear before each test.
+    const HYPERLINK_ENV_VARS: &[&str] = &[
+        "WT_SESSION",
+        "ITERM_SESSION_ID",
+        "KITTY_WINDOW_ID",
+        "KONSOLE_VERSION",
+        "WEZTERM_EXECUTABLE",
+        "GHOSTTY_RESOURCES_DIR",
+        "VTE_VERSION",
+        "MS_NO_HYPERLINKS",
+    ];
+
+    fn guard_clear_hyperlink_env() -> EnvGuard {
+        HYPERLINK_ENV_VARS
+            .iter()
+            .fold(EnvGuard::new(), |guard, key| guard.unset(key))
+    }
+
+    #[test]
+    fn test_hyperlink_detection_none() {
+        let _lock = ENV_LOCK.lock().unwrap();
+        let _guard = guard_clear_hyperlink_env();
+        assert!(!detect_hyperlink_support());
+    }
+
+    #[test]
+    fn test_hyperlink_detection_windows_terminal() {
+        let _lock = ENV_LOCK.lock().unwrap();
+        let _guard = guard_clear_hyperlink_env().set("WT_SESSION", "some-guid");
+        assert!(detect_hyperlink_support());
+    }
+
+    #[test]
+    fn test_hyperlink_detection_iterm2() {
+        let _lock = ENV_LOCK.lock().unwrap();
+        let _guard = guard_clear_hyperlink_env().set("ITERM_SESSION_ID", "w0t0p0");
+        assert!(detect_hyperlink_support());
+    }
+
+    #[test]
+    fn test_hyperlink_detection_kitty() {
+        let _lock = ENV_LOCK.lock().unwrap();
+        let _guard = guard_clear_hyperlink_env().set("KITTY_WINDOW_ID", "1");
+        assert!(detect_hyperlink_support());
+    }
+
+    #[test]
+    fn test_hyperlink_detection_konsole() {
+        let _lock = ENV_LOCK.lock().unwrap();
+        let _guard = guard_clear_hyperlink_env().set("KONSOLE_VERSION", "220401");
+        assert!(detect_hyperlink_support());
+    }
+
+    #[test]
+    fn test_hyperlink_detection_wezterm() {
+        let _lock = ENV_LOCK.lock().unwrap();
+        let _guard = guard_clear_hyperlink_env().set("WEZTERM_EXECUTABLE", "/usr/bin/wezterm");
+        assert!(detect_hyperlink_support());
+    }
+
+    #[test]
+    fn test_hyperlink_detection_ghostty() {
+        let _lock = ENV_LOCK.lock().unwrap();
+        let _guard = guard_clear_hyperlink_env().set("GHOSTTY_RESOURCES_DIR", "/usr/share/ghostty");
+        assert!(detect_hyperlink_support());
+    }
+
+    #[test]
+    fn test_hyperlink_detection_vte_new() {
+        let _lock = ENV_LOCK.lock().unwrap();
+        let _guard = guard_clear_hyperlink_env().set("VTE_VERSION", "6003");
+        assert!(detect_hyperlink_support());
+    }
+
+    #[test]
+    fn test_hyperlink_detection_vte_old() {
+        let _lock = ENV_LOCK.lock().unwrap();
+        let _guard = guard_clear_hyperlink_env().set("VTE_VERSION", "4999");
+        assert!(!detect_hyperlink_support());
+    }
+
+    #[test]
+    fn test_hyperlink_detection_vte_boundary() {
+        let _lock = ENV_LOCK.lock().unwrap();
+        let _guard = guard_clear_hyperlink_env().set("VTE_VERSION", "5000");
+        assert!(detect_hyperlink_support());
+    }
+
+    #[test]
+    fn test_hyperlink_opt_out() {
+        let _lock = ENV_LOCK.lock().unwrap();
+        let _guard = guard_clear_hyperlink_env()
+            .set("KITTY_WINDOW_ID", "1")
+            .set("MS_NO_HYPERLINKS", "1");
+        assert!(!detect_hyperlink_support());
     }
 }

@@ -934,6 +934,7 @@ fn theme_adapted_for_no_color_strips_colors() {
     let caps = TerminalCapabilities {
         color_system: None,
         supports_unicode: true,
+        supports_hyperlinks: false,
     };
     let theme = Theme::default().adapted_for_terminal(&caps);
 
@@ -946,6 +947,7 @@ fn theme_adapted_for_truecolor_preserves_colors() {
     let caps = TerminalCapabilities {
         color_system: Some(ColorSystem::TrueColor),
         supports_unicode: true,
+        supports_hyperlinks: false,
     };
     let theme = Theme::default().adapted_for_terminal(&caps);
 
@@ -959,6 +961,7 @@ fn theme_adapted_for_256_colors_downgrades() {
     let caps = TerminalCapabilities {
         color_system: Some(ColorSystem::EightBit),
         supports_unicode: true,
+        supports_hyperlinks: false,
     };
     let theme = Theme::default().adapted_for_terminal(&caps);
 
@@ -971,6 +974,7 @@ fn theme_adapted_for_16_colors_downgrades() {
     let caps = TerminalCapabilities {
         color_system: Some(ColorSystem::Standard),
         supports_unicode: true,
+        supports_hyperlinks: false,
     };
     let theme = Theme::default().adapted_for_terminal(&caps);
 
@@ -983,6 +987,7 @@ fn theme_adapted_for_no_unicode_uses_ascii() {
     let caps = TerminalCapabilities {
         color_system: Some(ColorSystem::TrueColor),
         supports_unicode: false,
+        supports_hyperlinks: false,
     };
     let theme = Theme::default().adapted_for_terminal(&caps);
 
@@ -997,6 +1002,7 @@ fn theme_adapted_for_dumb_terminal() {
     let caps = TerminalCapabilities {
         color_system: None,
         supports_unicode: false,
+        supports_hyperlinks: false,
     };
     let theme = Theme::default().adapted_for_terminal(&caps);
 
@@ -1042,9 +1048,11 @@ fn terminal_capabilities_struct_works() {
     let caps = TerminalCapabilities {
         color_system: Some(ColorSystem::TrueColor),
         supports_unicode: true,
+        supports_hyperlinks: false,
     };
     assert_eq!(caps.color_system, Some(ColorSystem::TrueColor));
     assert!(caps.supports_unicode);
+    assert!(!caps.supports_hyperlinks);
 }
 
 #[test]
@@ -1052,6 +1060,7 @@ fn terminal_capabilities_none_color() {
     let caps = TerminalCapabilities {
         color_system: None,
         supports_unicode: true,
+        supports_hyperlinks: false,
     };
     assert!(caps.color_system.is_none());
 }

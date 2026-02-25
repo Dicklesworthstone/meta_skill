@@ -1,0 +1,9 @@
+---
+source: tests/snapshots/rich_output_visual.rs
+expression: output
+---
+╭────────────────── ✗ Validation Failed ───────────────────╮
+│ Missing required field: description                      │
+│                                                          │
+│ Hint: Add a 'description' field to the YAML frontmatter  │
+╰──────────────────────────────────────────────────────────╯

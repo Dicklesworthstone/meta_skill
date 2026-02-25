@@ -3,41 +3,41 @@ source: tests/snapshots/cli_output.rs
 expression: json
 ---
 {
+  "status": "ok",
   "count": 3,
   "skills": [
     {
-      "author": null,
-      "deprecation_reason": null,
-      "description": "Standard Git workflow patterns for feature development.",
       "id": "git-workflow",
-      "is_deprecated": false,
-      "layer": "project",
       "name": "Git Workflow",
+      "version": "0.1.0",
+      "description": "Standard Git workflow patterns for feature development.",
+      "author": null,
+      "layer": "project",
+      "deprecation_reason": null,
       "quality_score": 0.3650000095367432,
-      "version": "0.1.0"
+      "is_deprecated": false
     },
     {
-      "author": null,
-      "deprecation_reason": null,
-      "description": "Use Result<T, E> for recoverable errors and panic! for unrecoverable ones.",
       "id": "rust-error-handling",
-      "is_deprecated": false,
-      "layer": "project",
       "name": "Rust Error Handling",
+      "version": "0.1.0",
+      "description": "Use Result<T, E> for recoverable errors and panic! for unrecoverable ones.",
+      "author": null,
+      "layer": "project",
+      "deprecation_reason": null,
       "quality_score": 0.48500001430511475,
-      "version": "0.1.0"
+      "is_deprecated": false
     },
     {
-      "author": null,
-      "deprecation_reason": null,
-      "description": "Guidelines for writing effective tests.",
       "id": "testing-best-practices",
-      "is_deprecated": false,
-      "layer": "project",
       "name": "Testing Best Practices",
+      "version": "0.1.0",
+      "description": "Guidelines for writing effective tests.",
+      "author": null,
+      "layer": "project",
+      "deprecation_reason": null,
       "quality_score": 0.3650000095367432,
-      "version": "0.1.0"
+      "is_deprecated": false
     }
-  ],
-  "status": "ok"
+  ]
 }

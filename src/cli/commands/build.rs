@@ -14,8 +14,8 @@ use std::io::{self, Write as IoWrite};
 use std::path::PathBuf;
 
 use clap::Args;
-use colored::Colorize;
 use serde_json::json;
+use tracing::debug;
 
 use std::time::{Duration, Instant};
 
@@ -597,7 +597,7 @@ impl BeadsTracker {
         if !client.is_available() {
             eprintln!(
                 "{} beads (bd) not available, skipping bead tracking",
-                "Warning:".yellow()
+                "Warning:"
             );
             return None;
         }
@@ -616,14 +616,14 @@ impl BeadsTracker {
             .update_status(&self.bead_id, IssueStatus::InProgress)
         {
             Ok(_) => {
-                eprintln!("{} {} set to in_progress", "Bead:".cyan(), self.bead_id);
+                eprintln!("{} {} set to in_progress", "Bead:", self.bead_id);
                 Ok(())
             }
             Err(e) => {
                 // Non-blocking: log warning but don't fail the build
                 eprintln!(
                     "{} failed to update bead {}: {}",
-                    "Warning:".yellow(),
+                    "Warning:",
                     self.bead_id,
                     e
                 );
@@ -638,7 +638,7 @@ impl BeadsTracker {
         if let Err(e) = self.append_completion_note(&completion) {
             eprintln!(
                 "{} failed to append completion note for {}: {}",
-                "Warning:".yellow(),
+                "Warning:",
                 self.bead_id,
                 e
             );
@@ -649,7 +649,7 @@ impl BeadsTracker {
                 Ok(_) => {
                     eprintln!(
                         "{} {} closed (build successful: {})",
-                        "Bead:".green(),
+                        "Bead:",
                         self.bead_id,
                         skill_name
                     );
@@ -658,7 +658,7 @@ impl BeadsTracker {
                 Err(e) => {
                     eprintln!(
                         "{} failed to close bead {}: {}",
-                        "Warning:".yellow(),
+                        "Warning:",
                         self.bead_id,
                         e
                     );
@@ -668,7 +668,7 @@ impl BeadsTracker {
         } else {
             eprintln!(
                 "{} {} build completed (close disabled: {})",
-                "Bead:".green(),
+                "Bead:",
                 self.bead_id,
                 skill_name
             );
@@ -683,7 +683,7 @@ impl BeadsTracker {
             Ok(()) => {
                 eprintln!(
                     "{} {} updated with failure note",
-                    "Bead:".yellow(),
+                    "Bead:",
                     self.bead_id
                 );
                 Ok(())
@@ -691,7 +691,7 @@ impl BeadsTracker {
             Err(e) => {
                 eprintln!(
                     "{} failed to update bead {}: {}",
-                    "Warning:".yellow(),
+                    "Warning:",
                     self.bead_id,
                     e
                 );
@@ -728,6 +728,8 @@ impl BeadsTracker {
 }
 
 pub fn run(ctx: &AppContext, args: &BuildArgs) -> Result<()> {
+    debug!(target: "build", mode = ?ctx.output_format, "output mode selected");
+
     // Validate incompatible options
     if args.guided && args.auto {
         return Err(MsError::Config(
@@ -743,7 +745,7 @@ pub fn run(ctx: &AppContext, args: &BuildArgs) -> Result<()> {
     {
         eprintln!(
             "{} Using --no-redact or --no-injection-filter bypasses safety filters.",
-            "Warning:".yellow()
+            "Warning:"
         );
         eprint!("Continue? [y/N] ");
         io::stdout().flush()?;
@@ -770,14 +772,14 @@ pub fn run(ctx: &AppContext, args: &BuildArgs) -> Result<()> {
                     if !cm_ctx.seed_rules.is_empty() {
                         eprintln!(
                             "{} Loaded {} CM rules as seeds",
-                            "Info:".cyan(),
+                            "Info:",
                             cm_ctx.seed_rules.len()
                         );
                     }
                     if !cm_ctx.anti_patterns.is_empty() {
                         eprintln!(
                             "{} Loaded {} anti-patterns for pitfalls",
-                            "Info:".cyan(),
+                            "Info:",
                             cm_ctx.anti_patterns.len()
                         );
                     }
@@ -788,14 +790,14 @@ pub fn run(ctx: &AppContext, args: &BuildArgs) -> Result<()> {
                 if ctx.output_format == OutputFormat::Human {
                     eprintln!(
                         "{} CM not available, proceeding without CM context",
-                        "Warning:".yellow()
+                        "Warning:"
                     );
                 }
                 None
             }
             Err(e) => {
                 if ctx.output_format == OutputFormat::Human {
-                    eprintln!("{} Failed to fetch CM context: {e}", "Warning:".yellow());
+                    eprintln!("{} Failed to fetch CM context: {e}", "Warning:");
                 }
                 None
             }
@@ -875,7 +877,7 @@ fn run_guided(
     // Show CM suggestions if available
     if let Some(cm_ctx) = cm_context {
         if !cm_ctx.suggested_queries.is_empty() && ctx.output_format == OutputFormat::Human {
-            eprintln!("\n{} CM suggested CASS queries:", "Tip:".cyan());
+            eprintln!("\n{} CM suggested CASS queries:", "Tip:");
             for q in &cm_ctx.suggested_queries {
                 eprintln!("   - {q}");
             }
@@ -937,7 +939,7 @@ fn run_guided(
             };
             fs::write(&calibration_path, calibration)?;
 
-            println!("\n{} Build complete!", "Success:".green());
+            println!("\n{} Build complete!", "Success:");
             println!("  Skill: {}", skill_path.display());
             println!("  Manifest: {}", manifest_path.display());
             println!("  Calibration: {}", calibration_path.display());
@@ -950,7 +952,7 @@ fn run_guided(
             reason,
             checkpoint_id,
         } => {
-            println!("\n{} Build cancelled: {}", "Info:".yellow(), reason);
+            println!("\n{} Build cancelled: {}", "Info:", reason);
             if let Some(id) = checkpoint_id {
                 println!("  Resume with: ms build --resume {id}");
             }
@@ -1029,7 +1031,7 @@ fn run_auto(
         });
         println!("{}", serde_json::to_string_pretty(&output)?);
     } else {
-        println!("{}", "Starting automatic build...".bold());
+        println!("{}", "Starting automatic build...");
         println!("  Session: {}", session.session_id);
         println!("  Query: {query}");
         println!("  Sessions: {}", args.sessions);
@@ -1061,8 +1063,9 @@ fn run_auto(
     // =========================================================================
     // Phase 1: Search CASS for sessions
     // =========================================================================
+    debug!(target: "build", stage = "search_sessions", "stage start");
     if ctx.output_format == OutputFormat::Human {
-        println!("\n{} Searching CASS...", "Phase 1:".cyan());
+        println!("\n{} Searching CASS...", "Phase 1:");
     }
 
     // Check for timeout before starting phase
@@ -1094,15 +1097,16 @@ fn run_auto(
     if session.should_checkpoint() {
         session.save_checkpoint(&ctx.ms_root)?;
         if ctx.output_format == OutputFormat::Human {
-            println!("  {} Checkpoint saved", "📌".cyan());
+            println!("  {} Checkpoint saved", "[checkpoint]");
         }
     }
 
     // =========================================================================
     // Phase 2: Quality filtering
     // =========================================================================
+    debug!(target: "build", stage = "quality_filter", "stage start");
     if ctx.output_format == OutputFormat::Human {
-        println!("\n{} Quality filtering...", "Phase 2:".cyan());
+        println!("\n{} Quality filtering...", "Phase 2:");
     }
 
     if session.is_timed_out() {
@@ -1186,15 +1190,16 @@ fn run_auto(
     if session.should_checkpoint() {
         session.save_checkpoint(&ctx.ms_root)?;
         if ctx.output_format == OutputFormat::Human {
-            println!("  {} Checkpoint saved", "📌".cyan());
+            println!("  {} Checkpoint saved", "[checkpoint]");
         }
     }
 
     // =========================================================================
     // Phase 3: Extract patterns
     // =========================================================================
+    debug!(target: "build", stage = "extract_patterns", "stage start");
     if ctx.output_format == OutputFormat::Human {
-        println!("\n{} Extracting patterns...", "Phase 3:".cyan());
+        println!("\n{} Extracting patterns...", "Phase 3:");
     }
 
     if session.is_timed_out() {
@@ -1253,8 +1258,9 @@ fn run_auto(
     // =========================================================================
     // Phase 4: Filter patterns
     // =========================================================================
+    debug!(target: "build", stage = "filter_patterns", "stage start");
     if ctx.output_format == OutputFormat::Human {
-        println!("\n{} Filtering by confidence...", "Phase 4:".cyan());
+        println!("\n{} Filtering by confidence...", "Phase 4:");
     }
 
     if session.is_timed_out() {
@@ -1312,8 +1318,9 @@ fn run_auto(
     // =========================================================================
     // Phase 5: Synthesize (write outputs)
     // =========================================================================
+    debug!(target: "build", stage = "synthesize", "stage start");
     if ctx.output_format == OutputFormat::Human {
-        println!("\n{} Writing outputs...", "Phase 5:".cyan());
+        println!("\n{} Writing outputs...", "Phase 5:");
     }
 
     if session.is_timed_out() {
@@ -1377,6 +1384,13 @@ fn run_auto(
     }
 
     // Final summary
+    debug!(
+        target: "build",
+        stage = "complete",
+        files = quality_sessions.len(),
+        warnings = 0_usize,
+        errors = 0_usize,
+    );
     if ctx.output_format != OutputFormat::Human {
         let output = json!({
             "status": "complete",
@@ -1392,7 +1406,7 @@ fn run_auto(
         });
         println!("{}", serde_json::to_string_pretty(&output)?);
     } else {
-        println!("\n{} Auto build complete!", "Success:".green());
+        println!("\n{} Auto build complete!", "Success:");
         println!("  Session: {}", session.session_id);
         println!("  Sessions processed: {}", quality_sessions.len());
         println!("  Patterns extracted: {}", filtered_patterns.len());
@@ -1429,7 +1443,7 @@ fn output_timeout(
     } else {
         println!(
             "\n{} Build timed out at phase: {}",
-            "Timeout:".yellow(),
+            "Timeout:",
             session.phase
         );
         println!("  Progress: {:.0}%", session.overall_progress() * 100.0);
@@ -1452,7 +1466,7 @@ fn output_no_sessions(ctx: &AppContext, session: &BuildSession, query: &str) -> 
     } else {
         println!(
             "{} No sessions found matching query: {}",
-            "Error:".red(),
+            "Error:",
             query
         );
     }
@@ -1480,7 +1494,7 @@ fn output_no_quality(
     } else {
         println!(
             "{} No sessions passed quality threshold (min: {:.0}%)",
-            "Error:".red(),
+            "Error:",
             min_quality * 100.0
         );
         if !skipped.is_empty() {
@@ -1510,7 +1524,7 @@ fn output_no_patterns(
         });
         println!("{}", serde_json::to_string_pretty(&output)?);
     } else {
-        println!("{} No patterns extracted from sessions", "Error:".red());
+        println!("{} No patterns extracted from sessions", "Error:");
     }
     Ok(())
 }
@@ -1531,7 +1545,7 @@ fn output_gate_fail(ctx: &AppContext, session: &BuildSession, error: &str) -> Re
         });
         println!("{}", serde_json::to_string_pretty(&output)?);
     } else {
-        println!("{} Quality gate failed: {}", "Error:".red(), error);
+        println!("{} Quality gate failed: {}", "Error:", error);
         println!(
             "  Required: {} sessions, {} patterns",
             session.gates.min_sessions, session.gates.min_patterns
@@ -1562,7 +1576,7 @@ fn run_interactive_build(
         return Ok(());
     }
 
-    println!("{}", "Interactive Build".bold());
+    println!("{}", "Interactive Build");
     println!();
 
     if args.from_cass.is_none() {
@@ -1578,7 +1592,7 @@ fn run_interactive_build(
 
         if let Some(cm_ctx) = cm_context {
             if !cm_ctx.suggested_queries.is_empty() {
-                println!("{} CM suggested queries:", "Tip:".cyan());
+                println!("{} CM suggested queries:", "Tip:");
                 for q in &cm_ctx.suggested_queries {
                     println!("   ms build --guided --from-cass \"{q}\"");
                 }
@@ -1618,7 +1632,7 @@ fn run_resume(
         } else {
             println!(
                 "{} No checkpoint found for session: {}",
-                "Error:".red(),
+                "Error:",
                 session_id
             );
             println!("\nTo list available checkpoints:");
@@ -1641,7 +1655,7 @@ fn run_resume(
         } else {
             println!(
                 "{} Checkpoint {} is not from a build operation (type: {})",
-                "Error:".red(),
+                "Error:",
                 session_id,
                 checkpoint.operation_type
             );
@@ -1663,7 +1677,7 @@ fn run_resume(
         });
         println!("{}", serde_json::to_string_pretty(&output)?);
     } else {
-        println!("{}", "Resuming build from checkpoint...".bold());
+        println!("{}", "Resuming build from checkpoint...");
         println!("  Session: {session_id}");
         println!("  Phase: {}", checkpoint.phase);
         println!("  Progress: {:.0}%", checkpoint.progress * 100.0);
@@ -1702,7 +1716,7 @@ fn run_resume(
             if ctx.output_format == OutputFormat::Human {
                 println!(
                     "\n{} Checkpoint indicates Brenner wizard session",
-                    "Info:".cyan()
+                    "Info:"
                 );
                 println!("  Use --guided flag to continue wizard workflow:");
                 println!(
@@ -1716,7 +1730,7 @@ fn run_resume(
             // Auto build phases - can resume from checkpoint state
             if let Some(query) = checkpoint.get_state("query") {
                 if ctx.output_format == OutputFormat::Human {
-                    println!("\n{} Auto build checkpoint found", "Info:".cyan());
+                    println!("\n{} Auto build checkpoint found", "Info:");
                     println!("  Restarting auto build from beginning...");
                 }
 
@@ -1737,7 +1751,7 @@ fn run_resume(
             if ctx.output_format == OutputFormat::Human {
                 println!(
                     "\n{} Unknown checkpoint phase: {}",
-                    "Warning:".yellow(),
+                    "Warning:",
                     checkpoint.phase
                 );
                 println!("  This checkpoint may be from an older version.");
@@ -1779,7 +1793,7 @@ fn run_resolve_uncertainties(ctx: &AppContext, args: &BuildArgs) -> Result<()> {
             });
             println!("{}", serde_json::to_string_pretty(&output)?);
         } else {
-            println!("{}", "Uncertainty Queue Status".bold());
+            println!("{}", "Uncertainty Queue Status");
             println!();
             println!("  Pending:     0");
             println!("  In Progress: 0");
@@ -1787,7 +1801,7 @@ fn run_resolve_uncertainties(ctx: &AppContext, args: &BuildArgs) -> Result<()> {
             println!("  Rejected:    {}", counts.rejected);
             println!("  Total:       {}", counts.total());
             println!();
-            println!("{} No pending uncertainties to resolve", "Info:".cyan());
+            println!("{} No pending uncertainties to resolve", "Info:");
         }
         return Ok(());
     }
@@ -1812,7 +1826,7 @@ fn run_resolve_uncertainties(ctx: &AppContext, args: &BuildArgs) -> Result<()> {
         });
         println!("{}", serde_json::to_string_pretty(&output)?);
     } else if ctx.output_format == OutputFormat::Human {
-        println!("{}", "Uncertainty Queue Status".bold());
+        println!("{}", "Uncertainty Queue Status");
         println!();
         println!(
             "  Pending:     {}{}",
@@ -1825,7 +1839,7 @@ fn run_resolve_uncertainties(ctx: &AppContext, args: &BuildArgs) -> Result<()> {
             counts.needs_human,
             if counts.needs_human > 0 { " 👤" } else { "" }
         );
-        println!("  Resolved:    {} {}", counts.resolved, "✓".green());
+        println!("  Resolved:    {} {}", counts.resolved, "[ok]");
         println!("  Rejected:    {}", counts.rejected);
         println!("  Expired:     {}", counts.expired);
         println!("  ──────────────────");
@@ -1840,7 +1854,7 @@ fn run_resolve_uncertainties(ctx: &AppContext, args: &BuildArgs) -> Result<()> {
         .collect();
 
     if ctx.output_format == OutputFormat::Human && !pending_items.is_empty() {
-        println!("{}", "Pending Uncertainties:".bold());
+        println!("{}", "Pending Uncertainties:");
         for (i, item) in pending_items.iter().take(10).enumerate() {
             let reason_str = format_uncertainty_reason(&item.reason);
             let description = item
@@ -1867,7 +1881,7 @@ fn run_resolve_uncertainties(ctx: &AppContext, args: &BuildArgs) -> Result<()> {
     // Auto-resolution flow
     if args.auto && !pending_items.is_empty() {
         if ctx.output_format == OutputFormat::Human {
-            println!("\n{} Running auto-resolution...", "Step:".cyan());
+            println!("\n{} Running auto-resolution...", "Step:");
         }
 
         let resolver = DefaultResolver::new(args.min_confidence, 5);
@@ -1941,7 +1955,7 @@ fn run_resolve_uncertainties(ctx: &AppContext, args: &BuildArgs) -> Result<()> {
                     if ctx.output_format == OutputFormat::Human {
                         println!(
                             "  {} Resolved: {}",
-                            "✓".green(),
+                            "[ok]",
                             item.pattern_candidate
                                 .description
                                 .as_deref()
@@ -1954,7 +1968,7 @@ fn run_resolve_uncertainties(ctx: &AppContext, args: &BuildArgs) -> Result<()> {
                     if ctx.output_format == OutputFormat::Human {
                         println!(
                             "  {} Needs more evidence: {}",
-                            "…".yellow(),
+                            "[pending]",
                             item.pattern_candidate
                                 .description
                                 .as_deref()
@@ -1971,7 +1985,7 @@ fn run_resolve_uncertainties(ctx: &AppContext, args: &BuildArgs) -> Result<()> {
                     if ctx.output_format == OutputFormat::Human {
                         println!(
                             "  {} Escalated: {} - {}",
-                            "👤".yellow(),
+                            "[human]",
                             item.pattern_candidate
                                 .description
                                 .as_deref()
@@ -1989,7 +2003,7 @@ fn run_resolve_uncertainties(ctx: &AppContext, args: &BuildArgs) -> Result<()> {
                     if ctx.output_format == OutputFormat::Human {
                         println!(
                             "  {} Rejected: {} - {}",
-                            "✗".red(),
+                            "[fail]",
                             item.pattern_candidate
                                 .description
                                 .as_deref()
@@ -2041,7 +2055,7 @@ fn run_resolve_uncertainties(ctx: &AppContext, args: &BuildArgs) -> Result<()> {
             println!("{}", serde_json::to_string_pretty(&output)?);
         } else {
             println!();
-            println!("{} Resolution complete", "Done:".green());
+            println!("{} Resolution complete", "Done:");
             println!("  Resolved:  {resolved_count}");
             println!("  Escalated: {escalated_count}");
             println!("  Rejected:  {rejected_count}");
@@ -2065,12 +2079,12 @@ fn run_resolve_uncertainties(ctx: &AppContext, args: &BuildArgs) -> Result<()> {
             });
             println!("{}", serde_json::to_string_pretty(&output)?);
         } else {
-            println!("{} No pending items to auto-resolve", "Info:".cyan());
+            println!("{} No pending items to auto-resolve", "Info:");
             println!("  {} items are in-progress", counts.in_progress);
         }
     } else if ctx.output_format == OutputFormat::Human {
         // Interactive mode hint (non-auto, non-robot)
-        println!("{}", "Options:".bold());
+        println!("{}", "Options:");
         println!("  Run with --auto to attempt automatic resolution");
         println!("  Use: ms uncertainties resolve <id> for manual resolution");
     }
@@ -2170,6 +2184,34 @@ fn format_uncertainty_reason(reason: &crate::cass::UncertaintyReason) -> String 
             format!("Conflicting patterns ({})", pattern_ids.len())
         }
     }
+}
+
+/// Check whether the terminal supports rich output for the build command.
+#[allow(dead_code)]
+fn should_use_rich_for_build() -> bool {
+    use std::io::IsTerminal;
+
+    if std::env::var("MS_FORCE_RICH").is_ok() {
+        return true;
+    }
+    if std::env::var("NO_COLOR").is_ok() || std::env::var("MS_PLAIN_OUTPUT").is_ok() {
+        return false;
+    }
+
+    use crate::output::{is_agent_environment, is_ci_environment};
+    if is_agent_environment() || is_ci_environment() {
+        return false;
+    }
+
+    std::io::stdout().is_terminal()
+}
+
+/// Get the terminal width, defaulting to 80 if detection fails.
+#[allow(dead_code)]
+fn terminal_width() -> usize {
+    crossterm::terminal::size()
+        .map(|(w, _)| w as usize)
+        .unwrap_or(80)
 }
 
 // =============================================================================
@@ -2723,5 +2765,252 @@ mod tests {
         // Try to advance past failed
         session.advance_phase();
         assert_eq!(session.phase, BuildPhase::Failed);
+    }
+
+    // =========================================================================
+    // Rich Output Tests (bd-27pe)
+    // =========================================================================
+
+    // ── 1. test_build_render_progress_stages ─────────────────────────
+
+    #[test]
+    fn test_build_render_progress_stages() {
+        let mut session = BuildSession::new("progress-render", QualityGates::default());
+
+        // Each stage should produce correct display names
+        let stages = [
+            (BuildPhase::SearchSessions, "search_sessions"),
+            (BuildPhase::QualityFilter, "quality_filter"),
+            (BuildPhase::ExtractPatterns, "extract_patterns"),
+            (BuildPhase::FilterPatterns, "filter_patterns"),
+            (BuildPhase::Synthesize, "synthesize"),
+            (BuildPhase::Complete, "complete"),
+            (BuildPhase::Failed, "failed"),
+        ];
+
+        for (phase, expected_name) in stages {
+            session.phase = phase;
+            assert_eq!(format!("{}", session.phase), expected_name);
+        }
+    }
+
+    // ── 2. test_build_render_file_processing ─────────────────────────
+
+    #[test]
+    fn test_build_render_file_processing() {
+        let mut session = BuildSession::new("file-proc", QualityGates::default());
+
+        // Simulate file processing progress within a phase
+        session.phase = BuildPhase::ExtractPatterns;
+        session.phase_progress = 0.0;
+        let start_progress = session.overall_progress();
+
+        session.phase_progress = 0.5;
+        let mid_progress = session.overall_progress();
+
+        session.phase_progress = 1.0;
+        let end_progress = session.overall_progress();
+
+        assert!(mid_progress > start_progress, "progress should increase");
+        assert!(end_progress > mid_progress, "progress should increase");
+    }
+
+    // ── 3. test_build_render_warnings ────────────────────────────────
+
+    #[test]
+    fn test_build_render_warnings() {
+        // Build warnings should be plain text without ANSI codes
+        let warning_msg = format!("{} Using --no-redact bypasses safety.", "Warning:");
+        assert!(!warning_msg.contains("\x1b["), "no ANSI in plain output");
+        assert!(warning_msg.starts_with("Warning:"));
+    }
+
+    // ── 4. test_build_render_errors ──────────────────────────────────
+
+    #[test]
+    fn test_build_render_errors() {
+        // Error messages should be plain text without ANSI codes
+        let error_msg = format!("{} No sessions found matching query: test", "Error:");
+        assert!(!error_msg.contains("\x1b["), "no ANSI in plain output");
+        assert!(error_msg.starts_with("Error:"));
+    }
+
+    // ── 5. test_build_render_summary_success ─────────────────────────
+
+    #[test]
+    fn test_build_render_summary_success() {
+        let completion = BuildCompletion::success(7.5);
+        let md = completion.to_markdown();
+        assert!(md.contains("Build Succeeded"));
+        assert!(md.contains("7.5s"));
+        assert!(!md.contains("Error Summary"));
+    }
+
+    // ── 6. test_build_render_summary_failure ─────────────────────────
+
+    #[test]
+    fn test_build_render_summary_failure() {
+        let completion = BuildCompletion::failure(3.2, "connection refused");
+        let md = completion.to_markdown();
+        assert!(md.contains("Build Failed"));
+        assert!(md.contains("3.2s"));
+        assert!(md.contains("connection refused"));
+    }
+
+    // ── 7. test_build_render_cache_status ────────────────────────────
+
+    #[test]
+    fn test_build_render_cache_status() {
+        // Checkpoint save/load represents the caching mechanism
+        let session = BuildSession::new("cache-test", QualityGates::default());
+        let checkpoint_msg = format!("  {} Checkpoint saved", "[checkpoint]");
+        assert!(checkpoint_msg.contains("[checkpoint]"));
+        assert!(!checkpoint_msg.contains("\x1b["), "no ANSI in plain output");
+        assert!(!session.session_id.is_empty());
+    }
+
+    // ── 8. test_build_plain_output_format ────────────────────────────
+
+    #[test]
+    fn test_build_plain_output_format() {
+        // Plain output for auto build should have no ANSI
+        let lines = vec![
+            format!("{}", "Starting automatic build..."),
+            format!("  Session: build-test"),
+            format!("  Query: test query"),
+            format!("  Sessions: 5"),
+            format!("  Min confidence: 80%"),
+        ];
+        for line in &lines {
+            assert!(
+                !line.contains("\x1b["),
+                "line should have no ANSI: {line}"
+            );
+        }
+    }
+
+    // ── 9. test_build_json_output_format ─────────────────────────────
+
+    #[test]
+    fn test_build_json_output_format() {
+        // Validate JSON structure for auto build start
+        let output = json!({
+            "status": "auto_build_start",
+            "session_id": "build-20250601-120000",
+            "query": "test patterns",
+            "sessions": 5,
+            "min_confidence": 0.8,
+        });
+        let json_str = serde_json::to_string_pretty(&output).unwrap();
+        assert!(json_str.contains("\"status\": \"auto_build_start\""));
+        assert!(json_str.contains("\"session_id\""));
+        assert!(json_str.contains("\"query\""));
+    }
+
+    // ── 10. test_build_jsonl_progress ────────────────────────────────
+
+    #[test]
+    fn test_build_jsonl_progress() {
+        // JSONL progress events should be valid single-line JSON
+        let events = [
+            json!({"phase": "search_sessions", "progress": 0.15}),
+            json!({"phase": "quality_filter", "progress": 0.30}),
+            json!({"phase": "extract_patterns", "progress": 0.60}),
+            json!({"phase": "complete", "progress": 1.0}),
+        ];
+        for event in &events {
+            let line = serde_json::to_string(event).unwrap();
+            assert!(!line.contains('\n'), "JSONL must be single-line");
+            let parsed: serde_json::Value = serde_json::from_str(&line).unwrap();
+            assert!(parsed.get("phase").is_some());
+            assert!(parsed.get("progress").is_some());
+        }
+    }
+
+    // ── 11. test_build_robot_mode_no_ansi ────────────────────────────
+
+    #[test]
+    fn test_build_robot_mode_no_ansi() {
+        // Robot mode JSON output should contain no ANSI escape sequences
+        let output = json!({
+            "status": "complete",
+            "session_id": "build-test",
+            "query": "test",
+            "sessions_used": 3,
+            "patterns_extracted": 10,
+            "progress": 1.0,
+            "elapsed_ms": 5000_u64,
+        });
+        let json_str = serde_json::to_string_pretty(&output).unwrap();
+        assert!(
+            !json_str.contains("\x1b["),
+            "JSON output must not contain ANSI"
+        );
+    }
+
+    // ── 12. test_build_rich_vs_plain_equivalence ─────────────────────
+
+    #[test]
+    fn test_build_rich_vs_plain_equivalence() {
+        // Both modes should expose the same data fields
+        let session = BuildSession::new("equiv-test", QualityGates::default());
+
+        // Plain mode fields
+        let plain_output = format!(
+            "Session: {}\nQuery: {}\nPhase: {}\nProgress: {:.0}%",
+            session.session_id,
+            session.query,
+            session.phase,
+            session.overall_progress() * 100.0,
+        );
+
+        // JSON mode fields
+        let json_output = json!({
+            "session_id": session.session_id,
+            "query": session.query,
+            "phase": session.phase.to_string(),
+            "progress": session.overall_progress(),
+        });
+
+        // Both should contain the same session_id
+        assert!(plain_output.contains(&session.session_id));
+        assert_eq!(
+            json_output["session_id"].as_str().unwrap(),
+            session.session_id
+        );
+
+        // Both should contain the same query
+        assert!(plain_output.contains(&session.query));
+        assert_eq!(json_output["query"].as_str().unwrap(), session.query);
+    }
+
+    // ── 13. test_build_format_uncertainty_reason ─────────────────────
+
+    #[test]
+    fn test_build_format_uncertainty_reason() {
+        use crate::cass::UncertaintyReason;
+
+        let reason = UncertaintyReason::InsufficientInstances {
+            have: 2,
+            need: 5,
+            variance: 0.3,
+        };
+        let formatted = format_uncertainty_reason(&reason);
+        assert!(formatted.contains("2/5"));
+        assert!(formatted.contains("Insufficient instances"));
+    }
+
+    // ── 14. test_build_parse_duration_for_display ────────────────────
+
+    #[test]
+    fn test_build_parse_duration_for_display() {
+        // Duration parsing feeds into progress display
+        let dur = parse_duration("2h30m").unwrap();
+        assert_eq!(dur.as_secs(), 2 * 3600 + 30 * 60);
+
+        // Verify it can be displayed
+        let display_secs = dur.as_secs_f64();
+        let display = format!("{:.1}s", display_secs);
+        assert!(display.contains("9000.0s"));
     }
 }

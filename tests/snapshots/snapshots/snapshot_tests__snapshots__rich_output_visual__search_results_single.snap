@@ -1,0 +1,9 @@
+---
+source: tests/snapshots/rich_output_visual.rs
+expression: output
+---
+┏━━━┳━━━━━━━━━━━━┳━━━━━━━┳━━━━━━━━━┳━━━━━━━━━━━━━━━━━━━━━━┓
+┃ # ┃ Skill      ┃ Score ┃ Layer   ┃ Description          ┃
+┡━━━╇━━━━━━━━━━━━╇━━━━━━━╇━━━━━━━━━╇━━━━━━━━━━━━━━━━━━━━━━┩
+│ 1 │ debug-rust │  0.95 │ project │ Debug Rust builds... │
+└───┴────────────┴───────┴─────────┴──────────────────────┘

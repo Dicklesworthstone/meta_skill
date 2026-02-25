@@ -3,19 +3,19 @@ source: tests/snapshots/cli_output.rs
 expression: json
 ---
 {
-  "count": 1,
+  "status": "ok",
   "query": "rust",
+  "search_type": "hybrid",
+  "count": 1,
   "results": [
     {
-      "description": "Use Result<T, E> for recoverable errors and panic! for unrecoverable ones.",
       "id": "rust-error-handling",
-      "is_deprecated": false,
-      "layer": "project",
       "name": "Rust Error Handling",
+      "description": "Use Result<T, E> for recoverable errors and panic! for unrecoverable ones.",
+      "layer": "project",
+      "score": 0.008196721,
       "quality": 0.48500001430511475,
-      "score": 0.008196721
+      "is_deprecated": false
     }
-  ],
-  "search_type": "hybrid",
-  "status": "ok"
+  ]
 }

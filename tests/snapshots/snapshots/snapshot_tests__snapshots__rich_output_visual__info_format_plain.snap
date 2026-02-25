@@ -1,0 +1,5 @@
+---
+source: tests/snapshots/rich_output_visual.rs
+expression: formatted
+---
+INFO Indexing 42 skills

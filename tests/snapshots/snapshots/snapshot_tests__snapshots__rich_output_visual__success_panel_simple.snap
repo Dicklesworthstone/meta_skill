@@ -1,0 +1,7 @@
+---
+source: tests/snapshots/rich_output_visual.rs
+expression: output
+---
+╭─────────────────────── ✓ Created ────────────────────────╮
+│ Skill saved to project layer                             │
+╰──────────────────────────────────────────────────────────╯

@@ -1,0 +1,9 @@
+---
+source: tests/snapshots/rich_output_visual.rs
+expression: output
+---
+╭───────────────────────────── Debug Rust Builds ──────────────────────────────╮
+│ Diagnose Rust compiler errors and build failures with structured debugging s │
+│                                                                              │
+│ Layer: project                                                               │
+╰──────────────────────────────────────────────────────────────────────────────╯

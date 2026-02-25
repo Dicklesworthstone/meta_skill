@@ -154,6 +154,7 @@ pub struct RichOutput {
     width: usize,
     color_system: Option<ColorSystem>,
     use_unicode: bool,
+    supports_hyperlinks: bool,
 }
 
 // RichOutput is Send + Sync because all its fields are:
@@ -231,6 +232,22 @@ impl RichOutput {
         Self::from_detection_inner(decision, format, config)
     }
 
+    /// Create a `RichOutput` for JSON output mode.
+    ///
+    /// Use this for structured JSON consumers (e.g., agent mode tests).
+    #[cfg(test)]
+    #[must_use]
+    pub fn json_mode() -> Self {
+        Self {
+            mode: OutputMode::Json,
+            theme: Theme::default().with_ascii_fallback(),
+            width: 80,
+            color_system: None,
+            use_unicode: false,
+            supports_hyperlinks: false,
+        }
+    }
+
     /// Create a `RichOutput` that always uses plain mode.
     ///
     /// Use this for MCP servers, tests, or any context where styled output
@@ -245,6 +262,7 @@ impl RichOutput {
             width: 80,
             color_system: None,
             use_unicode: false,
+            supports_hyperlinks: false,
         }
     }
 
@@ -276,6 +294,7 @@ impl RichOutput {
             width: terminal_width(),
             color_system: caps.color_system,
             use_unicode: caps.supports_unicode && decision.use_rich,
+            supports_hyperlinks: caps.supports_hyperlinks && decision.use_rich,
         }
     }
 
@@ -312,6 +331,7 @@ impl RichOutput {
             width: terminal_width(),
             color_system: caps.color_system,
             use_unicode: caps.supports_unicode && mode == OutputMode::Rich,
+            supports_hyperlinks: caps.supports_hyperlinks && mode == OutputMode::Rich,
         }
     }
 
@@ -365,6 +385,15 @@ impl RichOutput {
     #[must_use]
     pub const fn use_unicode(&self) -> bool {
         self.use_unicode
+    }
+
+    /// Check if the terminal supports OSC 8 clickable hyperlinks.
+    ///
+    /// Returns `false` in plain or JSON mode, even if the terminal supports
+    /// hyperlinks. Only returns `true` in rich mode with a supporting terminal.
+    #[must_use]
+    pub const fn supports_hyperlinks(&self) -> bool {
+        self.supports_hyperlinks
     }
 
     // =========================================================================
@@ -1089,6 +1118,75 @@ impl RichOutput {
             format!("{key}: {value}")
         }
     }
+
+    // =========================================================================
+    // Hyperlinks (OSC 8)
+    // =========================================================================
+
+    /// Print text as a clickable hyperlink using OSC 8 escape sequences.
+    ///
+    /// If the terminal supports hyperlinks (rich mode + capable terminal),
+    /// renders an OSC 8 sequence. Otherwise falls back to printing the text
+    /// with the URL in parentheses.
+    ///
+    /// In plain/JSON mode, never emits escape sequences.
+    pub fn print_hyperlink(&self, text: &str, url: &str) {
+        trace!(mode = ?self.mode, supports = self.supports_hyperlinks, "print_hyperlink");
+
+        print!("{}", self.format_hyperlink(text, url));
+        let _ = io::stdout().flush();
+    }
+
+    /// Print a hyperlink followed by a newline.
+    pub fn println_hyperlink(&self, text: &str, url: &str) {
+        trace!(mode = ?self.mode, supports = self.supports_hyperlinks, "println_hyperlink");
+
+        println!("{}", self.format_hyperlink(text, url));
+    }
+
+    /// Format text as a clickable hyperlink, returning the string.
+    ///
+    /// If the terminal supports hyperlinks:
+    ///   `\x1b]8;;URL\x1b\\TEXT\x1b]8;;\x1b\\`
+    ///
+    /// Otherwise returns `text (url)` for plain mode or `text` if the URL
+    /// would be redundant (text == url).
+    #[must_use]
+    pub fn format_hyperlink(&self, text: &str, url: &str) -> String {
+        if self.supports_hyperlinks {
+            format!("\x1b]8;;{url}\x1b\\{text}\x1b]8;;\x1b\\")
+        } else if self.is_plain() || self.is_json() {
+            if text == url {
+                text.to_string()
+            } else {
+                format!("{text} ({url})")
+            }
+        } else {
+            // Rich mode but no hyperlink support - just show text
+            text.to_string()
+        }
+    }
+
+    /// Format a file path as a clickable `file://` hyperlink.
+    ///
+    /// Converts the path to an absolute `file:///` URL for the OSC 8 link.
+    /// In plain mode, just returns the path string.
+    #[must_use]
+    pub fn format_file_hyperlink(&self, text: &str, path: &std::path::Path) -> String {
+        if self.supports_hyperlinks {
+            let abs_path = if path.is_absolute() {
+                path.to_path_buf()
+            } else {
+                std::env::current_dir()
+                    .unwrap_or_default()
+                    .join(path)
+            };
+            let url = format!("file://{}", abs_path.display());
+            self.format_hyperlink(text, &url)
+        } else {
+            text.to_string()
+        }
+    }
 }
 
 impl Default for RichOutput {
@@ -1104,6 +1202,7 @@ impl std::fmt::Debug for RichOutput {
             .field("width", &self.width)
             .field("color_system", &self.color_system)
             .field("use_unicode", &self.use_unicode)
+            .field("supports_hyperlinks", &self.supports_hyperlinks)
             .finish()
     }
 }
@@ -1207,5 +1306,74 @@ mod tests {
         let debug = format!("{output:?}");
         assert!(debug.contains("RichOutput"));
         assert!(debug.contains("Plain"));
+    }
+
+    // =========================================================================
+    // Hyperlink Tests
+    // =========================================================================
+
+    #[test]
+    fn test_plain_mode_no_hyperlinks() {
+        let output = RichOutput::plain();
+        assert!(!output.supports_hyperlinks());
+    }
+
+    #[test]
+    fn test_format_hyperlink_plain_different_text_and_url() {
+        let output = RichOutput::plain();
+        let result = output.format_hyperlink("click here", "https://example.com");
+        assert_eq!(result, "click here (https://example.com)");
+    }
+
+    #[test]
+    fn test_format_hyperlink_plain_same_text_and_url() {
+        let output = RichOutput::plain();
+        let result = output.format_hyperlink("https://example.com", "https://example.com");
+        assert_eq!(result, "https://example.com");
+    }
+
+    #[test]
+    fn test_format_hyperlink_with_osc8() {
+        // Create a RichOutput manually with hyperlink support enabled
+        let mut output = RichOutput::plain();
+        output.mode = OutputMode::Rich;
+        output.supports_hyperlinks = true;
+
+        let result = output.format_hyperlink("docs", "https://example.com/docs");
+        assert_eq!(
+            result,
+            "\x1b]8;;https://example.com/docs\x1b\\docs\x1b]8;;\x1b\\"
+        );
+    }
+
+    #[test]
+    fn test_format_hyperlink_rich_no_support() {
+        // Rich mode but terminal doesn't support hyperlinks
+        let mut output = RichOutput::plain();
+        output.mode = OutputMode::Rich;
+        output.supports_hyperlinks = false;
+
+        let result = output.format_hyperlink("docs", "https://example.com/docs");
+        // Should just return the text, no URL appended
+        assert_eq!(result, "docs");
+    }
+
+    #[test]
+    fn test_format_file_hyperlink_plain() {
+        let output = RichOutput::plain();
+        let result = output.format_file_hyperlink("main.rs", std::path::Path::new("/src/main.rs"));
+        assert_eq!(result, "main.rs");
+    }
+
+    #[test]
+    fn test_format_file_hyperlink_with_osc8() {
+        let mut output = RichOutput::plain();
+        output.mode = OutputMode::Rich;
+        output.supports_hyperlinks = true;
+
+        let result = output.format_file_hyperlink("main.rs", std::path::Path::new("/src/main.rs"));
+        assert!(result.contains("\x1b]8;;file:///src/main.rs\x1b\\"));
+        assert!(result.contains("main.rs"));
+        assert!(result.ends_with("\x1b]8;;\x1b\\"));
     }
 }

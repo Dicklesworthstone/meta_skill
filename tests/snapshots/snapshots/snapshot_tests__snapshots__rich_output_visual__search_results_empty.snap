@@ -1,0 +1,8 @@
+---
+source: tests/snapshots/rich_output_visual.rs
+expression: output
+---
+┏━━━┳━━━━━━━┳━━━━━━━┳━━━━━━━┳━━━━━━━━━━━━━┓
+┃ # ┃ Skill ┃ Score ┃ Layer ┃ Description ┃
+┡━━━╇━━━━━━━╇━━━━━━━╇━━━━━━━╇━━━━━━━━━━━━━┩
+└───┴───────┴───────┴───────┴─────────────┘

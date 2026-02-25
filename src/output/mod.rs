@@ -66,6 +66,7 @@ pub mod builders;
 pub mod detection;
 pub mod errors;
 pub mod fallback;
+pub mod messages;
 pub mod plain_format;
 pub mod progress;
 pub mod rich_output;
@@ -96,7 +97,7 @@ pub use fallback::{FallbackLevel, FallbackRenderer};
 pub use theme::{
     BoxChars, BoxStyle, ProgressChars, ProgressStyle, TerminalBackground, TerminalCapabilities,
     Theme, ThemeColors, ThemeError, ThemeIcons, ThemePreset, TreeChars, TreeGuides,
-    detect_terminal_background, detect_terminal_capabilities,
+    detect_hyperlink_support, detect_terminal_background, detect_terminal_capabilities,
 };
 
 // Re-export builder types and functions
@@ -127,6 +128,9 @@ pub use errors::{
 pub mod plain_utils {
     pub use super::plain_format::utils::*;
 }
+
+// Re-export message renderer types
+pub use messages::{HintDisplay, InfoRenderer, StatusTracker, SuccessRenderer};
 
 // Re-export progress types
 pub use progress::{

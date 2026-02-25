@@ -1,0 +1,12 @@
+---
+source: tests/snapshots/rich_output_visual.rs
+expression: output
+---
+╭───────────────────────────── Debug Rust Builds ──────────────────────────────╮
+│ Diagnose Rust compiler errors and build failures                             │
+│                                                                              │
+│ Layer: project  Quality: [#########-] 92%                                    │
+│                                                                              │
+│ Tags: rust, debugging, build                                                 │
+│ Source: template/debugging                                                   │
+╰──────────────────────────────────────────────────────────────────────────────╯

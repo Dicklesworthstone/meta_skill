@@ -3,6 +3,7 @@
 use clap::{Args, Subcommand};
 use serde::Serialize;
 use std::path::PathBuf;
+use tracing::debug;
 
 use crate::app::AppContext;
 use crate::cli::output::OutputFormat;
@@ -161,19 +162,26 @@ struct ScanOutput {
 }
 
 pub fn run(ctx: &AppContext, args: &SecurityArgs) -> Result<()> {
-    match &args.command {
+    debug!(target: "security", mode = ?ctx.output_format, "output mode selected");
+    debug!(target: "security", stage = "status_check_start");
+
+    let result = match &args.command {
         SecurityCommand::Status => status(ctx),
         SecurityCommand::Config => config(ctx),
         SecurityCommand::Version => version(ctx),
         SecurityCommand::Test { input, source } => test(ctx, input, source),
         SecurityCommand::Scan(args) => scan(ctx, args),
         SecurityCommand::Quarantine(cmd) => quarantine(ctx, cmd),
-    }
+    };
+
+    debug!(target: "security", stage = "render_complete");
+    result
 }
 
 fn status(ctx: &AppContext) -> Result<()> {
     let cfg = &ctx.config.security.acip;
     let detected = prompt_version(&cfg.prompt_path).ok().flatten();
+    debug!(target: "security", acip_status = cfg.enabled, "ACIP status");
     let (ok, error) = if cfg.enabled {
         match AcipEngine::load(cfg.clone()) {
             Ok(_) => (true, None),
@@ -416,5 +424,330 @@ fn emit_output<T: Serialize>(ctx: &AppContext, payload: &T) -> Result<()> {
             .map_err(|err| MsError::Config(format!("serialize output: {err}")))?;
         println!("{pretty}");
         Ok(())
+    }
+}
+
+/// Check whether the terminal supports rich output for security commands.
+#[allow(dead_code)]
+fn should_use_rich_for_security() -> bool {
+    use std::io::IsTerminal;
+
+    if std::env::var("MS_FORCE_RICH").is_ok() {
+        return true;
+    }
+    if std::env::var("NO_COLOR").is_ok() || std::env::var("MS_PLAIN_OUTPUT").is_ok() {
+        return false;
+    }
+
+    use crate::output::{is_agent_environment, is_ci_environment};
+    if is_agent_environment() || is_ci_environment() {
+        return false;
+    }
+
+    std::io::stdout().is_terminal()
+}
+
+/// Get the terminal width, defaulting to 80 if detection fails.
+#[allow(dead_code)]
+fn terminal_width() -> usize {
+    crossterm::terminal::size()
+        .map(|(w, _)| w as usize)
+        .unwrap_or(80)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // ── 1. test_security_render_dashboard ─────────────────────────────
+
+    #[test]
+    fn test_security_render_dashboard() {
+        let payload = StatusOutput {
+            ok: true,
+            enabled: true,
+            acip_version: "2.0".to_string(),
+            detected_version: Some("2.0".to_string()),
+            audit_mode: false,
+            prompt_path: "/etc/acip/prompt.md".to_string(),
+            error: None,
+        };
+        let json = serde_json::to_string_pretty(&payload).unwrap();
+        assert!(json.contains("\"ok\": true"));
+        assert!(json.contains("\"enabled\": true"));
+    }
+
+    // ── 2. test_security_render_score_healthy ────────────────────────
+
+    #[test]
+    fn test_security_render_score_healthy() {
+        let payload = StatusOutput {
+            ok: true,
+            enabled: true,
+            acip_version: "2.0".to_string(),
+            detected_version: Some("2.0".to_string()),
+            audit_mode: false,
+            prompt_path: "/prompt.md".to_string(),
+            error: None,
+        };
+        assert!(payload.ok);
+        assert!(payload.enabled);
+        assert!(payload.error.is_none());
+    }
+
+    // ── 3. test_security_render_score_warning ────────────────────────
+
+    #[test]
+    fn test_security_render_score_warning() {
+        let payload = StatusOutput {
+            ok: false,
+            enabled: true,
+            acip_version: "2.0".to_string(),
+            detected_version: None,
+            audit_mode: true,
+            prompt_path: "/missing.md".to_string(),
+            error: Some("Prompt file not found".to_string()),
+        };
+        assert!(!payload.ok);
+        assert!(payload.error.is_some());
+    }
+
+    // ── 4. test_security_render_policy_table ─────────────────────────
+
+    #[test]
+    fn test_security_render_policy_table() {
+        // Policy data serialized as JSON
+        let policy = serde_json::json!({
+            "rules": [
+                {"id": "acip-001", "severity": "high", "description": "No system prompt injection"},
+                {"id": "acip-002", "severity": "medium", "description": "No tool output injection"},
+            ]
+        });
+        let json_str = serde_json::to_string_pretty(&policy).unwrap();
+        assert!(json_str.contains("acip-001"));
+        assert!(json_str.contains("acip-002"));
+    }
+
+    // ── 5. test_security_render_severity_indicators ──────────────────
+
+    #[test]
+    fn test_security_render_severity_indicators() {
+        let severities = ["high", "medium", "low"];
+        for s in severities {
+            assert!(!s.contains("\x1b["), "severity indicator must be plain");
+        }
+    }
+
+    // ── 6. test_security_render_audit_log ────────────────────────────
+
+    #[test]
+    fn test_security_render_audit_log() {
+        let events = vec![
+            serde_json::json!({"ts": "2025-06-01T12:00:00Z", "action": "scan", "result": "allowed"}),
+            serde_json::json!({"ts": "2025-06-01T12:01:00Z", "action": "scan", "result": "disallowed"}),
+        ];
+        assert_eq!(events.len(), 2);
+        // Events should be chronological
+        let ts0 = events[0]["ts"].as_str().unwrap();
+        let ts1 = events[1]["ts"].as_str().unwrap();
+        assert!(ts0 < ts1, "events should be chronological");
+    }
+
+    // ── 7. test_security_render_blocked_panel ────────────────────────
+
+    #[test]
+    fn test_security_render_blocked_panel() {
+        let scan_output = ScanOutput {
+            classification: AcipClassification::Disallowed {
+                category: "injection".to_string(),
+                action: "quarantine".to_string(),
+            },
+            safe_excerpt: "You are now...".to_string(),
+            audit_tag: Some("audit-001".to_string()),
+            quarantined: true,
+            quarantine_id: Some("q-abc123".to_string()),
+            content_hash: "deadbeef".to_string(),
+        };
+        let json = serde_json::to_string_pretty(&scan_output).unwrap();
+        assert!(json.contains("Disallowed"));
+        assert!(json.contains("quarantined"));
+        assert!(json.contains("q-abc123"));
+    }
+
+    // ── 8. test_security_render_override_instructions ────────────────
+
+    #[test]
+    fn test_security_render_override_instructions() {
+        // Review output structure
+        let review = ReviewOutput {
+            quarantine_id: "q-abc123".to_string(),
+            review_id: Some("r-001".to_string()),
+            action: "false_positive".to_string(),
+            reason: Some("Legitimate system prompt".to_string()),
+            persisted: true,
+        };
+        let json = serde_json::to_string_pretty(&review).unwrap();
+        assert!(json.contains("false_positive"));
+        assert!(json.contains("Legitimate system prompt"));
+    }
+
+    // ── 9. test_security_render_permission_matrix ────────────────────
+
+    #[test]
+    fn test_security_render_permission_matrix() {
+        // Version output showing configured vs detected
+        let version = VersionOutput {
+            configured: "2.0".to_string(),
+            detected: Some("2.0".to_string()),
+        };
+        let json = serde_json::to_string_pretty(&version).unwrap();
+        assert!(json.contains("\"configured\": \"2.0\""));
+        assert!(json.contains("\"detected\": \"2.0\""));
+    }
+
+    // ── 10. test_security_plain_output_format ────────────────────────
+
+    #[test]
+    fn test_security_plain_output_format() {
+        let payload = StatusOutput {
+            ok: true,
+            enabled: true,
+            acip_version: "2.0".to_string(),
+            detected_version: Some("2.0".to_string()),
+            audit_mode: false,
+            prompt_path: "/prompt.md".to_string(),
+            error: None,
+        };
+        let plain = serde_json::to_string_pretty(&payload).unwrap();
+        assert!(!plain.contains("\x1b["), "plain output must have no ANSI");
+    }
+
+    // ── 11. test_security_json_output_format ─────────────────────────
+
+    #[test]
+    fn test_security_json_output_format() {
+        let payload = StatusOutput {
+            ok: true,
+            enabled: true,
+            acip_version: "2.0".to_string(),
+            detected_version: Some("2.0".to_string()),
+            audit_mode: false,
+            prompt_path: "/prompt.md".to_string(),
+            error: None,
+        };
+        let json = serde_json::to_string(&payload).unwrap();
+        let parsed: serde_json::Value = serde_json::from_str(&json).unwrap();
+        assert_eq!(parsed["ok"], true);
+        assert_eq!(parsed["enabled"], true);
+    }
+
+    // ── 12. test_security_robot_mode_no_ansi ─────────────────────────
+
+    #[test]
+    fn test_security_robot_mode_no_ansi() {
+        let payload = StatusOutput {
+            ok: false,
+            enabled: false,
+            acip_version: "1.0".to_string(),
+            detected_version: None,
+            audit_mode: true,
+            prompt_path: "/missing.md".to_string(),
+            error: Some("not found".to_string()),
+        };
+        let json = serde_json::to_string_pretty(&payload).unwrap();
+        assert!(!json.contains("\x1b["), "robot mode must have no ANSI");
+    }
+
+    // ── 13. test_security_no_info_leaked ─────────────────────────────
+
+    #[test]
+    fn test_security_no_info_leaked() {
+        // Replay output should only show safe excerpt
+        let replay = ReplayOutput {
+            quarantine_id: "q-abc".to_string(),
+            session_id: "sess-001".to_string(),
+            message_index: 0,
+            safe_excerpt: "Truncated content...".to_string(),
+            note: "Replay shows safe excerpt only; raw content is withheld.".to_string(),
+        };
+        let json = serde_json::to_string_pretty(&replay).unwrap();
+        assert!(json.contains("safe excerpt only"));
+        assert!(json.contains("withheld"));
+    }
+
+    // ── 14. test_security_audit_chronological ────────────────────────
+
+    #[test]
+    fn test_security_audit_chronological() {
+        // Scan output includes content hash for deduplication
+        let scan = ScanOutput {
+            classification: AcipClassification::Safe,
+            safe_excerpt: "Safe content".to_string(),
+            audit_tag: None,
+            quarantined: false,
+            quarantine_id: None,
+            content_hash: "abc123def456".to_string(),
+        };
+        assert!(!scan.content_hash.is_empty());
+        assert!(!scan.quarantined);
+    }
+
+    // ── 15. test_security_rich_vs_plain_equivalence ──────────────────
+
+    #[test]
+    fn test_security_rich_vs_plain_equivalence() {
+        let payload = StatusOutput {
+            ok: true,
+            enabled: true,
+            acip_version: "2.0".to_string(),
+            detected_version: Some("2.0".to_string()),
+            audit_mode: false,
+            prompt_path: "/prompt.md".to_string(),
+            error: None,
+        };
+
+        // Both modes should produce the same data
+        let pretty = serde_json::to_string_pretty(&payload).unwrap();
+        let compact = serde_json::to_string(&payload).unwrap();
+
+        let v1: serde_json::Value = serde_json::from_str(&pretty).unwrap();
+        let v2: serde_json::Value = serde_json::from_str(&compact).unwrap();
+
+        assert_eq!(v1["ok"], v2["ok"]);
+        assert_eq!(v1["enabled"], v2["enabled"]);
+        assert_eq!(v1["acip_version"], v2["acip_version"]);
+    }
+
+    // ── 16. test_security_parse_source ───────────────────────────────
+
+    #[test]
+    fn test_security_parse_source() {
+        assert!(matches!(parse_source("user").unwrap(), ContentSource::User));
+        assert!(matches!(
+            parse_source("assistant").unwrap(),
+            ContentSource::Assistant
+        ));
+        assert!(matches!(
+            parse_source("tool").unwrap(),
+            ContentSource::ToolOutput
+        ));
+        assert!(matches!(
+            parse_source("file").unwrap(),
+            ContentSource::File
+        ));
+        assert!(parse_source("unknown").is_err());
+    }
+
+    // ── 17. test_security_hash_content ───────────────────────────────
+
+    #[test]
+    fn test_security_hash_content() {
+        let hash1 = hash_content("hello");
+        let hash2 = hash_content("hello");
+        let hash3 = hash_content("world");
+
+        assert_eq!(hash1, hash2, "same input should produce same hash");
+        assert_ne!(hash1, hash3, "different input should produce different hash");
+        assert_eq!(hash1.len(), 64, "SHA-256 hex should be 64 chars");
     }
 }

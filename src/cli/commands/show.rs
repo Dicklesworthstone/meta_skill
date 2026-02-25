@@ -543,15 +543,6 @@ mod tests {
         }
     }
 
-    fn default_args() -> ShowArgs {
-        ShowArgs {
-            skill: "test-skill".to_string(),
-            full: false,
-            meta: false,
-            deps: false,
-        }
-    }
-
     // ── 1. test_show_render_header_panel ──────────────────────────────
 
     #[test]

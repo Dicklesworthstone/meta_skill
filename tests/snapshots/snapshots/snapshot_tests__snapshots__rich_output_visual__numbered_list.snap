@@ -1,0 +1,7 @@
+---
+source: tests/snapshots/rich_output_visual.rs
+expression: output
+---
+1. Parse input
+2. Validate schema
+3. Write to database

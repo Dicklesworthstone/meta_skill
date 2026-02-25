@@ -1,0 +1,7 @@
+---
+source: tests/snapshots/rich_output_visual.rs
+expression: output
+---
+╭───────────────────────────── ✓ Import Complete ──────────────────────────────╮
+│ Successfully imported 42 skills from the organization archive into the local │
+╰──────────────────────────────────────────────────────────────────────────────╯

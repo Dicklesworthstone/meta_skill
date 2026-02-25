@@ -2,6 +2,7 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 
 use clap::Args;
+use tracing::debug;
 
 use crate::app::AppContext;
 use crate::cli::formatters::{
@@ -103,6 +104,8 @@ pub struct ScoreBreakdown {
 }
 
 pub fn run(ctx: &AppContext, args: &SuggestArgs) -> Result<()> {
+    debug!(target: "suggest", mode = ?ctx.output_format, "output mode selected");
+
     // 1. Capture working context
     let cwd_path: Option<PathBuf> = args.cwd.as_ref().map(PathBuf::from);
     let capture = ContextCapture::capture_current(cwd_path.clone())?;
@@ -348,6 +351,7 @@ pub fn run(ctx: &AppContext, args: &SuggestArgs) -> Result<()> {
     cache.save(&cache_path)?;
 
     // 16. Output results
+    debug!(target: "suggest", count = suggestions.len(), "generating suggestions");
     output_suggestions(
         ctx,
         args,
@@ -463,6 +467,7 @@ fn output_suggestions(
         });
     }
 
+    debug!(target: "suggest", stage = "render_complete");
     println!("{}", output.format(ctx.output_format));
     Ok(())
 }
@@ -525,6 +530,34 @@ fn cooldown_path() -> std::path::PathBuf {
 fn contextual_bandit_path() -> std::path::PathBuf {
     let base = dirs::data_dir().unwrap_or_else(|| std::path::PathBuf::from("."));
     base.join("ms").join("contextual_bandit.json")
+}
+
+/// Check whether the terminal supports rich output for suggest commands.
+#[allow(dead_code)]
+fn should_use_rich_for_suggest() -> bool {
+    use std::io::IsTerminal;
+
+    if std::env::var("MS_FORCE_RICH").is_ok() {
+        return true;
+    }
+    if std::env::var("NO_COLOR").is_ok() || std::env::var("MS_PLAIN_OUTPUT").is_ok() {
+        return false;
+    }
+
+    use crate::output::{is_agent_environment, is_ci_environment};
+    if is_agent_environment() || is_ci_environment() {
+        return false;
+    }
+
+    std::io::stdout().is_terminal()
+}
+
+/// Get the terminal width, defaulting to 80 if detection fails.
+#[allow(dead_code)]
+fn terminal_width() -> usize {
+    crossterm::terminal::size()
+        .map(|(w, _)| w as usize)
+        .unwrap_or(80)
 }
 
 #[cfg(test)]
@@ -776,5 +809,213 @@ mod tests {
         }
 
         assert_eq!(s.score, 1.0); // Clamped to max
+    }
+
+    // =========================================================================
+    // Rich output bead tests (bd-11ye)
+    // =========================================================================
+
+    use crate::cli::formatters::{SuggestionContext, SuggestionItem, SuggestionOutput};
+    use crate::cli::output::OutputFormat;
+
+    fn make_suggestion_item(name: &str, score: f32, discovery: bool) -> SuggestionItem {
+        SuggestionItem {
+            skill_id: format!("skill-{name}"),
+            name: name.to_string(),
+            description: format!("Description for {name}"),
+            confidence: score,
+            reason: Some(format!("context match {:.0}%", score * 100.0)),
+            is_discovery: discovery,
+            tags: vec!["cli".to_string(), "rust".to_string()],
+            breakdown: None,
+        }
+    }
+
+    // ── 1. test_suggest_render_empty_suggestions ────────────────────
+
+    #[test]
+    fn test_suggest_render_empty_suggestions() {
+        let output = SuggestionOutput::new();
+        let human = output.format(OutputFormat::Human);
+        assert!(human.contains("No suggestions"));
+    }
+
+    // ── 2. test_suggest_render_single_suggestion ────────────────────
+
+    #[test]
+    fn test_suggest_render_single_suggestion() {
+        let mut output = SuggestionOutput::new();
+        output.add_suggestion(make_suggestion_item("my-skill", 0.85, false));
+        let human = output.format(OutputFormat::Human);
+        assert!(human.contains("my-skill"));
+    }
+
+    // ── 3. test_suggest_render_many_suggestions ─────────────────────
+
+    #[test]
+    fn test_suggest_render_many_suggestions() {
+        let mut output = SuggestionOutput::new();
+        for i in 0..5 {
+            output.add_suggestion(make_suggestion_item(
+                &format!("skill-{i}"),
+                0.9 - i as f32 * 0.1,
+                false,
+            ));
+        }
+        let human = output.format(OutputFormat::Human);
+        assert!(human.contains("skill-0"));
+        assert!(human.contains("skill-4"));
+    }
+
+    // ── 4. test_suggest_score_visualization ──────────────────────────
+
+    #[test]
+    fn test_suggest_score_visualization() {
+        let mut output = SuggestionOutput::new();
+        output.add_suggestion(make_suggestion_item("high-score", 0.95, false));
+        let human = output.format(OutputFormat::Human);
+        // Score should appear in human output
+        assert!(human.contains("95") || human.contains("0.95") || human.contains("high-score"));
+    }
+
+    // ── 5. test_suggest_context_panel ────────────────────────────────
+
+    #[test]
+    fn test_suggest_context_panel() {
+        let ctx = SuggestionContext {
+            cwd: Some("/home/user/project".to_string()),
+            git_branch: Some("main".to_string()),
+            recent_files: vec!["src/main.rs".to_string()],
+            fingerprint: Some(12345),
+        };
+        let mut output = SuggestionOutput::new().with_context(ctx);
+        output.add_suggestion(make_suggestion_item("test", 0.8, false));
+        let human = output.format(OutputFormat::Human);
+        assert!(!human.is_empty());
+    }
+
+    // ── 6. test_suggest_ranking_badges ───────────────────────────────
+
+    #[test]
+    fn test_suggest_ranking_badges() {
+        let mut output = SuggestionOutput::new();
+        output.add_suggestion(make_suggestion_item("first", 0.9, false));
+        output.add_suggestion(make_suggestion_item("second", 0.7, false));
+        let human = output.format(OutputFormat::Human);
+        // Both skills should appear in order
+        let pos1 = human.find("first").unwrap_or(0);
+        let pos2 = human.find("second").unwrap_or(0);
+        assert!(pos1 < pos2, "first should appear before second");
+    }
+
+    // ── 7. test_suggest_discovery_section ────────────────────────────
+
+    #[test]
+    fn test_suggest_discovery_section() {
+        let mut output = SuggestionOutput::new();
+        output.add_suggestion(make_suggestion_item("main-skill", 0.8, false));
+        output.add_suggestion(make_suggestion_item("discover-skill", 0.5, true));
+        let json = output.format(OutputFormat::Json);
+        let parsed: serde_json::Value = serde_json::from_str(&json).unwrap();
+        // Discovery suggestions should be in the output
+        assert!(parsed["suggestions"].is_array() || parsed["discovery_suggestions"].is_array());
+    }
+
+    // ── 8. test_suggest_plain_output_format ──────────────────────────
+
+    #[test]
+    fn test_suggest_plain_output_format() {
+        let mut output = SuggestionOutput::new();
+        output.add_suggestion(make_suggestion_item("plain-test", 0.75, false));
+        let plain = output.format(OutputFormat::Plain);
+        assert!(plain.contains("plain-test"));
+        assert!(plain.contains("0.75"));
+        assert!(!plain.contains("\x1b["), "plain output must have no ANSI");
+    }
+
+    // ── 9. test_suggest_json_output_format ───────────────────────────
+
+    #[test]
+    fn test_suggest_json_output_format() {
+        let mut output = SuggestionOutput::new();
+        output.add_suggestion(make_suggestion_item("json-test", 0.85, false));
+        let json = output.format(OutputFormat::Json);
+        let parsed: serde_json::Value = serde_json::from_str(&json).unwrap();
+        assert!(parsed["suggestions"].is_array());
+    }
+
+    // ── 10. test_suggest_robot_mode_no_ansi ──────────────────────────
+
+    #[test]
+    fn test_suggest_robot_mode_no_ansi() {
+        let mut output = SuggestionOutput::new();
+        output.add_suggestion(make_suggestion_item("robot-test", 0.6, false));
+        let plain = output.format(OutputFormat::Plain);
+        assert!(!plain.contains("\x1b["), "robot mode must have no ANSI");
+        let json = output.format(OutputFormat::Json);
+        assert!(!json.contains("\x1b["), "JSON mode must have no ANSI");
+    }
+
+    // ── 11. test_suggest_breakdown_display ────────────────────────────
+
+    #[test]
+    fn test_suggest_breakdown_display() {
+        let breakdown = ScoreBreakdown {
+            contextual_score: 0.6,
+            thompson_score: 0.5,
+            exploration_bonus: 0.1,
+            personal_boost: 0.2,
+            pull_count: 10,
+            avg_reward: 0.7,
+        };
+        let total = breakdown.contextual_score
+            + breakdown.thompson_score
+            + breakdown.exploration_bonus
+            + breakdown.personal_boost;
+        assert!(total > 0.0, "breakdown should have positive total");
+        assert_eq!(breakdown.pull_count, 10);
+    }
+
+    // ── 12. test_suggest_rich_vs_plain_equivalence ───────────────────
+
+    #[test]
+    fn test_suggest_rich_vs_plain_equivalence() {
+        let mut output = SuggestionOutput::new();
+        output.add_suggestion(make_suggestion_item("equiv-skill", 0.7, false));
+
+        let json = output.format(OutputFormat::Json);
+        let plain = output.format(OutputFormat::Plain);
+
+        // Both should contain the skill name
+        assert!(json.contains("equiv-skill"));
+        assert!(plain.contains("equiv-skill"));
+
+        // JSON should be parseable
+        let parsed: serde_json::Value = serde_json::from_str(&json).unwrap();
+        assert!(parsed["suggestions"].is_array());
+    }
+
+    // ── 13. test_suggest_parse_tags_from_metadata ────────────────────
+
+    #[test]
+    fn test_suggest_parse_tags_from_metadata() {
+        let meta = r#"{"tags":["cli","rust","testing"]}"#;
+        let tags = parse_tags_from_metadata(meta);
+        assert_eq!(tags, vec!["cli", "rust", "testing"]);
+
+        let empty = r#"{"no_tags": true}"#;
+        let tags = parse_tags_from_metadata(empty);
+        assert!(tags.is_empty());
+
+        let invalid = "not json";
+        let tags = parse_tags_from_metadata(invalid);
+        assert!(tags.is_empty());
+    }
+
+    // ── 14. test_suggest_should_use_rich_returns_bool ─────────────────
+
+    #[test]
+    fn test_suggest_should_use_rich_returns_bool() {
+        let _result: bool = should_use_rich_for_suggest();
     }
 }

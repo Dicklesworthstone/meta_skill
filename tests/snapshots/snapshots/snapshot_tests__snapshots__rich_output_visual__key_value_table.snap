@@ -1,0 +1,12 @@
+---
+source: tests/snapshots/rich_output_visual.rs
+expression: output
+---
+┏━━━━━━━┳━━━━━━━━━━━━━━━━━━━━━━━━┓
+┃ Key   ┃ Value                  ┃
+┡━━━━━━━╇━━━━━━━━━━━━━━━━━━━━━━━━┩
+│ Name  │ Debug Rust Builds      │
+│ Layer │ project                │
+│ Tags  │ rust, debugging, build │
+│ Score │ 0.92                   │
+└───────┴────────────────────────┘

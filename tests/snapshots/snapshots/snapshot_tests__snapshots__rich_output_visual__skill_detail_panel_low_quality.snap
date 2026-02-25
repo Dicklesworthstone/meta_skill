@@ -1,0 +1,11 @@
+---
+source: tests/snapshots/rich_output_visual.rs
+expression: output
+---
+╭──────────────────────────────── Git Workflow ────────────────────────────────╮
+│ Standard git workflow for feature branches                                   │
+│                                                                              │
+│ Layer: org  Quality: [####------] 35%                                        │
+│                                                                              │
+│ Tags: git, workflow                                                          │
+╰──────────────────────────────────────────────────────────────────────────────╯

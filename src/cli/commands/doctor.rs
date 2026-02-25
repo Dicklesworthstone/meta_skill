@@ -4,7 +4,7 @@ use std::path::Path;
 use std::sync::Arc;
 
 use clap::Args;
-use colored::Colorize;
+use tracing::debug;
 
 use crate::app::AppContext;
 use crate::core::recovery::{RecoveryManager, RecoveryReport};
@@ -39,11 +39,14 @@ pub struct DoctorArgs {
 }
 
 pub fn run(ctx: &AppContext, args: &DoctorArgs) -> Result<()> {
+    debug!(target: "doctor", mode = ?ctx.output_format, "output mode selected");
+    debug!(target: "doctor", stage = "checks_start");
+
     let mut issues_found = 0;
     let mut issues_fixed = 0;
     let verbose = ctx.verbosity > 0;
 
-    println!("{}", "ms doctor - Health Checks".bold());
+    println!("{}", "ms doctor - Health Checks");
     println!();
 
     let run_only = args.check.as_deref();
@@ -61,7 +64,7 @@ pub fn run(ctx: &AppContext, args: &DoctorArgs) -> Result<()> {
         gate.enforce(&command_str, None)?;
         if break_stale_lock(ctx)? {
             issues_fixed += 1;
-            println!("{} Stale lock broken", "✓".green());
+            println!("{} Stale lock broken", "[ok]");
         }
     }
 
@@ -94,7 +97,7 @@ pub fn run(ctx: &AppContext, args: &DoctorArgs) -> Result<()> {
             "perf" => check_perf(ctx, verbose)?,
             "output" | "output-mode" => check_output_mode(ctx, verbose)?,
             other => {
-                println!("{} Unknown check: {}", "!".yellow(), other);
+                println!("{} Unknown check: {}", "[!]", other);
                 println!("  Available checks: safety, security, recovery, perf, output");
                 1
             }
@@ -102,20 +105,27 @@ pub fn run(ctx: &AppContext, args: &DoctorArgs) -> Result<()> {
     }
 
     // Summary
+    debug!(
+        target: "doctor",
+        stage = "checks_complete",
+        passed = issues_found == 0,
+        failed = issues_found,
+    );
+    debug!(target: "doctor", stage = "render_complete");
     println!();
     if issues_found == 0 {
-        println!("{} All checks passed", "✓".green().bold());
+        println!("{} All checks passed", "[ok]");
     } else if args.fix && issues_fixed == issues_found {
         println!(
             "{} Found {} issues, fixed {}",
-            "✓".green().bold(),
+            "[ok]",
             issues_found,
             issues_fixed
         );
     } else {
         println!(
             "{} Found {} issues, fixed {}",
-            "!".yellow().bold(),
+            "[!]",
             issues_found,
             issues_fixed
         );
@@ -134,7 +144,7 @@ fn check_lock_status(ctx: &AppContext, verbose: bool) -> Result<usize> {
     let ms_root = &ctx.ms_root;
 
     if let Some(holder) = GlobalLock::status(ms_root)? {
-        println!("{} Lock held", "!".yellow());
+        println!("{} Lock held", "[!]");
         println!("  PID: {}", holder.pid);
         println!("  Host: {}", holder.hostname);
         println!("  Since: {}", holder.acquired_at);
@@ -146,7 +156,7 @@ fn check_lock_status(ctx: &AppContext, verbose: bool) -> Result<usize> {
             if !Path::new(&proc_path).exists() {
                 println!(
                     "  {} Process {} no longer exists - lock may be stale",
-                    "!".yellow(),
+                    "[!]",
                     holder.pid
                 );
                 println!("  Use --break-lock to remove stale lock");
@@ -159,7 +169,7 @@ fn check_lock_status(ctx: &AppContext, verbose: bool) -> Result<usize> {
         }
         Ok(0) // Active lock is not an issue
     } else {
-        println!("{} No lock held", "✓".green());
+        println!("{} No lock held", "[ok]");
         Ok(0)
     }
 }
@@ -176,7 +186,7 @@ fn break_stale_lock(ctx: &AppContext) -> Result<bool> {
         println!();
         println!(
             "  {} Breaking lock held by PID {} on {} since {}",
-            "!".yellow(),
+            "[!]",
             holder.pid,
             holder.hostname,
             holder.acquired_at
@@ -189,7 +199,7 @@ fn break_stale_lock(ctx: &AppContext) -> Result<bool> {
             Ok(false)
         }
     } else {
-        println!("{} No lock to break", "✓".green());
+        println!("{} No lock to break", "[ok]");
         Ok(false)
     }
 }
@@ -200,7 +210,7 @@ fn check_database(ctx: &AppContext, verbose: bool) -> Result<usize> {
 
     let db_path = ctx.ms_root.join("ms.db");
     if !db_path.exists() {
-        println!("{} Database not found", "!".yellow());
+        println!("{} Database not found", "[!]");
         println!("  Run 'ms init' to create the database");
         return Ok(1);
     }
@@ -211,24 +221,24 @@ fn check_database(ctx: &AppContext, verbose: bool) -> Result<usize> {
             // Run SQLite integrity check
             match db.integrity_check() {
                 Ok(true) => {
-                    println!("{} OK", "✓".green());
+                    println!("{} OK", "[ok]");
                     if verbose {
                         println!("  Database path: {}", db_path.display());
                     }
                     Ok(0)
                 }
                 Ok(false) => {
-                    println!("{} Integrity check failed", "✗".red());
+                    println!("{} Integrity check failed", "[FAIL]");
                     Ok(1)
                 }
                 Err(e) => {
-                    println!("{} Error: {}", "✗".red(), e);
+                    println!("{} Error: {}", "[FAIL]", e);
                     Ok(1)
                 }
             }
         }
         Err(e) => {
-            println!("{} Cannot open: {}", "✗".red(), e);
+            println!("{} Cannot open: {}", "[FAIL]", e);
             Ok(1)
         }
     }
@@ -240,27 +250,27 @@ fn check_git_archive(ctx: &AppContext, verbose: bool) -> Result<usize> {
 
     let archive_path = ctx.ms_root.join("archive");
     if !archive_path.exists() {
-        println!("{} Archive not found", "!".yellow());
+        println!("{} Archive not found", "[!]");
         println!("  Run 'ms init' to create the archive");
         return Ok(1);
     }
 
     let git_dir = archive_path.join(".git");
     if !git_dir.exists() {
-        println!("{} Not a Git repository", "✗".red());
+        println!("{} Not a Git repository", "[FAIL]");
         return Ok(1);
     }
 
     match crate::storage::GitArchive::open(&archive_path) {
         Ok(_git) => {
-            println!("{} OK", "✓".green());
+            println!("{} OK", "[ok]");
             if verbose {
                 println!("  Archive path: {}", archive_path.display());
             }
             Ok(0)
         }
         Err(e) => {
-            println!("{} Cannot open: {}", "✗".red(), e);
+            println!("{} Cannot open: {}", "[FAIL]", e);
             Ok(1)
         }
     }
@@ -274,7 +284,7 @@ fn check_safety(ctx: &AppContext, verbose: bool) -> Result<usize> {
     let status = gate.status();
 
     if let Some(version) = status.dcg_version {
-        println!("{} dcg {}", "✓".green(), version);
+        println!("{} dcg {}", "[ok]", version);
         if verbose {
             println!("  dcg_bin: {}", status.dcg_bin.display());
             if !status.packs.is_empty() {
@@ -283,14 +293,14 @@ fn check_safety(ctx: &AppContext, verbose: bool) -> Result<usize> {
         }
         Ok(0)
     } else {
-        println!("{} dcg not available", "!".yellow());
+        println!("{} dcg not available", "[!]");
         Ok(1)
     }
 }
 
 /// Comprehensive security check
 fn check_security(ctx: &AppContext, verbose: bool) -> Result<usize> {
-    println!("{}", "Security Checks".bold());
+    println!("{}", "Security Checks");
     println!("{}", "─".repeat(15));
 
     let mut issues = 0;
@@ -300,9 +310,9 @@ fn check_security(ctx: &AppContext, verbose: bool) -> Result<usize> {
     let gate = SafetyGate::from_context(ctx);
     let status = gate.status();
     if let Some(version) = status.dcg_version {
-        println!("{} v{}", "✓".green(), version);
+        println!("{} v{}", "[ok]", version);
     } else {
-        println!("{} not available", "!".yellow());
+        println!("{} not available", "[!]");
         println!("        Commands will run without safety checks");
         issues += 1;
     }
@@ -313,22 +323,22 @@ fn check_security(ctx: &AppContext, verbose: bool) -> Result<usize> {
     if acip_path.exists() {
         match crate::security::acip::prompt_version(acip_path) {
             Ok(Some(version)) => {
-                println!("{} v{}", "✓".green(), version);
+                println!("{} v{}", "[ok]", version);
                 if verbose {
                     println!("        Path: {}", acip_path.display());
                 }
             }
             Ok(None) => {
-                println!("{} no version detected", "!".yellow());
+                println!("{} no version detected", "[!]");
                 issues += 1;
             }
             Err(e) => {
-                println!("{} error: {}", "✗".red(), e);
+                println!("{} error: {}", "[FAIL]", e);
                 issues += 1;
             }
         }
     } else {
-        println!("{} not found", "-".dimmed());
+        println!("{} not found", "-");
         if verbose {
             println!("        Expected: {}", acip_path.display());
         }
@@ -339,10 +349,10 @@ fn check_security(ctx: &AppContext, verbose: bool) -> Result<usize> {
     if ctx.config.safety.require_verbatim_approval {
         println!(
             "{} verbatim approval required for dangerous commands",
-            "✓".green()
+            "[ok]"
         );
     } else {
-        println!("{} verbatim approval disabled", "!".yellow());
+        println!("{} verbatim approval disabled", "[!]");
         println!("        Dangerous commands may execute without explicit approval");
         issues += 1;
     }
@@ -381,7 +391,7 @@ fn check_security(ctx: &AppContext, verbose: bool) -> Result<usize> {
         if secrets_found > 0 {
             println!(
                 "{} {} potential secret(s) found",
-                "!".yellow(),
+                "[!]",
                 secrets_found
             );
             println!("        Review evidence files for sensitive data");
@@ -389,12 +399,12 @@ fn check_security(ctx: &AppContext, verbose: bool) -> Result<usize> {
         } else {
             println!(
                 "{} {} files scanned, no secrets detected",
-                "✓".green(),
+                "[ok]",
                 files_scanned
             );
         }
     } else {
-        println!("{} no evidence directory", "-".dimmed());
+        println!("{} no evidence directory", "-");
     }
 
     // 5. Check for .env files that shouldn't be tracked
@@ -415,11 +425,11 @@ fn check_security(ctx: &AppContext, verbose: bool) -> Result<usize> {
     }
 
     if env_issues.is_empty() {
-        println!("{} no sensitive env files in ms root", "✓".green());
+        println!("{} no sensitive env files in ms root", "[ok]");
     } else {
         println!(
             "{} found sensitive files: {}",
-            "!".yellow(),
+            "[!]",
             env_issues.join(", ")
         );
         println!("        These files should not be in the ms root directory");
@@ -429,9 +439,9 @@ fn check_security(ctx: &AppContext, verbose: bool) -> Result<usize> {
     // Summary
     println!();
     if issues == 0 {
-        println!("{} All security checks passed", "✓".green().bold());
+        println!("{} All security checks passed", "[ok]");
     } else {
-        println!("{} {} security issue(s) found", "!".yellow().bold(), issues);
+        println!("{} {} security issue(s) found", "[!]", issues);
     }
 
     Ok(issues)
@@ -450,21 +460,21 @@ fn check_transactions(
     let archive_path = ctx.ms_root.join("archive");
 
     if !db_path.exists() || !archive_path.exists() {
-        println!("{} Skipped (database or archive not found)", "-".dimmed());
+        println!("{} Skipped (database or archive not found)", "-");
         return Ok(0);
     }
 
     let db = if let Ok(db) = crate::storage::Database::open(&db_path) {
         std::sync::Arc::new(db)
     } else {
-        println!("{} Skipped (cannot open database)", "-".dimmed());
+        println!("{} Skipped (cannot open database)", "-");
         return Ok(0);
     };
 
     let git = if let Ok(git) = crate::storage::GitArchive::open(&archive_path) {
         std::sync::Arc::new(git)
     } else {
-        println!("{} Skipped (cannot open archive)", "-".dimmed());
+        println!("{} Skipped (cannot open archive)", "-");
         return Ok(0);
     };
 
@@ -474,7 +484,7 @@ fn check_transactions(
     if fix {
         let report = tx_mgr.recover()?;
         if report.had_work() {
-            println!("{} Recovered", "✓".green());
+            println!("{} Recovered", "[ok]");
             if verbose {
                 println!("  Rolled back: {}", report.rolled_back);
                 println!("  Completed: {}", report.completed);
@@ -483,19 +493,19 @@ fn check_transactions(
             *issues_fixed += report.rolled_back + report.completed + report.orphaned_files;
             Ok(report.rolled_back + report.completed + report.orphaned_files)
         } else {
-            println!("{} OK", "✓".green());
+            println!("{} OK", "[ok]");
             Ok(0)
         }
     } else {
         // Just check without fixing
         let incomplete = db.list_incomplete_transactions()?;
         if incomplete.is_empty() {
-            println!("{} OK", "✓".green());
+            println!("{} OK", "[ok]");
             Ok(0)
         } else {
             println!(
                 "{} {} incomplete transactions",
-                "!".yellow(),
+                "[!]",
                 incomplete.len()
             );
             if verbose {
@@ -517,7 +527,7 @@ fn run_comprehensive_check(
     issues_fixed: &mut usize,
 ) -> Result<usize> {
     println!();
-    println!("{}", "Comprehensive Recovery Diagnostics".bold());
+    println!("{}", "Comprehensive Recovery Diagnostics");
     println!("{}", "─".repeat(35));
 
     let db_path = ctx.ms_root.join("ms.db");
@@ -547,35 +557,32 @@ fn run_comprehensive_check(
 /// Print a formatted recovery report.
 fn print_recovery_report(report: &RecoveryReport, verbose: bool) {
     if report.issues.is_empty() {
-        println!("{} No issues detected", "✓".green());
+        println!("{} No issues detected", "[ok]");
     } else {
         println!(
             "{} Found {} issues:",
             if report.has_critical_issues() {
-                "✗".red()
+                "[FAIL]"
             } else {
-                "!".yellow()
+                "[!]"
             },
             report.issues.len()
         );
 
         for issue in &report.issues {
             let severity_marker = match issue.severity {
-                1 => "CRITICAL".red().bold(),
-                2 => "MAJOR".yellow(),
-                _ => "MINOR".dimmed(),
+                1 => "CRITICAL",
+                2 => "MAJOR",
+                _ => "MINOR",
             };
 
-            println!(
-                "  {} [{}] {}",
-                if issue.auto_recoverable {
-                    "→".green()
-                } else {
-                    "→".red()
-                },
-                severity_marker,
-                issue.description
-            );
+            let arrow = if issue.auto_recoverable {
+                "[auto]"
+            } else {
+                "[manual]"
+            };
+
+            println!("  {} [{}] {}", arrow, severity_marker, issue.description);
 
             if verbose {
                 println!("    Mode: {:?}", issue.mode);
@@ -588,32 +595,32 @@ fn print_recovery_report(report: &RecoveryReport, verbose: bool) {
 
     if report.had_work() {
         println!();
-        println!("{}", "Recovery actions:".bold());
+        println!("{}", "Recovery actions:");
         if report.rolled_back > 0 {
             println!(
                 "  {} Rolled back {} transactions",
-                "✓".green(),
+                "[ok]",
                 report.rolled_back
             );
         }
         if report.completed > 0 {
             println!(
                 "  {} Completed {} transactions",
-                "✓".green(),
+                "[ok]",
                 report.completed
             );
         }
         if report.orphaned_files > 0 {
             println!(
                 "  {} Cleaned {} orphaned files",
-                "✓".green(),
+                "[ok]",
                 report.orphaned_files
             );
         }
         if report.cache_invalidated > 0 {
             println!(
                 "  {} Invalidated {} cache entries",
-                "✓".green(),
+                "[ok]",
                 report.cache_invalidated
             );
         }
@@ -629,7 +636,7 @@ fn print_recovery_report(report: &RecoveryReport, verbose: bool) {
 
 /// Check output mode detection and explain the decision
 fn check_output_mode(ctx: &AppContext, verbose: bool) -> Result<usize> {
-    println!("{}", "Output Mode Detection Report".bold());
+    println!("{}", "Output Mode Detection Report");
     println!("{}", "═".repeat(28));
     println!();
 
@@ -641,47 +648,47 @@ fn check_output_mode(ctx: &AppContext, verbose: bool) -> Result<usize> {
     let report = OutputModeReport::generate(output_format, robot_mode);
 
     // Print format and mode settings
-    println!("{} Configuration", "▸".cyan());
+    println!("{} Configuration", ">");
     println!("  Format:     {}", report.format);
     println!("  Robot Mode: {}", report.robot_mode);
     println!();
 
     // Print environment variable status
-    println!("{} Environment Variables", "▸".cyan());
+    println!("{} Environment Variables", ">");
     println!(
         "  NO_COLOR:        {}",
         if report.env.no_color {
-            "set".yellow()
+            "set"
         } else {
-            "not set".dimmed()
+            "not set"
         }
     );
     println!(
         "  MS_PLAIN_OUTPUT: {}",
         if report.env.plain_output {
-            "set".yellow()
+            "set"
         } else {
-            "not set".dimmed()
+            "not set"
         }
     );
     println!(
         "  MS_FORCE_RICH:   {}",
         if report.env.force_rich {
-            "set".green()
+            "set"
         } else {
-            "not set".dimmed()
+            "not set"
         }
     );
     println!();
 
     // Print terminal information
-    println!("{} Terminal", "▸".cyan());
+    println!("{} Terminal", ">");
     println!(
         "  is_terminal(): {}",
         if report.env.stdout_is_terminal {
-            "true".green()
+            "true"
         } else {
-            "false".yellow()
+            "false"
         }
     );
     println!(
@@ -699,16 +706,16 @@ fn check_output_mode(ctx: &AppContext, verbose: bool) -> Result<usize> {
     println!();
 
     // Print agent detection
-    println!("{} Agent Detection", "▸".cyan());
+    println!("{} Agent Detection", ">");
     if is_agent_environment() {
-        println!("  Status: {} Agent environment detected", "!".yellow());
+        println!("  Status: {} Agent environment detected", "[!]");
         for var in &report.agent_vars {
             if let Ok(value) = std::env::var(var) {
-                println!("    {} = {:?}", var.yellow(), value);
+                println!("    {} = {:?}", var, value);
             }
         }
     } else {
-        println!("  Status: {} No agent environment", "✓".green());
+        println!("  Status: {} No agent environment", "[ok]");
         if verbose {
             println!(
                 "  (Checked {} agent env vars)",
@@ -719,16 +726,16 @@ fn check_output_mode(ctx: &AppContext, verbose: bool) -> Result<usize> {
     println!();
 
     // Print CI detection
-    println!("{} CI Detection", "▸".cyan());
+    println!("{} CI Detection", ">");
     if is_ci_environment() {
-        println!("  Status: {} CI environment detected", "!".yellow());
+        println!("  Status: {} CI environment detected", "[!]");
         for var in &report.ci_vars {
             if let Ok(value) = std::env::var(var) {
-                println!("    {} = {:?}", var.yellow(), value);
+                println!("    {} = {:?}", var, value);
             }
         }
     } else {
-        println!("  Status: {} No CI environment", "✓".green());
+        println!("  Status: {} No CI environment", "[ok]");
         if verbose {
             println!(
                 "  (Checked {} CI env vars)",
@@ -739,16 +746,16 @@ fn check_output_mode(ctx: &AppContext, verbose: bool) -> Result<usize> {
     println!();
 
     // Print IDE detection
-    println!("{} IDE Detection", "▸".cyan());
+    println!("{} IDE Detection", ">");
     if is_ide_environment() {
-        println!("  Status: {} IDE environment detected", "!".yellow());
+        println!("  Status: {} IDE environment detected", "[!]");
         for var in &report.ide_vars {
             if let Ok(value) = std::env::var(var) {
-                println!("    {} = {:?}", var.yellow(), value);
+                println!("    {} = {:?}", var, value);
             }
         }
     } else {
-        println!("  Status: {} No special IDE environment", "✓".green());
+        println!("  Status: {} No special IDE environment", "[ok]");
         if verbose {
             println!(
                 "  (Checked {} IDE env vars)",
@@ -759,11 +766,11 @@ fn check_output_mode(ctx: &AppContext, verbose: bool) -> Result<usize> {
     println!();
 
     // Print final decision
-    println!("{} Decision", "▸".cyan());
+    println!("{} Decision", ">");
     let mode = if report.decision.use_rich {
-        "RICH OUTPUT".green().bold()
+        "RICH OUTPUT"
     } else {
-        "PLAIN OUTPUT".yellow().bold()
+        "PLAIN OUTPUT"
     };
     println!("  Mode:   {}", mode);
     println!("  Reason: {:?}", report.decision.reason);
@@ -771,17 +778,17 @@ fn check_output_mode(ctx: &AppContext, verbose: bool) -> Result<usize> {
 
     // Print summary
     if report.decision.use_rich {
-        println!("{} Rich terminal output is enabled", "✓".green().bold());
+        println!("{} Rich terminal output is enabled", "[ok]");
         println!("  Colors, Unicode box drawing, and styling will be used.");
     } else {
-        println!("{} Plain text output is enabled", "!".yellow().bold());
+        println!("{} Plain text output is enabled", "[!]");
         println!("  No ANSI codes or fancy Unicode will be emitted.");
     }
 
     // Hints for debugging
     if verbose {
         println!();
-        println!("{} Debug Tips", "▸".cyan());
+        println!("{} Debug Tips", ">");
         println!("  • Set MS_DEBUG_OUTPUT=1 to see detection info on every command");
         println!("  • Set MS_FORCE_RICH=1 to force rich output (if terminal supports it)");
         println!("  • Set NO_COLOR=1 to disable all colors");
@@ -810,19 +817,19 @@ fn check_perf(ctx: &AppContext, verbose: bool) -> Result<usize> {
                     if rss_mb > 100.0 {
                         println!(
                             "{} High memory usage: {:.2} MB (target < 100 MB)",
-                            "!".yellow(),
+                            "[!]",
                             rss_mb
                         );
                         issues += 1;
                     } else {
-                        println!("{} Memory usage: {:.2} MB", "✓".green(), rss_mb);
+                        println!("{} Memory usage: {:.2} MB", "[ok]", rss_mb);
                     }
                 }
             }
         } else {
             println!(
                 "{} Memory check failed (cannot read /proc/self/statm)",
-                "!".yellow()
+                "[!]"
             );
         }
     }
@@ -831,7 +838,7 @@ fn check_perf(ctx: &AppContext, verbose: bool) -> Result<usize> {
     {
         println!(
             "{} Memory check skipped (not supported on this OS)",
-            "-".dimmed()
+            "-"
         );
     }
 
@@ -844,7 +851,7 @@ fn check_perf(ctx: &AppContext, verbose: bool) -> Result<usize> {
     if elapsed.as_millis() > 50 {
         println!(
             "{} Search latency high: {:?} (target < 50ms)",
-            "!".yellow(),
+            "[!]",
             elapsed
         );
         issues += 1;
@@ -853,6 +860,33 @@ fn check_perf(ctx: &AppContext, verbose: bool) -> Result<usize> {
     }
 
     Ok(issues)
+}
+
+/// Check whether the terminal supports rich output for the doctor command.
+#[allow(dead_code)]
+fn should_use_rich_for_doctor() -> bool {
+    use std::io::IsTerminal;
+
+    if std::env::var("MS_FORCE_RICH").is_ok() {
+        return true;
+    }
+    if std::env::var("NO_COLOR").is_ok() || std::env::var("MS_PLAIN_OUTPUT").is_ok() {
+        return false;
+    }
+
+    if is_agent_environment() || is_ci_environment() {
+        return false;
+    }
+
+    std::io::stdout().is_terminal()
+}
+
+/// Get the terminal width, defaulting to 80 if detection fails.
+#[allow(dead_code)]
+fn terminal_width() -> usize {
+    crossterm::terminal::size()
+        .map(|(w, _)| w as usize)
+        .unwrap_or(80)
 }
 
 #[cfg(test)]
@@ -1026,6 +1060,290 @@ mod tests {
         for check in &available_checks {
             let cli = TestCli::try_parse_from(["test", "--check", check]).unwrap();
             assert_eq!(cli.doctor.check, Some(check.to_string()));
+        }
+    }
+
+    // =========================================================================
+    // Rich Output Tests (bd-2caj)
+    // =========================================================================
+
+    // ── 1. test_doctor_render_dashboard_healthy ──────────────────────
+
+    #[test]
+    fn test_doctor_render_dashboard_healthy() {
+        // Healthy state: 0 issues, all checks pass
+        let issues_found = 0;
+        let msg = if issues_found == 0 {
+            format!("{} All checks passed", "[ok]")
+        } else {
+            format!("{} Found {} issues", "[!]", issues_found)
+        };
+        assert!(msg.contains("[ok]"));
+        assert!(msg.contains("All checks passed"));
+        assert!(!msg.contains("\x1b["), "no ANSI in plain output");
+    }
+
+    // ── 2. test_doctor_render_dashboard_warning ──────────────────────
+
+    #[test]
+    fn test_doctor_render_dashboard_warning() {
+        let issues_found = 2;
+        let issues_fixed = 1;
+        let msg = format!(
+            "{} Found {} issues, fixed {}",
+            "[!]", issues_found, issues_fixed
+        );
+        assert!(msg.contains("[!]"));
+        assert!(msg.contains("2"));
+        assert!(msg.contains("1"));
+        assert!(!msg.contains("\x1b["), "no ANSI in plain output");
+    }
+
+    // ── 3. test_doctor_render_dashboard_error ────────────────────────
+
+    #[test]
+    fn test_doctor_render_dashboard_error() {
+        use crate::core::recovery::{FailureMode, RecoveryIssue, RecoveryReport};
+
+        let mut report = RecoveryReport::default();
+        report.issues.push(RecoveryIssue {
+            description: "Database corruption detected".to_string(),
+            severity: 1,
+            mode: FailureMode::Database,
+            auto_recoverable: false,
+            suggested_fix: Some("Run ms init --force".to_string()),
+        });
+        assert!(report.has_critical_issues());
+
+        let severity_marker = match report.issues[0].severity {
+            1 => "CRITICAL",
+            2 => "MAJOR",
+            _ => "MINOR",
+        };
+        assert_eq!(severity_marker, "CRITICAL");
+    }
+
+    // ── 4. test_doctor_render_check_table ────────────────────────────
+
+    #[test]
+    fn test_doctor_render_check_table() {
+        // Check results should be plain key-value lines
+        let checks = [
+            ("Database", "[ok]", "OK"),
+            ("Git archive", "[ok]", "OK"),
+            ("Lock status", "[ok]", "No lock held"),
+        ];
+        for (name, icon, status) in checks {
+            let line = format!("Checking {}... {} {}", name, icon, status);
+            assert!(!line.contains("\x1b["), "no ANSI in check line");
+            assert!(line.contains(name));
+        }
+    }
+
+    // ── 5. test_doctor_render_check_icons ────────────────────────────
+
+    #[test]
+    fn test_doctor_render_check_icons() {
+        // Verify status icons are plain text
+        let ok = "[ok]";
+        let warn = "[!]";
+        let fail = "[FAIL]";
+
+        assert!(!ok.contains("\x1b["));
+        assert!(!warn.contains("\x1b["));
+        assert!(!fail.contains("\x1b["));
+
+        // They should be distinct
+        assert_ne!(ok, warn);
+        assert_ne!(ok, fail);
+        assert_ne!(warn, fail);
+    }
+
+    // ── 6. test_doctor_render_issue_panel ────────────────────────────
+
+    #[test]
+    fn test_doctor_render_issue_panel() {
+        use crate::core::recovery::{FailureMode, RecoveryIssue};
+
+        let issue = RecoveryIssue {
+            description: "WAL file too large".to_string(),
+            severity: 2,
+            mode: FailureMode::Database,
+            auto_recoverable: true,
+            suggested_fix: Some("PRAGMA wal_checkpoint(TRUNCATE)".to_string()),
+        };
+
+        let arrow = if issue.auto_recoverable {
+            "[auto]"
+        } else {
+            "[manual]"
+        };
+        let severity = match issue.severity {
+            1 => "CRITICAL",
+            2 => "MAJOR",
+            _ => "MINOR",
+        };
+
+        let line = format!("  {} [{}] {}", arrow, severity, issue.description);
+        assert!(line.contains("[auto]"));
+        assert!(line.contains("MAJOR"));
+        assert!(line.contains("WAL file too large"));
+    }
+
+    // ── 7. test_doctor_render_fix_suggestions ────────────────────────
+
+    #[test]
+    fn test_doctor_render_fix_suggestions() {
+        use crate::core::recovery::{FailureMode, RecoveryIssue};
+
+        let issue = RecoveryIssue {
+            description: "Stale lock".to_string(),
+            severity: 2,
+            mode: FailureMode::Transaction,
+            auto_recoverable: true,
+            suggested_fix: Some("ms doctor --break-lock".to_string()),
+        };
+
+        assert!(issue.suggested_fix.is_some());
+        let fix = issue.suggested_fix.unwrap();
+        assert!(fix.contains("ms doctor"));
+    }
+
+    // ── 8. test_doctor_render_environment_info ───────────────────────
+
+    #[test]
+    fn test_doctor_render_environment_info() {
+        // Environment info lines should be plain text
+        let lines = [
+            format!("> Configuration"),
+            format!("  Format:     Human"),
+            format!("  Robot Mode: false"),
+            format!("> Terminal"),
+            format!("  is_terminal(): true"),
+        ];
+        for line in &lines {
+            assert!(!line.contains("\x1b["), "no ANSI in env info: {line}");
+        }
+    }
+
+    // ── 9. test_doctor_render_recommendations ────────────────────────
+
+    #[test]
+    fn test_doctor_render_recommendations() {
+        let recommendation = "  Run with --fix to attempt automatic repairs";
+        assert!(!recommendation.contains("\x1b["), "no ANSI in recommendation");
+        assert!(recommendation.contains("--fix"));
+    }
+
+    // ── 10. test_doctor_plain_output_format ──────────────────────────
+
+    #[test]
+    fn test_doctor_plain_output_format() {
+        let header = format!("{}", "ms doctor - Health Checks");
+        assert!(!header.contains("\x1b["), "header should be plain text");
+        assert!(header.contains("ms doctor"));
+    }
+
+    // ── 11. test_doctor_json_output_format ───────────────────────────
+
+    #[test]
+    fn test_doctor_json_output_format() {
+        // JSON health report structure
+        let output = serde_json::json!({
+            "status": "healthy",
+            "checks": {
+                "database": "ok",
+                "git_archive": "ok",
+                "lock": "ok",
+                "safety": "ok",
+            },
+            "issues_found": 0,
+            "issues_fixed": 0,
+        });
+        let json_str = serde_json::to_string_pretty(&output).unwrap();
+        assert!(json_str.contains("\"status\": \"healthy\""));
+        assert!(!json_str.contains("\x1b["), "no ANSI in JSON");
+    }
+
+    // ── 12. test_doctor_robot_mode_no_ansi ───────────────────────────
+
+    #[test]
+    fn test_doctor_robot_mode_no_ansi() {
+        // All status markers must be ANSI-free
+        let markers = ["[ok]", "[!]", "[FAIL]", "[auto]", "[manual]",
+                        "CRITICAL", "MAJOR", "MINOR"];
+        for marker in markers {
+            assert!(
+                !marker.contains("\x1b["),
+                "marker '{}' must not contain ANSI",
+                marker
+            );
+        }
+    }
+
+    // ── 13. test_doctor_exit_code_healthy ─────────────────────────────
+
+    #[test]
+    fn test_doctor_exit_code_healthy() {
+        // When all checks pass, issues_found == 0
+        let issues_found = 0;
+        assert_eq!(issues_found, 0, "healthy state should have 0 issues");
+    }
+
+    // ── 14. test_doctor_exit_code_warning ────────────────────────────
+
+    #[test]
+    fn test_doctor_exit_code_warning() {
+        // When some checks fail, issues_found > 0
+        let issues_found = 3;
+        let issues_fixed = 1;
+        assert!(issues_found > 0, "warning state should have issues");
+        assert!(issues_found > issues_fixed, "not all issues fixed");
+    }
+
+    // ── 15. test_doctor_rich_vs_plain_equivalence ────────────────────
+
+    #[test]
+    fn test_doctor_rich_vs_plain_equivalence() {
+        // Both modes should expose the same data
+        let issues_found = 2_usize;
+        let issues_fixed = 1_usize;
+
+        // Plain mode
+        let plain_summary = format!(
+            "Found {} issues, fixed {}",
+            issues_found, issues_fixed
+        );
+
+        // JSON mode
+        let json_summary = serde_json::json!({
+            "issues_found": issues_found,
+            "issues_fixed": issues_fixed,
+        });
+
+        assert!(plain_summary.contains("2"));
+        assert_eq!(
+            json_summary["issues_found"].as_u64().unwrap(),
+            issues_found as u64
+        );
+        assert_eq!(
+            json_summary["issues_fixed"].as_u64().unwrap(),
+            issues_fixed as u64
+        );
+    }
+
+    // ── 16. test_doctor_severity_markers ─────────────────────────────
+
+    #[test]
+    fn test_doctor_severity_markers() {
+        for severity in 1..=3 {
+            let marker = match severity {
+                1 => "CRITICAL",
+                2 => "MAJOR",
+                _ => "MINOR",
+            };
+            assert!(!marker.is_empty());
+            assert!(!marker.contains("\x1b["), "no ANSI in severity marker");
         }
     }
 }

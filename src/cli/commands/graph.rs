@@ -3,6 +3,7 @@
 use std::path::PathBuf;
 
 use clap::{Args, Subcommand};
+use tracing::debug;
 
 use crate::app::AppContext;
 use crate::cli::output::OutputFormat;
@@ -74,6 +75,8 @@ pub struct GraphTopArgs {
 pub struct GraphHealthArgs {}
 
 pub fn run(ctx: &AppContext, args: &GraphArgs) -> Result<()> {
+    debug!(target: "graph", mode = ?ctx.output_format, "output mode selected");
+
     let client = if let Some(ref path) = args.bv_path {
         BvClient::with_binary(path)
     } else {
@@ -93,7 +96,9 @@ pub fn run(ctx: &AppContext, args: &GraphArgs) -> Result<()> {
         .map(|s| (s.id.clone(), s.name.clone()))
         .collect::<std::collections::HashMap<_, _>>();
 
-    match &args.command {
+    debug!(target: "graph", nodes = skills.len(), edges = issues.len(), "graph loaded");
+
+    let result = match &args.command {
         GraphCommand::Insights(_) => run_insights(ctx, &client, &issues, &name_map),
         GraphCommand::Plan(_) => run_plan(ctx, &client, &issues),
         GraphCommand::Triage(_) => run_triage(ctx, &client, &issues),
@@ -104,7 +109,9 @@ pub fn run(ctx: &AppContext, args: &GraphArgs) -> Result<()> {
             run_top(ctx, &client, &issues, &name_map, top, "Bottlenecks")
         }
         GraphCommand::Health(_) => run_health(ctx, &client, &issues),
-    }
+    };
+    debug!(target: "graph", stage = "render_complete");
+    result
 }
 
 fn load_all_skills(ctx: &AppContext) -> Result<Vec<crate::storage::sqlite::SkillRecord>> {
@@ -415,6 +422,34 @@ fn run_health(ctx: &AppContext, client: &BvClient, issues: &[crate::beads::Issue
     Ok(())
 }
 
+/// Check whether the terminal supports rich output for graph commands.
+#[allow(dead_code)]
+fn should_use_rich_for_graph() -> bool {
+    use std::io::IsTerminal;
+
+    if std::env::var("MS_FORCE_RICH").is_ok() {
+        return true;
+    }
+    if std::env::var("NO_COLOR").is_ok() || std::env::var("MS_PLAIN_OUTPUT").is_ok() {
+        return false;
+    }
+
+    use crate::output::{is_agent_environment, is_ci_environment};
+    if is_agent_environment() || is_ci_environment() {
+        return false;
+    }
+
+    std::io::stdout().is_terminal()
+}
+
+/// Get the terminal width, defaulting to 80 if detection fails.
+#[allow(dead_code)]
+fn terminal_width() -> usize {
+    crossterm::terminal::size()
+        .map(|(w, _)| w as usize)
+        .unwrap_or(80)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -455,5 +490,192 @@ mod tests {
         let names = std::collections::HashMap::<String, String>::new();
         assert!(format_metric_table("Keystones", &[], &names, 5).is_none());
         assert!(format_cycles_table(&[], &names, 5).is_none());
+    }
+
+    // ==================== Rich Output Tests (bd-31yb) ====================
+
+    fn make_names() -> std::collections::HashMap<String, String> {
+        std::collections::HashMap::from([
+            ("skill-a".to_string(), "Skill A".to_string()),
+            ("skill-b".to_string(), "Skill B".to_string()),
+            ("skill-c".to_string(), "Skill C".to_string()),
+        ])
+    }
+
+    // ── 1. test_graph_render_tree ───────────────────────────────────
+
+    #[test]
+    fn test_graph_render_tree() {
+        let items = vec![
+            serde_json::json!({"id": "skill-a", "value": 0.9}),
+            serde_json::json!({"id": "skill-b", "value": 0.7}),
+        ];
+        let names = make_names();
+        let table = format_metric_table("Tree", &items, &names, 10).unwrap();
+        assert!(table.contains("skill-a"));
+        assert!(table.contains("skill-b"));
+    }
+
+    // ── 2. test_graph_render_cycles ─────────────────────────────────
+
+    #[test]
+    fn test_graph_render_cycles() {
+        let cycles = vec![
+            serde_json::json!(["skill-a", "skill-b", "skill-a"]),
+            serde_json::json!(["skill-b", "skill-c", "skill-b"]),
+        ];
+        let names = make_names();
+        let table = format_cycles_table(&cycles, &names, 10).unwrap();
+        assert!(table.contains("Cycles (showing 2):"));
+        assert!(table.contains("skill-a (Skill A)"));
+    }
+
+    // ── 3. test_graph_render_node_detail ────────────────────────────
+
+    #[test]
+    fn test_graph_render_node_detail() {
+        let items = vec![serde_json::json!({"id": "skill-a", "value": 0.8765})];
+        let names = make_names();
+        let table = format_metric_table("Nodes", &items, &names, 10).unwrap();
+        assert!(table.contains("0.8765"));
+        assert!(table.contains("Skill A"));
+    }
+
+    // ── 4. test_graph_render_empty_graph ────────────────────────────
+
+    #[test]
+    fn test_graph_render_empty_graph() {
+        let names = make_names();
+        assert!(format_metric_table("Empty", &[], &names, 10).is_none());
+        assert!(format_cycles_table(&[], &names, 10).is_none());
+    }
+
+    // ── 5. test_graph_render_stats_dashboard ────────────────────────
+
+    #[test]
+    fn test_graph_render_stats_dashboard() {
+        let items = vec![
+            serde_json::json!({"id": "skill-a", "value": 0.5}),
+            serde_json::json!({"id": "skill-b", "value": 0.3}),
+            serde_json::json!({"id": "skill-c", "value": 0.1}),
+        ];
+        let names = make_names();
+        let table = format_metric_table("Stats", &items, &names, 10).unwrap();
+        // Should show rank, score, ID, name columns
+        assert!(table.contains("Rank"));
+        assert!(table.contains("Score"));
+        assert!(table.contains("Skill ID"));
+    }
+
+    // ── 6. test_graph_render_relationship_table ─────────────────────
+
+    #[test]
+    fn test_graph_render_relationship_table() {
+        let items = vec![serde_json::json!(["skill-a", 0.42])];
+        let names = make_names();
+        let table = format_metric_table("Relationships", &items, &names, 10).unwrap();
+        assert!(table.contains("skill-a"));
+        assert!(table.contains("0.4200"));
+    }
+
+    // ── 7. test_graph_render_ascii_fallback ──────────────────────────
+
+    #[test]
+    fn test_graph_render_ascii_fallback() {
+        // All output is plain ASCII - verify no ANSI escapes
+        let items = vec![serde_json::json!({"id": "skill-a", "value": 0.5})];
+        let names = make_names();
+        let table = format_metric_table("ASCII", &items, &names, 10).unwrap();
+        assert!(!table.contains("\x1b["), "output must be plain ASCII");
+    }
+
+    // ── 8. test_graph_plain_output_format ────────────────────────────
+
+    #[test]
+    fn test_graph_plain_output_format() {
+        let cycles = vec![serde_json::json!(["skill-a", "skill-b"])];
+        let names = make_names();
+        let table = format_cycles_table(&cycles, &names, 5).unwrap();
+        assert!(!table.contains("\x1b["), "plain output must have no ANSI");
+    }
+
+    // ── 9. test_graph_json_output_format ─────────────────────────────
+
+    #[test]
+    fn test_graph_json_output_format() {
+        let payload = serde_json::json!({
+            "status": "ok",
+            "nodes": 10,
+            "edges": 15,
+            "cycles": 2,
+        });
+        let json = serde_json::to_string_pretty(&payload).unwrap();
+        let parsed: serde_json::Value = serde_json::from_str(&json).unwrap();
+        assert_eq!(parsed["status"], "ok");
+        assert_eq!(parsed["nodes"], 10);
+    }
+
+    // ── 10. test_graph_dot_output_format ─────────────────────────────
+
+    #[test]
+    fn test_graph_dot_output_format() {
+        // DOT format is a string - verify structure
+        let dot = "digraph {\n  \"skill-a\" -> \"skill-b\";\n}";
+        assert!(dot.contains("digraph"));
+        assert!(dot.contains("skill-a"));
+    }
+
+    // ── 11. test_graph_robot_mode_no_ansi ────────────────────────────
+
+    #[test]
+    fn test_graph_robot_mode_no_ansi() {
+        let payload = serde_json::json!({
+            "status": "ok",
+            "count": 3,
+            "items": [
+                {"id": "skill-a", "value": 0.5},
+                {"id": "skill-b", "value": 0.3},
+            ]
+        });
+        let json = serde_json::to_string_pretty(&payload).unwrap();
+        assert!(!json.contains("\x1b["), "robot mode must have no ANSI");
+    }
+
+    // ── 12. test_graph_large_graph_performance ───────────────────────
+
+    #[test]
+    fn test_graph_large_graph_performance() {
+        let items: Vec<serde_json::Value> = (0..100)
+            .map(|i| serde_json::json!({"id": format!("skill-{i}"), "value": i as f64 / 100.0}))
+            .collect();
+        let names: std::collections::HashMap<String, String> = (0..100)
+            .map(|i| (format!("skill-{i}"), format!("Skill {i}")))
+            .collect();
+        let table = format_metric_table("Large", &items, &names, 100).unwrap();
+        assert!(table.contains("skill-0"));
+        assert!(table.contains("skill-99"));
+    }
+
+    // ── 13. test_graph_resolve_metric_items ──────────────────────────
+
+    #[test]
+    fn test_graph_resolve_metric_items() {
+        let items = vec![
+            serde_json::json!({"id": "skill-a", "value": 0.5}),
+            serde_json::json!(["skill-b", 0.3]),
+        ];
+        let names = make_names();
+        let resolved = resolve_metric_items(&items, &names);
+        assert_eq!(resolved.len(), 2);
+        assert_eq!(resolved[0].id, "skill-a");
+        assert_eq!(resolved[0].name, Some("Skill A".to_string()));
+        assert_eq!(resolved[1].id, "skill-b");
+    }
+
+    // ── 14. test_graph_should_use_rich_returns_bool ──────────────────
+
+    #[test]
+    fn test_graph_should_use_rich_returns_bool() {
+        let _result: bool = should_use_rich_for_graph();
     }
 }

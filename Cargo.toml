@@ -130,6 +130,10 @@ default = []
 name = "search_perf"
 harness = false
 
+[[bench]]
+name = "rich_output_perf"
+harness = false
+
 [profile.release]
 opt-level = "z"
 lto = true

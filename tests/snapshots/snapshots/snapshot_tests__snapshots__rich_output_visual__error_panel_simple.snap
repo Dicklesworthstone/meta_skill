@@ -1,0 +1,7 @@
+---
+source: tests/snapshots/rich_output_visual.rs
+expression: output
+---
+╭────────────────────── ✗ Not Found ───────────────────────╮
+│ Skill 'foo' not found in any layer                       │
+╰──────────────────────────────────────────────────────────╯

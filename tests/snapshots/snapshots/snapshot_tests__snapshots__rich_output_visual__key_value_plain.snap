@@ -1,0 +1,7 @@
+---
+source: tests/snapshots/rich_output_visual.rs
+expression: output
+---
+Name: Debug Rust Builds
+Layer: project
+Tags: rust, debugging, build

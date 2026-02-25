@@ -1,0 +1,7 @@
+---
+source: tests/snapshots/rich_output_visual.rs
+expression: output
+---
+╭────────────────────── ⚠ Deprecated ──────────────────────╮
+│ The --legacy flag will be removed in v2.0                │
+╰──────────────────────────────────────────────────────────╯

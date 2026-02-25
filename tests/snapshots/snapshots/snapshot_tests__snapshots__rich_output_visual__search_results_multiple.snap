@@ -1,0 +1,13 @@
+---
+source: tests/snapshots/rich_output_visual.rs
+expression: output
+---
+┏━━━┳━━━━━━━━━━━━━━┳━━━━━━━┳━━━━━━━━━┳━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓
+┃ # ┃ Skill        ┃ Score ┃ Layer   ┃ Description                              ┃
+┡━━━╇━━━━━━━━━━━━━━╇━━━━━━━╇━━━━━━━━━╇━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┩
+│ 1 │ debug-rust   │  0.95 │ project │ Debug Rust builds and compiler errors    │
+│ 2 │ test-runner  │  0.88 │ org     │ Run test suites efficiently              │
+│ 3 │ git-workflow │  0.82 │ global  │ Git workflow helpers for feature bran... │
+│ 4 │ perf-tuning  │  0.75 │ project │ Performance optimization and profiling   │
+│ 5 │ code-review  │  0.71 │ org     │ Code review checklist and guidelines     │
+└───┴──────────────┴───────┴─────────┴──────────────────────────────────────────┘
