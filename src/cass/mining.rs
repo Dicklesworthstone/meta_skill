@@ -2196,7 +2196,7 @@ And more text.
 
         let pattern = extract_command_patterns(&session).expect("Should extract pattern");
 
-        if let PatternType::CommandPattern { ref commands, .. } = pattern.pattern_type {
+        if let PatternType::CommandPattern { commands: ref _outer_commands, .. } = pattern.pattern_type {
             let ir = pattern_to_ir(&pattern);
             if let PatternIR::CommandSeq { commands, .. } = ir {
                 let cmd = &commands[0];

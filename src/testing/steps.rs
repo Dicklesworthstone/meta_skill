@@ -664,4 +664,249 @@ mod tests {
         };
         assert!(execute_assert(&step, &mut ctx, false).is_err());
     }
+
+    #[test]
+    fn test_execute_assert_stdout_not_contains_fails() {
+        let mut ctx = TestContext::default();
+        ctx.last_stdout = "error occurred".to_string();
+
+        let step = Assertions {
+            stdout_not_contains: Some("error".to_string()),
+            ..Default::default()
+        };
+        assert!(execute_assert(&step, &mut ctx, false).is_err());
+    }
+
+    #[test]
+    fn test_execute_assert_stderr_empty() {
+        let mut ctx = TestContext::default();
+        ctx.last_stderr = String::new();
+
+        let step = Assertions {
+            stderr_empty: Some(true),
+            ..Default::default()
+        };
+        assert!(execute_assert(&step, &mut ctx, false).is_ok());
+
+        ctx.last_stderr = "some error".to_string();
+        assert!(execute_assert(&step, &mut ctx, false).is_err());
+    }
+
+    #[test]
+    fn test_execute_assert_skill_loaded() {
+        let mut ctx = TestContext::default();
+
+        // No skill loaded yet
+        let step = Assertions {
+            skill_loaded: Some(true),
+            ..Default::default()
+        };
+        assert!(execute_assert(&step, &mut ctx, false).is_err());
+
+        // Now load a skill
+        ctx.loaded_skill = Some(LoadedSkillInfo {
+            skill_id: "test".to_string(),
+            sections: vec!["overview".to_string()],
+            content_length: 100,
+        });
+        assert!(execute_assert(&step, &mut ctx, false).is_ok());
+    }
+
+    #[test]
+    fn test_execute_assert_sections_present() {
+        let mut ctx = TestContext::default();
+        ctx.loaded_skill = Some(LoadedSkillInfo {
+            skill_id: "test".to_string(),
+            sections: vec!["overview".to_string(), "examples".to_string()],
+            content_length: 100,
+        });
+
+        let step = Assertions {
+            sections_present: Some(vec!["overview".to_string()]),
+            ..Default::default()
+        };
+        assert!(execute_assert(&step, &mut ctx, false).is_ok());
+
+        let step = Assertions {
+            sections_present: Some(vec!["nonexistent".to_string()]),
+            ..Default::default()
+        };
+        assert!(execute_assert(&step, &mut ctx, false).is_err());
+    }
+
+    #[test]
+    fn test_execute_assert_tokens_used_lt() {
+        let mut ctx = TestContext::default();
+        ctx.tokens_used = 500;
+
+        let step = Assertions {
+            tokens_used_lt: Some(1000),
+            ..Default::default()
+        };
+        assert!(execute_assert(&step, &mut ctx, false).is_ok());
+
+        let step = Assertions {
+            tokens_used_lt: Some(500),
+            ..Default::default()
+        };
+        assert!(execute_assert(&step, &mut ctx, false).is_err());
+
+        let step = Assertions {
+            tokens_used_lt: Some(100),
+            ..Default::default()
+        };
+        assert!(execute_assert(&step, &mut ctx, false).is_err());
+    }
+
+    #[test]
+    fn test_execute_assert_multiple_failures() {
+        let mut ctx = TestContext::default();
+        ctx.last_exit_code = Some(1);
+        ctx.last_stdout = "hello".to_string();
+
+        let step = Assertions {
+            exit_code: Some(0),
+            stdout_contains: Some("missing".to_string()),
+            ..Default::default()
+        };
+        let err = execute_assert(&step, &mut ctx, false).unwrap_err();
+        let msg = err.to_string();
+        // Both failures should be reported
+        assert!(msg.contains("exit_code"));
+        assert!(msg.contains("stdout_contains"));
+    }
+
+    #[test]
+    fn test_evaluate_condition_empty() {
+        // Empty condition (all None) should evaluate to true
+        let cond = Condition::default();
+        assert!(evaluate_condition(&cond));
+    }
+
+    #[test]
+    fn test_evaluate_condition_platform() {
+        let cond = Condition {
+            platform: Some(std::env::consts::OS.to_string()),
+            ..Default::default()
+        };
+        assert!(evaluate_condition(&cond));
+
+        let cond = Condition {
+            platform: Some("nonexistent_os".to_string()),
+            ..Default::default()
+        };
+        assert!(!evaluate_condition(&cond));
+    }
+
+    #[test]
+    fn test_evaluate_condition_env_exists() {
+        let cond = Condition {
+            env_exists: Some("HOME".to_string()),
+            ..Default::default()
+        };
+        assert!(evaluate_condition(&cond));
+
+        let cond = Condition {
+            env_exists: Some("MS_NONEXISTENT_TEST_VAR_99".to_string()),
+            ..Default::default()
+        };
+        assert!(!evaluate_condition(&cond));
+    }
+
+    #[test]
+    fn test_context_expand_multiple_vars() {
+        let mut ctx = TestContext::default();
+        ctx.variables
+            .insert("first".to_string(), "hello".to_string());
+        ctx.variables
+            .insert("second".to_string(), "world".to_string());
+
+        assert_eq!(ctx.expand("${first} ${second}!"), "hello world!");
+    }
+
+    #[test]
+    fn test_context_expand_unknown_var_unchanged() {
+        let ctx = TestContext::default();
+        assert_eq!(ctx.expand("${unknown}"), "${unknown}");
+    }
+
+    #[test]
+    fn test_context_default() {
+        let ctx = TestContext::default();
+        assert!(ctx.variables.is_empty());
+        assert!(ctx.last_stdout.is_empty());
+        assert!(ctx.last_stderr.is_empty());
+        assert!(ctx.last_exit_code.is_none());
+        assert!(ctx.loaded_skill.is_none());
+        assert_eq!(ctx.tokens_used, 0);
+        assert!(ctx.retrieval_rank.is_none());
+    }
+
+    #[test]
+    fn test_execute_set_with_expansion() {
+        let mut ctx = TestContext::default();
+        ctx.variables
+            .insert("base".to_string(), "/tmp".to_string());
+
+        let step = SetStep {
+            name: "full_path".to_string(),
+            value: "${base}/file.txt".to_string(),
+        };
+        execute_set(&step, &mut ctx, false).unwrap();
+        assert_eq!(
+            ctx.variables.get("full_path"),
+            Some(&"/tmp/file.txt".to_string())
+        );
+    }
+
+    #[test]
+    fn test_execute_run_failing_command() {
+        let mut ctx = TestContext::default();
+        let step = RunStep {
+            cmd: "false".to_string(),
+            cwd: None,
+            env: HashMap::new(),
+            stdin: None,
+            timeout: None,
+        };
+        execute_run(&step, &mut ctx, false, None).unwrap();
+        assert_ne!(ctx.last_exit_code, Some(0));
+    }
+
+    #[test]
+    fn test_execute_run_with_env() {
+        let mut ctx = TestContext::default();
+        let mut env = HashMap::new();
+        env.insert(
+            "MS_TEST_MARKER".to_string(),
+            "test_value_42".to_string(),
+        );
+        let step = RunStep {
+            cmd: "echo $MS_TEST_MARKER".to_string(),
+            cwd: None,
+            env,
+            stdin: None,
+            timeout: None,
+        };
+        execute_run(&step, &mut ctx, false, None).unwrap();
+        assert!(ctx.last_stdout.contains("test_value_42"));
+    }
+
+    #[test]
+    fn test_execute_assert_retrieval_rank() {
+        let mut ctx = TestContext::default();
+        ctx.retrieval_rank = Some(3);
+
+        let step = Assertions {
+            retrieval_rank_le: Some(5),
+            ..Default::default()
+        };
+        assert!(execute_assert(&step, &mut ctx, false).is_ok());
+
+        let step = Assertions {
+            retrieval_rank_le: Some(2),
+            ..Default::default()
+        };
+        assert!(execute_assert(&step, &mut ctx, false).is_err());
+    }
 }

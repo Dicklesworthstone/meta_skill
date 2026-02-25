@@ -542,7 +542,7 @@ mod tests {
 
     #[test]
     fn test_security_render_audit_log() {
-        let events = vec![
+        let events = [
             serde_json::json!({"ts": "2025-06-01T12:00:00Z", "action": "scan", "result": "allowed"}),
             serde_json::json!({"ts": "2025-06-01T12:01:00Z", "action": "scan", "result": "disallowed"}),
         ];

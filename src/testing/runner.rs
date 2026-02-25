@@ -98,6 +98,121 @@ impl SkillTestReport {
     }
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_status_serialization() {
+        let json = serde_json::to_string(&TestStatus::Passed).unwrap();
+        assert_eq!(json, "\"passed\"");
+        let json = serde_json::to_string(&TestStatus::Failed).unwrap();
+        assert_eq!(json, "\"failed\"");
+        let json = serde_json::to_string(&TestStatus::Skipped).unwrap();
+        assert_eq!(json, "\"skipped\"");
+        let json = serde_json::to_string(&TestStatus::Timeout).unwrap();
+        assert_eq!(json, "\"timeout\"");
+    }
+
+    #[test]
+    fn test_status_deserialization() {
+        let s: TestStatus = serde_json::from_str("\"passed\"").unwrap();
+        assert_eq!(s, TestStatus::Passed);
+        let s: TestStatus = serde_json::from_str("\"failed\"").unwrap();
+        assert_eq!(s, TestStatus::Failed);
+    }
+
+    #[test]
+    fn test_report_success_all_passed() {
+        let report = SkillTestReport {
+            skill_id: "test-skill".to_string(),
+            tests_run: 3,
+            passed: 3,
+            failed: 0,
+            skipped: 0,
+            duration_ms: 100,
+            results: vec![],
+        };
+        assert!(report.success());
+    }
+
+    #[test]
+    fn test_report_success_with_failures() {
+        let report = SkillTestReport {
+            skill_id: "test-skill".to_string(),
+            tests_run: 3,
+            passed: 2,
+            failed: 1,
+            skipped: 0,
+            duration_ms: 200,
+            results: vec![],
+        };
+        assert!(!report.success());
+    }
+
+    #[test]
+    fn test_report_success_with_skipped_only() {
+        let report = SkillTestReport {
+            skill_id: "test-skill".to_string(),
+            tests_run: 2,
+            passed: 0,
+            failed: 0,
+            skipped: 2,
+            duration_ms: 0,
+            results: vec![],
+        };
+        assert!(report.success());
+    }
+
+    #[test]
+    fn test_result_serialization_roundtrip() {
+        let result = TestResult {
+            name: "my test".to_string(),
+            status: TestStatus::Failed,
+            duration_ms: 42,
+            failures: vec!["exit_code mismatch".to_string()],
+        };
+        let json = serde_json::to_string(&result).unwrap();
+        let parsed: TestResult = serde_json::from_str(&json).unwrap();
+        assert_eq!(parsed.name, "my test");
+        assert_eq!(parsed.status, TestStatus::Failed);
+        assert_eq!(parsed.duration_ms, 42);
+        assert_eq!(parsed.failures.len(), 1);
+    }
+
+    #[test]
+    fn test_options_default() {
+        let opts = TestOptions::default();
+        assert!(!opts.verbose);
+        assert!(!opts.fail_fast);
+        assert!(opts.test_name.is_none());
+        assert!(opts.include_tags.is_empty());
+        assert!(opts.exclude_tags.is_empty());
+        assert!(opts.timeout_override.is_none());
+    }
+
+    #[test]
+    fn test_report_serialization() {
+        let report = SkillTestReport {
+            skill_id: "my-skill".to_string(),
+            tests_run: 1,
+            passed: 1,
+            failed: 0,
+            skipped: 0,
+            duration_ms: 50,
+            results: vec![TestResult {
+                name: "basic".to_string(),
+                status: TestStatus::Passed,
+                duration_ms: 50,
+                failures: vec![],
+            }],
+        };
+        let json = serde_json::to_string(&report).unwrap();
+        assert!(json.contains("\"skill_id\":\"my-skill\""));
+        assert!(json.contains("\"passed\":1"));
+    }
+}
+
 /// Runner for skill tests.
 pub struct SkillTestRunner<'a> {
     ctx: &'a AppContext,

@@ -1,9 +1,12 @@
 //! E2E test suite entry point.
 
+mod auto_load_workflow;
+mod backup_workflow;
 mod bundle_workflow;
 mod cass_workflow;
 #[path = "../common/mod.rs"]
 mod common;
+mod cross_project_workflow;
 mod dedup_workflow;
 mod doctor_workflow;
 mod experiment_workflow;

@@ -202,7 +202,7 @@ mod tests {
         assert!(low.priority < high.priority);
 
         // Verify sorting works correctly
-        let mut overlays = vec![high.clone(), low.clone()];
+        let mut overlays = [high.clone(), low.clone()];
         overlays.sort_by(|a, b| a.priority.cmp(&b.priority));
         assert_eq!(overlays[0].id, "low");
         assert_eq!(overlays[1].id, "high");

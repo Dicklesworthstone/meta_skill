@@ -246,6 +246,7 @@ impl McpClient {
     }
 
     /// Shutdown the server
+    #[allow(dead_code)]
     fn shutdown(&mut self) -> Result<McpResponse> {
         self.request("shutdown", json!({}))
     }

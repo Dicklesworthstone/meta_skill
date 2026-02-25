@@ -12,7 +12,7 @@
 
 use ms::cli::output::OutputFormat;
 use ms::output::detection::{
-    AGENT_ENV_VARS, CI_ENV_VARS, IDE_ENV_VARS, OutputDecision, OutputDecisionReason,
+    AGENT_ENV_VARS, CI_ENV_VARS, IDE_ENV_VARS, OutputDecisionReason,
     OutputDetector, OutputEnvironment, OutputModeReport, is_agent_environment, is_ci_environment,
     is_ide_environment, maybe_print_debug_output, should_use_rich_output,
     should_use_rich_with_flags,

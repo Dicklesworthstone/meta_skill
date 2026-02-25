@@ -467,7 +467,7 @@ fn test_remote_management() -> Result<()> {
     let output = fixture.run_ms(&["--robot", "remote", "list"]);
     fixture.assert_success(&output, "remote list after remove");
     let list_output = &output.stdout;
-    let json_output = output.json();
+    let _json_output = output.json();
     // After removal, remote should not appear
     println!("[VERIFY] List after removal: {}", list_output);
     fixture.checkpoint("post_verify");

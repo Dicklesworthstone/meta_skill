@@ -488,4 +488,323 @@ steps:
             _ => panic!("expected Assert step"),
         }
     }
+
+    #[test]
+    fn parse_minimal_spec() {
+        let yaml = "name: minimal\nsteps: []\n";
+        let spec = TestSpec::from_yaml(yaml).unwrap();
+        assert_eq!(spec.name, "minimal");
+        assert!(spec.description.is_none());
+        assert!(spec.skill.is_none());
+        assert!(spec.setup.is_none());
+        assert!(spec.steps.is_empty());
+        assert!(spec.cleanup.is_none());
+        assert!(spec.timeout.is_none());
+        assert!(spec.tags.is_empty());
+        assert!(spec.skip_if.is_none());
+        assert!(spec.requires.is_none());
+    }
+
+    #[test]
+    fn parse_write_file_step() {
+        let yaml = r#"
+name: test
+steps:
+  - write_file:
+      path: "/tmp/out.txt"
+      content: "hello world"
+"#;
+        let spec = TestSpec::from_yaml(yaml).unwrap();
+        match &spec.steps[0] {
+            TestStep::WriteFile { write_file } => {
+                assert_eq!(write_file.path, "/tmp/out.txt");
+                assert_eq!(write_file.content, "hello world");
+            }
+            _ => panic!("expected WriteFile step"),
+        }
+    }
+
+    #[test]
+    fn parse_set_step() {
+        let yaml = r#"
+name: test
+steps:
+  - set:
+      name: MY_VAR
+      value: some_value
+"#;
+        let spec = TestSpec::from_yaml(yaml).unwrap();
+        match &spec.steps[0] {
+            TestStep::Set { set } => {
+                assert_eq!(set.name, "MY_VAR");
+                assert_eq!(set.value, "some_value");
+            }
+            _ => panic!("expected Set step"),
+        }
+    }
+
+    #[test]
+    fn parse_copy_step() {
+        let yaml = r#"
+name: test
+steps:
+  - copy:
+      from: "/tmp/a.txt"
+      to: "/tmp/b.txt"
+"#;
+        let spec = TestSpec::from_yaml(yaml).unwrap();
+        match &spec.steps[0] {
+            TestStep::Copy { copy } => {
+                assert_eq!(copy.from, "/tmp/a.txt");
+                assert_eq!(copy.to, "/tmp/b.txt");
+            }
+            _ => panic!("expected Copy step"),
+        }
+    }
+
+    #[test]
+    fn parse_sleep_step() {
+        let yaml = r#"
+name: test
+steps:
+  - sleep:
+      duration: 500ms
+"#;
+        let spec = TestSpec::from_yaml(yaml).unwrap();
+        match &spec.steps[0] {
+            TestStep::Sleep { sleep } => {
+                assert_eq!(sleep.duration, Duration::from_millis(500));
+            }
+            _ => panic!("expected Sleep step"),
+        }
+    }
+
+    #[test]
+    fn parse_mkdir_step() {
+        let yaml = r#"
+name: test
+steps:
+  - mkdir:
+      path: "/tmp/testdir"
+      parents: true
+"#;
+        let spec = TestSpec::from_yaml(yaml).unwrap();
+        match &spec.steps[0] {
+            TestStep::Mkdir { mkdir } => {
+                assert_eq!(mkdir.path, "/tmp/testdir");
+                assert!(mkdir.parents);
+            }
+            _ => panic!("expected Mkdir step"),
+        }
+    }
+
+    #[test]
+    fn parse_remove_step() {
+        let yaml = r#"
+name: test
+steps:
+  - remove:
+      path: "/tmp/testdir"
+      recursive: true
+"#;
+        let spec = TestSpec::from_yaml(yaml).unwrap();
+        match &spec.steps[0] {
+            TestStep::Remove { remove } => {
+                assert_eq!(remove.path, "/tmp/testdir");
+                assert!(remove.recursive);
+            }
+            _ => panic!("expected Remove step"),
+        }
+    }
+
+    #[test]
+    fn parse_if_step() {
+        let yaml = r#"
+name: test
+steps:
+  - if:
+      condition:
+        platform: linux
+      then:
+        - set:
+            name: OS
+            value: linux
+      else:
+        - set:
+            name: OS
+            value: other
+"#;
+        let spec = TestSpec::from_yaml(yaml).unwrap();
+        match &spec.steps[0] {
+            TestStep::If { if_step } => {
+                assert_eq!(if_step.condition.platform, Some("linux".to_string()));
+                assert_eq!(if_step.then_steps.len(), 1);
+                assert!(if_step.else_steps.is_some());
+                assert_eq!(if_step.else_steps.as_ref().unwrap().len(), 1);
+            }
+            _ => panic!("expected If step"),
+        }
+    }
+
+    #[test]
+    fn parse_skip_conditions() {
+        let yaml = r#"
+name: test
+steps: []
+skip_if:
+  - platform: windows
+  - command_missing: nonexistent-cmd
+  - env_missing: NONEXISTENT_VAR
+"#;
+        let spec = TestSpec::from_yaml(yaml).unwrap();
+        let skip_if = spec.skip_if.as_ref().unwrap();
+        assert_eq!(skip_if.len(), 3);
+        matches!(&skip_if[0], SkipCondition::Platform(p) if p == "windows");
+        matches!(&skip_if[1], SkipCondition::CommandMissing(c) if c == "nonexistent-cmd");
+        matches!(&skip_if[2], SkipCondition::EnvMissing(v) if v == "NONEXISTENT_VAR");
+    }
+
+    #[test]
+    fn parse_requirements() {
+        let yaml = r#"
+name: test
+steps: []
+requires:
+  - command: git
+  - env: HOME
+  - platform: linux
+"#;
+        let spec = TestSpec::from_yaml(yaml).unwrap();
+        let reqs = spec.requires.as_ref().unwrap();
+        assert_eq!(reqs.len(), 3);
+        matches!(&reqs[0], Requirement::Command(c) if c == "git");
+        matches!(&reqs[1], Requirement::Env(e) if e == "HOME");
+        matches!(&reqs[2], Requirement::Platform(p) if p == "linux");
+    }
+
+    #[test]
+    fn invalid_yaml_errors() {
+        let result = TestSpec::from_yaml("not: [valid: yaml: spec");
+        assert!(result.is_err());
+        let err = result.unwrap_err().to_string();
+        assert!(err.contains("invalid test YAML"));
+    }
+
+    #[test]
+    fn has_tag_case_insensitive() {
+        let yaml = "name: test\nsteps: []\ntags: [Smoke, Integration]\n";
+        let spec = TestSpec::from_yaml(yaml).unwrap();
+        assert!(spec.has_tag("smoke"));
+        assert!(spec.has_tag("SMOKE"));
+        assert!(spec.has_tag("Smoke"));
+        assert!(spec.has_tag("integration"));
+        assert!(!spec.has_tag("unit"));
+    }
+
+    #[test]
+    fn should_skip_returns_none_without_conditions() {
+        let yaml = "name: test\nsteps: []\n";
+        let spec = TestSpec::from_yaml(yaml).unwrap();
+        assert!(spec.should_skip().is_none());
+    }
+
+    #[test]
+    fn should_skip_env_missing() {
+        let yaml = r#"
+name: test
+steps: []
+skip_if:
+  - env_missing: MS_TEST_NONEXISTENT_VAR_12345
+"#;
+        let spec = TestSpec::from_yaml(yaml).unwrap();
+        let reason = spec.should_skip();
+        assert!(reason.is_some());
+        assert!(reason.unwrap().contains("env var missing"));
+    }
+
+    #[test]
+    fn check_requirements_passes_when_none() {
+        let yaml = "name: test\nsteps: []\n";
+        let spec = TestSpec::from_yaml(yaml).unwrap();
+        assert!(spec.check_requirements().is_ok());
+    }
+
+    #[test]
+    fn check_requirements_fails_missing_command() {
+        let yaml = r#"
+name: test
+steps: []
+requires:
+  - command: nonexistent_command_xyz_99
+"#;
+        let spec = TestSpec::from_yaml(yaml).unwrap();
+        let result = spec.check_requirements();
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("command not found"));
+    }
+
+    #[test]
+    fn load_skill_default_level() {
+        let yaml = r#"
+name: test
+steps:
+  - load_skill:
+      budget: 500
+"#;
+        let spec = TestSpec::from_yaml(yaml).unwrap();
+        match &spec.steps[0] {
+            TestStep::LoadSkill { load_skill } => {
+                assert_eq!(load_skill.level, "standard");
+                assert_eq!(load_skill.budget, Some(500));
+            }
+            _ => panic!("expected LoadSkill step"),
+        }
+    }
+
+    #[test]
+    fn parse_multiple_step_types() {
+        let yaml = r#"
+name: multi-step
+steps:
+  - set:
+      name: dir
+      value: /tmp/test
+  - mkdir:
+      path: /tmp/test
+  - run:
+      cmd: echo done
+  - assert:
+      exit_code: 0
+"#;
+        let spec = TestSpec::from_yaml(yaml).unwrap();
+        assert_eq!(spec.steps.len(), 4);
+        assert!(matches!(&spec.steps[0], TestStep::Set { .. }));
+        assert!(matches!(&spec.steps[1], TestStep::Mkdir { .. }));
+        assert!(matches!(&spec.steps[2], TestStep::Run { .. }));
+        assert!(matches!(&spec.steps[3], TestStep::Assert { .. }));
+    }
+
+    #[test]
+    fn parse_condition_env_equals() {
+        let yaml = r#"
+name: test
+steps:
+  - if:
+      condition:
+        env_equals:
+          CI: "true"
+      then:
+        - set:
+            name: mode
+            value: ci
+"#;
+        let spec = TestSpec::from_yaml(yaml).unwrap();
+        match &spec.steps[0] {
+            TestStep::If { if_step } => {
+                let env_eq = if_step.condition.env_equals.as_ref().unwrap();
+                assert_eq!(env_eq.get("CI"), Some(&"true".to_string()));
+            }
+            _ => panic!("expected If step"),
+        }
+    }
 }

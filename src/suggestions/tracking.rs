@@ -527,8 +527,6 @@ impl FeedbackCollector {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::thread;
-    use std::time::Duration;
 
     #[test]
     fn test_session_tracker_new() {

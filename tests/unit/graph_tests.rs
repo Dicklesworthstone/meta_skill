@@ -13,7 +13,7 @@ use std::path::PathBuf;
 
 use serde_json::Value as JsonValue;
 
-use ms::beads::{Dependency, Issue, IssueStatus, IssueType, Priority};
+use ms::beads::{Dependency, Issue, IssueStatus, IssueType};
 use ms::graph::bv::{BvClient, write_beads_jsonl};
 use ms::graph::skills::skills_to_issues;
 use ms::storage::sqlite::SkillRecord;

@@ -359,7 +359,8 @@ fn test_list_by_layer() -> Result<()> {
 
     // Note: The global_skills path may map to "global" or "org" layer
     // depending on how the config path is interpreted
-    assert!(count >= 0, "Should find skills in org/global layer");
+    // count is usize (always >= 0), just verify it's accessible
+    let _ = count;
 
     fixture.generate_report();
     Ok(())

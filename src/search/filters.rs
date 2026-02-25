@@ -215,7 +215,7 @@ mod tests {
 
     #[test]
     fn test_filter_skill_ids() {
-        let skills = vec![
+        let skills = [
             make_skill("rust-cli", "project", 0.8, false, &["rust"]),
             make_skill("python-web", "org", 0.9, false, &["python"]),
             make_skill("deprecated", "project", 0.7, true, &["rust"]),

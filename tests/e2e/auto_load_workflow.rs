@@ -87,7 +87,7 @@ Standard git branching model.
 - Write clear commit messages
 "#;
 
-const SIGNAL_SKILL: &str = r#"---
+const SIGNAL_SKILL: &str = r##"---
 name: Thiserror Patterns
 description: Advanced thiserror usage patterns
 tags: [rust, errors, thiserror]
@@ -111,7 +111,7 @@ Advanced patterns for the thiserror crate.
 
 - Use `#[from]` for automatic conversion
 - Add display messages for each variant
-"#;
+"##;
 
 const FILE_PATTERN_SKILL: &str = r#"---
 name: Markdown Documentation

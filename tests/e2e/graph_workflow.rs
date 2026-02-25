@@ -121,6 +121,7 @@ fn setup_graph_fixture(scenario: &str) -> Result<E2EFixture> {
 }
 
 /// Check if bv is available, returning true if it is.
+#[allow(dead_code)]
 fn check_bv_available(fixture: &mut E2EFixture) -> bool {
     let output = fixture.run_ms(&["--robot", "graph", "export", "--format", "json"]);
     if !output.success {

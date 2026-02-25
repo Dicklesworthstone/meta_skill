@@ -59,6 +59,7 @@ Use pytest for all testing needs.
 - Use fixtures for setup
 "#;
 
+#[allow(dead_code)]
 const SKILL_INVALID: &str = r#"---
 name:
 description:

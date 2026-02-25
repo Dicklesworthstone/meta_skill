@@ -1,3 +1,7 @@
+// assert_cmd::Command::cargo_bin is deprecated in favor of cargo::cargo_bin_cmd!
+// Suppress until the migration is done.
+#![allow(deprecated)]
+
 use assert_cmd::Command;
 use chrono::Utc;
 use ms::storage::sqlite::{Database, SkillRecord};

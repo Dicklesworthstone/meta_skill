@@ -1,3 +1,6 @@
+// This module provides utility methods for E2E tests; not all are used in every test module.
+#![allow(dead_code)]
+
 //! E2E test fixture with comprehensive logging and checkpointing.
 //!
 //! This module provides a rich test fixture for end-to-end testing with:

@@ -636,11 +636,13 @@ impl TestSkill {
         }
     }
 
+    #[allow(dead_code)]
     pub fn with_tags(mut self, tags: Vec<&str>) -> Self {
         self.tags = tags.into_iter().map(String::from).collect();
         self
     }
 
+    #[allow(dead_code)]
     pub fn with_layer(mut self, layer: &str) -> Self {
         self.layer = Some(layer.to_string());
         self

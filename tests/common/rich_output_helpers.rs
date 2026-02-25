@@ -1,5 +1,8 @@
 // Allow unsafe code for env::set_var/remove_var which are unsafe in Rust 2024
 #![allow(unsafe_code)]
+// These helpers are utility code available for use across test modules;
+// not all are currently called, which is expected for a shared helper library.
+#![allow(dead_code, unused_imports)]
 
 //! Rich output test helpers for integration tests.
 //!
