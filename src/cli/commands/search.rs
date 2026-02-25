@@ -4,7 +4,7 @@
 //! similarity via RRF fusion.
 
 use clap::Args;
-use console::style;
+use tracing::debug;
 
 use crate::app::AppContext;
 use crate::cli::formatters::SearchResults;
@@ -75,7 +75,7 @@ pub fn run(ctx: &AppContext, args: &SearchArgs) -> Result<()> {
                     );
                 }
                 _ => {
-                    println!("{} {}", style("!").yellow(), error_msg);
+                    println!("! {error_msg}");
                 }
             }
             return Ok(());
@@ -255,6 +255,12 @@ fn display_results(
     args: &SearchArgs,
     search_type: &str,
 ) -> Result<()> {
+    debug!(target: "search", stage = "render_start");
+    debug!(target: "search", results = results.len(), "rendering results");
+    debug!(target: "search", mode = ?ctx.output_format, "output mode selected");
+
+    let start = std::time::Instant::now();
+
     // Build SearchResults using the new formatter
     let mut search_results = SearchResults::from_tuples(&args.query, search_type, results);
 
@@ -273,6 +279,13 @@ fn display_results(
 
     // Use the new output format
     println!("{}", search_results.format(ctx.output_format));
+
+    let elapsed = start.elapsed();
+    debug!(
+        target: "search",
+        stage = "render_complete",
+        duration_ms = elapsed.as_millis() as u64,
+    );
 
     Ok(())
 }
