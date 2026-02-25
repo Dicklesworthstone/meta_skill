@@ -531,6 +531,7 @@ mod tests {
             })
             .to_string(),
             content_hash: "abcdef0123456789abcdef".to_string(),
+            assets_json: "[]".to_string(),
             token_count: 42,
             quality_score: 0.85,
             indexed_at: "2025-06-01T12:00:00Z".to_string(),
