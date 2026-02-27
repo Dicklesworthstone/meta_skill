@@ -90,7 +90,7 @@ open = "5.3.2"
 
 # Utilities
 chrono = { version = "0.4.43", default-features = false, features = ["std", "clock", "serde"] }
-uuid = { version = "1.19.0", features = ["v4"] }
+uuid = { version = "1.21.0", features = ["v4"] }
 dirs = "6.0.0"
 walkdir = "2.5.0"
 glob = "0.3.3"
