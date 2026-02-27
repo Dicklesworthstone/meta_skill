@@ -40,7 +40,7 @@ anyhow = "1.0.100"
 serde = { version = "1.0.228", features = ["derive"] }
 serde_json = "1.0.149"
 serde_yaml = "0.9.34"
-toml = "0.9.8"
+toml = "1.0.3"
 toon_rust = { package = "toon", git = "https://github.com/Dicklesworthstone/toon_rust" }
 
 # Database
