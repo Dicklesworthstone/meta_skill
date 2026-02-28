@@ -182,7 +182,7 @@ jobs:
           Compress-Archive -Path dist/* -DestinationPath ${{ env.BINARY_NAME }}-${{ needs.validate.outputs.version }}-${{ matrix.target }}.zip
 
       - name: Upload artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: ${{ env.BINARY_NAME }}-${{ matrix.target }}
           path: ${{ env.BINARY_NAME }}-${{ needs.validate.outputs.version }}-${{ matrix.target }}.${{ matrix.archive }}
@@ -222,7 +222,7 @@ jobs:
           cat SHA256SUMS.txt
 
       - name: Generate artifact attestations
-        uses: actions/attest-build-provenance@v2
+        uses: actions/attest-build-provenance@v4
         with:
           subject-path: 'release/*'
 
