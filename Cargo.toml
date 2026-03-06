@@ -120,7 +120,7 @@ predicates = "3.1.3"
 insta = { version = "1.46.0", features = ["json", "yaml"] }
 criterion = { version = "0.8.2", features = ["html_reports"] }
 proptest = "1.9.0"
-proptest-derive = "0.7.0"
+proptest-derive = "0.8.0"
 httpmock = "0.8.2"
 
 [features]
