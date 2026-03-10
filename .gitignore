@@ -98,3 +98,26 @@ rustc-ice-*.txt
 *.snap.new
 sweep_*.png
 test_screenshot.png
+
+# ACFS ephemeral patterns (auto-generated agent artifacts)
+core
+core.*
+cline.mcp.json
+codex.mcp.json
+cursor.mcp.json
+gemini.mcp.json
+opencode.json
+windsurf.mcp.json
+*.mcp.json.*.bak
+.opencode.json.*.bak
+.windsurf.mcp.json.*.bak
+.agent-mail-project-id
+.agent-mail.yaml
+*.sqlite3.corrupt*
+storage.sqlite3.corrupt-*
+storage.sqlite3-shm.corrupt-*
+storage.sqlite3-wal.corrupt-*
+.beads/*.corrupt*
+.beads/*.pre_repair_*
+.beads/*.repair_candidate_*
+.beads/*.bak-corrupt
