@@ -94,7 +94,7 @@ impl CassClient {
         let results: CassSearchResults = serde_json::from_slice(&output)
             .map_err(|e| MsError::CassUnavailable(format!("Failed to parse search output: {e}")))?;
 
-        Ok(results.matches)
+        Ok(results.hits)
     }
 
     /// Get full session content by ID
@@ -152,12 +152,12 @@ impl CassClient {
         // If no fingerprint cache, return all results
         let cache = match &self.fingerprint_cache {
             Some(c) => c,
-            None => return Ok(results.matches),
+            None => return Ok(results.hits),
         };
 
         // Filter to only new or changed sessions
         let mut delta = Vec::new();
-        for m in results.matches {
+        for m in results.hits {
             let content_hash = m.content_hash.as_deref().unwrap_or("");
             if cache.is_new_or_changed(&m.session_id, content_hash)? {
                 delta.push(m);
@@ -282,7 +282,8 @@ fn classify_cass_error(exit_code: i32, stderr: &str) -> MsError {
 /// CASS search results wrapper
 #[derive(Debug, Clone, Deserialize)]
 pub struct CassSearchResults {
-    pub matches: Vec<SessionMatch>,
+    #[serde(alias = "matches")]
+    pub hits: Vec<SessionMatch>,
     #[serde(default)]
     pub total_count: usize,
     #[serde(default)]
