@@ -44,7 +44,7 @@ toml = "1.0.3"
 toon_rust = { package = "tru", git = "https://github.com/Dicklesworthstone/toon_rust" }
 
 # Database
-rusqlite = { version = "0.38.0", features = ["bundled", "modern_sqlite"] }
+rusqlite = { version = "0.39.0", features = ["bundled", "modern_sqlite"] }
 
 # Search
 tantivy = "0.25.0"
