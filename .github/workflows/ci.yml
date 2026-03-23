@@ -144,7 +144,8 @@ jobs:
       - name: Check advisories and licenses
         run: cargo deny check
       - name: Run security audit
-        run: cargo audit
+        # RUSTSEC-2025-0140: gix-date — requires vergen-gix major version bump
+        run: cargo audit --ignore RUSTSEC-2025-0140
       - name: Security summary
         if: always()
         run: |
