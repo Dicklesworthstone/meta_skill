@@ -6,7 +6,6 @@
 
 <div align="center">
 
-[![CI](https://github.com/Dicklesworthstone/meta_skill/actions/workflows/ci.yml/badge.svg)](https://github.com/Dicklesworthstone/meta_skill/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT%2BOpenAI%2FAnthropic%20Rider-blue.svg)](./LICENSE)
 
 </div>
