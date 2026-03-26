@@ -4,6 +4,26 @@ Beautiful terminal UI for bash/shell scripts without writing Go.
 
 ---
 
+## Table of Contents
+
+- [Gum: The Essential Tool](#gum-the-essential-tool)
+  - [Input & Text](#input--text)
+  - [Selection](#selection)
+  - [Confirmation](#confirmation)
+  - [Spinners & Progress](#spinners--progress)
+  - [Styled Output](#styled-output)
+  - [Join & Layout](#join--layout)
+  - [Format & Markdown](#format--markdown)
+  - [File Operations](#file-operations)
+- [Complete Gum Recipes](#complete-gum-recipes)
+- [VHS: Terminal Recording](#vhs-terminal-recording)
+- [Mods: AI in Terminal](#mods-ai-in-terminal)
+- [Glow: Markdown Viewer](#glow-markdown-viewer)
+- [Freeze: Code Screenshots](#freeze-code-screenshots)
+- [Quick Install](#quick-install)
+
+---
+
 ## Gum: The Essential Tool
 
 Gum provides all the UI primitives you need for shell scripts.

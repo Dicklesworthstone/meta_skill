@@ -4,6 +4,20 @@ Self-hosted services, SSH applications, and development utilities.
 
 ---
 
+## Table of Contents
+
+- [Wish: SSH App Server](#wish-ssh-app-server)
+- [Soft Serve: Git Server](#soft-serve-git-server)
+- [Pop: Terminal Email](#pop-terminal-email)
+- [Skate: Key-Value Store](#skate-key-value-store)
+- [Melt: SSH Key Backup](#melt-ssh-key-backup)
+- [Wishlist: SSH Gateway](#wishlist-ssh-gateway)
+- [Testing TUIs: teatest](#testing-tuis-teatest)
+- [Terminal Detection: x/term](#terminal-detection-xterm)
+- [Quick Install](#quick-install)
+
+---
+
 ## Wish: SSH App Server
 
 Build SSH-accessible TUI applications.

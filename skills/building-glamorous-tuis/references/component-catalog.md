@@ -4,6 +4,24 @@ Quick reference for all Bubbles components with key APIs and patterns.
 
 ---
 
+## Table of Contents
+
+- [Text Input](#text-input)
+- [Text Area](#text-area)
+- [List](#list)
+- [Table](#table)
+- [Viewport](#viewport)
+- [Spinner](#spinner)
+- [Progress](#progress)
+- [File Picker](#file-picker)
+- [Paginator](#paginator)
+- [Help](#help)
+- [Timer](#timer)
+- [Stopwatch](#stopwatch)
+- [Key Bindings](#key-bindings)
+
+---
+
 ## Text Input
 
 **Package:** `github.com/charmbracelet/bubbles/textinput`

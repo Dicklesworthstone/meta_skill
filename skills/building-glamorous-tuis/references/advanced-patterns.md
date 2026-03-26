@@ -2,6 +2,26 @@
 
 Deep-dive reference for production Charm applications.
 
+---
+
+## Table of Contents
+
+- [Complete Bubble Tea App Template](#complete-bubble-tea-app-template)
+- [Lip Gloss Layout Patterns](#lip-gloss-layout-patterns)
+  - [Three-Column Dashboard](#three-column-dashboard)
+  - [Modal Overlay](#modal-overlay)
+  - [Status Bar](#status-bar)
+- [Huh Advanced Forms](#huh-advanced-forms)
+  - [Dynamic Options](#dynamic-options)
+  - [Validation Chains](#validation-chains)
+  - [Custom Themes](#custom-themes)
+- [Harmonica Animation Recipes](#harmonica-animation-recipes)
+- [Wish SSH App Patterns](#wish-ssh-app-patterns)
+- [Testing Patterns](#testing-patterns)
+- [Performance Tips](#performance-tips)
+
+---
+
 ## Complete Bubble Tea App Template
 
 ```go

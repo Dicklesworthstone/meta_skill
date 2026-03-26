@@ -4,6 +4,28 @@ Building terminal user interfaces in Go with Bubble Tea ecosystem.
 
 ---
 
+## Table of Contents
+
+- [The 5-Minute TUI](#the-5-minute-tui)
+- [Core Architecture: The Elm Pattern](#core-architecture-the-elm-pattern)
+- [UI Pattern Recipes](#ui-pattern-recipes)
+  - [Command Palette](#command-palette-fuzzy-search)
+  - [Confirmation Dialog](#confirmation-dialog)
+  - [Split Pane Layout](#split-pane-layout)
+  - [Toast/Notification](#toastnotification)
+  - [Progress with Details](#progress-with-details)
+  - [Tab Navigation](#tab-navigation)
+  - [Error Display](#error-display)
+- [Library Quick Reference](#library-quick-reference)
+- [Progressive Enhancement Path](#progressive-enhancement-path)
+- [Production Hardening](#production-hardening)
+- [Debugging TUIs](#debugging-tuis)
+- [Anti-Patterns](#anti-patterns)
+- [When NOT to Use Full TUI](#when-not-to-use-full-tui)
+- [THE EXACT PROMPTS](#the-exact-prompts)
+
+---
+
 ## The 5-Minute TUI
 
 Copy this, modify the items, ship it:
