@@ -47,7 +47,7 @@ toon_rust = { package = "tru", git = "https://github.com/Dicklesworthstone/toon_
 rusqlite = { version = "0.39.0", features = ["bundled", "modern_sqlite"] }
 
 # Search
-tantivy = "0.25.0"
+tantivy = "0.26.0"
 
 # Git (use vendored-openssl for musl cross-compilation)
 git2 = { version = "0.20.3", features = ["vendored-openssl"] }
