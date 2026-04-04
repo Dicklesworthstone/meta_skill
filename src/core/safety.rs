@@ -88,7 +88,11 @@ impl DcgGuard {
             return None;
         }
         let raw = String::from_utf8_lossy(&output.stdout).trim().to_string();
-        if raw.is_empty() { None } else { Some(raw) }
+        if raw.is_empty() {
+            None
+        } else {
+            Some(raw)
+        }
     }
 
     pub fn evaluate_command(&self, command: &str) -> Result<DcgDecision> {
@@ -250,12 +254,10 @@ mod tests {
         assert_eq!(decision.tier, SafetyTier::Critical);
         assert_eq!(decision.reason, "dcg not found");
         assert!(decision.remediation.is_some());
-        assert!(
-            decision
-                .remediation
-                .unwrap()
-                .contains("Install or configure DCG")
-        );
+        assert!(decision
+            .remediation
+            .unwrap()
+            .contains("Install or configure DCG"));
     }
 
     #[test]

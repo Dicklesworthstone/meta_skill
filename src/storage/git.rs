@@ -2,10 +2,11 @@
 
 use std::collections::{HashMap, HashSet};
 use std::fs;
+use std::io::{BufReader, Read};
 use std::path::{Path, PathBuf};
 
 use chrono::{DateTime, Utc};
-use git2::{Commit, ErrorCode, Oid, Repository, Signature};
+use git2::{Commit, ErrorCode, ObjectType, Oid, Repository, Signature, Tree};
 use serde::{Deserialize, Serialize};
 
 use crate::core::{SkillMetadata, SkillSpec};
@@ -22,6 +23,28 @@ pub struct GitArchive {
 pub struct SkillCommit {
     pub oid: String,
     pub message: String,
+}
+
+/// Archive snapshot for package resources discovered during indexing.
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct SkillArchivePackageSnapshot {
+    /// Resource files to persist under `resources/` in the archive.
+    pub resources: Vec<SkillArchiveResource>,
+}
+
+/// Single package resource entry for archive persistence.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SkillArchiveResource {
+    /// Relative package path (e.g. `scripts/run.sh`).
+    pub relative_path: PathBuf,
+    /// Source file path on disk at indexing time.
+    pub source_path: PathBuf,
+    /// Stable resource category key.
+    pub resource_type: String,
+    /// SHA-256 hash from discovery baseline.
+    pub content_hash: String,
+    /// File size from discovery baseline.
+    pub size_bytes: u64,
 }
 
 impl GitArchive {
@@ -126,6 +149,48 @@ impl GitArchive {
             Err(e) if e.code() == ErrorCode::NotFound => Ok(false),
             Err(e) => Err(MsError::Git(e)),
         }
+    }
+
+    /// Reconcile the working-tree copy of a skill with the current HEAD commit.
+    pub fn reconcile_skill_worktree(&self, skill_id: &str) -> Result<()> {
+        let skill_path = self.skill_path(skill_id).ok_or_else(|| {
+            MsError::ValidationFailed("skill id contains path traversal sequences".to_string())
+        })?;
+
+        if skill_path.exists() {
+            fs::remove_dir_all(&skill_path)?;
+        }
+
+        let Some(tree) = self.skill_tree_from_head(skill_id)? else {
+            return Ok(());
+        };
+
+        fs::create_dir_all(&skill_path)?;
+        materialize_tree_to_fs(&self.repo, &tree, &skill_path)?;
+        Ok(())
+    }
+
+    /// Reset the git index to match the current HEAD tree.
+    pub fn reconcile_index_to_head(&self) -> Result<()> {
+        let mut index = self.repo.index()?;
+
+        match self.repo.head() {
+            Ok(head) => {
+                if let Some(target) = head.target() {
+                    let commit = self.repo.find_commit(target)?;
+                    let tree = commit.tree().map_err(MsError::Git)?;
+                    index.read_tree(&tree)?;
+                } else {
+                    index.clear()?;
+                }
+            }
+            Err(_) => {
+                index.clear()?;
+            }
+        }
+
+        index.write()?;
+        Ok(())
     }
 
     pub fn list_skill_ids(&self) -> Result<Vec<String>> {
@@ -248,20 +313,19 @@ impl GitArchive {
 
     /// Write a skill spec + compiled markdown into the archive and commit.
     pub fn write_skill(&self, spec: &SkillSpec) -> Result<SkillCommit> {
-        let skill_id = spec.metadata.id.trim();
-        if skill_id.is_empty() {
-            return Err(MsError::ValidationFailed(
-                "skill id must be non-empty".to_string(),
-            ));
-        }
-        // Prevent path traversal attacks
-        if skill_id.contains("..") || skill_id.contains('/') || skill_id.contains('\\') {
-            return Err(MsError::ValidationFailed(
-                "skill id must not contain path traversal sequences".to_string(),
-            ));
-        }
+        self.write_skill_with_package(spec, None)
+    }
 
-        let skill_dir = self.root.join("skills/by-id").join(skill_id);
+    /// Write a skill spec and optional package snapshot into the archive and commit.
+    pub fn write_skill_with_package(
+        &self,
+        spec: &SkillSpec,
+        package: Option<&SkillArchivePackageSnapshot>,
+    ) -> Result<SkillCommit> {
+        let skill_id = spec.metadata.id.trim();
+        let skill_dir = self.skill_path(skill_id).ok_or_else(|| {
+            MsError::ValidationFailed("skill id contains path traversal sequences".to_string())
+        })?;
         fs::create_dir_all(&skill_dir)?;
         fs::create_dir_all(skill_dir.join("evidence"))?;
         fs::create_dir_all(skill_dir.join("tests"))?;
@@ -282,6 +346,8 @@ impl GitArchive {
         write_string(&slices_path, "[]")?;
         ensure_file(&usage_log_path)?;
 
+        let resource_files = self.materialize_package_resources(&skill_dir, package)?;
+
         let mut index = self.repo.index()?;
         add_path(&mut index, &self.root, &metadata_path)?;
         add_path(&mut index, &self.root, &spec_path)?;
@@ -290,6 +356,10 @@ impl GitArchive {
         add_path(&mut index, &self.root, &evidence_path)?;
         add_path(&mut index, &self.root, &slices_path)?;
         add_path(&mut index, &self.root, &usage_log_path)?;
+        remove_dir_if_tracked(&mut index, "skills/by-id", skill_id, "resources")?;
+        for path in &resource_files {
+            add_path(&mut index, &self.root, path)?;
+        }
         index.write()?;
 
         let tree_id = index.write_tree()?;
@@ -301,6 +371,103 @@ impl GitArchive {
             oid: oid.to_string(),
             message,
         })
+    }
+
+    fn materialize_package_resources(
+        &self,
+        skill_dir: &Path,
+        snapshot: Option<&SkillArchivePackageSnapshot>,
+    ) -> Result<Vec<PathBuf>> {
+        let resources_root = skill_dir.join("resources");
+        if resources_root.exists() {
+            fs::remove_dir_all(&resources_root)?;
+        }
+
+        let Some(snapshot) = snapshot else {
+            return Ok(Vec::new());
+        };
+
+        fs::create_dir_all(&resources_root)?;
+
+        let mut written = Vec::with_capacity(snapshot.resources.len());
+        for resource in &snapshot.resources {
+            let rel = validate_resource_relative_path(&resource.relative_path)?;
+            let canonical_source = fs::canonicalize(&resource.source_path).map_err(|e| {
+                MsError::ValidationFailed(format!(
+                    "cannot canonicalize package resource {}: {e}",
+                    resource.source_path.display()
+                ))
+            })?;
+
+            if !canonical_source.is_file() {
+                return Err(MsError::ValidationFailed(format!(
+                    "package resource is not a file: {}",
+                    canonical_source.display()
+                )));
+            }
+
+            let metadata = fs::metadata(&canonical_source).map_err(|e| {
+                MsError::ValidationFailed(format!(
+                    "cannot read package resource metadata {}: {e}",
+                    canonical_source.display()
+                ))
+            })?;
+            if metadata.len() != resource.size_bytes {
+                return Err(MsError::ValidationFailed(format!(
+                    "package resource size mismatch for {} (expected {}, found {})",
+                    canonical_source.display(),
+                    resource.size_bytes,
+                    metadata.len()
+                )));
+            }
+
+            let actual_hash = compute_file_hash(&canonical_source)?;
+            if actual_hash != resource.content_hash {
+                return Err(MsError::ValidationFailed(format!(
+                    "package resource hash mismatch for {}",
+                    canonical_source.display()
+                )));
+            }
+
+            let destination = resources_root.join(&rel);
+            if let Some(parent) = destination.parent() {
+                fs::create_dir_all(parent)?;
+            }
+            fs::copy(&canonical_source, &destination).map_err(|e| {
+                MsError::ValidationFailed(format!(
+                    "copy package resource {} -> {} failed: {e}",
+                    canonical_source.display(),
+                    destination.display()
+                ))
+            })?;
+
+            let copied_metadata = fs::metadata(&destination).map_err(|e| {
+                MsError::ValidationFailed(format!(
+                    "cannot read copied package resource metadata {}: {e}",
+                    destination.display()
+                ))
+            })?;
+            if copied_metadata.len() != resource.size_bytes {
+                return Err(MsError::ValidationFailed(format!(
+                    "copied package resource size mismatch for {} (expected {}, found {})",
+                    destination.display(),
+                    resource.size_bytes,
+                    copied_metadata.len()
+                )));
+            }
+
+            let copied_hash = compute_file_hash(&destination)?;
+            if copied_hash != resource.content_hash {
+                return Err(MsError::ValidationFailed(format!(
+                    "copied package resource hash mismatch for {}",
+                    destination.display()
+                )));
+            }
+
+            written.push(destination);
+        }
+
+        Ok(written)
     }
 
     /// Read a skill spec from the archive.
@@ -323,6 +490,60 @@ impl GitArchive {
         let contents = fs::read_to_string(metadata_path)?;
         let metadata = serde_yaml::from_str(&contents)?;
         Ok(metadata)
+    }
+
+    /// Read package resource bytes from archived `resources/` directory.
+    pub fn read_skill_resource(&self, skill_id: &str, relative_path: &Path) -> Result<Vec<u8>> {
+        let resource_path = self.resolve_archived_resource_path(skill_id, relative_path)?;
+        let bytes = fs::read(&resource_path).map_err(|err| {
+            MsError::ValidationFailed(format!("failed to read archived resource: {err}"))
+        })?;
+        Ok(bytes)
+    }
+
+    /// Check whether an archived package resource exists and is readable.
+    pub fn skill_resource_exists(&self, skill_id: &str, relative_path: &Path) -> Result<bool> {
+        match self.resolve_archived_resource_path(skill_id, relative_path) {
+            Ok(path) => Ok(path.is_file()),
+            Err(MsError::ValidationFailed(_)) => Ok(false),
+            Err(err) => Err(err),
+        }
+    }
+
+    fn resolve_archived_resource_path(
+        &self,
+        skill_id: &str,
+        relative_path: &Path,
+    ) -> Result<PathBuf> {
+        let skill_path = self.skill_path(skill_id).ok_or_else(|| {
+            MsError::ValidationFailed("skill id contains path traversal sequences".to_string())
+        })?;
+        let normalized = validate_resource_relative_path(relative_path)?;
+        let resources_root = skill_path.join("resources");
+        let resource_path = resources_root.join(normalized);
+
+        let root_metadata = fs::symlink_metadata(&resources_root).map_err(|err| {
+            MsError::ValidationFailed(format!("resource root is not available: {err}"))
+        })?;
+        if root_metadata.file_type().is_symlink() {
+            return Err(MsError::ValidationFailed(
+                "resource root must not be a symlink".to_string(),
+            ));
+        }
+
+        let canonical_root = fs::canonicalize(&resources_root).map_err(|err| {
+            MsError::ValidationFailed(format!("resource root is not available: {err}"))
+        })?;
+        let canonical_resource = fs::canonicalize(&resource_path)
+            .map_err(|_| MsError::ValidationFailed("archived resource not found".to_string()))?;
+
+        if !canonical_resource.starts_with(&canonical_root) {
+            return Err(MsError::ValidationFailed(
+                "archived resource escapes resource root".to_string(),
+            ));
+        }
+
+        Ok(canonical_resource)
     }
 
     /// Delete a skill directory and commit the removal.
@@ -367,6 +588,34 @@ impl GitArchive {
             )?;
         }
         Ok(())
+    }
+
+    fn skill_tree_from_head(&self, skill_id: &str) -> Result<Option<Tree<'_>>> {
+        let rel = Path::new("skills/by-id").join(skill_id);
+        let head = match self.repo.head() {
+            Ok(head) => head,
+            Err(_) => return Ok(None),
+        };
+
+        let Some(target) = head.target() else {
+            return Ok(None);
+        };
+        let commit = self.repo.find_commit(target)?;
+        let tree = commit.tree().map_err(MsError::Git)?;
+
+        match tree.get_path(&rel) {
+            Ok(entry) => {
+                let Some(ObjectType::Tree) = entry.kind() else {
+                    return Err(MsError::ValidationFailed(format!(
+                        "archive HEAD entry for {} is not a directory",
+                        rel.display()
+                    )));
+                };
+                Ok(Some(self.repo.find_tree(entry.id())?))
+            }
+            Err(err) if err.code() == ErrorCode::NotFound => Ok(None),
+            Err(err) => Err(MsError::Git(err)),
+        }
     }
 }
 
@@ -449,6 +698,30 @@ fn add_dir_recursive(index: &mut git2::Index, root: &Path, dir: &Path) -> Result
     Ok(())
 }
 
+fn materialize_tree_to_fs(repo: &Repository, tree: &Tree<'_>, dest: &Path) -> Result<()> {
+    for entry in tree {
+        let Some(name) = entry.name() else {
+            continue;
+        };
+
+        let path = dest.join(name);
+        match entry.kind() {
+            Some(ObjectType::Blob) => {
+                let blob = repo.find_blob(entry.id())?;
+                fs::write(&path, blob.content())?;
+            }
+            Some(ObjectType::Tree) => {
+                fs::create_dir_all(&path)?;
+                let subtree = repo.find_tree(entry.id())?;
+                materialize_tree_to_fs(repo, &subtree, &path)?;
+            }
+            _ => {}
+        }
+    }
+
+    Ok(())
+}
+
 fn commit_with_parents(
     repo: &Repository,
     signature: &Signature,
@@ -478,6 +751,78 @@ fn commit_with_parents(
         &parent_refs,
     )?;
     Ok(oid)
+}
+
+fn validate_resource_relative_path(relative_path: &Path) -> Result<PathBuf> {
+    if relative_path.as_os_str().is_empty() || relative_path.is_absolute() {
+        return Err(MsError::ValidationFailed(
+            "resource path must be non-empty and relative".to_string(),
+        ));
+    }
+
+    let mut normalized = PathBuf::new();
+    for component in relative_path.components() {
+        match component {
+            std::path::Component::Normal(part) => normalized.push(part),
+            _ => {
+                return Err(MsError::ValidationFailed(format!(
+                    "resource path contains unsafe component: {}",
+                    relative_path.display()
+                )));
+            }
+        }
+    }
+
+    if normalized.as_os_str().is_empty() {
+        return Err(MsError::ValidationFailed(
+            "resource path must not normalize to empty".to_string(),
+        ));
+    }
+
+    Ok(normalized)
+}
+
+pub(crate) fn compute_file_hash(path: &Path) -> Result<String> {
+    use sha2::{Digest, Sha256};
+
+    let file = fs::File::open(path).map_err(|e| {
+        MsError::ValidationFailed(format!(
+            "cannot open package resource {}: {e}",
+            path.display()
+        ))
+    })?;
+    let mut reader = BufReader::new(file);
+    let mut hasher = Sha256::new();
+    let mut buffer = [0_u8; 8192];
+
+    loop {
+        let bytes_read = reader.read(&mut buffer).map_err(|e| {
+            MsError::ValidationFailed(format!(
+                "cannot hash package resource {}: {e}",
+                path.display()
+            ))
+        })?;
+        if bytes_read == 0 {
+            break;
+        }
+        hasher.update(&buffer[..bytes_read]);
+    }
+
+    Ok(hex::encode(hasher.finalize()))
+}
+
+fn remove_dir_if_tracked(
+    index: &mut git2::Index,
+    base: &str,
+    skill_id: &str,
+    dir_name: &str,
+) -> Result<()> {
+    let dir = Path::new(base).join(skill_id).join(dir_name);
+    match index.remove_dir(&dir, 0) {
+        Ok(()) => Ok(()),
+        Err(err) if err.code() == ErrorCode::NotFound => Ok(()),
+        Err(err) => Err(MsError::Git(err)),
+    }
 }
 
 #[cfg(test)]
@@ -656,5 +1001,53 @@ mod tests {
         // Should exist on disk but not committed
         assert!(archive.skill_exists("uncomm-skill"));
         assert!(!archive.skill_committed("uncomm-skill").unwrap());
+    }
+
+    #[test]
+    fn test_write_skill_with_package_resources() {
+        let dir = tempdir().unwrap();
+        let package_root = dir.path().join("pkg");
+        let script_path = package_root.join("scripts/run.sh");
+        let reference_path = package_root.join("references/example.md");
+        fs::create_dir_all(package_root.join("scripts")).unwrap();
+        fs::create_dir_all(package_root.join("references")).unwrap();
+        fs::write(&script_path, "#!/usr/bin/env bash\necho hi\n").unwrap();
+        fs::write(&reference_path, "example").unwrap();
+
+        let script_size = fs::metadata(&script_path).unwrap().len();
+        let reference_size = fs::metadata(&reference_path).unwrap().len();
+        let script_hash = compute_file_hash(&script_path).unwrap();
+        let reference_hash = compute_file_hash(&reference_path).unwrap();
+
+        let archive_dir = dir.path().join("archive");
+        let archive = GitArchive::open(&archive_dir).unwrap();
+        let spec = sample_spec("pkg-skill");
+
+        let snapshot = SkillArchivePackageSnapshot {
+            resources: vec![
+                SkillArchiveResource {
+                    relative_path: PathBuf::from("scripts/run.sh"),
+                    source_path: script_path,
+                    resource_type: "script".to_string(),
+                    content_hash: script_hash,
+                    size_bytes: script_size,
+                },
+                SkillArchiveResource {
+                    relative_path: PathBuf::from("references/example.md"),
+                    source_path: reference_path,
+                    resource_type: "reference".to_string(),
+                    content_hash: reference_hash,
+                    size_bytes: reference_size,
+                },
+            ],
+        };
+
+        archive
+            .write_skill_with_package(&spec, Some(&snapshot))
+            .unwrap();
+
+        let skill_dir = archive_dir.join("skills/by-id/pkg-skill");
+        assert!(skill_dir.join("resources/scripts/run.sh").exists());
+        assert!(skill_dir.join("resources/references/example.md").exists());
     }
 }

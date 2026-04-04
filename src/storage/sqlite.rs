@@ -1,9 +1,11 @@
 //! `SQLite` database layer
 
 use std::path::Path;
+use std::sync::LazyLock;
 
 use half::f16;
-use rusqlite::{Connection, Row, params};
+use regex::Regex;
+use rusqlite::{params, Connection, Row};
 use serde_json::Value as JsonValue;
 use uuid::Uuid;
 
@@ -37,7 +39,9 @@ pub struct SkillRecord {
     pub git_remote: Option<String>,
     pub git_commit: Option<String>,
     pub content_hash: String,
+    pub bundle_hash: Option<String>,
     pub body: String,
+    pub manifest_json: String,
     pub metadata_json: String,
     pub assets_json: String,
     pub token_count: i64,
@@ -46,6 +50,15 @@ pub struct SkillRecord {
     pub modified_at: String,
     pub is_deprecated: bool,
     pub deprecation_reason: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SkillResourceRecord {
+    pub skill_id: String,
+    pub relative_path: String,
+    pub resource_type: String,
+    pub content_hash: String,
+    pub size_bytes: i64,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -65,6 +78,42 @@ pub struct SkillSearchCandidate {
     pub metadata_json: String,
     pub quality_score: f64,
     pub is_deprecated: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ExactSkillMatch {
+    pub id: String,
+    pub name: String,
+}
+
+static FTS_PUNCTUATION_REGEX: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r#"[[:punct:]]+"#).expect("valid FTS punctuation regex"));
+
+fn should_retry_fts_query(query: &str, err: &rusqlite::Error) -> bool {
+    let is_plain_hyphenated_identifier = query.contains('-')
+        && !query.chars().any(char::is_whitespace)
+        && query
+            .chars()
+            .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '-' | '_' | '.'));
+    if !is_plain_hyphenated_identifier {
+        return false;
+    }
+
+    let message = err.to_string().to_ascii_lowercase();
+    message.contains("no such column")
+        || message.contains("fts5")
+        || message.contains("malformed match expression")
+        || message.contains("syntax error")
+}
+
+fn sanitize_fts_query(query: &str) -> String {
+    let collapsed = FTS_PUNCTUATION_REGEX.replace_all(query, " ");
+    let normalized = collapsed.split_whitespace().collect::<Vec<_>>().join(" ");
+    if normalized.is_empty() {
+        String::new()
+    } else {
+        format!("\"{normalized}\"")
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -187,7 +236,7 @@ impl Database {
     pub fn get_skill(&self, id: &str) -> Result<Option<SkillRecord>> {
         let mut stmt = self.conn.prepare(
             "SELECT id, name, description, version, author, source_path, source_layer, \
-             git_remote, git_commit, content_hash, body, metadata_json, assets_json, \
+             git_remote, git_commit, content_hash, bundle_hash, body, manifest_json, metadata_json, assets_json, \
              token_count, quality_score, indexed_at, modified_at, is_deprecated, deprecation_reason \
              FROM skills WHERE id = ?",
         )?;
@@ -201,7 +250,7 @@ impl Database {
     pub fn list_skills(&self, limit: usize, offset: usize) -> Result<Vec<SkillRecord>> {
         let mut stmt = self.conn.prepare(
             "SELECT id, name, description, version, author, source_path, source_layer, \
-             git_remote, git_commit, content_hash, body, metadata_json, assets_json, \
+             git_remote, git_commit, content_hash, bundle_hash, body, manifest_json, metadata_json, assets_json, \
              token_count, quality_score, indexed_at, modified_at, is_deprecated, deprecation_reason \
              FROM skills ORDER BY modified_at DESC LIMIT ? OFFSET ?",
         )?;
@@ -358,10 +407,10 @@ impl Database {
         self.conn.execute(
             "INSERT INTO skills (
                 id, name, description, version, author, source_path, source_layer,
-                git_remote, git_commit, content_hash, body, metadata_json, assets_json,
+                git_remote, git_commit, content_hash, bundle_hash, body, manifest_json, metadata_json, assets_json,
                 token_count, quality_score, indexed_at, modified_at, is_deprecated, deprecation_reason
              ) VALUES (
-                ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
+                ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
              )
              ON CONFLICT(id) DO UPDATE SET
                 name=excluded.name,
@@ -373,7 +422,9 @@ impl Database {
                 git_remote=excluded.git_remote,
                 git_commit=excluded.git_commit,
                 content_hash=excluded.content_hash,
+                bundle_hash=excluded.bundle_hash,
                 body=excluded.body,
+                manifest_json=excluded.manifest_json,
                 metadata_json=excluded.metadata_json,
                 assets_json=excluded.assets_json,
                 token_count=excluded.token_count,
@@ -393,7 +444,9 @@ impl Database {
                 skill.git_remote,
                 skill.git_commit,
                 skill.content_hash,
+                skill.bundle_hash,
                 skill.body,
+                skill.manifest_json,
                 skill.metadata_json,
                 skill.assets_json,
                 skill.token_count,
@@ -526,28 +579,52 @@ impl Database {
     }
 
     pub fn search_fts(&self, query: &str, limit: usize) -> Result<Vec<SkillSearchCandidate>> {
-        let mut stmt = self.conn.prepare(
-            "SELECT s.id, s.source_layer, s.metadata_json, s.quality_score, s.is_deprecated
+        let sql = "SELECT s.id, s.source_layer, s.metadata_json, s.quality_score, s.is_deprecated
              FROM skills_fts f
              JOIN skills s ON s.rowid = f.rowid
              WHERE skills_fts MATCH ?
              ORDER BY bm25(skills_fts)
-             LIMIT ?",
-        )?;
-        let rows = stmt.query_map(params![query, limit as i64], |row| {
-            Ok(SkillSearchCandidate {
-                id: row.get(0)?,
-                source_layer: row.get(1)?,
-                metadata_json: row.get(2)?,
-                quality_score: row.get(3)?,
-                is_deprecated: row.get::<_, i64>(4)? != 0,
-            })
-        })?;
-        let mut candidates = Vec::new();
-        for row in rows {
-            candidates.push(row?);
+             LIMIT ?";
+
+        let run_query = |fts_query: &str| -> Result<Vec<SkillSearchCandidate>> {
+            let mut stmt = self.conn.prepare(sql)?;
+            let rows = stmt.query_map(params![fts_query, limit as i64], |row| {
+                Ok(SkillSearchCandidate {
+                    id: row.get(0)?,
+                    source_layer: row.get(1)?,
+                    metadata_json: row.get(2)?,
+                    quality_score: row.get(3)?,
+                    is_deprecated: row.get::<_, i64>(4)? != 0,
+                })
+            })?;
+            let mut candidates = Vec::new();
+            for row in rows {
+                candidates.push(row?);
+            }
+            Ok(candidates)
+        };
+
+        match run_query(query) {
+            Ok(results) => Ok(results),
+            Err(MsError::Database(err)) if should_retry_fts_query(query, &err) => {
+                let fallback = sanitize_fts_query(query);
+                if fallback == query {
+                    Err(MsError::QueryParse(format!(
+                        "invalid FTS query '{}': {err}",
+                        query
+                    )))
+                } else {
+                    run_query(&fallback).map_err(|retry_err| match retry_err {
+                        MsError::Database(db_err) => MsError::QueryParse(format!(
+                            "invalid FTS query '{}' (fallback '{}'): {db_err}",
+                            query, fallback
+                        )),
+                        other => other,
+                    })
+                }
+            }
+            Err(err) => Err(err),
         }
-        Ok(candidates)
     }
 
     pub fn get_skill_candidate(&self, id: &str) -> Result<Option<SkillSearchCandidate>> {
@@ -557,15 +634,50 @@ impl Database {
         )?;
         let mut rows = stmt.query([id])?;
         if let Some(row) = rows.next()? {
-            return Ok(Some(SkillSearchCandidate {
+            Ok(SkillSearchCandidate {
                 id: row.get(0)?,
                 source_layer: row.get(1)?,
                 metadata_json: row.get(2)?,
                 quality_score: row.get(3)?,
                 is_deprecated: row.get::<_, i64>(4)? != 0,
-            }));
+            })
+            .map(Some)
+        } else {
+            Ok(None)
         }
-        Ok(None)
+    }
+
+    pub fn find_exact_skill_match(&self, query: &str) -> Result<Option<ExactSkillMatch>> {
+        let normalized = query.trim().to_ascii_lowercase();
+        if normalized.is_empty() {
+            return Ok(None);
+        }
+
+        let mut stmt = self.conn.prepare(
+            "SELECT id, name
+             FROM skills
+             WHERE lower(id) = ?1
+                OR lower(name) = ?1
+                OR replace(lower(id), '-', ':') = replace(?1, '-', ':')
+                OR replace(lower(name), '-', ':') = replace(?1, '-', ':')
+             ORDER BY CASE
+                 WHEN lower(id) = ?1 THEN 0
+                 WHEN lower(name) = ?1 THEN 1
+                 WHEN replace(lower(id), '-', ':') = replace(?1, '-', ':') THEN 2
+                 ELSE 3
+             END
+             LIMIT 1",
+        )?;
+
+        let mut rows = stmt.query([normalized])?;
+        if let Some(row) = rows.next()? {
+            Ok(Some(ExactSkillMatch {
+                id: row.get(0)?,
+                name: row.get(1)?,
+            }))
+        } else {
+            Ok(None)
+        }
     }
 
     pub fn upsert_embedding(&self, record: &EmbeddingRecord) -> Result<()> {
@@ -950,7 +1062,7 @@ impl Database {
         token_count: i64,
     ) -> Result<()> {
         self.conn.execute(
-            "INSERT INTO skills (id, name, description, version, author, source_path, source_layer, content_hash, body, metadata_json, assets_json, token_count, quality_score, indexed_at, modified_at) VALUES (?, ?, ?, ?, ?, 'pending', ?, 'pending', '', ?, '{}', ?, 0.0, datetime('now'), datetime('now')) ON CONFLICT(id) DO UPDATE SET name=excluded.name, description=excluded.description, version=excluded.version, author=excluded.author, source_layer=excluded.source_layer, metadata_json=excluded.metadata_json, token_count=excluded.token_count, modified_at=excluded.modified_at",
+            "INSERT INTO skills (id, name, description, version, author, source_path, source_layer, content_hash, bundle_hash, body, manifest_json, metadata_json, assets_json, token_count, quality_score, indexed_at, modified_at) VALUES (?, ?, ?, ?, ?, 'pending', ?, 'pending', NULL, '', '{}', ?, '{}', ?, 0.0, datetime('now'), datetime('now')) ON CONFLICT(id) DO UPDATE SET name=excluded.name, description=excluded.description, version=excluded.version, author=excluded.author, source_layer=excluded.source_layer, metadata_json=excluded.metadata_json, token_count=excluded.token_count, modified_at=excluded.modified_at",
             params![
                 skill.metadata.id,
                 skill.metadata.name,
@@ -982,6 +1094,135 @@ impl Database {
             params![source_path, content_hash, body, skill_id],
         )?;
         Ok(())
+    }
+
+    /// Persist additive package baseline fields without changing core commit semantics.
+    pub fn update_skill_package_baseline(
+        &self,
+        skill_id: &str,
+        bundle_hash: Option<&str>,
+        manifest_json: &str,
+    ) -> Result<()> {
+        self.conn.execute(
+            "UPDATE skills
+             SET bundle_hash = ?, manifest_json = ?, modified_at = datetime('now')
+             WHERE id = ?",
+            params![bundle_hash, manifest_json, skill_id],
+        )?;
+        Ok(())
+    }
+
+    /// Count persisted package resources for a skill.
+    pub fn count_skill_resources(&self, skill_id: &str) -> Result<usize> {
+        let count: i64 = self.conn.query_row(
+            "SELECT COUNT(*) FROM skill_resources WHERE skill_id = ?",
+            [skill_id],
+            |row| row.get(0),
+        )?;
+        Ok(count.max(0) as usize)
+    }
+
+    /// Persist additive package baseline and discovered resources atomically.
+    pub fn persist_skill_package_baseline(
+        &self,
+        skill_id: &str,
+        bundle_hash: Option<&str>,
+        manifest_json: &str,
+        resources: &[SkillResourceRecord],
+    ) -> Result<()> {
+        let tx = self.conn.unchecked_transaction()?;
+        tx.execute(
+            "UPDATE skills
+             SET bundle_hash = ?, manifest_json = ?, modified_at = datetime('now')
+             WHERE id = ?",
+            params![bundle_hash, manifest_json, skill_id],
+        )?;
+        tx.execute("DELETE FROM skill_resources WHERE skill_id = ?", [skill_id])?;
+
+        {
+            let mut stmt = tx.prepare(
+                "INSERT INTO skill_resources (skill_id, relative_path, resource_type, content_hash, size_bytes)
+                 VALUES (?, ?, ?, ?, ?)",
+            )?;
+            for resource in resources {
+                stmt.execute(params![
+                    skill_id,
+                    resource.relative_path,
+                    resource.resource_type,
+                    resource.content_hash,
+                    resource.size_bytes,
+                ])?;
+            }
+        }
+
+        tx.commit()?;
+        Ok(())
+    }
+
+    /// Clear additive package baseline fields and all discovered resources for a skill.
+    pub fn clear_skill_package_baseline(&self, skill_id: &str) -> Result<()> {
+        let tx = self.conn.unchecked_transaction()?;
+        tx.execute(
+            "UPDATE skills
+             SET bundle_hash = NULL, manifest_json = '{}', modified_at = datetime('now')
+             WHERE id = ?",
+            [skill_id],
+        )?;
+        tx.execute("DELETE FROM skill_resources WHERE skill_id = ?", [skill_id])?;
+        tx.commit()?;
+        Ok(())
+    }
+
+    /// Replace baseline discovered resources for a skill.
+    pub fn replace_skill_resources(
+        &self,
+        skill_id: &str,
+        resources: &[SkillResourceRecord],
+    ) -> Result<()> {
+        let tx = self.conn.unchecked_transaction()?;
+        tx.execute("DELETE FROM skill_resources WHERE skill_id = ?", [skill_id])?;
+
+        {
+            let mut stmt = tx.prepare(
+                "INSERT INTO skill_resources (skill_id, relative_path, resource_type, content_hash, size_bytes)
+                 VALUES (?, ?, ?, ?, ?)",
+            )?;
+            for resource in resources {
+                stmt.execute(params![
+                    skill_id,
+                    resource.relative_path,
+                    resource.resource_type,
+                    resource.content_hash,
+                    resource.size_bytes,
+                ])?;
+            }
+        }
+
+        tx.commit()?;
+        Ok(())
+    }
+
+    pub fn list_skill_resources(&self, skill_id: &str) -> Result<Vec<SkillResourceRecord>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT skill_id, relative_path, resource_type, content_hash, size_bytes
+             FROM skill_resources
+             WHERE skill_id = ?
+             ORDER BY relative_path",
+        )?;
+        let rows = stmt.query_map([skill_id], |row| {
+            Ok(SkillResourceRecord {
+                skill_id: row.get(0)?,
+                relative_path: row.get(1)?,
+                resource_type: row.get(2)?,
+                content_hash: row.get(3)?,
+                size_bytes: row.get(4)?,
+            })
+        })?;
+        let mut out = Vec::new();
+        for row in rows {
+            out.push(row?);
+        }
+        Ok(out)
     }
 
     /// Run `SQLite` integrity check
@@ -1572,15 +1813,17 @@ fn skill_from_row(row: &Row<'_>) -> rusqlite::Result<SkillRecord> {
         git_remote: row.get(7)?,
         git_commit: row.get(8)?,
         content_hash: row.get(9)?,
-        body: row.get(10)?,
-        metadata_json: row.get(11)?,
-        assets_json: row.get(12)?,
-        token_count: row.get(13)?,
-        quality_score: row.get(14)?,
-        indexed_at: row.get(15)?,
-        modified_at: row.get(16)?,
-        is_deprecated: row.get::<_, i64>(17)? != 0,
-        deprecation_reason: row.get(18)?,
+        bundle_hash: row.get(10)?,
+        body: row.get(11)?,
+        manifest_json: row.get(12)?,
+        metadata_json: row.get(13)?,
+        assets_json: row.get(14)?,
+        token_count: row.get(15)?,
+        quality_score: row.get(16)?,
+        indexed_at: row.get(17)?,
+        modified_at: row.get(18)?,
+        is_deprecated: row.get::<_, i64>(19)? != 0,
+        deprecation_reason: row.get(20)?,
     })
 }
 
@@ -1713,6 +1956,7 @@ mod tests {
         let db = Database::open(dir.path().join("test.db")).unwrap();
         let tables = [
             "skills",
+            "skill_resources",
             "skill_aliases",
             "skills_fts",
             "skill_embeddings",
@@ -1772,7 +2016,9 @@ mod tests {
             git_remote: None,
             git_commit: None,
             content_hash: "abc123".to_string(),
+            bundle_hash: None,
             body: "Write good commit messages".to_string(),
+            manifest_json: "{}".to_string(),
             metadata_json: r#"{"tags":"git,workflow"}"#.to_string(),
             assets_json: "{}".to_string(),
             token_count: 500,
@@ -1786,6 +2032,70 @@ mod tests {
         db.upsert_skill(&record).unwrap();
         let fetched = db.get_skill("git-commit").unwrap().unwrap();
         assert_eq!(record, fetched);
+    }
+
+    #[test]
+    fn test_package_baseline_and_resource_persistence() {
+        let dir = tempdir().unwrap();
+        let db = Database::open(dir.path().join("test.db")).unwrap();
+
+        let record = SkillRecord {
+            id: "pkg-skill".to_string(),
+            name: "Package Skill".to_string(),
+            description: "Skill with package baseline".to_string(),
+            version: Some("1.0.0".to_string()),
+            author: Some("Example".to_string()),
+            source_path: "/skills/pkg".to_string(),
+            source_layer: "base".to_string(),
+            git_remote: None,
+            git_commit: None,
+            content_hash: "spec-hash".to_string(),
+            bundle_hash: None,
+            body: "Body".to_string(),
+            manifest_json: "{}".to_string(),
+            metadata_json: "{}".to_string(),
+            assets_json: "{}".to_string(),
+            token_count: 10,
+            quality_score: 0.5,
+            indexed_at: "2026-01-01T00:00:00Z".to_string(),
+            modified_at: "2026-01-01T00:00:00Z".to_string(),
+            is_deprecated: false,
+            deprecation_reason: None,
+        };
+
+        db.upsert_skill(&record).unwrap();
+
+        let manifest_json = r#"{"bundle_hash":"bundle-1","summary":{"resource_count":2}}"#;
+        db.update_skill_package_baseline("pkg-skill", Some("bundle-1"), manifest_json)
+            .unwrap();
+
+        let resources = vec![
+            SkillResourceRecord {
+                skill_id: "pkg-skill".to_string(),
+                relative_path: "SKILL.md".to_string(),
+                resource_type: "skill_spec".to_string(),
+                content_hash: "h1".to_string(),
+                size_bytes: 12,
+            },
+            SkillResourceRecord {
+                skill_id: "pkg-skill".to_string(),
+                relative_path: "scripts/run.sh".to_string(),
+                resource_type: "script".to_string(),
+                content_hash: "h2".to_string(),
+                size_bytes: 34,
+            },
+        ];
+        db.replace_skill_resources("pkg-skill", &resources).unwrap();
+
+        let fetched = db.get_skill("pkg-skill").unwrap().unwrap();
+        assert_eq!(fetched.content_hash, "spec-hash");
+        assert_eq!(fetched.bundle_hash.as_deref(), Some("bundle-1"));
+        assert_eq!(fetched.manifest_json, manifest_json);
+
+        let persisted_resources = db.list_skill_resources("pkg-skill").unwrap();
+        assert_eq!(persisted_resources.len(), 2);
+        assert_eq!(persisted_resources[0].relative_path, "SKILL.md");
+        assert_eq!(persisted_resources[1].relative_path, "scripts/run.sh");
     }
 
     #[test]
@@ -1803,7 +2113,9 @@ mod tests {
             git_remote: None,
             git_commit: None,
             content_hash: "def456".to_string(),
+            bundle_hash: None,
             body: "Use Result<T, E> and anyhow".to_string(),
+            manifest_json: "{}".to_string(),
             metadata_json: r#"{"tags":"rust,error"}"#.to_string(),
             assets_json: "{}".to_string(),
             token_count: 250,
@@ -1823,6 +2135,41 @@ mod tests {
     }
 
     #[test]
+    fn test_fts_search_retries_hyphenated_plain_query() {
+        let dir = tempdir().unwrap();
+        let db = Database::open(dir.path().join("test.db")).unwrap();
+        let record = SkillRecord {
+            id: "bom-execute".to_string(),
+            name: "bom:execute".to_string(),
+            description: "Execute bounded implementation work".to_string(),
+            version: Some("1.0.0".to_string()),
+            author: None,
+            source_path: "/skills/bom-execute".to_string(),
+            source_layer: "project".to_string(),
+            git_remote: None,
+            git_commit: None,
+            content_hash: "skill-hash".to_string(),
+            bundle_hash: None,
+            body: "Use bom execute for bounded implementation".to_string(),
+            manifest_json: "{}".to_string(),
+            metadata_json: r#"{"tags":"execution,bom"}"#.to_string(),
+            assets_json: "{}".to_string(),
+            token_count: 120,
+            quality_score: 0.8,
+            indexed_at: "2026-01-01T00:00:00Z".to_string(),
+            modified_at: "2026-01-01T00:00:00Z".to_string(),
+            is_deprecated: false,
+            deprecation_reason: None,
+        };
+
+        db.upsert_skill(&record).unwrap();
+
+        let results = db.search_fts("bom-execute", 10).unwrap();
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].id, "bom-execute");
+    }
+
+    #[test]
     fn test_embedding_roundtrip_and_cache() {
         let dir = tempdir().unwrap();
         let db = Database::open(dir.path().join("test.db")).unwrap();
@@ -1839,7 +2186,9 @@ mod tests {
             git_remote: None,
             git_commit: None,
             content_hash: "abc123".to_string(),
+            bundle_hash: None,
             body: "Git body".to_string(),
+            manifest_json: "{}".to_string(),
             metadata_json: "{}".to_string(),
             assets_json: "{}".to_string(),
             token_count: 100,
@@ -1896,7 +2245,9 @@ mod tests {
             git_remote: None,
             git_commit: None,
             content_hash: "ghi789".to_string(),
+            bundle_hash: None,
             body: "Alias body".to_string(),
+            manifest_json: "{}".to_string(),
             metadata_json: "{}".to_string(),
             assets_json: "{}".to_string(),
             token_count: 10,
@@ -1983,7 +2334,9 @@ mod tests {
             git_remote: None,
             git_commit: None,
             content_hash: "old".to_string(),
+            bundle_hash: None,
             body: "Older body".to_string(),
+            manifest_json: "{}".to_string(),
             metadata_json: "{}".to_string(),
             assets_json: "{}".to_string(),
             token_count: 1,
@@ -2004,7 +2357,9 @@ mod tests {
             git_remote: None,
             git_commit: None,
             content_hash: "new".to_string(),
+            bundle_hash: None,
             body: "Newer body".to_string(),
+            manifest_json: "{}".to_string(),
             metadata_json: "{}".to_string(),
             assets_json: "{}".to_string(),
             token_count: 2,
@@ -2046,7 +2401,9 @@ mod tests {
             git_remote: None,
             git_commit: None,
             content_hash: "test123".to_string(),
+            bundle_hash: None,
             body: "Test body".to_string(),
+            manifest_json: "{}".to_string(),
             metadata_json: "{}".to_string(),
             assets_json: "{}".to_string(),
             token_count: 100,
@@ -2122,7 +2479,9 @@ mod tests {
             git_remote: None,
             git_commit: None,
             content_hash: "multi123".to_string(),
+            bundle_hash: None,
             body: "Multi rule body".to_string(),
+            manifest_json: "{}".to_string(),
             metadata_json: "{}".to_string(),
             assets_json: "{}".to_string(),
             token_count: 200,
@@ -2194,7 +2553,9 @@ mod tests {
             git_remote: None,
             git_commit: None,
             content_hash: "upd123".to_string(),
+            bundle_hash: None,
             body: "Update body".to_string(),
+            manifest_json: "{}".to_string(),
             metadata_json: "{}".to_string(),
             assets_json: "{}".to_string(),
             token_count: 50,

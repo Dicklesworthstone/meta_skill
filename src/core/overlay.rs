@@ -272,11 +272,9 @@ mod tests {
         assert_eq!(spec.metadata.name, "New Name");
         assert_eq!(spec.metadata.author.as_deref(), Some("New Author"));
         // Check that unknown key was logged but didn't crash
-        assert!(
-            result
-                .changes
-                .iter()
-                .any(|c| c.contains("Set metadata unknown"))
-        );
+        assert!(result
+            .changes
+            .iter()
+            .any(|c| c.contains("Set metadata unknown")));
     }
 }

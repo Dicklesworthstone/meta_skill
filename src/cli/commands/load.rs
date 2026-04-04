@@ -2,8 +2,9 @@
 
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::io::{self, Write};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
+use base64::Engine;
 use clap::{Args, ValueEnum};
 use serde::Deserialize;
 use tracing::debug;
@@ -16,13 +17,16 @@ use crate::core::dependencies::{
     DependencyGraph, DependencyLoadMode, DependencyResolver, DisclosureLevel as DepDisclosure,
 };
 use crate::core::disclosure::{
-    DisclosedContent, DisclosureLevel, DisclosurePlan, PackMode, TokenBudget, disclose,
+    disclose, DisclosedContent, DisclosureLevel, DisclosurePlan, PackMode, TokenBudget,
 };
 use crate::core::pack_contracts::{
-    PackContractPreset, custom_contracts_path, find_custom_contract,
+    custom_contracts_path, find_custom_contract, PackContractPreset,
 };
-use crate::core::resolution::{DbSkillRepository, resolve_full};
-use crate::core::skill::{PackContract, SkillAssets, SkillMetadata};
+use crate::core::resolution::{resolve_full, DbSkillRepository};
+use crate::core::skill::{
+    PackContract, SkillAssets, SkillMetadata, SkillPackageManifest, SkillResourceEntry,
+    SkillResourceType,
+};
 use crate::core::spec_lens::parse_markdown;
 use crate::error::{MsError, Result};
 use crate::meta_skills::{ConditionContext, MetaSkillManager, MetaSkillRegistry};
@@ -725,10 +729,7 @@ fn output_auto_human(ctx: &AppContext, result: &AutoLoadResult, _args: &LoadArgs
     println!("Detecting context...");
     if !result.context_summary.project_types.is_empty() {
         for (ptype, confidence) in &result.context_summary.project_types {
-            println!(
-                "  Project type: {} (confidence: {:.2})",
-                ptype, confidence
-            );
+            println!("  Project type: {} (confidence: {:.2})", ptype, confidence);
         }
     }
     println!(
@@ -758,10 +759,7 @@ fn output_auto_human(ctx: &AppContext, result: &AutoLoadResult, _args: &LoadArgs
             };
             println!(
                 "  {} [{:.2}] {} - {}",
-                status,
-                candidate.score,
-                candidate.skill_id,
-                candidate.skill_name
+                status, candidate.score, candidate.skill_id, candidate.skill_name
             );
         }
         println!();
@@ -877,7 +875,11 @@ pub(crate) fn load_skill(ctx: &AppContext, args: &LoadArgs, skill_ref: &str) -> 
     let assets: SkillAssets = serde_json::from_str(&skill.assets_json).unwrap_or_default();
 
     // Apply disclosure
-    let disclosed = disclose(&spec, &assets, &disclosure_plan);
+    let mut disclosed = disclose(&spec, &assets, &disclosure_plan);
+    if disclosed.level == DisclosureLevel::Complete {
+        disclosed.package_manifest = parse_package_manifest(&skill.manifest_json);
+        disclosed.package_resources = load_package_resources(ctx, &skill.id)?;
+    }
     let slices_included = disclosed.slices_included;
 
     // Handle dependencies if enabled
@@ -1285,6 +1287,103 @@ fn merge_metadata(skill: &SkillRecord, parsed_meta: &SkillMetadata) -> SkillMeta
     }
 }
 
+fn parse_package_manifest(raw: &str) -> Option<SkillPackageManifest> {
+    if raw.trim().is_empty() || raw.trim() == "{}" {
+        return None;
+    }
+    serde_json::from_str(raw).ok()
+}
+
+fn parse_resource_type(value: &str) -> SkillResourceType {
+    match value {
+        "skill_spec" => SkillResourceType::SkillSpec,
+        "script" => SkillResourceType::Script,
+        "reference" => SkillResourceType::Reference,
+        "test" => SkillResourceType::Test,
+        _ => SkillResourceType::Other,
+    }
+}
+
+fn load_package_resources(ctx: &AppContext, skill_id: &str) -> Result<Vec<SkillResourceEntry>> {
+    let resources = ctx.db.list_skill_resources(skill_id)?;
+    Ok(resources
+        .into_iter()
+        .map(|record| SkillResourceEntry {
+            relative_path: record.relative_path.into(),
+            resource_type: parse_resource_type(&record.resource_type),
+            size_bytes: u64::try_from(record.size_bytes).unwrap_or_default(),
+            content_hash: record.content_hash,
+        })
+        .collect())
+}
+
+fn guess_resource_mime_type(path: &Path) -> &'static str {
+    let path_str = path.to_string_lossy();
+    if path_str.ends_with(".md") {
+        "text/markdown"
+    } else if path_str.ends_with(".json") {
+        "application/json"
+    } else if path_str.ends_with(".yml") || path_str.ends_with(".yaml") {
+        "application/yaml"
+    } else if path_str.ends_with(".sh") {
+        "application/x-sh"
+    } else if path_str.ends_with(".py") {
+        "text/x-python"
+    } else if path_str.ends_with(".rs") {
+        "text/x-rust"
+    } else if path_str.ends_with(".toml") {
+        "application/toml"
+    } else if path_str.ends_with(".html") {
+        "text/html"
+    } else {
+        "application/octet-stream"
+    }
+}
+
+fn build_embedded_resource_payload(
+    ctx: &AppContext,
+    skill_id: &str,
+    resource: &SkillResourceEntry,
+) -> serde_json::Value {
+    let mime = guess_resource_mime_type(&resource.relative_path);
+    let uri = format!(
+        "ms://skill/{}/resource/{}",
+        skill_id,
+        urlencoding::encode(&resource.relative_path.to_string_lossy())
+    );
+
+    let content = match ctx
+        .git
+        .read_skill_resource(skill_id, &resource.relative_path)
+    {
+        Ok(bytes) => match String::from_utf8(bytes.clone()) {
+            Ok(text) => serde_json::json!({
+                "uri": uri,
+                "mimeType": mime,
+                "text": text,
+            }),
+            Err(_) => serde_json::json!({
+                "uri": uri,
+                "mimeType": mime,
+                "blob": base64::engine::general_purpose::STANDARD.encode(bytes),
+            }),
+        },
+        Err(err) => serde_json::json!({
+            "uri": uri,
+            "mimeType": mime,
+            "error": err.to_string(),
+        }),
+    };
+
+    serde_json::json!({
+        "relative_path": resource.relative_path.to_string_lossy(),
+        "resource_type": resource.resource_type.as_str(),
+        "size_bytes": resource.size_bytes,
+        "content_hash": resource.content_hash,
+        "content": content,
+    })
+}
+
 fn load_dependencies(
     ctx: &AppContext,
     skill: &SkillRecord,
@@ -1536,6 +1635,27 @@ pub(crate) fn output_human(_ctx: &AppContext, result: &LoadResult, _args: &LoadA
         }
     }
 
+    if disclosed.package_manifest.is_some() || !disclosed.package_resources.is_empty() {
+        println!();
+        println!("## Package Resources");
+        if let Some(manifest) = &disclosed.package_manifest {
+            println!("- Bundle hash: {}", manifest.bundle_hash);
+            println!("- Resource count: {}", manifest.summary.resource_count);
+            println!("- Total bytes: {}", manifest.summary.total_bytes);
+        }
+        if !disclosed.package_resources.is_empty() {
+            println!("- Entries:");
+            for resource in &disclosed.package_resources {
+                println!(
+                    "  - {} ({}, {} bytes)",
+                    resource.relative_path.display(),
+                    resource.resource_type.as_str(),
+                    resource.size_bytes
+                );
+            }
+        }
+    }
+
     // Footer with stats
     println!();
     println!(
@@ -1549,7 +1669,7 @@ pub(crate) fn output_human(_ctx: &AppContext, result: &LoadResult, _args: &LoadA
 }
 
 fn output_robot(ctx: &AppContext, result: &LoadResult, args: &LoadArgs) -> Result<()> {
-    let output = build_robot_payload(result, args);
+    let output = build_robot_payload(ctx, result, args);
     match ctx.output_format {
         OutputFormat::Toon => {
             println!("{}", toon_rust::encode(output, None));
@@ -1580,7 +1700,11 @@ fn output_tsv(result: &LoadResult) -> Result<()> {
     Ok(())
 }
 
-pub(crate) fn build_robot_payload(result: &LoadResult, args: &LoadArgs) -> serde_json::Value {
+pub(crate) fn build_robot_payload(
+    ctx: &AppContext,
+    result: &LoadResult,
+    args: &LoadArgs,
+) -> serde_json::Value {
     let disclosed = &result.disclosed;
 
     let pack_info = if let Some(tokens) = args.pack {
@@ -1628,6 +1752,20 @@ pub(crate) fn build_robot_payload(result: &LoadResult, args: &LoadArgs) -> serde
                     "path": r.path.to_string_lossy(),
                     "file_type": r.file_type,
                 })
+            }).collect::<Vec<_>>(),
+            "package_manifest": disclosed.package_manifest.as_ref().map(|manifest| {
+                serde_json::json!({
+                    "bundle_hash": manifest.bundle_hash,
+                    "summary": {
+                        "package_root": manifest.summary.package_root.to_string_lossy(),
+                        "resource_count": manifest.summary.resource_count,
+                        "total_bytes": manifest.summary.total_bytes,
+                        "resource_type_counts": manifest.summary.resource_type_counts,
+                    }
+                })
+            }),
+            "package_resources": disclosed.package_resources.iter().map(|resource| {
+                build_embedded_resource_payload(ctx, &result.skill_id, resource)
             }).collect::<Vec<_>>(),
         },
         "warnings": result.warnings
@@ -1686,6 +1824,8 @@ mod tests {
                 body: Some("Body content".to_string()),
                 scripts: vec![],
                 references: vec![],
+                package_manifest: None,
+                package_resources: vec![],
                 token_estimate: 100,
                 slices_included: None,
             },
@@ -1740,6 +1880,8 @@ mod tests {
                 body: Some(format!("Body content for {name}")),
                 scripts: vec![],
                 references: vec![],
+                package_manifest: None,
+                package_resources: vec![],
                 token_estimate: tokens,
                 slices_included: None,
             },
@@ -1794,7 +1936,11 @@ mod tests {
         let result = make_load_result("success-skill", 300);
         assert_eq!(result.name, "success-skill");
         assert!(result.disclosed.body.is_some());
-        assert!(result.disclosed.frontmatter.description.contains("success-skill"));
+        assert!(result
+            .disclosed
+            .frontmatter
+            .description
+            .contains("success-skill"));
     }
 
     // ── 6. test_load_render_conflict_diff ───────────────────────────
@@ -1918,5 +2064,78 @@ mod tests {
     fn test_load_terminal_width() {
         let width = terminal_width();
         assert!(width >= 40 && width <= 500);
+    }
+
+    #[test]
+    fn test_build_robot_payload_includes_package_resources() {
+        let mut result = make_load_result("pkg-skill", 123);
+        result.disclosed.package_manifest = Some(SkillPackageManifest {
+            bundle_hash: "abc123".to_string(),
+            summary: crate::core::skill::SkillPackageSummary {
+                package_root: PathBuf::from("."),
+                resource_count: 1,
+                total_bytes: 42,
+                resource_type_counts: std::collections::BTreeMap::from([(
+                    "reference".to_string(),
+                    1,
+                )]),
+            },
+            resources: vec![],
+        });
+        result.disclosed.package_resources = vec![SkillResourceEntry {
+            relative_path: PathBuf::from("references/doc.md"),
+            resource_type: SkillResourceType::Reference,
+            size_bytes: 42,
+            content_hash: "deadbeef".to_string(),
+        }];
+
+        let args = LoadArgs {
+            skill: Some("pkg-skill".to_string()),
+            auto: false,
+            threshold: 0.3,
+            confirm: false,
+            dry_run: false,
+            level: None,
+            pack: None,
+            mode: CliPackMode::Balanced,
+            contract: None,
+            contract_id: None,
+            max_per_group: 2,
+            full: false,
+            complete: true,
+            deps: DepsMode::Auto,
+            experiment_id: None,
+            variant_id: None,
+        };
+
+        let ctx = crate::app::AppContext::from_cli(&crate::cli::Cli {
+            command: crate::cli::Commands::List(crate::cli::commands::list::ListArgs {
+                limit: 1,
+                offset: 0,
+                layer: None,
+                tags: vec![],
+                include_deprecated: false,
+                sort: "name".to_string(),
+            }),
+            output_format: Some(crate::cli::OutputFormat::Json),
+            machine: false,
+            plain: false,
+            color: None,
+            theme: None,
+            verbose: 0,
+            quiet: false,
+            config: None,
+            robot: false,
+        })
+        .unwrap();
+        let payload = build_robot_payload(&ctx, &result, &args);
+        assert_eq!(
+            payload["data"]["package_manifest"]["bundle_hash"],
+            serde_json::json!("abc123")
+        );
+        assert_eq!(
+            payload["data"]["package_resources"][0]["relative_path"],
+            serde_json::json!("references/doc.md")
+        );
     }
 }

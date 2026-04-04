@@ -4,6 +4,7 @@
 //! panels and styled metadata (Human mode), plain YAML-like key-value pairs
 //! (Plain mode), JSON, JSONL, TSV, and TOON.
 
+use base64::Engine;
 use clap::Args;
 use tracing::debug;
 
@@ -180,10 +181,7 @@ fn show_human_plain(skill: &SkillRecord, args: &ShowArgs) -> Result<()> {
 
     // Core fields
     println!("ID:      {}", skill.id);
-    println!(
-        "Version: {}",
-        skill.version.as_deref().unwrap_or("-")
-    );
+    println!("Version: {}", skill.version.as_deref().unwrap_or("-"));
     if let Some(ref author) = skill.author {
         println!("Author:  {author}");
     }
@@ -317,6 +315,105 @@ fn show_json(skill: &SkillRecord, args: &ShowArgs, pretty: bool) -> Result<()> {
 
     if args.full {
         output["skill"]["body"] = serde_json::Value::String(skill.body.clone());
+        output["skill"]["package_manifest"] =
+            if skill.manifest_json.trim().is_empty() || skill.manifest_json.trim() == "{}" {
+                serde_json::Value::Null
+            } else {
+                serde_json::from_str(&skill.manifest_json).unwrap_or(serde_json::Value::Null)
+            };
+        let package_resources = if let Some(ms_root) = std::path::Path::new(&skill.source_path)
+            .ancestors()
+            .find(|path| path.file_name().and_then(|n| n.to_str()) == Some("by-id"))
+        {
+            let archive_root = ms_root
+                .parent()
+                .and_then(|p| p.parent())
+                .and_then(|p| p.parent())
+                .map(std::path::Path::to_path_buf);
+            let archive_resources_root = archive_root.map(|root| {
+                root.join("archive")
+                    .join("skills")
+                    .join("by-id")
+                    .join(&skill.id)
+                    .join("resources")
+            });
+            let db = crate::storage::sqlite::Database::open(
+                std::path::Path::new(&skill.source_path)
+                    .ancestors()
+                    .find(|path| path.file_name().and_then(|n| n.to_str()) == Some(".ms"))
+                    .unwrap_or_else(|| std::path::Path::new(".ms"))
+                    .join("ms.db"),
+            )
+            .ok();
+            if let (Some(resources_root), Some(db)) = (archive_resources_root, db) {
+                db.list_skill_resources(&skill.id)
+                    .unwrap_or_default()
+                    .into_iter()
+                    .map(|resource| {
+                        let rel_path = std::path::PathBuf::from(&resource.relative_path);
+                        let full_path = resources_root.join(&rel_path);
+                        let mime = if resource.relative_path.ends_with(".md") {
+                            "text/markdown"
+                        } else if resource.relative_path.ends_with(".json") {
+                            "application/json"
+                        } else if resource.relative_path.ends_with(".yml")
+                            || resource.relative_path.ends_with(".yaml")
+                        {
+                            "application/yaml"
+                        } else if resource.relative_path.ends_with(".sh") {
+                            "application/x-sh"
+                        } else if resource.relative_path.ends_with(".py") {
+                            "text/x-python"
+                        } else if resource.relative_path.ends_with(".rs") {
+                            "text/x-rust"
+                        } else if resource.relative_path.ends_with(".toml") {
+                            "application/toml"
+                        } else if resource.relative_path.ends_with(".html") {
+                            "text/html"
+                        } else {
+                            "application/octet-stream"
+                        };
+                        let uri = format!(
+                            "ms://skill/{}/resource/{}",
+                            skill.id,
+                            urlencoding::encode(&resource.relative_path)
+                        );
+                        let content = match std::fs::read(&full_path) {
+                            Ok(bytes) => match String::from_utf8(bytes.clone()) {
+                                Ok(text) => serde_json::json!({
+                                    "uri": uri,
+                                    "mimeType": mime,
+                                    "text": text,
+                                }),
+                                Err(_) => serde_json::json!({
+                                    "uri": uri,
+                                    "mimeType": mime,
+                                    "blob": base64::engine::general_purpose::STANDARD.encode(bytes),
+                                }),
+                            },
+                            Err(err) => serde_json::json!({
+                                "uri": uri,
+                                "mimeType": mime,
+                                "error": err.to_string(),
+                            }),
+                        };
+
+                        serde_json::json!({
+                            "relative_path": resource.relative_path,
+                            "resource_type": resource.resource_type,
+                            "size_bytes": resource.size_bytes,
+                            "content_hash": resource.content_hash,
+                            "content": content,
+                        })
+                    })
+                    .collect::<Vec<_>>()
+            } else {
+                Vec::new()
+            }
+        } else {
+            Vec::new()
+        };
+        output["skill"]["package_resources"] = serde_json::Value::Array(package_resources);
     }
 
     if args.deps {
@@ -445,6 +542,12 @@ fn show_toon(skill: &SkillRecord, args: &ShowArgs) -> Result<()> {
 
     if args.full {
         output["skill"]["body"] = serde_json::Value::String(skill.body.clone());
+        output["skill"]["package_manifest"] =
+            if skill.manifest_json.trim().is_empty() || skill.manifest_json.trim() == "{}" {
+                serde_json::Value::Null
+            } else {
+                serde_json::from_str(&skill.manifest_json).unwrap_or(serde_json::Value::Null)
+            };
     }
 
     if args.deps {
@@ -523,14 +626,18 @@ mod tests {
             author: Some("tester".to_string()),
             source_layer: "local".to_string(),
             source_path: "/skills/test-skill.md".to_string(),
+            git_remote: Some("https://github.com/example/repo".to_string()),
+            git_commit: Some("deadbeef12345678".to_string()),
+            content_hash: "abcdef0123456789abcdef".to_string(),
+            bundle_hash: None,
             body: "# Test\nHello world".to_string(),
+            manifest_json: "{}".to_string(),
             metadata_json: serde_json::json!({
                 "tags": ["cli", "rust"],
                 "type": "tool",
                 "requires": ["dep-a", "dep-b"]
             })
             .to_string(),
-            content_hash: "abcdef0123456789abcdef".to_string(),
             assets_json: "[]".to_string(),
             token_count: 42,
             quality_score: 0.85,
@@ -538,8 +645,6 @@ mod tests {
             modified_at: "2025-06-15T08:30:00Z".to_string(),
             is_deprecated: false,
             deprecation_reason: None,
-            git_remote: Some("https://github.com/example/repo".to_string()),
-            git_commit: Some("deadbeef12345678".to_string()),
         }
     }
 
@@ -573,8 +678,7 @@ mod tests {
             ("Layer", normalize_layer(&skill.source_layer)),
             ("Source", skill.source_path.clone()),
         ];
-        let table_data: Vec<(&str, &str)> =
-            pairs.iter().map(|(k, v)| (*k, v.as_str())).collect();
+        let table_data: Vec<(&str, &str)> = pairs.iter().map(|(k, v)| (*k, v.as_str())).collect();
         let table = key_value_table(&table_data);
         let rendered = table.render_plain(80);
         assert!(rendered.contains("sk-abc123"), "table should contain ID");
@@ -642,10 +746,7 @@ mod tests {
         let skill = make_skill();
         // Plain format produces YAML-like key-value pairs
         let meta: serde_json::Value = serde_json::from_str(&skill.metadata_json).unwrap();
-        let skill_type = meta
-            .get("type")
-            .and_then(|t| t.as_str())
-            .unwrap_or("skill");
+        let skill_type = meta.get("type").and_then(|t| t.as_str()).unwrap_or("skill");
         assert_eq!(skill_type, "tool");
 
         // Verify all plain output fields are available
@@ -722,8 +823,8 @@ mod tests {
         let hash_trunc = &skill.content_hash[..skill.content_hash.len().min(16)];
         assert_eq!(hash_trunc, "abcdef0123456789");
 
-        let commit_trunc = &skill.git_commit.as_ref().unwrap()
-            [..skill.git_commit.as_ref().unwrap().len().min(8)];
+        let commit_trunc =
+            &skill.git_commit.as_ref().unwrap()[..skill.git_commit.as_ref().unwrap().len().min(8)];
         assert_eq!(commit_trunc, "deadbeef");
     }
 
@@ -777,10 +878,7 @@ mod tests {
         skill.is_deprecated = true;
         skill.deprecation_reason = Some("Use v2 instead".to_string());
 
-        let warn = warning_panel(
-            "DEPRECATED",
-            skill.deprecation_reason.as_deref().unwrap(),
-        );
+        let warn = warning_panel("DEPRECATED", skill.deprecation_reason.as_deref().unwrap());
         let rendered = format!("{warn}");
         assert!(!rendered.is_empty(), "warning panel should render");
     }
@@ -791,10 +889,7 @@ mod tests {
     fn test_show_deps_parsing() {
         let skill = make_skill();
         let meta: serde_json::Value = serde_json::from_str(&skill.metadata_json).unwrap();
-        let requires = meta
-            .get("requires")
-            .and_then(|d| d.as_array())
-            .unwrap();
+        let requires = meta.get("requires").and_then(|d| d.as_array()).unwrap();
         assert_eq!(requires.len(), 2);
         assert_eq!(requires[0].as_str().unwrap(), "dep-a");
         assert_eq!(requires[1].as_str().unwrap(), "dep-b");

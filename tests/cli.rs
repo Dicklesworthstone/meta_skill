@@ -136,12 +136,10 @@ fn test_security_scan_requires_session_id_when_persisting() {
     let output = scan.output().unwrap();
     assert!(!output.status.success());
     let json: Value = serde_json::from_slice(&output.stdout).unwrap();
-    assert!(
-        json["message"]
-            .as_str()
-            .unwrap_or_default()
-            .contains("session_id required")
-    );
+    assert!(json["message"]
+        .as_str()
+        .unwrap_or_default()
+        .contains("session_id required"));
 }
 
 #[test]
@@ -171,12 +169,10 @@ fn test_security_scan_rejects_both_input_and_file() {
     let output = scan.output().unwrap();
     assert!(!output.status.success());
     let json: Value = serde_json::from_slice(&output.stdout).unwrap();
-    assert!(
-        json["message"]
-            .as_str()
-            .unwrap_or_default()
-            .contains("not both")
-    );
+    assert!(json["message"]
+        .as_str()
+        .unwrap_or_default()
+        .contains("not both"));
 }
 
 #[test]
@@ -204,12 +200,10 @@ fn test_security_scan_rejects_invalid_source() {
     let output = scan.output().unwrap();
     assert!(!output.status.success());
     let json: Value = serde_json::from_slice(&output.stdout).unwrap();
-    assert!(
-        json["message"]
-            .as_str()
-            .unwrap_or_default()
-            .contains("invalid source")
-    );
+    assert!(json["message"]
+        .as_str()
+        .unwrap_or_default()
+        .contains("invalid source"));
 }
 
 #[test]
@@ -246,7 +240,9 @@ Some content.
         git_remote: None,
         git_commit: None,
         content_hash: "hash".to_string(),
+        bundle_hash: None,
         body: body.to_string(),
+        manifest_json: "{}".to_string(),
         metadata_json: "{}".to_string(),
         assets_json: "{}".to_string(),
         token_count: 0,

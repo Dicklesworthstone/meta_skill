@@ -9,7 +9,7 @@ use std::sync::RwLock;
 use tantivy::collector::TopDocs;
 use tantivy::query::QueryParser;
 use tantivy::schema::{
-    Field, IndexRecordOption, STORED, STRING, Schema, TextFieldIndexing, TextOptions, Value,
+    Field, IndexRecordOption, Schema, TextFieldIndexing, TextOptions, Value, STORED, STRING,
 };
 use tantivy::{Index, IndexReader, IndexWriter, ReloadPolicy, TantivyDocument};
 
@@ -93,7 +93,10 @@ impl Bm25Index {
         let path = path.as_ref();
         if !path.join("meta.json").exists() {
             return Err(MsError::SearchIndex(tantivy::TantivyError::InternalError(
-                format!("Index directory does not exist or is empty: {}", path.display()),
+                format!(
+                    "Index directory does not exist or is empty: {}",
+                    path.display()
+                ),
             )));
         }
 
@@ -515,7 +518,9 @@ mod tests {
             git_remote: None,
             git_commit: None,
             content_hash: "test-hash".to_string(),
+            bundle_hash: None,
             body: body.to_string(),
+            manifest_json: "{}".to_string(),
             metadata_json: r#"{"tags": ["git", "workflow"], "aliases": ["commit-skill"]}"#
                 .to_string(),
             assets_json: "{}".to_string(),

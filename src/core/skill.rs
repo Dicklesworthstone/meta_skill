@@ -1,6 +1,7 @@
 //! Skill data structure
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
+use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
 
@@ -388,6 +389,78 @@ pub struct TestFile {
     /// Test framework (if applicable)
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub framework: Option<String>,
+}
+
+// =============================================================================
+// SKILL PACKAGE / RESOURCE MANIFEST (PHASE 1 BASELINE)
+// =============================================================================
+
+/// A single resource discovered under a skill package root.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct SkillResourceEntry {
+    /// Relative path from package root.
+    pub relative_path: PathBuf,
+    /// Resource category.
+    pub resource_type: SkillResourceType,
+    /// File size in bytes.
+    pub size_bytes: u64,
+    /// SHA-256 hash of file content.
+    pub content_hash: String,
+}
+
+/// Coarse classification for discovered package resources.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum SkillResourceType {
+    /// The canonical skill spec markdown.
+    SkillSpec,
+    /// A script under scripts/.
+    Script,
+    /// A reference asset under references/.
+    Reference,
+    /// A test file under tests/.
+    Test,
+    /// Any other file under the package root.
+    Other,
+}
+
+impl SkillResourceType {
+    /// Stable string representation for persistence.
+    #[must_use]
+    pub const fn as_str(&self) -> &'static str {
+        match self {
+            Self::SkillSpec => "skill_spec",
+            Self::Script => "script",
+            Self::Reference => "reference",
+            Self::Test => "test",
+            Self::Other => "other",
+        }
+    }
+}
+
+/// Aggregate package summary persisted alongside the skill row.
+#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq, Eq)]
+pub struct SkillPackageSummary {
+    /// Package root marker relative to the discovered skill root.
+    pub package_root: PathBuf,
+    /// Total discovered file count.
+    pub resource_count: usize,
+    /// Total discovered bytes.
+    pub total_bytes: u64,
+    /// Counts by resource type key.
+    #[serde(default)]
+    pub resource_type_counts: BTreeMap<String, usize>,
+}
+
+/// Baseline package manifest payload for Phase 1 persistence.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct SkillPackageManifest {
+    /// Content hash over discovered package resources.
+    pub bundle_hash: String,
+    /// Aggregate summary for quick inspection.
+    pub summary: SkillPackageSummary,
+    /// File-level resource entries.
+    pub resources: Vec<SkillResourceEntry>,
 }
 
 // =============================================================================

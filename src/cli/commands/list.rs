@@ -335,7 +335,9 @@ mod tests {
             git_remote: None,
             git_commit: None,
             content_hash: "abc123".to_string(),
+            bundle_hash: None,
             body: String::new(),
+            manifest_json: "{}".to_string(),
             metadata_json: r#"{"tags":["cli","rust"]}"#.to_string(),
             assets_json: "[]".to_string(),
             token_count: 100,
@@ -458,8 +460,7 @@ mod tests {
     #[test]
     fn test_list_plain_output_format() {
         let skill = make_skill("my-skill", "project", false);
-        let tags = if let Ok(meta) =
-            serde_json::from_str::<serde_json::Value>(&skill.metadata_json)
+        let tags = if let Ok(meta) = serde_json::from_str::<serde_json::Value>(&skill.metadata_json)
         {
             meta.get("tags")
                 .and_then(|t| t.as_array())
@@ -478,7 +479,10 @@ mod tests {
             .split('T')
             .next()
             .unwrap_or(&skill.modified_at);
-        let line = format!("{}\t{}\t{}\t{}", skill.name, skill.source_layer, tags, updated);
+        let line = format!(
+            "{}\t{}\t{}\t{}",
+            skill.name, skill.source_layer, tags, updated
+        );
         assert!(line.contains("my-skill"));
         assert!(line.contains("project"));
         assert!(line.contains("cli,rust"));

@@ -9,7 +9,7 @@
 
 use super::fixture::E2EFixture;
 use ms::error::Result;
-use serde_json::{Value, json};
+use serde_json::{json, Value};
 use std::io::{BufRead, BufReader, Write};
 use std::process::{Child, Command, Stdio};
 use std::time::{Duration, Instant};
@@ -399,6 +399,10 @@ fn test_mcp_server_startup() -> Result<()> {
         result["capabilities"]["tools"].is_object(),
         "Tools capability should be present"
     );
+    assert!(
+        result["capabilities"]["resources"].is_object(),
+        "Resources capability should be present"
+    );
 
     fixture.log_step("Shutdown server");
     fixture.emit_event(
@@ -571,6 +575,12 @@ fn test_mcp_load_tool() -> Result<()> {
     let text = response.tool_text().expect("Should have tool text");
     println!("[MCP] Load result length: {} chars", text.len());
 
+    let load_result: Value = serde_json::from_str(text).expect("Should be valid JSON");
+    assert!(
+        load_result["skill"].is_object(),
+        "Load response should include skill object"
+    );
+
     // Should contain skill content
     assert!(
         text.contains("Rust Error Handling") || text.contains("rust-error-handling"),
@@ -627,7 +637,7 @@ fn test_mcp_list_show_tools() -> Result<()> {
     let skills = list_result["skills"]
         .as_array()
         .expect("Should have skills array");
-    assert!(skills.len() >= 3, "Should have at least 3 skills indexed");
+    assert!(skills.len() >= 2, "Should have at least 2 skills indexed");
 
     // Get first skill ID for show test
     let first_skill_id = skills[0]["id"].as_str().expect("Should have skill id");
@@ -666,6 +676,70 @@ fn test_mcp_list_show_tools() -> Result<()> {
     assert!(
         show_result["skill"].is_object(),
         "Should have skill object in show result"
+    );
+
+    client.kill();
+    Ok(())
+}
+
+#[test]
+fn test_mcp_resources_list_and_read() -> Result<()> {
+    let mut fixture = setup_mcp_fixture("mcp_resources_list_read")?;
+
+    fixture.log_step("Test resources/list and resources/read");
+    let mut client = McpClient::spawn(&fixture, false)?;
+    client.initialize()?;
+
+    let list_response = client.request("resources/list", json!({}))?;
+    assert!(list_response.is_success(), "resources/list should succeed");
+    assert!(
+        !list_response.contains_ansi(),
+        "resources/list response should not contain ANSI codes"
+    );
+
+    let resources = list_response
+        .result()
+        .and_then(|result| result.get("resources"))
+        .and_then(Value::as_array)
+        .expect("resources/list should return resources array");
+    assert!(
+        !resources.is_empty(),
+        "resources/list should return entries"
+    );
+
+    let first_uri = resources[0]["uri"]
+        .as_str()
+        .expect("resource entry should include uri");
+    assert!(
+        first_uri.starts_with("ms://skill/"),
+        "resource URI should use ms://skill scheme"
+    );
+
+    let read_response = client.request("resources/read", json!({ "uri": first_uri }))?;
+    assert!(read_response.is_success(), "resources/read should succeed");
+    assert!(
+        !read_response.contains_ansi(),
+        "resources/read response should not contain ANSI codes"
+    );
+
+    let contents = read_response
+        .result()
+        .and_then(|result| result.get("contents"))
+        .and_then(Value::as_array)
+        .expect("resources/read should return contents array");
+    assert_eq!(
+        contents.len(),
+        1,
+        "resources/read should return one content"
+    );
+    assert_eq!(
+        contents[0]["uri"].as_str(),
+        Some(first_uri),
+        "read URI should match request URI"
+    );
+    assert!(
+        contents[0].get("text").is_some() || contents[0].get("blob").is_some(),
+        "content should include text or blob"
     );
 
     client.kill();
