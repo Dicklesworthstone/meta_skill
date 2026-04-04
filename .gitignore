@@ -121,3 +121,5 @@ storage.sqlite3-wal.corrupt-*
 .beads/*.pre_repair_*
 .beads/*.repair_candidate_*
 .beads/*.bak-corrupt
+CONTEXT.md
+DELIVERY_MAP.md
