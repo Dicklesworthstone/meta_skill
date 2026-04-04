@@ -1,6 +1,5 @@
 //! ms doctor - Health checks and repairs
 
-use std::path::Path;
 use std::sync::Arc;
 
 use clap::Args;
@@ -10,9 +9,9 @@ use crate::app::AppContext;
 use crate::core::recovery::{RecoveryManager, RecoveryReport};
 use crate::error::Result;
 use crate::output::{
-    OutputModeReport, is_agent_environment, is_ci_environment, is_ide_environment,
+    is_agent_environment, is_ci_environment, is_ide_environment, OutputModeReport,
 };
-use crate::security::{SafetyGate, scan_secrets_summary};
+use crate::security::{scan_secrets_summary, SafetyGate};
 use crate::storage::tx::GlobalLock;
 
 #[derive(Args, Debug)]
@@ -118,16 +117,12 @@ pub fn run(ctx: &AppContext, args: &DoctorArgs) -> Result<()> {
     } else if args.fix && issues_fixed == issues_found {
         println!(
             "{} Found {} issues, fixed {}",
-            "[ok]",
-            issues_found,
-            issues_fixed
+            "[ok]", issues_found, issues_fixed
         );
     } else {
         println!(
             "{} Found {} issues, fixed {}",
-            "[!]",
-            issues_found,
-            issues_fixed
+            "[!]", issues_found, issues_fixed
         );
         if !args.fix && issues_found > issues_fixed {
             println!("  Run with --fix to attempt automatic repairs");
@@ -156,8 +151,7 @@ fn check_lock_status(ctx: &AppContext, verbose: bool) -> Result<usize> {
             if !Path::new(&proc_path).exists() {
                 println!(
                     "  {} Process {} no longer exists - lock may be stale",
-                    "[!]",
-                    holder.pid
+                    "[!]", holder.pid
                 );
                 println!("  Use --break-lock to remove stale lock");
                 return Ok(1);
@@ -186,10 +180,7 @@ fn break_stale_lock(ctx: &AppContext) -> Result<bool> {
         println!();
         println!(
             "  {} Breaking lock held by PID {} on {} since {}",
-            "[!]",
-            holder.pid,
-            holder.hostname,
-            holder.acquired_at
+            "[!]", holder.pid, holder.hostname, holder.acquired_at
         );
 
         if GlobalLock::break_lock(ms_root)? {
@@ -389,18 +380,13 @@ fn check_security(ctx: &AppContext, verbose: bool) -> Result<usize> {
         }
 
         if secrets_found > 0 {
-            println!(
-                "{} {} potential secret(s) found",
-                "[!]",
-                secrets_found
-            );
+            println!("{} {} potential secret(s) found", "[!]", secrets_found);
             println!("        Review evidence files for sensitive data");
             issues += 1;
         } else {
             println!(
                 "{} {} files scanned, no secrets detected",
-                "[ok]",
-                files_scanned
+                "[ok]", files_scanned
             );
         }
     } else {
@@ -427,11 +413,7 @@ fn check_security(ctx: &AppContext, verbose: bool) -> Result<usize> {
     if env_issues.is_empty() {
         println!("{} no sensitive env files in ms root", "[ok]");
     } else {
-        println!(
-            "{} found sensitive files: {}",
-            "[!]",
-            env_issues.join(", ")
-        );
+        println!("{} found sensitive files: {}", "[!]", env_issues.join(", "));
         println!("        These files should not be in the ms root directory");
         issues += env_issues.len();
     }
@@ -503,11 +485,7 @@ fn check_transactions(
             println!("{} OK", "[ok]");
             Ok(0)
         } else {
-            println!(
-                "{} {} incomplete transactions",
-                "[!]",
-                incomplete.len()
-            );
+            println!("{} {} incomplete transactions", "[!]", incomplete.len());
             if verbose {
                 for tx in &incomplete {
                     println!("  - {} ({}, phase: {})", tx.id, tx.entity_type, tx.phase);
@@ -599,29 +577,22 @@ fn print_recovery_report(report: &RecoveryReport, verbose: bool) {
         if report.rolled_back > 0 {
             println!(
                 "  {} Rolled back {} transactions",
-                "[ok]",
-                report.rolled_back
+                "[ok]", report.rolled_back
             );
         }
         if report.completed > 0 {
-            println!(
-                "  {} Completed {} transactions",
-                "[ok]",
-                report.completed
-            );
+            println!("  {} Completed {} transactions", "[ok]", report.completed);
         }
         if report.orphaned_files > 0 {
             println!(
                 "  {} Cleaned {} orphaned files",
-                "[ok]",
-                report.orphaned_files
+                "[ok]", report.orphaned_files
             );
         }
         if report.cache_invalidated > 0 {
             println!(
                 "  {} Invalidated {} cache entries",
-                "[ok]",
-                report.cache_invalidated
+                "[ok]", report.cache_invalidated
             );
         }
     }
@@ -817,8 +788,7 @@ fn check_perf(ctx: &AppContext, verbose: bool) -> Result<usize> {
                     if rss_mb > 100.0 {
                         println!(
                             "{} High memory usage: {:.2} MB (target < 100 MB)",
-                            "[!]",
-                            rss_mb
+                            "[!]", rss_mb
                         );
                         issues += 1;
                     } else {
@@ -836,10 +806,7 @@ fn check_perf(ctx: &AppContext, verbose: bool) -> Result<usize> {
 
     #[cfg(not(target_os = "linux"))]
     {
-        println!(
-            "{} Memory check skipped (not supported on this OS)",
-            "-"
-        );
+        println!("{} Memory check skipped (not supported on this OS)", "-");
     }
 
     // Check search latency (simple benchmark)
@@ -851,8 +818,7 @@ fn check_perf(ctx: &AppContext, verbose: bool) -> Result<usize> {
     if elapsed.as_millis() > 50 {
         println!(
             "{} Search latency high: {:?} (target < 50ms)",
-            "[!]",
-            elapsed
+            "[!]", elapsed
         );
         issues += 1;
     } else if verbose {
@@ -1231,7 +1197,10 @@ mod tests {
     #[test]
     fn test_doctor_render_recommendations() {
         let recommendation = "  Run with --fix to attempt automatic repairs";
-        assert!(!recommendation.contains("\x1b["), "no ANSI in recommendation");
+        assert!(
+            !recommendation.contains("\x1b["),
+            "no ANSI in recommendation"
+        );
         assert!(recommendation.contains("--fix"));
     }
 
@@ -1270,8 +1239,9 @@ mod tests {
     #[test]
     fn test_doctor_robot_mode_no_ansi() {
         // All status markers must be ANSI-free
-        let markers = ["[ok]", "[!]", "[FAIL]", "[auto]", "[manual]",
-                        "CRITICAL", "MAJOR", "MINOR"];
+        let markers = [
+            "[ok]", "[!]", "[FAIL]", "[auto]", "[manual]", "CRITICAL", "MAJOR", "MINOR",
+        ];
         for marker in markers {
             assert!(
                 !marker.contains("\x1b["),
@@ -1310,10 +1280,7 @@ mod tests {
         let issues_fixed = 1_usize;
 
         // Plain mode
-        let plain_summary = format!(
-            "Found {} issues, fixed {}",
-            issues_found, issues_fixed
-        );
+        let plain_summary = format!("Found {} issues, fixed {}", issues_found, issues_fixed);
 
         // JSON mode
         let json_summary = serde_json::json!({

@@ -218,6 +218,86 @@ Getting started with Python programming.
     Ok(())
 }
 
+/// Regression test for reindexing after new skills are added.
+#[test]
+fn test_reindex_after_adding_skill() -> Result<()> {
+    let mut fixture = E2EFixture::new("reindex_after_adding_skill");
+
+    fixture.log_step("Initialize");
+    let output = fixture.init();
+    fixture.assert_success(&output, "init");
+
+    fixture.log_step("Create initial skill");
+    fixture.create_skill(
+        "initial-rust",
+        r#"---
+name: Initial Rust
+description: Initial skill indexed before reindex
+tags: [rust, initial]
+---
+
+# Initial Rust
+
+This skill exists before the second indexing pass.
+"#,
+    )?;
+
+    fixture.log_step("Run initial index");
+    let output = fixture.run_ms(&["--robot", "index"]);
+    fixture.assert_success(&output, "initial index");
+    fixture.assert_output_not_contains(&output, "Index opened in read-only mode");
+
+    fixture.log_step("Create second skill");
+    fixture.create_skill(
+        "second-rust",
+        r#"---
+name: Second Rust
+description: Added after the first indexing pass
+tags: [rust, reindex]
+---
+
+# Second Rust
+
+This skill is added between indexing passes and must be picked up by reindex.
+"#,
+    )?;
+
+    fixture.log_step("Run second index");
+    let output = fixture.run_ms(&["--robot", "index"]);
+    fixture.assert_success(&output, "second index");
+    fixture.assert_output_not_contains(&output, "Index opened in read-only mode");
+
+    fixture.log_step("List indexed skills after reindex");
+    let output = fixture.run_ms(&["--robot", "list"]);
+    fixture.assert_success(&output, "list after reindex");
+
+    let json = output.json();
+    let skills = json["skills"].as_array().expect("skills should be array");
+    let skill_ids: Vec<&str> = skills.iter().filter_map(|s| s["id"].as_str()).collect();
+    assert!(
+        skill_ids.contains(&"initial-rust"),
+        "initial-rust should still be indexed after reindex"
+    );
+    assert!(
+        skill_ids.contains(&"second-rust"),
+        "second-rust should be indexed after reindex"
+    );
+
+    fixture.log_step("Search for second skill");
+    let output = fixture.run_ms(&["--robot", "search", "second rust"]);
+    fixture.assert_success(&output, "search after reindex");
+
+    let json = output.json();
+    let results = json["results"].as_array().expect("results should be array");
+    assert!(
+        results.iter().any(|result| result["id"] == "second-rust"),
+        "second-rust should appear in search results after reindex"
+    );
+
+    fixture.generate_report();
+    Ok(())
+}
+
 /// Test that load fails gracefully for missing skills.
 #[test]
 fn test_load_missing_skill() -> Result<()> {

@@ -22,6 +22,14 @@ pub struct AppContext {
 
 impl AppContext {
     pub fn from_cli(cli: &crate::cli::Cli) -> Result<Self> {
+        Self::from_cli_with_search_mode(cli, SearchMode::Writable)
+    }
+
+    pub fn from_cli_readonly_search(cli: &crate::cli::Cli) -> Result<Self> {
+        Self::from_cli_with_search_mode(cli, SearchMode::Readonly)
+    }
+
+    fn from_cli_with_search_mode(cli: &crate::cli::Cli, search_mode: SearchMode) -> Result<Self> {
         let ms_root = Self::find_ms_root()?;
         let config_path = cli
             .config
@@ -29,19 +37,21 @@ impl AppContext {
             .unwrap_or_else(|| default_config_path(&ms_root));
         let config = Config::load(cli.config.as_deref(), &ms_root)?;
 
+        let index_path = ms_root.join("index");
+        let search = match search_mode {
+            SearchMode::Writable => SearchIndex::open(&index_path)?,
+            // Read-only consumers such as the MCP server should never acquire
+            // the Tantivy writer lock, or they will block indexing commands.
+            SearchMode::Readonly => SearchIndex::open_readonly(&index_path)?,
+        };
+
         Ok(Self {
             ms_root: ms_root.clone(),
             config_path,
             config,
             db: Arc::new(Database::open(ms_root.join("ms.db"))?),
             git: Arc::new(GitArchive::open(ms_root.join("archive"))?),
-            search: Arc::new({
-                let index_path = ms_root.join("index");
-                // Try writable first; if the write lock is busy (another process),
-                // fall back to read-only mode so concurrent MCP servers and CLI
-                // commands can coexist without "LockBusy" errors.
-                SearchIndex::open(&index_path).or_else(|_| SearchIndex::open_readonly(&index_path))?
-            }),
+            search: Arc::new(search),
             robot_mode: cli.robot,
             output_format: cli.output_format(),
             verbosity: cli.verbose,
@@ -61,6 +71,11 @@ impl AppContext {
             .ok_or_else(|| MsError::MissingConfig("data directory not found".to_string()))?;
         Ok(data_dir.join("ms"))
     }
+}
+
+enum SearchMode {
+    Writable,
+    Readonly,
 }
 
 fn default_config_path(ms_root: &Path) -> PathBuf {
