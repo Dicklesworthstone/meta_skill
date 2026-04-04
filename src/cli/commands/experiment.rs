@@ -4,18 +4,18 @@ use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 
 use clap::{Args, Subcommand};
-use rand::Rng;
 use rand::distr::Distribution;
+use rand::Rng;
 use rand_distr::Beta;
 use serde::{Deserialize, Serialize};
 
 use crate::app::AppContext;
 use crate::cli::commands::load::{
-    CliPackContract, CliPackMode, DepsMode, LoadArgs, build_robot_payload, load_skill,
-    output_human as output_load_human,
+    build_robot_payload, load_skill, output_human as output_load_human, CliPackContract,
+    CliPackMode, DepsMode, LoadArgs,
 };
 use crate::cli::output::OutputFormat;
-use crate::cli::output::{HumanLayout, emit_json};
+use crate::cli::output::{emit_json, HumanLayout};
 use crate::error::{MsError, Result};
 use crate::storage::sqlite::ExperimentEventRecord;
 
@@ -479,7 +479,7 @@ fn run_load(ctx: &AppContext, args: &ExperimentLoadArgs) -> Result<()> {
     )?;
 
     if ctx.output_format != OutputFormat::Human {
-        let mut payload = build_robot_payload(&load_result, &load_args);
+        let mut payload = build_robot_payload(ctx, &load_result, &load_args);
         if let Some(data) = payload.as_object_mut() {
             data.insert(
                 "experiment".to_string(),

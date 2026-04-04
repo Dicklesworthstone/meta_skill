@@ -14,7 +14,7 @@ use std::path::PathBuf;
 use serde_json::Value as JsonValue;
 
 use ms::beads::{Dependency, Issue, IssueStatus, IssueType};
-use ms::graph::bv::{BvClient, write_beads_jsonl};
+use ms::graph::bv::{write_beads_jsonl, BvClient};
 use ms::graph::skills::skills_to_issues;
 use ms::storage::sqlite::SkillRecord;
 
@@ -34,7 +34,9 @@ fn base_skill_record(id: &str) -> SkillRecord {
         git_remote: None,
         git_commit: None,
         content_hash: "hash".to_string(),
+        bundle_hash: None,
         body: String::new(),
+        manifest_json: "{}".to_string(),
         metadata_json: "{}".to_string(),
         assets_json: "{}".to_string(),
         token_count: 0,

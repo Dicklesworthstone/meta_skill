@@ -15,11 +15,55 @@ use serde::{Deserialize, Serialize};
 use tracing::{debug, info, warn};
 use uuid::Uuid;
 
-use crate::core::{SkillLayer, SkillSlicer, SkillSpec, spec_lens::compile_markdown};
+use crate::core::{
+    spec_lens::compile_markdown, SkillLayer, SkillPackageManifest, SkillSlicer, SkillSpec,
+};
 use crate::error::{MsError, Result};
 
-use super::git::GitArchive;
-use super::sqlite::Database;
+use super::git::{GitArchive, SkillArchivePackageSnapshot, SkillArchiveResource};
+use super::sqlite::{Database, SkillResourceRecord};
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct SkillTxPayload {
+    skill: SkillSpec,
+    layer: SkillLayer,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    package: Option<SkillWritePackagePayload>,
+}
+
+impl SkillTxPayload {
+    fn from_legacy(skill: SkillSpec) -> Self {
+        Self {
+            skill,
+            layer: SkillLayer::Project,
+            package: None,
+        }
+    }
+}
+
+/// Additive package payload carried across 2PC boundaries.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SkillWritePackagePayload {
+    /// Bundle hash discovered during package scan.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bundle_hash: Option<String>,
+    /// Typed package manifest captured at index time.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub manifest: Option<SkillPackageManifest>,
+    /// Concrete resource files and source paths for archive reproduction.
+    #[serde(default)]
+    pub resources: Vec<SkillWriteResourcePayload>,
+}
+
+/// Resource payload used to preserve archive companion files in tx.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SkillWriteResourcePayload {
+    pub relative_path: PathBuf,
+    pub source_path: PathBuf,
+    pub resource_type: String,
+    pub content_hash: String,
+    pub size_bytes: u64,
+}
 
 // =============================================================================
 // FSYNC HELPER
@@ -422,7 +466,22 @@ impl TxManager {
 
     /// Write a skill with 2PC guarantees and an explicit layer
     pub fn write_skill_with_layer(&self, skill: &SkillSpec, layer: SkillLayer) -> Result<()> {
-        let tx = TxRecord::prepare("skill", &skill.metadata.id, skill)?;
+        self.write_skill_with_package(skill, layer, None)
+    }
+
+    /// Write a skill with 2PC guarantees plus additive package snapshot.
+    pub fn write_skill_with_package(
+        &self,
+        skill: &SkillSpec,
+        layer: SkillLayer,
+        package: Option<SkillWritePackagePayload>,
+    ) -> Result<()> {
+        let payload = SkillTxPayload {
+            skill: skill.clone(),
+            layer,
+            package,
+        };
+        let tx = TxRecord::prepare("skill", &skill.metadata.id, &payload)?;
         debug!(
             "Starting 2PC transaction {} for skill {}",
             tx.id, skill.metadata.id
@@ -432,7 +491,7 @@ impl TxManager {
         self.write_tx_record(&tx)?;
 
         // Phase 2: Pending - write to SQLite
-        let tx = self.db_write_pending(&tx, layer)?;
+        let tx = self.db_write_pending(&tx)?;
 
         // Phase 3: Commit - write to Git
         let tx = self.git_commit(&tx)?;
@@ -545,16 +604,17 @@ impl TxManager {
     }
 
     /// Write to `SQLite` in pending state
-    fn db_write_pending(&self, tx: &TxRecord, layer: SkillLayer) -> Result<TxRecord> {
+    fn db_write_pending(&self, tx: &TxRecord) -> Result<TxRecord> {
         debug!("Phase: pending (tx={})", tx.id);
 
-        let skill: SkillSpec = serde_json::from_str(&tx.payload_json)
-            .map_err(|e| MsError::TransactionFailed(format!("deserialize skill: {e}")))?;
+        let payload = parse_skill_tx_payload(&tx.payload_json)?;
+        let skill = &payload.skill;
 
-        let token_count = SkillSlicer::estimate_total_tokens(&skill) as i64;
+        let token_count = SkillSlicer::estimate_total_tokens(skill) as i64;
 
         // Upsert skill with pending marker
-        self.db.upsert_skill_pending(&skill, layer, token_count)?;
+        self.db
+            .upsert_skill_pending(skill, payload.layer, token_count)?;
 
         // Update phase
         let mut tx = tx.clone();
@@ -574,11 +634,17 @@ impl TxManager {
     fn git_commit(&self, tx: &TxRecord) -> Result<TxRecord> {
         debug!("Phase: committed (tx={})", tx.id);
 
-        let skill: SkillSpec = serde_json::from_str(&tx.payload_json)
-            .map_err(|e| MsError::TransactionFailed(format!("deserialize skill: {e}")))?;
+        let payload = parse_skill_tx_payload(&tx.payload_json)?;
+        let skill = &payload.skill;
+        let archive_package = payload
+            .package
+            .as_ref()
+            .map(convert_to_archive_snapshot)
+            .transpose()?;
 
         // Write to Git
-        self.git.write_skill(&skill)?;
+        self.git
+            .write_skill_with_package(skill, archive_package.as_ref())?;
 
         // Update phase
         let mut tx = tx.clone();
@@ -598,8 +664,8 @@ impl TxManager {
     fn db_mark_committed(&self, tx: &TxRecord) -> Result<TxRecord> {
         debug!("Phase: complete (tx={})", tx.id);
 
-        let skill: SkillSpec = serde_json::from_str(&tx.payload_json)
-            .map_err(|e| MsError::TransactionFailed(format!("deserialize skill: {e}")))?;
+        let payload = parse_skill_tx_payload(&tx.payload_json)?;
+        let skill = &payload.skill;
 
         // Update skill with final values
         let git_path = self
@@ -608,13 +674,26 @@ impl TxManager {
             .join("skills/by-id")
             .join(&skill.metadata.id);
         let git_path_str = git_path.to_string_lossy();
-        let content_hash = compute_content_hash(&skill)?;
+        let content_hash = compute_content_hash(skill)?;
 
         // Compile skill to markdown for FTS-searchable body
-        let body = compile_markdown(&skill);
+        let body = compile_markdown(skill);
 
         self.db
             .finalize_skill_commit(&skill.metadata.id, &git_path_str, &content_hash, &body)?;
+
+        if let Some(package) = payload.package.as_ref() {
+            let (bundle_hash, manifest_json, resources) =
+                package_baseline_for_sqlite(&skill.metadata.id, package)?;
+            self.db.persist_skill_package_baseline(
+                &skill.metadata.id,
+                bundle_hash.as_deref(),
+                &manifest_json,
+                &resources,
+            )?;
+        } else {
+            self.db.clear_skill_package_baseline(&skill.metadata.id)?;
+        }
 
         // Update phase
         let mut tx = tx.clone();
@@ -644,6 +723,7 @@ impl TxManager {
 
     /// Recover from incomplete transactions on startup
     pub fn recover(&self) -> Result<RecoveryReport> {
+        let _lock = GlobalLock::acquire(&self.ms_root)?;
         info!("Starting transaction recovery");
         let mut report = RecoveryReport::default();
 
@@ -714,6 +794,8 @@ impl TxManager {
                 // might have files even if commit failed.
                 if self.git.skill_committed(&tx.entity_id)? {
                     info!("Completing pending tx with committed Git data: {}", tx.id);
+                    self.git.reconcile_skill_worktree(&tx.entity_id)?;
+                    self.git.reconcile_index_to_head()?;
                     let tx = self.db_mark_committed(tx)?;
                     self.cleanup_tx(&tx)?;
                     report.completed += 1;
@@ -747,9 +829,11 @@ impl TxManager {
                 // db.update_tx_phase to Committed failed, leaving us at Prepare phase).
                 // If skill is gone from Git, we need to complete the delete in SQLite.
                 // If skill still exists in Git, delete truly never started.
-                if self.git.skill_exists(&tx.entity_id) {
+                if self.git.skill_committed(&tx.entity_id)? {
                     // Skill exists in Git - delete never started, clean up tx record
                     info!("Rolling back prepare-only delete tx: {}", tx.id);
+                    self.git.reconcile_skill_worktree(&tx.entity_id)?;
+                    self.git.reconcile_index_to_head()?;
                     self.db.delete_tx_record(&tx.id)?;
                     let tx_path = self.tx_dir.join(format!("{}.json", tx.id));
                     let _ = tombstone_file(&self.ms_root, &tx_path, "tx");
@@ -770,8 +854,10 @@ impl TxManager {
                 // Delete transactions skip Pending phase, but handle just in case.
                 // Apply same logic as Prepare: check Git state to determine action.
                 warn!("Unexpected Pending phase for delete tx: {}", tx.id);
-                if self.git.skill_exists(&tx.entity_id) {
+                if self.git.skill_committed(&tx.entity_id)? {
                     // Skill exists in Git - clean up tx record
+                    self.git.reconcile_skill_worktree(&tx.entity_id)?;
+                    self.git.reconcile_index_to_head()?;
                     self.db.delete_tx_record(&tx.id)?;
                     let tx_path = self.tx_dir.join(format!("{}.json", tx.id));
                     let _ = tombstone_file(&self.ms_root, &tx_path, "tx");
@@ -819,6 +905,9 @@ impl TxManager {
             self.db.delete_pending_skill(&tx.entity_id)?;
         }
 
+        self.git.reconcile_skill_worktree(&tx.entity_id)?;
+        self.git.reconcile_index_to_head()?;
+
         // Remove from tx_log
         self.db.delete_tx_record(&tx.id)?;
 
@@ -828,6 +917,72 @@ impl TxManager {
 
         Ok(())
     }
+}
+
+fn parse_skill_tx_payload(payload_json: &str) -> Result<SkillTxPayload> {
+    match serde_json::from_str::<SkillTxPayload>(payload_json) {
+        Ok(payload) => Ok(payload),
+        Err(v2_err) => match serde_json::from_str::<SkillSpec>(payload_json) {
+            Ok(skill) => Ok(SkillTxPayload::from_legacy(skill)),
+            Err(v1_err) => Err(MsError::TransactionFailed(format!(
+                "deserialize tx payload failed (v2: {v2_err}; v1: {v1_err})"
+            ))),
+        },
+    }
+}
+
+fn convert_to_archive_snapshot(
+    package: &SkillWritePackagePayload,
+) -> Result<SkillArchivePackageSnapshot> {
+    let mut resources = Vec::with_capacity(package.resources.len());
+    for resource in &package.resources {
+        resources.push(SkillArchiveResource {
+            relative_path: resource.relative_path.clone(),
+            source_path: resource.source_path.clone(),
+            resource_type: resource.resource_type.clone(),
+            content_hash: resource.content_hash.clone(),
+            size_bytes: resource.size_bytes,
+        });
+    }
+    Ok(SkillArchivePackageSnapshot { resources })
+}
+
+fn package_baseline_for_sqlite(
+    skill_id: &str,
+    package: &SkillWritePackagePayload,
+) -> Result<(Option<String>, String, Vec<SkillResourceRecord>)> {
+    let manifest_json = if let Some(manifest) = package.manifest.as_ref() {
+        serde_json::to_string(manifest)
+            .map_err(|e| MsError::TransactionFailed(format!("serialize manifest: {e}")))?
+    } else {
+        "{}".to_string()
+    };
+
+    let mut resources = Vec::with_capacity(package.resources.len());
+    for resource in &package.resources {
+        let size_bytes = i64::try_from(resource.size_bytes).map_err(|_| {
+            MsError::TransactionFailed(format!(
+                "resource too large to persist safely: {}",
+                resource.relative_path.display()
+            ))
+        })?;
+        resources.push(SkillResourceRecord {
+            skill_id: skill_id.to_string(),
+            relative_path: normalize_resource_path(&resource.relative_path),
+            resource_type: resource.resource_type.clone(),
+            content_hash: resource.content_hash.clone(),
+            size_bytes,
+        });
+    }
+
+    Ok((package.bundle_hash.clone(), manifest_json, resources))
+}
+
+fn normalize_resource_path(path: &Path) -> String {
+    path.components()
+        .map(|component| component.as_os_str().to_string_lossy().into_owned())
+        .collect::<Vec<_>>()
+        .join("/")
 }
 
 /// Report of recovery actions taken
@@ -894,7 +1049,7 @@ fn tombstone_file(ms_root: &Path, path: &Path, bucket: &str) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::{SkillMetadata, SkillSection};
+    use crate::core::{SkillMetadata, SkillResourceEntry, SkillSection};
     use tempfile::tempdir;
 
     fn sample_skill(id: &str) -> SkillSpec {
@@ -1054,6 +1209,105 @@ mod tests {
 
         // Hash should be hex string of SHA256 (64 chars)
         assert_eq!(hash1.len(), 64);
+    }
+
+    #[test]
+    fn test_successful_2pc_with_package_payload_persists_archive_resources() {
+        let dir = tempdir().unwrap();
+        let db_path = dir.path().join("test.db");
+        let archive_path = dir.path().join("archive");
+        let ms_root = dir.path().to_path_buf();
+
+        let db = Arc::new(Database::open(&db_path).unwrap());
+        let git = Arc::new(GitArchive::open(&archive_path).unwrap());
+        let tx_mgr = TxManager::new(db.clone(), git.clone(), ms_root).unwrap();
+
+        let package_root = dir.path().join("pkg");
+        let script_path = package_root.join("scripts/run.sh");
+        fs::create_dir_all(package_root.join("scripts")).unwrap();
+        fs::write(&script_path, "#!/usr/bin/env bash\necho from tx\n").unwrap();
+
+        let skill = sample_skill("2pc-with-package");
+        let resource_size = fs::metadata(&script_path).unwrap().len();
+        let resource_hash = super::super::git::compute_file_hash(&script_path).unwrap();
+        let package_payload = SkillWritePackagePayload {
+            bundle_hash: Some("bundle-hash-123".to_string()),
+            manifest: Some(SkillPackageManifest {
+                bundle_hash: "bundle-hash-123".to_string(),
+                summary: crate::core::SkillPackageSummary {
+                    package_root: PathBuf::from("."),
+                    resource_count: 2,
+                    total_bytes: resource_size,
+                    resource_type_counts: {
+                        let mut map = std::collections::BTreeMap::new();
+                        map.insert("script".to_string(), 1);
+                        map.insert("skill_spec".to_string(), 1);
+                        map
+                    },
+                },
+                resources: vec![SkillResourceEntry {
+                    relative_path: PathBuf::from("scripts/run.sh"),
+                    resource_type: crate::core::SkillResourceType::Script,
+                    size_bytes: resource_size,
+                    content_hash: resource_hash.clone(),
+                }],
+            }),
+            resources: vec![SkillWriteResourcePayload {
+                relative_path: PathBuf::from("scripts/run.sh"),
+                source_path: script_path,
+                resource_type: "script".to_string(),
+                content_hash: resource_hash,
+                size_bytes: resource_size,
+            }],
+        };
+
+        tx_mgr
+            .write_skill_with_package(&skill, SkillLayer::Project, Some(package_payload))
+            .unwrap();
+
+        let archived_resource =
+            archive_path.join("skills/by-id/2pc-with-package/resources/scripts/run.sh");
+        assert!(archived_resource.exists());
+
+        let db_skill = db.get_skill("2pc-with-package").unwrap().unwrap();
+        assert_eq!(db_skill.bundle_hash.as_deref(), Some("bundle-hash-123"));
+        assert!(db_skill.manifest_json.contains("bundle-hash-123"));
+        assert_eq!(db.count_skill_resources("2pc-with-package").unwrap(), 1);
+    }
+
+    #[test]
+    fn test_recover_pending_legacy_payload_still_supported() {
+        let dir = tempdir().unwrap();
+        let db_path = dir.path().join("test.db");
+        let archive_path = dir.path().join("archive");
+        let ms_root = dir.path().to_path_buf();
+
+        let db = Arc::new(Database::open(&db_path).unwrap());
+        let git = Arc::new(GitArchive::open(&archive_path).unwrap());
+        let tx_mgr = TxManager::new(db.clone(), git, ms_root.clone()).unwrap();
+
+        let skill = sample_skill("legacy-recovery");
+
+        // Simulate legacy tx payload (SkillSpec only) stuck in pending.
+        let legacy_tx = TxRecord::prepare("skill", &skill.metadata.id, &skill).unwrap();
+        db.insert_tx_record(&legacy_tx).unwrap();
+        db.upsert_skill_pending(&skill, SkillLayer::Project, 0)
+            .unwrap();
+        db.update_tx_phase(&legacy_tx.id, TxPhase::Pending).unwrap();
+
+        let mut pending_tx = legacy_tx;
+        pending_tx.phase = TxPhase::Pending;
+        fs::create_dir_all(ms_root.join("tx")).unwrap();
+        let tx_path = ms_root.join("tx").join(format!("{}.json", pending_tx.id));
+        fs::write(&tx_path, serde_json::to_string_pretty(&pending_tx).unwrap()).unwrap();
+
+        // Make Git contain committed skill so recovery completes Pending -> Complete.
+        let archive_for_commit = GitArchive::open(&archive_path).unwrap();
+        archive_for_commit.write_skill(&skill).unwrap();
+
+        let report = tx_mgr.recover().unwrap();
+        assert_eq!(report.completed, 1);
+        assert!(db.list_incomplete_transactions().unwrap().is_empty());
     }
 
     #[test]

@@ -25,19 +25,19 @@ pub use layering::{
     BlockDiff, ConflictDetail, ConflictResolution, ConflictStrategy, LayeredRegistry,
     MergeStrategy, ResolutionOptions, ResolvedSkill, SectionDiff, SkillCandidate,
 };
-pub use pack_contracts::{PackContractPreset, contract_from_name};
+pub use pack_contracts::{contract_from_name, PackContractPreset};
 pub use packing::{
     ConstrainedPacker, CoverageQuota, MandatoryPredicate, MandatorySlice, PackConstraints,
     PackError, PackResult,
 };
 pub use recovery::{
-    Checkpoint, FailureMode, RecoveryIssue, RecoveryManager, RecoveryReport, RetryConfig,
-    with_retry, with_retry_if,
+    with_retry, with_retry_if, Checkpoint, FailureMode, RecoveryIssue, RecoveryManager,
+    RecoveryReport, RetryConfig,
 };
 pub use resolution::{
-    CycleDetectionResult, GitSkillRepository, MAX_INHERITANCE_DEPTH, ResolutionWarning,
-    ResolvedSkillSpec, SkillRepository, detect_inheritance_cycle, get_inheritance_chain,
-    resolve_extends, resolve_full,
+    detect_inheritance_cycle, get_inheritance_chain, resolve_extends, resolve_full,
+    CycleDetectionResult, GitSkillRepository, ResolutionWarning, ResolvedSkillSpec,
+    SkillRepository, MAX_INHERITANCE_DEPTH,
 };
 pub use resolution_cache::{
     CacheKey, CacheStats, CachedResolvedSkill, DependencyGraph as ResolutionDependencyGraph,
@@ -45,7 +45,8 @@ pub use resolution_cache::{
 };
 pub use skill::{
     BlockType, EvidenceCoverage, EvidenceLevel, EvidenceRef, Skill, SkillBlock, SkillEvidenceIndex,
-    SkillLayer, SkillMetadata, SkillSection, SkillSpec,
+    SkillLayer, SkillMetadata, SkillPackageManifest, SkillPackageSummary, SkillResourceEntry,
+    SkillResourceType, SkillSection, SkillSpec,
 };
 pub use slicing::{SkillSliceIndex, SkillSlicer};
 pub use spec_migration::migrate_spec;

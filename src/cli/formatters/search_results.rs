@@ -9,7 +9,7 @@ use tracing::debug;
 
 use crate::cli::output::{Formattable, OutputFormat};
 use crate::output::{is_agent_environment, is_ci_environment, search_results_table, warning_panel};
-use crate::storage::sqlite::SkillRecord;
+use crate::storage::sqlite::{SkillRecord, SkillResourceRecord};
 
 /// Search result item with score
 #[derive(Debug, Clone)]
@@ -20,6 +20,8 @@ pub struct SearchResultItem {
     pub score: f32,
     /// Optional snippet of matching content
     pub snippet: Option<String>,
+    /// Optional package resources for exact package hits.
+    pub package_resources: Vec<SkillResourceRecord>,
 }
 
 /// Search results collection for formatted display
@@ -47,6 +49,15 @@ struct SearchResultJson {
     is_deprecated: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     snippet: Option<String>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    package_resources: Vec<SearchResourceJson>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct SearchResourceJson {
+    relative_path: String,
+    resource_type: String,
+    size_bytes: i64,
 }
 
 /// Serializable search response for JSON output
@@ -78,6 +89,22 @@ impl SearchResults {
             skill,
             score,
             snippet: None,
+            package_resources: Vec::new(),
+        });
+    }
+
+    /// Add a result with package resources attached.
+    pub fn add_result_with_resources(
+        &mut self,
+        skill: SkillRecord,
+        score: f32,
+        package_resources: Vec<SkillResourceRecord>,
+    ) {
+        self.results.push(SearchResultItem {
+            skill,
+            score,
+            snippet: None,
+            package_resources,
         });
     }
 
@@ -92,6 +119,7 @@ impl SearchResults {
             skill,
             score,
             snippet: Some(snippet.into()),
+            package_resources: Vec::new(),
         });
     }
 
@@ -134,6 +162,15 @@ impl SearchResults {
                     quality: r.skill.quality_score,
                     is_deprecated: r.skill.is_deprecated,
                     snippet: r.snippet.clone(),
+                    package_resources: r
+                        .package_resources
+                        .iter()
+                        .map(|resource| SearchResourceJson {
+                            relative_path: resource.relative_path.clone(),
+                            resource_type: resource.resource_type.clone(),
+                            size_bytes: resource.size_bytes,
+                        })
+                        .collect(),
                 })
                 .collect(),
         }
@@ -236,6 +273,15 @@ impl SearchResults {
                 if let Some(ref snippet) = result.snippet {
                     out.push_str(&format!("   {snippet}\n"));
                 }
+                if !result.package_resources.is_empty() {
+                    out.push_str("   Package resources:\n");
+                    for resource in &result.package_resources {
+                        out.push_str(&format!(
+                            "   - {} ({})\n",
+                            resource.relative_path, resource.resource_type
+                        ));
+                    }
+                }
                 out.push('\n');
             }
         }
@@ -329,6 +375,15 @@ impl SearchResults {
                     quality: r.skill.quality_score,
                     is_deprecated: r.skill.is_deprecated,
                     snippet: r.snippet.clone(),
+                    package_resources: r
+                        .package_resources
+                        .iter()
+                        .map(|resource| SearchResourceJson {
+                            relative_path: resource.relative_path.clone(),
+                            resource_type: resource.resource_type.clone(),
+                            size_bytes: resource.size_bytes,
+                        })
+                        .collect(),
                 })
                 .ok()
             })
@@ -435,7 +490,9 @@ mod tests {
             git_remote: None,
             git_commit: None,
             content_hash: "hash".to_string(),
+            bundle_hash: None,
             body: "body".to_string(),
+            manifest_json: "{}".to_string(),
             metadata_json: "{}".to_string(),
             assets_json: "[]".to_string(),
             token_count: 50,
@@ -563,7 +620,10 @@ mod tests {
             output.contains("1 results"),
             "Should show result count: got {output}"
         );
-        assert!(output.contains("Skill skill-1"), "Should contain skill name");
+        assert!(
+            output.contains("Skill skill-1"),
+            "Should contain skill name"
+        );
         assert!(output.contains("bm25"), "Should show search type");
     }
 
@@ -619,10 +679,7 @@ mod tests {
             header.contains("semantic"),
             "Header should contain search type"
         );
-        assert!(
-            header.contains("in 15ms"),
-            "Header should contain duration"
-        );
+        assert!(header.contains("in 15ms"), "Header should contain duration");
     }
 
     #[test]
@@ -642,11 +699,19 @@ mod tests {
 
         let output = results.format(OutputFormat::Plain);
         let lines: Vec<&str> = output.lines().collect();
-        assert_eq!(lines.len(), 2, "Plain output should have one line per result");
+        assert_eq!(
+            lines.len(),
+            2,
+            "Plain output should have one line per result"
+        );
 
         for line in &lines {
             let fields: Vec<&str> = line.split('\t').collect();
-            assert_eq!(fields.len(), 4, "Each line should be SCORE\\tNAME\\tLAYER\\tDESC");
+            assert_eq!(
+                fields.len(),
+                4,
+                "Each line should be SCORE\\tNAME\\tLAYER\\tDESC"
+            );
         }
     }
 
@@ -766,8 +831,7 @@ mod tests {
         assert!(!output.is_empty(), "TOON output should not be empty");
         // TOON is not valid JSON (different format)
         assert!(
-            serde_json::from_str::<serde_json::Value>(&output).is_err()
-                || output.contains("test"),
+            serde_json::from_str::<serde_json::Value>(&output).is_err() || output.contains("test"),
             "TOON output should contain data or be a different format from JSON"
         );
     }
@@ -780,8 +844,14 @@ mod tests {
         let plain_empty = results.format_empty_results(false);
 
         // Both should mention the query and give suggestions
-        assert!(rich_empty.contains("nothing"), "Rich empty should contain query");
-        assert!(plain_empty.contains("nothing"), "Plain empty should contain query");
+        assert!(
+            rich_empty.contains("nothing"),
+            "Rich empty should contain query"
+        );
+        assert!(
+            plain_empty.contains("nothing"),
+            "Plain empty should contain query"
+        );
         assert!(
             rich_empty.contains("different keywords"),
             "Rich empty should suggest alternatives"

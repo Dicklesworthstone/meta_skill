@@ -11,7 +11,7 @@ use crate::cli::formatters::SearchResults;
 use crate::cli::output::{Formattable, OutputFormat};
 use crate::error::{MsError, Result};
 use crate::search::{
-    RrfConfig, SearchFilters, SearchLayer, VectorIndex, build_embedder, fuse_simple,
+    build_embedder, fuse_simple, RrfConfig, SearchFilters, SearchLayer, VectorIndex,
 };
 
 #[derive(Args, Debug)]
@@ -109,6 +109,10 @@ pub fn run(ctx: &AppContext, args: &SearchArgs) -> Result<()> {
 }
 
 fn search_hybrid(ctx: &AppContext, args: &SearchArgs, filters: &SearchFilters) -> Result<()> {
+    if let Some(exact_results) = search_exact_package_hit(ctx, args, filters)? {
+        return display_results(ctx, &exact_results, args, "exact");
+    }
+
     // Fetch enough results from both systems for fusion
     // Increase limit to allow for filtering
     let fetch_limit = args.limit * 50;
@@ -181,6 +185,10 @@ fn search_hybrid(ctx: &AppContext, args: &SearchArgs, filters: &SearchFilters) -
 }
 
 fn search_bm25(ctx: &AppContext, args: &SearchArgs, filters: &SearchFilters) -> Result<()> {
+    if let Some(exact_results) = search_exact_package_hit(ctx, args, filters)? {
+        return display_results(ctx, &exact_results, args, "exact");
+    }
+
     // Increase limit to allow for filtering
     let candidates = ctx.db.search_fts(&args.query, args.limit * 50)?;
 
@@ -209,6 +217,10 @@ fn search_bm25(ctx: &AppContext, args: &SearchArgs, filters: &SearchFilters) -> 
 }
 
 fn search_semantic(ctx: &AppContext, args: &SearchArgs, filters: &SearchFilters) -> Result<()> {
+    if let Some(exact_results) = search_exact_package_hit(ctx, args, filters)? {
+        return display_results(ctx, &exact_results, args, "exact");
+    }
+
     let embedder = build_embedder(&ctx.config.search)?;
     let query_embedding = embedder.embed(&args.query);
 
@@ -249,6 +261,32 @@ fn search_semantic(ctx: &AppContext, args: &SearchArgs, filters: &SearchFilters)
     display_results(ctx, &results, args, "semantic")
 }
 
+fn search_exact_package_hit(
+    ctx: &AppContext,
+    args: &SearchArgs,
+    filters: &SearchFilters,
+) -> Result<Option<Vec<(crate::storage::sqlite::SkillRecord, f32)>>> {
+    let Some(exact) = ctx.db.find_exact_skill_match(&args.query)? else {
+        return Ok(None);
+    };
+
+    let Some(skill) = ctx.db.get_skill(&exact.id)? else {
+        return Ok(None);
+    };
+
+    let skill_tags = parse_tags_from_metadata(&skill.metadata_json);
+    if !filters.matches(
+        &skill_tags,
+        &skill.source_layer,
+        skill.quality_score as f32,
+        skill.is_deprecated,
+    ) {
+        return Ok(Some(Vec::new()));
+    }
+
+    Ok(Some(vec![(skill, 1.0)]))
+}
+
 fn display_results(
     ctx: &AppContext,
     results: &[(crate::storage::sqlite::SkillRecord, f32)],
@@ -262,7 +300,15 @@ fn display_results(
     let start = std::time::Instant::now();
 
     // Build SearchResults using the new formatter
-    let mut search_results = SearchResults::from_tuples(&args.query, search_type, results);
+    let mut search_results = SearchResults::new(&args.query, search_type);
+    for (skill, score) in results {
+        let package_resources = if search_type == "exact" {
+            ctx.db.list_skill_resources(&skill.id).unwrap_or_default()
+        } else {
+            Vec::new()
+        };
+        search_results.add_result_with_resources(skill.clone(), *score, package_resources);
+    }
 
     // Add snippets if requested
     if args.snippets {

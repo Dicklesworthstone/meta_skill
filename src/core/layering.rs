@@ -807,12 +807,10 @@ mod tests {
 
         let resolved = registry.effective("test").unwrap().unwrap();
         assert!(resolved.needs_resolution);
-        assert!(
-            resolved
-                .conflicts
-                .iter()
-                .all(|c| matches!(c.resolution, ConflictResolution::Unresolved))
-        );
+        assert!(resolved
+            .conflicts
+            .iter()
+            .all(|c| matches!(c.resolution, ConflictResolution::Unresolved)));
     }
 
     #[test]

@@ -1,6 +1,8 @@
 //! ms index - Index skills from configured paths
 
-use std::path::PathBuf;
+use std::collections::BTreeMap;
+use std::io::{BufReader, Read};
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -11,9 +13,13 @@ use walkdir::WalkDir;
 
 use crate::app::AppContext;
 use crate::cli::output::OutputFormat;
-use crate::core::{GitSkillRepository, ResolutionCache, SkillLayer, spec_lens::parse_markdown};
+use crate::core::{
+    spec_lens::parse_markdown, GitSkillRepository, ResolutionCache, SkillLayer,
+    SkillPackageManifest, SkillPackageSummary, SkillResourceEntry, SkillResourceType,
+};
 use crate::error::{MsError, Result};
 use crate::storage::tx::GlobalLock;
+use crate::storage::tx::{SkillWritePackagePayload, SkillWriteResourcePayload};
 use crate::storage::{SkillRecord, TxManager};
 use crate::sync::ru::RuClient;
 
@@ -47,6 +53,7 @@ struct SkillRoot {
 
 struct DiscoveredSkill {
     path: PathBuf,
+    package_root: PathBuf,
     layer: SkillLayer,
 }
 
@@ -337,13 +344,20 @@ fn discover_skill_files(roots: &[SkillRoot]) -> Vec<DiscoveredSkill> {
         }
 
         for entry in WalkDir::new(&root.path)
-            .follow_links(true)
+            .follow_links(false)
             .into_iter()
+            .filter_entry(|entry| {
+                !entry.file_type().is_dir() || !should_skip_discovery_dir(entry.path())
+            })
             .filter_map(std::result::Result::ok)
         {
             if entry.file_type().is_file() && entry.file_name() == "SKILL.md" {
+                let Some(package_root) = entry.path().parent() else {
+                    continue;
+                };
                 skill_files.push(DiscoveredSkill {
                     path: entry.path().to_path_buf(),
+                    package_root: package_root.to_path_buf(),
                     layer: root.layer,
                 });
             }
@@ -361,6 +375,8 @@ fn index_skill_file(
     skill: &DiscoveredSkill,
     force: bool,
 ) -> Result<()> {
+    let package_manifest = discover_package_manifest(&skill.path, &skill.package_root)?;
+
     // Read the file
     let content = std::fs::read_to_string(&skill.path)?;
 
@@ -377,27 +393,74 @@ fn index_skill_file(
 
     // Check if already indexed (unless force)
     let new_hash = compute_spec_hash(&spec)?;
+    let needs_resolution = spec.extends.is_some() || !spec.includes.is_empty();
+    let manifest_json = serde_json::to_string(&package_manifest)
+        .map_err(|e| MsError::InvalidSkill(format!("serialize package manifest: {e}")))?;
+    let existing = ctx.db.get_skill(&spec.metadata.id).ok().flatten();
     if !force {
-        if let Ok(Some(existing)) = ctx.db.get_skill(&spec.metadata.id) {
+        if let Some(existing) = existing.as_ref() {
             // Check content hash to skip unchanged skills
             let same_layer = existing.source_layer == skill.layer.as_str();
-            if existing.content_hash == new_hash && same_layer {
+            let same_bundle =
+                existing.bundle_hash.as_deref() == Some(&package_manifest.bundle_hash);
+            let baseline_complete = existing.manifest_json == manifest_json
+                && ctx.db.count_skill_resources(&spec.metadata.id).ok()
+                    == Some(package_manifest.resources.len());
+            if !needs_resolution
+                && existing.content_hash == new_hash
+                && same_layer
+                && same_bundle
+                && baseline_complete
+            {
                 return Ok(()); // Skip unchanged
             }
         }
     }
+    let content_changed = existing
+        .as_ref()
+        .map(|existing| {
+            existing.content_hash != new_hash || existing.source_layer != skill.layer.as_str()
+        })
+        .unwrap_or(true);
+    let baseline_changed = existing
+        .as_ref()
+        .map(|existing| {
+            existing.bundle_hash.as_deref() != Some(&package_manifest.bundle_hash)
+                || existing.manifest_json != manifest_json
+                || ctx.db.count_skill_resources(&spec.metadata.id).ok()
+                    != Some(package_manifest.resources.len())
+        })
+        .unwrap_or(true);
 
-    // Write using 2PC transaction manager (stores raw spec)
-    tx_mgr.write_skill_with_layer(&spec, skill.layer)?;
+    let requires_tx_write = force || content_changed || baseline_changed;
+
+    if requires_tx_write {
+        let package_payload = SkillWritePackagePayload {
+            bundle_hash: Some(package_manifest.bundle_hash.clone()),
+            manifest: Some(package_manifest.clone()),
+            resources: package_manifest
+                .resources
+                .iter()
+                .map(|resource| SkillWriteResourcePayload {
+                    relative_path: resource.relative_path.clone(),
+                    source_path: skill.package_root.join(&resource.relative_path),
+                    resource_type: resource.resource_type.as_str().to_string(),
+                    content_hash: resource.content_hash.clone(),
+                    size_bytes: resource.size_bytes,
+                })
+                .collect(),
+        };
+
+        // Write using 2PC transaction manager (stores raw spec)
+        tx_mgr.write_skill_with_package(&spec, skill.layer, Some(package_payload))?;
+    }
 
     // Compute and persist quality score
     let scorer = crate::quality::QualityScorer::with_defaults();
     let quality = scorer.score_spec(&spec, &crate::quality::QualityContext::default());
     ctx.db
         .update_skill_quality(&spec.metadata.id, f64::from(quality.overall))?;
-
-    // Resolve the skill if it has inheritance or composition
-    let needs_resolution = spec.extends.is_some() || !spec.includes.is_empty();
+    let refreshed_record = ctx.db.get_skill(&spec.metadata.id)?;
 
     if needs_resolution {
         // Create a hash lookup function that reads skills from git archive and hashes them
@@ -424,11 +487,17 @@ fn index_skill_file(
         )?;
 
         // Build a SkillRecord from the resolved spec for search indexing
-        let resolved_record = build_skill_record_from_resolved(&resolved.spec, skill, &new_hash);
+        let resolved_record = build_skill_record_from_resolved(
+            &resolved.spec,
+            skill,
+            &new_hash,
+            &package_manifest,
+            refreshed_record.as_ref(),
+        );
         ctx.search.index_skill(&resolved_record)?;
     } else {
         // No resolution needed - index the raw spec directly
-        if let Ok(Some(skill_record)) = ctx.db.get_skill(&spec.metadata.id) {
+        if let Some(skill_record) = refreshed_record {
             ctx.search.index_skill(&skill_record)?;
         }
     }
@@ -441,6 +510,8 @@ fn build_skill_record_from_resolved(
     spec: &crate::core::SkillSpec,
     discovered: &DiscoveredSkill,
     content_hash: &str,
+    package_manifest: &SkillPackageManifest,
+    existing: Option<&SkillRecord>,
 ) -> SkillRecord {
     // Concatenate all section content for the body field
     let body = spec
@@ -469,19 +540,243 @@ fn build_skill_record_from_resolved(
         author: spec.metadata.author.clone(),
         source_path: discovered.path.display().to_string(),
         source_layer: discovered.layer.as_str().to_string(),
-        git_remote: None,
-        git_commit: None,
+        git_remote: existing.and_then(|record| record.git_remote.clone()),
+        git_commit: existing.and_then(|record| record.git_commit.clone()),
         content_hash: content_hash.to_string(),
+        bundle_hash: Some(package_manifest.bundle_hash.clone()),
         body,
+        manifest_json: serde_json::to_string(package_manifest).unwrap_or_else(|_| "{}".to_string()),
         metadata_json,
         assets_json: "[]".to_string(), // No assets in current SkillSpec
-        token_count: 0,                // Will be computed separately if needed
-        quality_score: 0.0,            // Will be updated by quality scorer
-        indexed_at: chrono::Utc::now().to_rfc3339(),
-        modified_at: chrono::Utc::now().to_rfc3339(),
-        is_deprecated: false, // Not tracked in current SkillMetadata
-        deprecation_reason: None,
+        token_count: existing.map_or(0, |record| record.token_count),
+        quality_score: existing.map_or(0.0, |record| record.quality_score),
+        indexed_at: existing
+            .map(|record| record.indexed_at.clone())
+            .unwrap_or_else(|| chrono::Utc::now().to_rfc3339()),
+        modified_at: existing
+            .map(|record| record.modified_at.clone())
+            .unwrap_or_else(|| chrono::Utc::now().to_rfc3339()),
+        is_deprecated: existing.is_some_and(|record| record.is_deprecated),
+        deprecation_reason: existing.and_then(|record| record.deprecation_reason.clone()),
     }
+}
+
+fn discover_package_manifest(
+    skill_path: &Path,
+    package_root: &Path,
+) -> Result<SkillPackageManifest> {
+    let canonical_root = std::fs::canonicalize(package_root).map_err(|e| {
+        MsError::InvalidSkill(format!(
+            "{}: cannot canonicalize package root {}: {e}",
+            skill_path.display(),
+            package_root.display()
+        ))
+    })?;
+
+    let mut resources = Vec::new();
+    scan_package_resources(&canonical_root, &canonical_root, skill_path, &mut resources)?;
+    resources.sort_by(|a, b| a.relative_path.cmp(&b.relative_path));
+
+    let mut resource_type_counts = BTreeMap::<String, usize>::new();
+    let mut total_bytes: u64 = 0;
+    for resource in &resources {
+        *resource_type_counts
+            .entry(resource.resource_type.as_str().to_string())
+            .or_insert(0) += 1;
+        total_bytes = total_bytes.saturating_add(resource.size_bytes);
+    }
+
+    let bundle_hash = compute_bundle_hash(&resources)?;
+    Ok(SkillPackageManifest {
+        bundle_hash,
+        summary: SkillPackageSummary {
+            package_root: PathBuf::from("."),
+            resource_count: resources.len(),
+            total_bytes,
+            resource_type_counts,
+        },
+        resources,
+    })
+}
+
+fn should_skip_package_dir(package_root: &Path, entry_path: &Path) -> bool {
+    let Some(name) = entry_path.file_name().and_then(|name| name.to_str()) else {
+        return false;
+    };
+
+    if matches!(name, ".git" | ".hg" | ".svn" | "target" | "node_modules") {
+        return true;
+    }
+
+    entry_path != package_root && entry_path.join("SKILL.md").is_file()
+}
+
+fn should_skip_discovery_dir(entry_path: &Path) -> bool {
+    let Some(name) = entry_path.file_name().and_then(|name| name.to_str()) else {
+        return false;
+    };
+
+    matches!(name, ".git" | ".hg" | ".svn" | "target" | "node_modules")
+}
+
+fn scan_package_resources(
+    package_root: &Path,
+    dir: &Path,
+    skill_path: &Path,
+    resources: &mut Vec<SkillResourceEntry>,
+) -> Result<()> {
+    let read_dir = std::fs::read_dir(dir).map_err(|e| {
+        MsError::InvalidSkill(format!(
+            "{}: cannot read package directory {}: {e}",
+            skill_path.display(),
+            dir.display()
+        ))
+    })?;
+
+    for entry in read_dir {
+        let entry = entry.map_err(|e| {
+            MsError::InvalidSkill(format!(
+                "{}: cannot read package entry in {}: {e}",
+                skill_path.display(),
+                dir.display()
+            ))
+        })?;
+        let entry_path = entry.path();
+        let file_type = entry.file_type().map_err(|e| {
+            MsError::InvalidSkill(format!(
+                "{}: cannot inspect package entry {}: {e}",
+                skill_path.display(),
+                entry_path.display()
+            ))
+        })?;
+
+        if file_type.is_symlink() {
+            continue;
+        }
+
+        if file_type.is_dir() {
+            if should_skip_package_dir(package_root, &entry_path) {
+                continue;
+            }
+            scan_package_resources(package_root, &entry_path, skill_path, resources)?;
+            continue;
+        }
+
+        if !file_type.is_file() {
+            continue;
+        }
+
+        let canonical_file = std::fs::canonicalize(&entry_path).map_err(|e| {
+            MsError::InvalidSkill(format!(
+                "{}: cannot canonicalize package file {}: {e}",
+                skill_path.display(),
+                entry_path.display()
+            ))
+        })?;
+
+        if !canonical_file.starts_with(package_root) {
+            return Err(MsError::InvalidSkill(format!(
+                "{}: resource path escapes package root: {}",
+                skill_path.display(),
+                entry_path.display()
+            )));
+        }
+
+        let relative_path = canonical_file
+            .strip_prefix(package_root)
+            .map_err(|e| {
+                MsError::InvalidSkill(format!(
+                    "{}: invalid relative package path {}: {e}",
+                    skill_path.display(),
+                    canonical_file.display()
+                ))
+            })?
+            .to_path_buf();
+
+        let metadata = std::fs::metadata(&canonical_file).map_err(|e| {
+            MsError::InvalidSkill(format!(
+                "{}: cannot read metadata for {}: {e}",
+                skill_path.display(),
+                canonical_file.display()
+            ))
+        })?;
+        let content_hash = compute_file_hash(&canonical_file)?;
+        let resource_type = classify_resource_type(&relative_path);
+
+        resources.push(SkillResourceEntry {
+            relative_path,
+            resource_type,
+            size_bytes: metadata.len(),
+            content_hash,
+        });
+    }
+
+    Ok(())
+}
+
+fn classify_resource_type(relative_path: &Path) -> SkillResourceType {
+    if relative_path == Path::new("SKILL.md") {
+        return SkillResourceType::SkillSpec;
+    }
+
+    if relative_path.starts_with("scripts") {
+        return SkillResourceType::Script;
+    }
+    if relative_path.starts_with("references") {
+        return SkillResourceType::Reference;
+    }
+    if relative_path.starts_with("tests") {
+        return SkillResourceType::Test;
+    }
+
+    SkillResourceType::Other
+}
+
+fn compute_file_hash(path: &Path) -> Result<String> {
+    use sha2::{Digest, Sha256};
+    let file = std::fs::File::open(path)
+        .map_err(|e| MsError::InvalidSkill(format!("read resource {}: {e}", path.display())))?;
+    let mut reader = BufReader::new(file);
+    let mut hasher = Sha256::new();
+    let mut buffer = [0_u8; 8192];
+    loop {
+        let bytes_read = reader
+            .read(&mut buffer)
+            .map_err(|e| MsError::InvalidSkill(format!("hash resource {}: {e}", path.display())))?;
+        if bytes_read == 0 {
+            break;
+        }
+        hasher.update(&buffer[..bytes_read]);
+    }
+    Ok(hex::encode(hasher.finalize()))
+}
+
+fn normalize_resource_path(path: &Path) -> String {
+    path.components()
+        .map(|component| component.as_os_str().to_string_lossy().into_owned())
+        .collect::<Vec<_>>()
+        .join("/")
+}
+
+fn compute_bundle_hash(resources: &[SkillResourceEntry]) -> Result<String> {
+    use sha2::{Digest, Sha256};
+    let normalized = resources
+        .iter()
+        .map(|entry| {
+            serde_json::json!({
+                "path": normalize_resource_path(&entry.relative_path),
+                "type": entry.resource_type.as_str(),
+                "size": entry.size_bytes,
+                "hash": entry.content_hash,
+            })
+        })
+        .collect::<Vec<_>>();
+
+    let json = serde_json::to_string(&normalized)
+        .map_err(|e| MsError::InvalidSkill(format!("serialize bundle payload for hash: {e}")))?;
+    let mut hasher = Sha256::new();
+    hasher.update(json.as_bytes());
+    Ok(hex::encode(hasher.finalize()))
 }
 
 fn compute_spec_hash(spec: &crate::core::SkillSpec) -> Result<String> {
@@ -499,6 +794,8 @@ fn compute_spec_hash(spec: &crate::core::SkillSpec) -> Result<String> {
 mod tests {
     use super::*;
     use std::fs;
+    #[cfg(unix)]
+    use std::os::unix::fs::symlink;
     use tempfile::TempDir;
 
     // ==================== Expand Path Tests ====================
@@ -893,10 +1190,142 @@ mod tests {
     fn test_discovered_skill_struct() {
         let skill = DiscoveredSkill {
             path: PathBuf::from("/test/skill/SKILL.md"),
+            package_root: PathBuf::from("/test/skill"),
             layer: SkillLayer::Base,
         };
 
         assert_eq!(skill.path, PathBuf::from("/test/skill/SKILL.md"));
+        assert_eq!(skill.package_root, PathBuf::from("/test/skill"));
         assert_eq!(skill.layer, SkillLayer::Base);
+    }
+
+    #[test]
+    fn test_discover_package_manifest_skill_md_only() {
+        let temp = TempDir::new().unwrap();
+        let skill_dir = temp.path().join("legacy-skill");
+        fs::create_dir(&skill_dir).unwrap();
+        let skill_md = skill_dir.join("SKILL.md");
+        fs::write(&skill_md, "# Legacy Skill").unwrap();
+
+        let manifest = discover_package_manifest(&skill_md, &skill_dir).unwrap();
+        assert_eq!(manifest.summary.resource_count, 1);
+        assert_eq!(manifest.resources.len(), 1);
+        assert_eq!(
+            manifest.resources[0].relative_path,
+            PathBuf::from("SKILL.md")
+        );
+        assert_eq!(
+            manifest.resources[0].resource_type,
+            SkillResourceType::SkillSpec
+        );
+        assert_eq!(
+            manifest.summary.resource_type_counts.get("skill_spec"),
+            Some(&1)
+        );
+        assert_eq!(manifest.bundle_hash.len(), 64);
+        assert_eq!(manifest.summary.package_root, PathBuf::from("."));
+    }
+
+    #[test]
+    fn test_discover_package_manifest_skips_git_dir_and_nested_skill_package() {
+        let temp = TempDir::new().unwrap();
+        let root_skill_dir = temp.path().join("root-skill");
+        fs::create_dir(&root_skill_dir).unwrap();
+        let skill_md = root_skill_dir.join("SKILL.md");
+        fs::write(&skill_md, "# Root Skill").unwrap();
+
+        let git_dir = root_skill_dir.join(".git");
+        fs::create_dir(&git_dir).unwrap();
+        fs::write(git_dir.join("config"), "[core]").unwrap();
+
+        let docs_dir = root_skill_dir.join("references");
+        fs::create_dir(&docs_dir).unwrap();
+        fs::write(docs_dir.join("guide.md"), "guide").unwrap();
+
+        let nested_skill = root_skill_dir.join("nested-skill");
+        fs::create_dir(&nested_skill).unwrap();
+        fs::write(nested_skill.join("SKILL.md"), "# Nested").unwrap();
+        fs::write(nested_skill.join("notes.md"), "nested notes").unwrap();
+
+        let manifest = discover_package_manifest(&skill_md, &root_skill_dir).unwrap();
+        let paths: Vec<_> = manifest
+            .resources
+            .iter()
+            .map(|r| r.relative_path.to_string_lossy().to_string())
+            .collect();
+
+        assert!(paths.contains(&"SKILL.md".to_string()));
+        assert!(paths.contains(&"references/guide.md".to_string()));
+        assert!(!paths.iter().any(|path| path.starts_with(".git/")));
+        assert!(!paths.iter().any(|path| path.starts_with("nested-skill/")));
+    }
+
+    #[test]
+    fn test_discover_skill_files_prunes_junk_dirs() {
+        let temp = TempDir::new().unwrap();
+        let real_skill = temp.path().join("real-skill");
+        fs::create_dir(&real_skill).unwrap();
+        fs::write(real_skill.join("SKILL.md"), "# Real").unwrap();
+
+        let git_dir = temp.path().join(".git");
+        fs::create_dir(&git_dir).unwrap();
+        fs::write(git_dir.join("SKILL.md"), "# Should not be discovered").unwrap();
+
+        let roots = vec![SkillRoot {
+            path: temp.path().to_path_buf(),
+            layer: SkillLayer::Project,
+        }];
+
+        let result = discover_skill_files(&roots);
+        assert_eq!(result.len(), 1);
+        assert!(result[0].path.ends_with("real-skill/SKILL.md"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_discover_skill_files_does_not_follow_symlink_dirs() {
+        let temp = TempDir::new().unwrap();
+        let real_skill = temp.path().join("real");
+        fs::create_dir(&real_skill).unwrap();
+        fs::write(real_skill.join("SKILL.md"), "# Real").unwrap();
+
+        let external = TempDir::new().unwrap();
+        let external_skill = external.path().join("external");
+        fs::create_dir(&external_skill).unwrap();
+        fs::write(external_skill.join("SKILL.md"), "# External").unwrap();
+        let link_path = temp.path().join("linked-dir");
+        symlink(&external_skill, &link_path).unwrap();
+
+        let roots = vec![SkillRoot {
+            path: temp.path().to_path_buf(),
+            layer: SkillLayer::Project,
+        }];
+
+        let result = discover_skill_files(&roots);
+        assert_eq!(result.len(), 1);
+        assert!(result[0].path.ends_with("real/SKILL.md"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_discover_package_manifest_skips_symlinked_file() {
+        let temp = TempDir::new().unwrap();
+        let skill_dir = temp.path().join("skill");
+        fs::create_dir(&skill_dir).unwrap();
+        let skill_md = skill_dir.join("SKILL.md");
+        fs::write(&skill_md, "# Skill").unwrap();
+
+        let outside = temp.path().join("outside.txt");
+        fs::write(&outside, "secret").unwrap();
+        symlink(&outside, skill_dir.join("scripts_link.sh")).unwrap();
+
+        let manifest = discover_package_manifest(&skill_md, &skill_dir).unwrap();
+        let paths: Vec<_> = manifest
+            .resources
+            .iter()
+            .map(|r| r.relative_path.to_string_lossy().to_string())
+            .collect();
+
+        assert_eq!(paths, vec!["SKILL.md".to_string()]);
     }
 }

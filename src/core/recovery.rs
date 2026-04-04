@@ -932,7 +932,11 @@ mod tests {
 
         let result: std::result::Result<i32, &str> = with_retry(&config, || {
             attempts += 1;
-            if attempts < 3 { Err("not yet") } else { Ok(42) }
+            if attempts < 3 {
+                Err("not yet")
+            } else {
+                Ok(42)
+            }
         });
 
         assert_eq!(result.unwrap(), 42);
@@ -1123,13 +1127,11 @@ mod tests {
         assert_eq!(issue.severity, 2);
         assert!(!issue.auto_recoverable);
         assert!(issue.suggested_fix.is_some());
-        assert!(
-            issue
-                .suggested_fix
-                .as_ref()
-                .unwrap()
-                .contains("ms doctor --fix")
-        );
+        assert!(issue
+            .suggested_fix
+            .as_ref()
+            .unwrap()
+            .contains("ms doctor --fix"));
     }
 
     #[test]

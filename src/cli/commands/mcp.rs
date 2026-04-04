@@ -14,16 +14,19 @@
 //!
 //! See [`sanitize_mcp_output`] and [`validate_mcp_json`] for details.
 
+use std::collections::BTreeMap;
 use std::io::{self, BufRead, Write};
+use std::path::Path;
 
+use base64::Engine;
 use clap::{Args, Subcommand};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use tracing::{debug, warn};
 
 use crate::app::AppContext;
-use crate::cli::output::OutputFormat;
 use crate::cli::output::emit_json;
+use crate::cli::output::OutputFormat;
 use crate::context::detector::ProjectDetector;
 use crate::core::spec_lens::parse_markdown;
 use crate::error::{MsError, Result};
@@ -298,10 +301,17 @@ const INTERNAL_ERROR: i32 = -32603;
 #[derive(Debug, Serialize)]
 struct ServerCapabilities {
     tools: ToolsCapability,
+    resources: ResourcesCapability,
 }
 
 #[derive(Debug, Serialize)]
 struct ToolsCapability {
+    #[serde(rename = "listChanged")]
+    list_changed: bool,
+}
+
+#[derive(Debug, Serialize)]
+struct ResourcesCapability {
     #[serde(rename = "listChanged")]
     list_changed: bool,
 }
@@ -782,11 +792,8 @@ fn handle_request(ctx: &AppContext, line: &str, debug: bool) -> Option<JsonRpcRe
         "tools/call" => Some(handle_tools_call(ctx, request.id, &request.params, debug)),
         "ping" => Some(handle_ping(request.id)),
         "shutdown" => Some(handle_shutdown(request.id)),
-        // Return empty results for resource endpoints we don't support
-        "resources/list" => Some(JsonRpcResponse::success(
-            request.id,
-            serde_json::json!({"resources": []}),
-        )),
+        "resources/list" => Some(handle_resources_list(ctx, request.id)),
+        "resources/read" => Some(handle_resources_read(ctx, request.id, &request.params)),
         "resources/templates/list" => Some(JsonRpcResponse::success(
             request.id,
             serde_json::json!({"resourceTemplates": []}),
@@ -814,6 +821,9 @@ fn handle_initialize(id: Option<Value>, _params: &Value) -> JsonRpcResponse {
             tools: ToolsCapability {
                 list_changed: false,
             },
+            resources: ResourcesCapability {
+                list_changed: false,
+            },
         },
         server_info: ServerInfo {
             name: SERVER_NAME.to_string(),
@@ -821,6 +831,202 @@ fn handle_initialize(id: Option<Value>, _params: &Value) -> JsonRpcResponse {
         },
     };
     JsonRpcResponse::success(id, serde_json::to_value(result).unwrap())
+}
+
+const RESOURCE_URI_PREFIX: &str = "ms://skill/";
+
+fn normalize_resource_path_for_uri(path: &str) -> String {
+    path.replace('\\', "/")
+}
+
+fn build_resource_uri(skill_id: &str, relative_path: &str) -> String {
+    let encoded = urlencoding::encode(relative_path);
+    format!("{RESOURCE_URI_PREFIX}{skill_id}/resource/{encoded}")
+}
+
+fn parse_resource_uri(uri: &str) -> Result<(String, String)> {
+    let suffix = uri
+        .strip_prefix(RESOURCE_URI_PREFIX)
+        .ok_or_else(|| MsError::ValidationFailed(format!("invalid resource URI: {uri}")))?;
+    let (skill_id, encoded_path) = suffix
+        .split_once("/resource/")
+        .ok_or_else(|| MsError::ValidationFailed(format!("invalid resource URI format: {uri}")))?;
+    if skill_id.is_empty() || encoded_path.is_empty() {
+        return Err(MsError::ValidationFailed(format!(
+            "resource URI missing skill or path: {uri}"
+        )));
+    }
+    let decoded_path = urlencoding::decode(encoded_path)
+        .map_err(|_| MsError::ValidationFailed(format!("invalid URL encoding in URI: {uri}")))?;
+    Ok((skill_id.to_string(), decoded_path.to_string()))
+}
+
+fn guess_mime_type(path: &str) -> &'static str {
+    if path.ends_with(".md") {
+        "text/markdown"
+    } else if path.ends_with(".json") {
+        "application/json"
+    } else if path.ends_with(".yml") || path.ends_with(".yaml") {
+        "application/yaml"
+    } else if path.ends_with(".sh") {
+        "application/x-sh"
+    } else if path.ends_with(".py") {
+        "text/x-python"
+    } else if path.ends_with(".rs") {
+        "text/x-rust"
+    } else if path.ends_with(".toml") {
+        "application/toml"
+    } else {
+        "application/octet-stream"
+    }
+}
+
+fn read_skill_resource_summary(
+    ctx: &AppContext,
+    skill_id: &str,
+) -> Result<(usize, u64, BTreeMap<String, usize>)> {
+    let resources = ctx.db.list_skill_resources(skill_id)?;
+    let mut type_counts = BTreeMap::<String, usize>::new();
+    let mut total_bytes = 0_u64;
+    for resource in &resources {
+        *type_counts
+            .entry(resource.resource_type.clone())
+            .or_default() += 1;
+        total_bytes = total_bytes.saturating_add(resource.size_bytes.max(0) as u64);
+    }
+    Ok((resources.len(), total_bytes, type_counts))
+}
+
+fn parse_manifest_value(raw: &str) -> Value {
+    if raw.trim().is_empty() || raw.trim() == "{}" {
+        Value::Null
+    } else {
+        serde_json::from_str(raw).unwrap_or(Value::Null)
+    }
+}
+
+fn encode_resource_content(uri: &str, mime: &str, bytes: Vec<u8>) -> Value {
+    match String::from_utf8(bytes.clone()) {
+        Ok(text) => serde_json::json!({
+            "uri": uri,
+            "mimeType": mime,
+            "text": sanitize_mcp_output(&text),
+        }),
+        Err(_) => serde_json::json!({
+            "uri": uri,
+            "mimeType": mime,
+            "blob": base64::engine::general_purpose::STANDARD.encode(bytes),
+        }),
+    }
+}
+
+fn build_embedded_package_resources(ctx: &AppContext, skill_id: &str) -> Result<Vec<Value>> {
+    let resources = ctx.db.list_skill_resources(skill_id)?;
+    let mut embedded = Vec::with_capacity(resources.len());
+
+    for resource in resources {
+        let rel = normalize_resource_path_for_uri(&resource.relative_path);
+        let uri = build_resource_uri(skill_id, &rel);
+        let mime = guess_mime_type(&rel);
+        let bytes = ctx.git.read_skill_resource(skill_id, Path::new(&rel))?;
+
+        let mut entry = serde_json::json!({
+            "relative_path": rel,
+            "resource_type": resource.resource_type,
+            "size_bytes": resource.size_bytes,
+            "content": encode_resource_content(&uri, mime, bytes),
+        });
+
+        if let Some(map) = entry.as_object_mut() {
+            map.insert("uri".to_string(), Value::String(uri));
+            map.insert("mimeType".to_string(), Value::String(mime.to_string()));
+        }
+
+        embedded.push(entry);
+    }
+
+    Ok(embedded)
+}
+
+fn handle_resources_list(ctx: &AppContext, id: Option<Value>) -> JsonRpcResponse {
+    let mut resources_out = Vec::new();
+    let mut offset = 0usize;
+    let limit = 200usize;
+    loop {
+        let skills = match ctx.db.list_skills(limit, offset) {
+            Ok(s) => s,
+            Err(err) => {
+                return JsonRpcResponse::error(id, INVALID_PARAMS, err.to_string(), None);
+            }
+        };
+        if skills.is_empty() {
+            break;
+        }
+        offset += skills.len();
+
+        for skill in skills {
+            let skill_resources = match ctx.db.list_skill_resources(&skill.id) {
+                Ok(items) => items,
+                Err(err) => {
+                    return JsonRpcResponse::error(id, INVALID_PARAMS, err.to_string(), None);
+                }
+            };
+            for resource in skill_resources {
+                let rel = normalize_resource_path_for_uri(&resource.relative_path);
+                match ctx.git.skill_resource_exists(&skill.id, Path::new(&rel)) {
+                    Ok(true) => {}
+                    Ok(false) => continue,
+                    Err(err) => {
+                        return JsonRpcResponse::error(id, INVALID_PARAMS, err.to_string(), None);
+                    }
+                }
+                resources_out.push(serde_json::json!({
+                    "uri": build_resource_uri(&skill.id, &rel),
+                    "name": format!("{}:{}", skill.id, rel),
+                    "mimeType": guess_mime_type(&rel),
+                    "description": format!("{} ({})", rel, resource.resource_type),
+                    "sizeBytes": resource.size_bytes,
+                    "skillId": skill.id,
+                    "relativePath": rel,
+                    "resourceType": resource.resource_type,
+                }));
+            }
+        }
+    }
+
+    JsonRpcResponse::success(id, serde_json::json!({"resources": resources_out}))
+}
+
+fn handle_resources_read(ctx: &AppContext, id: Option<Value>, params: &Value) -> JsonRpcResponse {
+    let uri = match params.get("uri").and_then(|v| v.as_str()) {
+        Some(uri) => uri,
+        None => {
+            return JsonRpcResponse::error(
+                id,
+                INVALID_PARAMS,
+                "Missing required parameter: uri".to_string(),
+                None,
+            );
+        }
+    };
+
+    let (skill_id, relative_path) = match parse_resource_uri(uri) {
+        Ok(value) => value,
+        Err(err) => return JsonRpcResponse::error(id, INVALID_PARAMS, err.to_string(), None),
+    };
+
+    let bytes = match ctx
+        .git
+        .read_skill_resource(&skill_id, Path::new(&relative_path))
+    {
+        Ok(data) => data,
+        Err(err) => return JsonRpcResponse::error(id, INVALID_PARAMS, err.to_string(), None),
+    };
+
+    let mime = guess_mime_type(&relative_path);
+    let content = encode_resource_content(uri, mime, bytes);
+
+    JsonRpcResponse::success(id, serde_json::json!({"contents": [content]}))
 }
 
 fn handle_initialized(id: Option<Value>) -> Option<JsonRpcResponse> {
@@ -931,6 +1137,29 @@ fn handle_tool_search(ctx: &AppContext, args: &Value) -> Result<ToolResult> {
         .and_then(serde_json::Value::as_u64)
         .unwrap_or(20) as usize;
 
+    if let Some(exact) = ctx.db.find_exact_skill_match(query)? {
+        let resources = ctx.db.list_skill_resources(&exact.id)?;
+        let output = serde_json::json!({
+            "query": query,
+            "count": 1,
+            "match_type": "exact_package",
+            "results": [{
+                "id": exact.id,
+                "name": exact.name,
+                "score": 1.0,
+                "package_resources": resources.iter().map(|r| {
+                    serde_json::json!({
+                        "relative_path": r.relative_path,
+                        "resource_type": r.resource_type,
+                        "size_bytes": r.size_bytes,
+                    })
+                }).collect::<Vec<_>>()
+            }]
+        });
+
+        return Ok(ToolResult::text(serde_json::to_string_pretty(&output)?));
+    }
+
     // Use BM25 search via Tantivy
     let results = ctx.search.search(query, limit)?;
 
@@ -964,23 +1193,45 @@ fn handle_tool_load(ctx: &AppContext, args: &Value) -> Result<ToolResult> {
         .get_skill(skill_id)?
         .ok_or_else(|| MsError::SkillNotFound(skill_id.to_string()))?;
 
-    let output = if full {
-        serde_json::json!({
-            "skill_id": skill.id,
-            "name": skill.name,
-            "description": skill.description,
-            "content": skill.body,
-            "layer": skill.source_layer,
-            "quality_score": skill.quality_score,
-        })
-    } else {
-        serde_json::json!({
-            "skill_id": skill.id,
-            "name": skill.name,
-            "description": skill.description,
-            "layer": skill.source_layer,
-        })
-    };
+    let mut skill_payload = serde_json::json!({
+        "id": skill.id,
+        "skill_id": skill.id,
+        "name": skill.name,
+        "description": skill.description,
+        "layer": skill.source_layer,
+    });
+
+    if full {
+        let (resource_count, total_bytes, resource_type_counts) =
+            read_skill_resource_summary(ctx, &skill.id)?;
+        let package_resources = build_embedded_package_resources(ctx, &skill.id)?;
+        if let Some(map) = skill_payload.as_object_mut() {
+            map.insert("content".to_string(), serde_json::json!(skill.body));
+            map.insert(
+                "quality_score".to_string(),
+                serde_json::json!(skill.quality_score),
+            );
+            map.insert(
+                "package_manifest".to_string(),
+                parse_manifest_value(&skill.manifest_json),
+            );
+            map.insert(
+                "resource_summary".to_string(),
+                serde_json::json!({
+                    "resource_count": resource_count,
+                    "total_bytes": total_bytes,
+                    "resource_type_counts": resource_type_counts,
+                    "resource_uri_prefix": format!("{RESOURCE_URI_PREFIX}{}/resource/", skill.id),
+                }),
+            );
+            map.insert(
+                "package_resources".to_string(),
+                Value::Array(package_resources),
+            );
+        }
+    }
+
+    let output = serde_json::json!({ "skill": skill_payload });
 
     Ok(ToolResult::text(serde_json::to_string_pretty(&output)?))
 }
@@ -1082,24 +1333,49 @@ fn handle_tool_show(ctx: &AppContext, args: &Value) -> Result<ToolResult> {
         .get_skill(skill_id)?
         .ok_or_else(|| MsError::SkillNotFound(skill_id.to_string()))?;
 
-    let output = if full {
-        serde_json::json!({
-            "id": skill.id,
-            "name": skill.name,
-            "description": skill.description,
-            "layer": skill.source_layer,
-            "quality_score": skill.quality_score,
-            "is_deprecated": skill.is_deprecated,
-            "content": skill.body,
-        })
-    } else {
-        serde_json::json!({
-            "id": skill.id,
-            "name": skill.name,
-            "description": skill.description,
-            "layer": skill.source_layer,
-        })
-    };
+    let mut skill_payload = serde_json::json!({
+        "id": skill.id,
+        "skill_id": skill.id,
+        "name": skill.name,
+        "description": skill.description,
+        "layer": skill.source_layer,
+    });
+
+    if full {
+        let (resource_count, total_bytes, resource_type_counts) =
+            read_skill_resource_summary(ctx, &skill.id)?;
+        let package_resources = build_embedded_package_resources(ctx, &skill.id)?;
+        if let Some(map) = skill_payload.as_object_mut() {
+            map.insert(
+                "quality_score".to_string(),
+                serde_json::json!(skill.quality_score),
+            );
+            map.insert(
+                "is_deprecated".to_string(),
+                serde_json::json!(skill.is_deprecated),
+            );
+            map.insert("content".to_string(), serde_json::json!(skill.body));
+            map.insert(
+                "package_manifest".to_string(),
+                parse_manifest_value(&skill.manifest_json),
+            );
+            map.insert(
+                "resource_summary".to_string(),
+                serde_json::json!({
+                    "resource_count": resource_count,
+                    "total_bytes": total_bytes,
+                    "resource_type_counts": resource_type_counts,
+                    "resource_uri_prefix": format!("{RESOURCE_URI_PREFIX}{}/resource/", skill.id),
+                }),
+            );
+            map.insert(
+                "package_resources".to_string(),
+                Value::Array(package_resources),
+            );
+        }
+    }
+
+    let output = serde_json::json!({ "skill": skill_payload });
 
     Ok(ToolResult::text(serde_json::to_string_pretty(&output)?))
 }

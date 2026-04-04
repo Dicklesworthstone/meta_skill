@@ -7,7 +7,8 @@ use serde::{Deserialize, Serialize};
 
 use super::packing::{ConstrainedPacker, MandatoryPredicate, MandatorySlice, PackConstraints};
 use super::skill::{
-    ReferenceFile, ScriptFile, SkillAssets, SkillMetadata, SkillSection, SkillSpec,
+    ReferenceFile, ScriptFile, SkillAssets, SkillMetadata, SkillPackageManifest,
+    SkillResourceEntry, SkillSection, SkillSpec,
 };
 use super::slicing::SkillSlicer;
 
@@ -194,6 +195,12 @@ pub struct DisclosedContent {
     /// References (only at Complete level)
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub references: Vec<ReferenceFile>,
+    /// Package manifest baseline (available for indexed package skills)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub package_manifest: Option<SkillPackageManifest>,
+    /// Package resource entries (available for indexed package skills)
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub package_resources: Vec<SkillResourceEntry>,
     /// Actual token count of this disclosure
     pub token_estimate: usize,
     /// The disclosure level used
@@ -309,6 +316,8 @@ pub fn disclose_level(
                 body: None,
                 scripts: vec![],
                 references: vec![],
+                package_manifest: None,
+                package_resources: vec![],
                 token_estimate: estimate_tokens_frontmatter(&spec.metadata, true),
                 level,
                 slices_included: None,
@@ -324,6 +333,8 @@ pub fn disclose_level(
                 body,
                 scripts: vec![],
                 references: vec![],
+                package_manifest: None,
+                package_resources: vec![],
                 token_estimate,
                 level,
                 slices_included: None,
@@ -340,6 +351,8 @@ pub fn disclose_level(
                 body,
                 scripts: vec![],
                 references: vec![],
+                package_manifest: None,
+                package_resources: vec![],
                 token_estimate,
                 level,
                 slices_included: None,
@@ -355,6 +368,8 @@ pub fn disclose_level(
                 body,
                 scripts: vec![],
                 references: vec![],
+                package_manifest: None,
+                package_resources: vec![],
                 token_estimate,
                 level,
                 slices_included: None,
@@ -371,6 +386,8 @@ pub fn disclose_level(
                 body,
                 scripts: assets.scripts.clone(),
                 references: assets.references.clone(),
+                package_manifest: None,
+                package_resources: vec![],
                 token_estimate,
                 level,
                 slices_included: None,
@@ -401,6 +418,8 @@ fn disclose_packed(
             body: None,
             scripts: vec![],
             references: vec![],
+            package_manifest: None,
+            package_resources: vec![],
             token_estimate: frontmatter_tokens,
             level: DisclosureLevel::Minimal,
             slices_included: Some(0),
@@ -422,6 +441,8 @@ fn disclose_packed(
                 body: None,
                 scripts: vec![],
                 references: vec![],
+                package_manifest: None,
+                package_resources: vec![],
                 token_estimate: frontmatter_tokens,
                 level: DisclosureLevel::Minimal,
                 slices_included: Some(0),
@@ -457,6 +478,8 @@ fn disclose_packed(
         body,
         scripts: vec![],
         references: vec![],
+        package_manifest: None,
+        package_resources: vec![],
         token_estimate: frontmatter_tokens + body_tokens,
         level,
         slices_included: Some(slice_count),
