@@ -600,7 +600,7 @@ pub fn hash_spec_json(spec: &serde_json::Value) -> Result<String> {
         .map_err(|e| MsError::Config(format!("Failed to serialize spec: {e}")))?;
     let mut hasher = Sha256::new();
     hasher.update(&json);
-    Ok(format!("{:x}", hasher.finalize()))
+    Ok(hex::encode(hasher.finalize()))
 }
 
 /// Create a push item from a SkillSpec.

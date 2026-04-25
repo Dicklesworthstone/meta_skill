@@ -1187,7 +1187,7 @@ fn hash_skill_spec(spec: &SkillSpec) -> Result<String> {
     let json = serde_json::to_vec(spec)?;
     let mut hasher = Sha256::new();
     hasher.update(&json);
-    Ok(format!("{:x}", hasher.finalize()))
+    Ok(hex::encode(hasher.finalize()))
 }
 
 fn open_git_remote(remote: &RemoteConfig, ms_root: &Path) -> Result<GitArchive> {

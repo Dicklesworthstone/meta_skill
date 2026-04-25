@@ -607,11 +607,18 @@ fn parse_repo(input: &str) -> Result<(String, String)> {
 }
 
 fn compute_sha256(path: &Path) -> Result<String> {
+    use std::io::Read;
     let mut file = std::fs::File::open(path)?;
     let mut hasher = Sha256::new();
-    std::io::copy(&mut file, &mut hasher)?;
-    let hash = hasher.finalize();
-    Ok(hex::encode(hash))
+    let mut buf = [0u8; 8192];
+    loop {
+        let n = file.read(&mut buf)?;
+        if n == 0 {
+            break;
+        }
+        hasher.update(&buf[..n]);
+    }
+    Ok(hex::encode(hasher.finalize()))
 }
 
 fn current_target() -> String {

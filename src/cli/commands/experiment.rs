@@ -4,7 +4,7 @@ use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 
 use clap::{Args, Subcommand};
-use rand::Rng;
+use rand::RngExt;
 use rand::distr::Distribution;
 use rand_distr::Beta;
 use serde::{Deserialize, Serialize};

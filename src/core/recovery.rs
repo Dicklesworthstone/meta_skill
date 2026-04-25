@@ -77,7 +77,7 @@ impl RetryConfig {
 
         // Add random jitter to prevent thundering herd
         let jitter = if self.jitter_factor > 0.0 {
-            use rand::Rng;
+            use rand::RngExt;
             let jitter_range = capped_delay * self.jitter_factor;
             // Use true randomness to decorrelate retry attempts across processes
             let mut rng = rand::rng();

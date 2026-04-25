@@ -732,7 +732,7 @@ fn hash_content(content: &[u8]) -> String {
     let mut hasher = Sha256::new();
     hasher.update(content);
     let digest = hasher.finalize();
-    format!("{digest:x}")[..16].to_string()
+    hex::encode(digest)[..16].to_string()
 }
 
 #[cfg(test)]
