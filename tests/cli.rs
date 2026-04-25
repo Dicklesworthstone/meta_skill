@@ -33,6 +33,59 @@ fn test_robot_mode_global() {
     cmd.args(["--robot", "--help"]).assert().success();
 }
 
+/// `ms doctor --robot` must emit a single JSON envelope on stdout —
+/// no progress markers, no human-readable check log. The CI E2E
+/// workflow pipes this directly into `jq -e .`, so any non-JSON
+/// stdout makes the run fail. (Pre-fix: doctor used raw `println!`
+/// throughout and the JSON consumer got "ms doctor - Health
+/// Checks\n\nChecking lock status..." in front of any structured
+/// output, which jq immediately rejected.)
+#[test]
+fn test_doctor_robot_emits_pure_json() {
+    let dir = tempdir().unwrap();
+
+    // Initialise the workspace first so doctor has something to inspect.
+    let mut init = Command::cargo_bin("ms").unwrap();
+    init.env("MS_ROOT", dir.path())
+        .args(["init", "--robot"])
+        .assert()
+        .success();
+
+    let mut doctor = Command::cargo_bin("ms").unwrap();
+    let assert = doctor
+        .env("MS_ROOT", dir.path())
+        .args(["doctor", "--robot"])
+        .assert()
+        .success();
+    let stdout = String::from_utf8(assert.get_output().stdout.clone())
+        .expect("stdout must be utf-8");
+
+    // The whole stdout must parse as a single JSON value — not a JSON
+    // value preceded by progress text. That's what makes the CI test
+    // robust against the bug class this fix addresses.
+    let parsed: Value = serde_json::from_str(stdout.trim())
+        .unwrap_or_else(|err| panic!("doctor --robot stdout is not pure JSON: {err}\n--- stdout ---\n{stdout}\n--- end stdout ---"));
+
+    let obj = parsed.as_object().expect("top-level JSON must be an object");
+    let status = obj
+        .get("status")
+        .and_then(|v| v.as_str())
+        .expect("status field must be present and a string");
+    assert!(
+        matches!(status, "ok" | "issues" | "fixed"),
+        "unexpected status: {status}"
+    );
+    // Counts must be present and numeric so consumers can branch on them.
+    assert!(
+        obj.get("issues_found").and_then(|v| v.as_u64()).is_some(),
+        "issues_found must be an unsigned integer"
+    );
+    assert!(
+        obj.get("issues_fixed").and_then(|v| v.as_u64()).is_some(),
+        "issues_fixed must be an unsigned integer"
+    );
+}
+
 #[test]
 fn test_security_scan_quarantine_review_flow() {
     let dir = tempdir().unwrap();

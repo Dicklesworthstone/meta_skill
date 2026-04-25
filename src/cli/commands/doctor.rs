@@ -15,6 +15,36 @@ use crate::output::{
 use crate::security::{SafetyGate, scan_secrets_summary};
 use crate::storage::tx::GlobalLock;
 
+/// Conditional `println!` for the doctor command. Emits human-readable
+/// output only when the active OutputFormat is *not* machine-readable
+/// (json / jsonl / tsv / toon); otherwise the call is a no-op so that
+/// `ms doctor --robot` can produce a single JSON envelope on stdout
+/// without interleaving the long-form check log (which is what made
+/// the CI robot-mode test fail before this fix — `jq -e .` rejected
+/// the mixed text/JSON capture).
+macro_rules! say {
+    ($ctx:expr) => {
+        if !$ctx.output_format.is_machine_readable() {
+            ::std::println!();
+        }
+    };
+    ($ctx:expr, $($arg:tt)*) => {
+        if !$ctx.output_format.is_machine_readable() {
+            ::std::println!($($arg)*);
+        }
+    };
+}
+
+/// Inline progress marker (`print!` with no newline). Same gating as
+/// [`say!`] — silenced under machine-readable output formats.
+macro_rules! say_inline {
+    ($ctx:expr, $($arg:tt)*) => {
+        if !$ctx.output_format.is_machine_readable() {
+            ::std::print!($($arg)*);
+        }
+    };
+}
+
 #[derive(Args, Debug)]
 pub struct DoctorArgs {
     /// Run a specific check only (e.g. safety, recovery)
@@ -46,8 +76,8 @@ pub fn run(ctx: &AppContext, args: &DoctorArgs) -> Result<()> {
     let mut issues_fixed = 0;
     let verbose = ctx.verbosity > 0;
 
-    println!("{}", "ms doctor - Health Checks");
-    println!();
+    say!(ctx,"{}", "ms doctor - Health Checks");
+    say!(ctx);
 
     let run_only = args.check.as_deref();
 
@@ -64,7 +94,7 @@ pub fn run(ctx: &AppContext, args: &DoctorArgs) -> Result<()> {
         gate.enforce(&command_str, None)?;
         if break_stale_lock(ctx)? {
             issues_fixed += 1;
-            println!("{} Stale lock broken", "[ok]");
+            say!(ctx,"{} Stale lock broken", "[ok]");
         }
     }
 
@@ -97,8 +127,8 @@ pub fn run(ctx: &AppContext, args: &DoctorArgs) -> Result<()> {
             "perf" => check_perf(ctx, verbose)?,
             "output" | "output-mode" => check_output_mode(ctx, verbose)?,
             other => {
-                println!("{} Unknown check: {}", "[!]", other);
-                println!("  Available checks: safety, security, recovery, perf, output");
+                say!(ctx,"{} Unknown check: {}", "[!]", other);
+                say!(ctx,"  Available checks: safety, security, recovery, perf, output");
                 1
             }
         };
@@ -112,25 +142,56 @@ pub fn run(ctx: &AppContext, args: &DoctorArgs) -> Result<()> {
         failed = issues_found,
     );
     debug!(target: "doctor", stage = "render_complete");
-    println!();
-    if issues_found == 0 {
-        println!("{} All checks passed", "[ok]");
-    } else if args.fix && issues_fixed == issues_found {
+
+    if ctx.output_format.is_machine_readable() {
+        // Robot mode: emit a single JSON envelope on stdout. Every
+        // human-readable check line was already suppressed by the
+        // `say!` macro, so stdout is empty up to this point and the
+        // capturing CI test (`ms doctor --robot 2>&1 | tee | jq -e .`)
+        // sees only this object.
+        let status = if issues_found == 0 {
+            "ok"
+        } else if args.fix && issues_fixed == issues_found {
+            "fixed"
+        } else {
+            "issues"
+        };
+        let payload = serde_json::json!({
+            "status": status,
+            "issues_found": issues_found,
+            "issues_fixed": issues_fixed,
+            "fix_requested": args.fix,
+            "comprehensive": args.comprehensive,
+            "check": args.check,
+        });
+        // Use `to_string` rather than `to_string_pretty` so consumers
+        // doing line-buffered ndjson capture get a single line.
         println!(
-            "{} Found {} issues, fixed {}",
-            "[ok]",
-            issues_found,
-            issues_fixed
+            "{}",
+            serde_json::to_string(&payload)
+                .unwrap_or_else(|_| "{\"status\":\"ok\"}".to_string())
         );
     } else {
-        println!(
-            "{} Found {} issues, fixed {}",
-            "[!]",
-            issues_found,
-            issues_fixed
-        );
-        if !args.fix && issues_found > issues_fixed {
-            println!("  Run with --fix to attempt automatic repairs");
+        say!(ctx);
+        if issues_found == 0 {
+            say!(ctx, "{} All checks passed", "[ok]");
+        } else if args.fix && issues_fixed == issues_found {
+            say!(ctx,
+                "{} Found {} issues, fixed {}",
+                "[ok]",
+                issues_found,
+                issues_fixed
+            );
+        } else {
+            say!(ctx,
+                "{} Found {} issues, fixed {}",
+                "[!]",
+                issues_found,
+                issues_fixed
+            );
+            if !args.fix && issues_found > issues_fixed {
+                say!(ctx, "  Run with --fix to attempt automatic repairs");
+            }
         }
     }
 
@@ -139,52 +200,52 @@ pub fn run(ctx: &AppContext, args: &DoctorArgs) -> Result<()> {
 
 /// Check the global lock status
 fn check_lock_status(ctx: &AppContext, verbose: bool) -> Result<usize> {
-    print!("Checking lock status... ");
+    say_inline!(ctx,"Checking lock status... ");
 
     let ms_root = &ctx.ms_root;
 
     if let Some(holder) = GlobalLock::status(ms_root)? {
-        println!("{} Lock held", "[!]");
-        println!("  PID: {}", holder.pid);
-        println!("  Host: {}", holder.hostname);
-        println!("  Since: {}", holder.acquired_at);
+        say!(ctx,"{} Lock held", "[!]");
+        say!(ctx,"  PID: {}", holder.pid);
+        say!(ctx,"  Host: {}", holder.hostname);
+        say!(ctx,"  Since: {}", holder.acquired_at);
 
         // Check if process is still alive
         #[cfg(target_os = "linux")]
         {
             let proc_path = format!("/proc/{}", holder.pid);
             if !Path::new(&proc_path).exists() {
-                println!(
+                say!(ctx,
                     "  {} Process {} no longer exists - lock may be stale",
                     "[!]",
                     holder.pid
                 );
-                println!("  Use --break-lock to remove stale lock");
+                say!(ctx,"  Use --break-lock to remove stale lock");
                 return Ok(1);
             }
         }
 
         if verbose {
-            println!("  Lock is held by an active process");
+            say!(ctx,"  Lock is held by an active process");
         }
         Ok(0) // Active lock is not an issue
     } else {
-        println!("{} No lock held", "[ok]");
+        say!(ctx,"{} No lock held", "[ok]");
         Ok(0)
     }
 }
 
 /// Break a stale lock
 fn break_stale_lock(ctx: &AppContext) -> Result<bool> {
-    print!("Breaking stale lock... ");
+    say_inline!(ctx,"Breaking stale lock... ");
 
     let ms_root = &ctx.ms_root;
 
     // First check if there's a lock to break
     if let Some(holder) = GlobalLock::status(ms_root)? {
         // Warn user about what we're doing
-        println!();
-        println!(
+        say!(ctx);
+        say!(ctx,
             "  {} Breaking lock held by PID {} on {} since {}",
             "[!]",
             holder.pid,
@@ -195,23 +256,23 @@ fn break_stale_lock(ctx: &AppContext) -> Result<bool> {
         if GlobalLock::break_lock(ms_root)? {
             Ok(true)
         } else {
-            println!("  Lock file not found");
+            say!(ctx,"  Lock file not found");
             Ok(false)
         }
     } else {
-        println!("{} No lock to break", "[ok]");
+        say!(ctx,"{} No lock to break", "[ok]");
         Ok(false)
     }
 }
 
 /// Check database integrity
 fn check_database(ctx: &AppContext, verbose: bool) -> Result<usize> {
-    print!("Checking database... ");
+    say_inline!(ctx,"Checking database... ");
 
     let db_path = ctx.ms_root.join("ms.db");
     if !db_path.exists() {
-        println!("{} Database not found", "[!]");
-        println!("  Run 'ms init' to create the database");
+        say!(ctx,"{} Database not found", "[!]");
+        say!(ctx,"  Run 'ms init' to create the database");
         return Ok(1);
     }
 
@@ -221,24 +282,24 @@ fn check_database(ctx: &AppContext, verbose: bool) -> Result<usize> {
             // Run SQLite integrity check
             match db.integrity_check() {
                 Ok(true) => {
-                    println!("{} OK", "[ok]");
+                    say!(ctx,"{} OK", "[ok]");
                     if verbose {
-                        println!("  Database path: {}", db_path.display());
+                        say!(ctx,"  Database path: {}", db_path.display());
                     }
                     Ok(0)
                 }
                 Ok(false) => {
-                    println!("{} Integrity check failed", "[FAIL]");
+                    say!(ctx,"{} Integrity check failed", "[FAIL]");
                     Ok(1)
                 }
                 Err(e) => {
-                    println!("{} Error: {}", "[FAIL]", e);
+                    say!(ctx,"{} Error: {}", "[FAIL]", e);
                     Ok(1)
                 }
             }
         }
         Err(e) => {
-            println!("{} Cannot open: {}", "[FAIL]", e);
+            say!(ctx,"{} Cannot open: {}", "[FAIL]", e);
             Ok(1)
         }
     }
@@ -246,31 +307,31 @@ fn check_database(ctx: &AppContext, verbose: bool) -> Result<usize> {
 
 /// Check Git archive integrity
 fn check_git_archive(ctx: &AppContext, verbose: bool) -> Result<usize> {
-    print!("Checking Git archive... ");
+    say_inline!(ctx,"Checking Git archive... ");
 
     let archive_path = ctx.ms_root.join("archive");
     if !archive_path.exists() {
-        println!("{} Archive not found", "[!]");
-        println!("  Run 'ms init' to create the archive");
+        say!(ctx,"{} Archive not found", "[!]");
+        say!(ctx,"  Run 'ms init' to create the archive");
         return Ok(1);
     }
 
     let git_dir = archive_path.join(".git");
     if !git_dir.exists() {
-        println!("{} Not a Git repository", "[FAIL]");
+        say!(ctx,"{} Not a Git repository", "[FAIL]");
         return Ok(1);
     }
 
     match crate::storage::GitArchive::open(&archive_path) {
         Ok(_git) => {
-            println!("{} OK", "[ok]");
+            say!(ctx,"{} OK", "[ok]");
             if verbose {
-                println!("  Archive path: {}", archive_path.display());
+                say!(ctx,"  Archive path: {}", archive_path.display());
             }
             Ok(0)
         }
         Err(e) => {
-            println!("{} Cannot open: {}", "[FAIL]", e);
+            say!(ctx,"{} Cannot open: {}", "[FAIL]", e);
             Ok(1)
         }
     }
@@ -278,87 +339,87 @@ fn check_git_archive(ctx: &AppContext, verbose: bool) -> Result<usize> {
 
 /// Check command safety (DCG) availability
 fn check_safety(ctx: &AppContext, verbose: bool) -> Result<usize> {
-    print!("Checking command safety... ");
+    say_inline!(ctx,"Checking command safety... ");
 
     let gate = SafetyGate::from_context(ctx);
     let status = gate.status();
 
     if let Some(version) = status.dcg_version {
-        println!("{} dcg {}", "[ok]", version);
+        say!(ctx,"{} dcg {}", "[ok]", version);
         if verbose {
-            println!("  dcg_bin: {}", status.dcg_bin.display());
+            say!(ctx,"  dcg_bin: {}", status.dcg_bin.display());
             if !status.packs.is_empty() {
-                println!("  packs: {}", status.packs.join(", "));
+                say!(ctx,"  packs: {}", status.packs.join(", "));
             }
         }
         Ok(0)
     } else {
-        println!("{} dcg not available", "[!]");
+        say!(ctx,"{} dcg not available", "[!]");
         Ok(1)
     }
 }
 
 /// Comprehensive security check
 fn check_security(ctx: &AppContext, verbose: bool) -> Result<usize> {
-    println!("{}", "Security Checks");
-    println!("{}", "─".repeat(15));
+    say!(ctx,"{}", "Security Checks");
+    say!(ctx,"{}", "─".repeat(15));
 
     let mut issues = 0;
 
     // 1. Check DCG availability
-    print!("  [1/5] Command safety (DCG)... ");
+    say_inline!(ctx,"  [1/5] Command safety (DCG)... ");
     let gate = SafetyGate::from_context(ctx);
     let status = gate.status();
     if let Some(version) = status.dcg_version {
-        println!("{} v{}", "[ok]", version);
+        say!(ctx,"{} v{}", "[ok]", version);
     } else {
-        println!("{} not available", "[!]");
-        println!("        Commands will run without safety checks");
+        say!(ctx,"{} not available", "[!]");
+        say!(ctx,"        Commands will run without safety checks");
         issues += 1;
     }
 
     // 2. Check ACIP prompt availability
-    print!("  [2/5] ACIP prompt... ");
+    say_inline!(ctx,"  [2/5] ACIP prompt... ");
     let acip_path = &ctx.config.security.acip.prompt_path;
     if acip_path.exists() {
         match crate::security::acip::prompt_version(acip_path) {
             Ok(Some(version)) => {
-                println!("{} v{}", "[ok]", version);
+                say!(ctx,"{} v{}", "[ok]", version);
                 if verbose {
-                    println!("        Path: {}", acip_path.display());
+                    say!(ctx,"        Path: {}", acip_path.display());
                 }
             }
             Ok(None) => {
-                println!("{} no version detected", "[!]");
+                say!(ctx,"{} no version detected", "[!]");
                 issues += 1;
             }
             Err(e) => {
-                println!("{} error: {}", "[FAIL]", e);
+                say!(ctx,"{} error: {}", "[FAIL]", e);
                 issues += 1;
             }
         }
     } else {
-        println!("{} not found", "-");
+        say!(ctx,"{} not found", "-");
         if verbose {
-            println!("        Expected: {}", acip_path.display());
+            say!(ctx,"        Expected: {}", acip_path.display());
         }
     }
 
     // 3. Check safety tier configuration
-    print!("  [3/5] Safety tier config... ");
+    say_inline!(ctx,"  [3/5] Safety tier config... ");
     if ctx.config.safety.require_verbatim_approval {
-        println!(
+        say!(ctx,
             "{} verbatim approval required for dangerous commands",
             "[ok]"
         );
     } else {
-        println!("{} verbatim approval disabled", "[!]");
-        println!("        Dangerous commands may execute without explicit approval");
+        say!(ctx,"{} verbatim approval disabled", "[!]");
+        say!(ctx,"        Dangerous commands may execute without explicit approval");
         issues += 1;
     }
 
     // 4. Scan evidence for secrets
-    print!("  [4/5] Evidence secret scan... ");
+    say_inline!(ctx,"  [4/5] Evidence secret scan... ");
     let evidence_dir = ctx.ms_root.join("archive").join("skills");
     if evidence_dir.exists() {
         let mut secrets_found = 0;
@@ -375,8 +436,8 @@ fn check_security(ctx: &AppContext, verbose: bool) -> Result<usize> {
                         if summary.total_count > 0 {
                             secrets_found += summary.total_count;
                             if verbose {
-                                println!();
-                                println!(
+                                say!(ctx);
+                                say!(ctx,
                                     "        {} potential secret(s) in {}",
                                     summary.total_count,
                                     path.display()
@@ -389,26 +450,26 @@ fn check_security(ctx: &AppContext, verbose: bool) -> Result<usize> {
         }
 
         if secrets_found > 0 {
-            println!(
+            say!(ctx,
                 "{} {} potential secret(s) found",
                 "[!]",
                 secrets_found
             );
-            println!("        Review evidence files for sensitive data");
+            say!(ctx,"        Review evidence files for sensitive data");
             issues += 1;
         } else {
-            println!(
+            say!(ctx,
                 "{} {} files scanned, no secrets detected",
                 "[ok]",
                 files_scanned
             );
         }
     } else {
-        println!("{} no evidence directory", "-");
+        say!(ctx,"{} no evidence directory", "-");
     }
 
     // 5. Check for .env files that shouldn't be tracked
-    print!("  [5/5] Environment files... ");
+    say_inline!(ctx,"  [5/5] Environment files... ");
     let mut env_issues = Vec::new();
 
     for env_file in &[
@@ -425,23 +486,23 @@ fn check_security(ctx: &AppContext, verbose: bool) -> Result<usize> {
     }
 
     if env_issues.is_empty() {
-        println!("{} no sensitive env files in ms root", "[ok]");
+        say!(ctx,"{} no sensitive env files in ms root", "[ok]");
     } else {
-        println!(
+        say!(ctx,
             "{} found sensitive files: {}",
             "[!]",
             env_issues.join(", ")
         );
-        println!("        These files should not be in the ms root directory");
+        say!(ctx,"        These files should not be in the ms root directory");
         issues += env_issues.len();
     }
 
     // Summary
-    println!();
+    say!(ctx);
     if issues == 0 {
-        println!("{} All security checks passed", "[ok]");
+        say!(ctx,"{} All security checks passed", "[ok]");
     } else {
-        println!("{} {} security issue(s) found", "[!]", issues);
+        say!(ctx,"{} {} security issue(s) found", "[!]", issues);
     }
 
     Ok(issues)
@@ -454,27 +515,27 @@ fn check_transactions(
     verbose: bool,
     issues_fixed: &mut usize,
 ) -> Result<usize> {
-    print!("Checking transactions... ");
+    say_inline!(ctx,"Checking transactions... ");
 
     let db_path = ctx.ms_root.join("ms.db");
     let archive_path = ctx.ms_root.join("archive");
 
     if !db_path.exists() || !archive_path.exists() {
-        println!("{} Skipped (database or archive not found)", "-");
+        say!(ctx,"{} Skipped (database or archive not found)", "-");
         return Ok(0);
     }
 
     let db = if let Ok(db) = crate::storage::Database::open(&db_path) {
         std::sync::Arc::new(db)
     } else {
-        println!("{} Skipped (cannot open database)", "-");
+        say!(ctx,"{} Skipped (cannot open database)", "-");
         return Ok(0);
     };
 
     let git = if let Ok(git) = crate::storage::GitArchive::open(&archive_path) {
         std::sync::Arc::new(git)
     } else {
-        println!("{} Skipped (cannot open archive)", "-");
+        say!(ctx,"{} Skipped (cannot open archive)", "-");
         return Ok(0);
     };
 
@@ -484,36 +545,36 @@ fn check_transactions(
     if fix {
         let report = tx_mgr.recover()?;
         if report.had_work() {
-            println!("{} Recovered", "[ok]");
+            say!(ctx,"{} Recovered", "[ok]");
             if verbose {
-                println!("  Rolled back: {}", report.rolled_back);
-                println!("  Completed: {}", report.completed);
-                println!("  Orphaned files cleaned: {}", report.orphaned_files);
+                say!(ctx,"  Rolled back: {}", report.rolled_back);
+                say!(ctx,"  Completed: {}", report.completed);
+                say!(ctx,"  Orphaned files cleaned: {}", report.orphaned_files);
             }
             *issues_fixed += report.rolled_back + report.completed + report.orphaned_files;
             Ok(report.rolled_back + report.completed + report.orphaned_files)
         } else {
-            println!("{} OK", "[ok]");
+            say!(ctx,"{} OK", "[ok]");
             Ok(0)
         }
     } else {
         // Just check without fixing
         let incomplete = db.list_incomplete_transactions()?;
         if incomplete.is_empty() {
-            println!("{} OK", "[ok]");
+            say!(ctx,"{} OK", "[ok]");
             Ok(0)
         } else {
-            println!(
+            say!(ctx,
                 "{} {} incomplete transactions",
                 "[!]",
                 incomplete.len()
             );
             if verbose {
                 for tx in &incomplete {
-                    println!("  - {} ({}, phase: {})", tx.id, tx.entity_type, tx.phase);
+                    say!(ctx,"  - {} ({}, phase: {})", tx.id, tx.entity_type, tx.phase);
                 }
             }
-            println!("  Run with --fix to recover transactions");
+            say!(ctx,"  Run with --fix to recover transactions");
             Ok(incomplete.len())
         }
     }
@@ -526,9 +587,9 @@ fn run_comprehensive_check(
     verbose: bool,
     issues_fixed: &mut usize,
 ) -> Result<usize> {
-    println!();
-    println!("{}", "Comprehensive Recovery Diagnostics");
-    println!("{}", "─".repeat(35));
+    say!(ctx);
+    say!(ctx,"{}", "Comprehensive Recovery Diagnostics");
+    say!(ctx,"{}", "─".repeat(35));
 
     let db_path = ctx.ms_root.join("ms.db");
     let archive_path = ctx.ms_root.join("archive");
@@ -546,7 +607,7 @@ fn run_comprehensive_check(
 
     // Run diagnosis or recovery
     let report = manager.recover(fix)?;
-    print_recovery_report(&report, verbose);
+    print_recovery_report(ctx, &report, verbose);
 
     // Update fixed count
     *issues_fixed += report.fixed;
@@ -555,11 +616,11 @@ fn run_comprehensive_check(
 }
 
 /// Print a formatted recovery report.
-fn print_recovery_report(report: &RecoveryReport, verbose: bool) {
+fn print_recovery_report(ctx: &AppContext, report: &RecoveryReport, verbose: bool) {
     if report.issues.is_empty() {
-        println!("{} No issues detected", "[ok]");
+        say!(ctx,"{} No issues detected", "[ok]");
     } else {
-        println!(
+        say!(ctx,
             "{} Found {} issues:",
             if report.has_critical_issues() {
                 "[FAIL]"
@@ -582,43 +643,43 @@ fn print_recovery_report(report: &RecoveryReport, verbose: bool) {
                 "[manual]"
             };
 
-            println!("  {} [{}] {}", arrow, severity_marker, issue.description);
+            say!(ctx,"  {} [{}] {}", arrow, severity_marker, issue.description);
 
             if verbose {
-                println!("    Mode: {:?}", issue.mode);
+                say!(ctx,"    Mode: {:?}", issue.mode);
                 if let Some(fix) = &issue.suggested_fix {
-                    println!("    Fix: {fix}");
+                    say!(ctx,"    Fix: {fix}");
                 }
             }
         }
     }
 
     if report.had_work() {
-        println!();
-        println!("{}", "Recovery actions:");
+        say!(ctx);
+        say!(ctx,"{}", "Recovery actions:");
         if report.rolled_back > 0 {
-            println!(
+            say!(ctx,
                 "  {} Rolled back {} transactions",
                 "[ok]",
                 report.rolled_back
             );
         }
         if report.completed > 0 {
-            println!(
+            say!(ctx,
                 "  {} Completed {} transactions",
                 "[ok]",
                 report.completed
             );
         }
         if report.orphaned_files > 0 {
-            println!(
+            say!(ctx,
                 "  {} Cleaned {} orphaned files",
                 "[ok]",
                 report.orphaned_files
             );
         }
         if report.cache_invalidated > 0 {
-            println!(
+            say!(ctx,
                 "  {} Invalidated {} cache entries",
                 "[ok]",
                 report.cache_invalidated
@@ -628,17 +689,17 @@ fn print_recovery_report(report: &RecoveryReport, verbose: bool) {
 
     if let Some(duration) = report.duration {
         if verbose {
-            println!();
-            println!("  Duration: {duration:?}");
+            say!(ctx);
+            say!(ctx,"  Duration: {duration:?}");
         }
     }
 }
 
 /// Check output mode detection and explain the decision
 fn check_output_mode(ctx: &AppContext, verbose: bool) -> Result<usize> {
-    println!("{}", "Output Mode Detection Report");
-    println!("{}", "═".repeat(28));
-    println!();
+    say!(ctx,"{}", "Output Mode Detection Report");
+    say!(ctx,"{}", "═".repeat(28));
+    say!(ctx);
 
     // Get the output format from context
     let output_format = ctx.output_format;
@@ -648,14 +709,14 @@ fn check_output_mode(ctx: &AppContext, verbose: bool) -> Result<usize> {
     let report = OutputModeReport::generate(output_format, robot_mode);
 
     // Print format and mode settings
-    println!("{} Configuration", ">");
-    println!("  Format:     {}", report.format);
-    println!("  Robot Mode: {}", report.robot_mode);
-    println!();
+    say!(ctx,"{} Configuration", ">");
+    say!(ctx,"  Format:     {}", report.format);
+    say!(ctx,"  Robot Mode: {}", report.robot_mode);
+    say!(ctx);
 
     // Print environment variable status
-    println!("{} Environment Variables", ">");
-    println!(
+    say!(ctx,"{} Environment Variables", ">");
+    say!(ctx,
         "  NO_COLOR:        {}",
         if report.env.no_color {
             "set"
@@ -663,7 +724,7 @@ fn check_output_mode(ctx: &AppContext, verbose: bool) -> Result<usize> {
             "not set"
         }
     );
-    println!(
+    say!(ctx,
         "  MS_PLAIN_OUTPUT: {}",
         if report.env.plain_output {
             "set"
@@ -671,7 +732,7 @@ fn check_output_mode(ctx: &AppContext, verbose: bool) -> Result<usize> {
             "not set"
         }
     );
-    println!(
+    say!(ctx,
         "  MS_FORCE_RICH:   {}",
         if report.env.force_rich {
             "set"
@@ -679,11 +740,11 @@ fn check_output_mode(ctx: &AppContext, verbose: bool) -> Result<usize> {
             "not set"
         }
     );
-    println!();
+    say!(ctx);
 
     // Print terminal information
-    println!("{} Terminal", ">");
-    println!(
+    say!(ctx,"{} Terminal", ">");
+    say!(ctx,
         "  is_terminal(): {}",
         if report.env.stdout_is_terminal {
             "true"
@@ -691,108 +752,108 @@ fn check_output_mode(ctx: &AppContext, verbose: bool) -> Result<usize> {
             "false"
         }
     );
-    println!(
+    say!(ctx,
         "  TERM:          {}",
         report.term.as_deref().unwrap_or("not set")
     );
-    println!(
+    say!(ctx,
         "  COLORTERM:     {}",
         report.colorterm.as_deref().unwrap_or("not set")
     );
-    println!(
+    say!(ctx,
         "  COLUMNS:       {}",
         report.columns.as_deref().unwrap_or("not set")
     );
-    println!();
+    say!(ctx);
 
     // Print agent detection
-    println!("{} Agent Detection", ">");
+    say!(ctx,"{} Agent Detection", ">");
     if is_agent_environment() {
-        println!("  Status: {} Agent environment detected", "[!]");
+        say!(ctx,"  Status: {} Agent environment detected", "[!]");
         for var in &report.agent_vars {
             if let Ok(value) = std::env::var(var) {
-                println!("    {} = {:?}", var, value);
+                say!(ctx,"    {} = {:?}", var, value);
             }
         }
     } else {
-        println!("  Status: {} No agent environment", "[ok]");
+        say!(ctx,"  Status: {} No agent environment", "[ok]");
         if verbose {
-            println!(
+            say!(ctx,
                 "  (Checked {} agent env vars)",
                 crate::output::AGENT_ENV_VARS.len()
             );
         }
     }
-    println!();
+    say!(ctx);
 
     // Print CI detection
-    println!("{} CI Detection", ">");
+    say!(ctx,"{} CI Detection", ">");
     if is_ci_environment() {
-        println!("  Status: {} CI environment detected", "[!]");
+        say!(ctx,"  Status: {} CI environment detected", "[!]");
         for var in &report.ci_vars {
             if let Ok(value) = std::env::var(var) {
-                println!("    {} = {:?}", var, value);
+                say!(ctx,"    {} = {:?}", var, value);
             }
         }
     } else {
-        println!("  Status: {} No CI environment", "[ok]");
+        say!(ctx,"  Status: {} No CI environment", "[ok]");
         if verbose {
-            println!(
+            say!(ctx,
                 "  (Checked {} CI env vars)",
                 crate::output::CI_ENV_VARS.len()
             );
         }
     }
-    println!();
+    say!(ctx);
 
     // Print IDE detection
-    println!("{} IDE Detection", ">");
+    say!(ctx,"{} IDE Detection", ">");
     if is_ide_environment() {
-        println!("  Status: {} IDE environment detected", "[!]");
+        say!(ctx,"  Status: {} IDE environment detected", "[!]");
         for var in &report.ide_vars {
             if let Ok(value) = std::env::var(var) {
-                println!("    {} = {:?}", var, value);
+                say!(ctx,"    {} = {:?}", var, value);
             }
         }
     } else {
-        println!("  Status: {} No special IDE environment", "[ok]");
+        say!(ctx,"  Status: {} No special IDE environment", "[ok]");
         if verbose {
-            println!(
+            say!(ctx,
                 "  (Checked {} IDE env vars)",
                 crate::output::IDE_ENV_VARS.len()
             );
         }
     }
-    println!();
+    say!(ctx);
 
     // Print final decision
-    println!("{} Decision", ">");
+    say!(ctx,"{} Decision", ">");
     let mode = if report.decision.use_rich {
         "RICH OUTPUT"
     } else {
         "PLAIN OUTPUT"
     };
-    println!("  Mode:   {}", mode);
-    println!("  Reason: {:?}", report.decision.reason);
-    println!();
+    say!(ctx,"  Mode:   {}", mode);
+    say!(ctx,"  Reason: {:?}", report.decision.reason);
+    say!(ctx);
 
     // Print summary
     if report.decision.use_rich {
-        println!("{} Rich terminal output is enabled", "[ok]");
-        println!("  Colors, Unicode box drawing, and styling will be used.");
+        say!(ctx,"{} Rich terminal output is enabled", "[ok]");
+        say!(ctx,"  Colors, Unicode box drawing, and styling will be used.");
     } else {
-        println!("{} Plain text output is enabled", "[!]");
-        println!("  No ANSI codes or fancy Unicode will be emitted.");
+        say!(ctx,"{} Plain text output is enabled", "[!]");
+        say!(ctx,"  No ANSI codes or fancy Unicode will be emitted.");
     }
 
     // Hints for debugging
     if verbose {
-        println!();
-        println!("{} Debug Tips", ">");
-        println!("  • Set MS_DEBUG_OUTPUT=1 to see detection info on every command");
-        println!("  • Set MS_FORCE_RICH=1 to force rich output (if terminal supports it)");
-        println!("  • Set NO_COLOR=1 to disable all colors");
-        println!("  • Use --output-format=plain for plain text output");
+        say!(ctx);
+        say!(ctx,"{} Debug Tips", ">");
+        say!(ctx,"  • Set MS_DEBUG_OUTPUT=1 to see detection info on every command");
+        say!(ctx,"  • Set MS_FORCE_RICH=1 to force rich output (if terminal supports it)");
+        say!(ctx,"  • Set NO_COLOR=1 to disable all colors");
+        say!(ctx,"  • Use --output-format=plain for plain text output");
     }
 
     Ok(0)
@@ -800,7 +861,7 @@ fn check_output_mode(ctx: &AppContext, verbose: bool) -> Result<usize> {
 
 /// Check performance metrics
 fn check_perf(ctx: &AppContext, verbose: bool) -> Result<usize> {
-    print!("Checking performance... ");
+    say_inline!(ctx,"Checking performance... ");
 
     let mut issues = 0;
 
@@ -815,19 +876,19 @@ fn check_perf(ctx: &AppContext, verbose: bool) -> Result<usize> {
                     let rss_mb = rss_bytes as f64 / (1024.0 * 1024.0);
 
                     if rss_mb > 100.0 {
-                        println!(
+                        say!(ctx,
                             "{} High memory usage: {:.2} MB (target < 100 MB)",
                             "[!]",
                             rss_mb
                         );
                         issues += 1;
                     } else {
-                        println!("{} Memory usage: {:.2} MB", "[ok]", rss_mb);
+                        say!(ctx,"{} Memory usage: {:.2} MB", "[ok]", rss_mb);
                     }
                 }
             }
         } else {
-            println!(
+            say!(ctx,
                 "{} Memory check failed (cannot read /proc/self/statm)",
                 "[!]"
             );
@@ -836,7 +897,7 @@ fn check_perf(ctx: &AppContext, verbose: bool) -> Result<usize> {
 
     #[cfg(not(target_os = "linux"))]
     {
-        println!(
+        say!(ctx,
             "{} Memory check skipped (not supported on this OS)",
             "-"
         );
@@ -849,14 +910,14 @@ fn check_perf(ctx: &AppContext, verbose: bool) -> Result<usize> {
     let elapsed = start.elapsed();
 
     if elapsed.as_millis() > 50 {
-        println!(
+        say!(ctx,
             "{} Search latency high: {:?} (target < 50ms)",
             "[!]",
             elapsed
         );
         issues += 1;
     } else if verbose {
-        println!("  Search latency: {elapsed:?}");
+        say!(ctx,"  Search latency: {elapsed:?}");
     }
 
     Ok(issues)
