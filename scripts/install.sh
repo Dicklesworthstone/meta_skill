@@ -22,11 +22,6 @@ REPO="Dicklesworthstone/meta_skill"
 BINARY_NAME="ms"
 DEFAULT_INSTALL_DIR="${HOME}/.local/bin"
 
-# Allow sourcing without running (for testing)
-if [[ "${1:-}" == "--source-only" ]]; then
-    return 0 2>/dev/null || exit 0
-fi
-
 # Colors (respect NO_COLOR)
 if [[ -z "${NO_COLOR:-}" ]] && [[ -t 1 ]]; then
     RED='\033[0;31m'
@@ -142,20 +137,53 @@ fetch_latest_version() {
 # Download with progress
 download() {
     local url="$1" dest="$2"
+    local max_attempts="${MS_INSTALL_DOWNLOAD_ATTEMPTS:-3}"
+    local attempt=1
+    local status=0
+    local delay=0
 
     log "Downloading from $url..."
 
+    case "$max_attempts" in
+        ''|*[!0-9]*) max_attempts=3 ;;
+        0) max_attempts=1 ;;
+    esac
+
     if command -v curl >/dev/null 2>&1; then
-        curl -fsSL "$url" -o "$dest" || {
-            die "Download failed: $url"
-        }
+        while [[ $attempt -le $max_attempts ]]; do
+            if curl -fsSL "$url" -o "$dest"; then
+                return 0
+            else
+                status=$?
+            fi
+            if [[ $attempt -lt $max_attempts ]]; then
+                delay=$((attempt * 2))
+                warn "Download failed (attempt ${attempt}/${max_attempts}); retrying in ${delay}s"
+                sleep "$delay"
+            fi
+            attempt=$((attempt + 1))
+        done
     elif command -v wget >/dev/null 2>&1; then
-        wget -q "$url" -O "$dest" || {
-            die "Download failed: $url"
-        }
+        while [[ $attempt -le $max_attempts ]]; do
+            if wget -q "$url" -O "$dest"; then
+                return 0
+            else
+                status=$?
+            fi
+            if [[ $attempt -lt $max_attempts ]]; then
+                delay=$((attempt * 2))
+                warn "Download failed (attempt ${attempt}/${max_attempts}); retrying in ${delay}s"
+                sleep "$delay"
+            fi
+            attempt=$((attempt + 1))
+        done
     else
-        die "Neither curl nor wget found"
+        err "Neither curl nor wget found"
+        return 1
     fi
+
+    err "Download failed after ${max_attempts} attempt(s): $url"
+    return "$status"
 }
 
 # Verify checksum
@@ -266,7 +294,9 @@ main() {
     local checksums_url="${base_url}/SHA256SUMS.txt"
 
     # Download archive
-    download "$archive_url" "${temp_dir}/${archive_name}"
+    download "$archive_url" "${temp_dir}/${archive_name}" || {
+        die "Download failed: $archive_url"
+    }
 
     # Download checksums (optional)
     download "$checksums_url" "${temp_dir}/SHA256SUMS.txt" 2>/dev/null || {
@@ -345,5 +375,12 @@ main() {
         warn "Binary installed but failed to run. Please check the logs."
     fi
 }
+
+if [[ "${1:-}" == "--source-only" ]]; then
+    if (return 0 2>/dev/null); then
+        return 0
+    fi
+    exit 0
+fi
 
 main "$@"
