@@ -188,8 +188,8 @@ download() {
 
 # Verify checksum
 verify_checksum() {
-    local binary="$1" checksums="$2"
-    local expected actual binary_name
+    local artifact="$1" checksums="$2"
+    local expected actual artifact_name
 
     if [[ "${VERIFY:-true}" != "true" ]]; then
         warn "Checksum verification skipped (--no-verify)"
@@ -197,26 +197,32 @@ verify_checksum() {
     fi
 
     if [[ ! -f "$checksums" ]]; then
-        warn "Checksums file not found, skipping verification"
-        return 0
+        die "Checksums file not found: $checksums"
     fi
 
-    binary_name=$(basename "$binary")
-    expected=$(grep -E "\s${binary_name}$" "$checksums" 2>/dev/null | awk '{print $1}' || true)
+    artifact_name=$(basename "$artifact")
+    expected=$(awk -v name="$artifact_name" '
+        {
+            filename = $NF
+            sub(/\r$/, "", filename)
+            if (filename == name) {
+                print $1
+                exit
+            }
+        }
+    ' "$checksums")
 
     if [[ -z "$expected" ]]; then
-        warn "No checksum found for $binary_name, skipping verification"
-        return 0
+        die "No checksum found for $artifact_name in $checksums"
     fi
 
     # Use sha256sum on Linux, shasum on macOS
     if command -v sha256sum >/dev/null 2>&1; then
-        actual=$(sha256sum "$binary" | awk '{print $1}')
+        actual=$(sha256sum "$artifact" | awk '{print $1}')
     elif command -v shasum >/dev/null 2>&1; then
-        actual=$(shasum -a 256 "$binary" | awk '{print $1}')
+        actual=$(shasum -a 256 "$artifact" | awk '{print $1}')
     else
-        warn "No SHA256 tool found, skipping verification"
-        return 0
+        die "No SHA256 tool found. Install sha256sum or shasum, or rerun with --no-verify."
     fi
 
     if [[ "$expected" != "$actual" ]]; then
@@ -298,11 +304,14 @@ main() {
         die "Download failed: $archive_url"
     }
 
-    # Download checksums (optional)
-    download "$checksums_url" "${temp_dir}/SHA256SUMS.txt" 2>/dev/null || {
-        warn "Could not download checksums file"
-        touch "${temp_dir}/SHA256SUMS.txt"
-    }
+    if [[ "$VERIFY" == "true" ]]; then
+        download "$checksums_url" "${temp_dir}/SHA256SUMS.txt" || {
+            die "Could not download checksums file: $checksums_url"
+        }
+        verify_checksum "${temp_dir}/${archive_name}" "${temp_dir}/SHA256SUMS.txt"
+    else
+        warn "Checksum verification skipped (--no-verify)"
+    fi
 
     # Extract
     log "Extracting..."
@@ -320,9 +329,6 @@ main() {
     if [[ -z "$binary_path" ]]; then
         die "Could not find $BINARY_NAME in archive"
     fi
-
-    # Verify checksum
-    verify_checksum "$binary_path" "${temp_dir}/SHA256SUMS.txt"
 
     # Install
     mkdir -p "$INSTALL_DIR"
