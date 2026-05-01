@@ -112,11 +112,17 @@ detect_platform() {
 fetch_latest_version_from_redirect() {
     local effective_url version
 
-    if ! command -v curl >/dev/null 2>&1; then
+    if command -v curl >/dev/null 2>&1; then
+        effective_url=$(curl -fsSL -o /dev/null -w '%{url_effective}' "https://github.com/${REPO}/releases/latest" 2>/dev/null) || return 1
+    elif command -v wget >/dev/null 2>&1; then
+        effective_url=$(
+            wget -S --spider "https://github.com/${REPO}/releases/latest" 2>&1 |
+                awk 'tolower($1) == "location:" { loc = $2 } END { sub(/\r$/, "", loc); print loc }'
+        ) || return 1
+        [[ -n "$effective_url" ]] || return 1
+    else
         return 1
     fi
-
-    effective_url=$(curl -fsSL -o /dev/null -w '%{url_effective}' "https://github.com/${REPO}/releases/latest" 2>/dev/null) || return 1
     version="${effective_url##*/}"
 
     if [[ -n "$version" && "$version" =~ ^v[0-9] && "$version" != *"/"* ]]; then
