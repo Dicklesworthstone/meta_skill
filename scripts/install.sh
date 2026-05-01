@@ -109,9 +109,32 @@ detect_platform() {
     echo "${arch}-${os}"
 }
 
-# Fetch latest version from GitHub API
+fetch_latest_version_from_redirect() {
+    local effective_url version
+
+    if ! command -v curl >/dev/null 2>&1; then
+        return 1
+    fi
+
+    effective_url=$(curl -fsSL -o /dev/null -w '%{url_effective}' "https://github.com/${REPO}/releases/latest" 2>/dev/null) || return 1
+    version="${effective_url##*/}"
+
+    if [[ -n "$version" && "$version" =~ ^v[0-9] && "$version" != *"/"* ]]; then
+        echo "$version"
+        return 0
+    fi
+
+    return 1
+}
+
+# Fetch latest version without spending unauthenticated GitHub API quota.
 fetch_latest_version() {
     local response version
+
+    if version=$(fetch_latest_version_from_redirect); then
+        echo "$version"
+        return 0
+    fi
 
     if command -v curl >/dev/null 2>&1; then
         response=$(curl -sS "https://api.github.com/repos/${REPO}/releases/latest" 2>/dev/null) || {

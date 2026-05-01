@@ -81,10 +81,17 @@ cleanup_test_env() {
 test_github_releases_accessible() {
     log "Testing GitHub releases accessibility..."
 
-    local response
+    local effective_url version response
+    if effective_url=$(curl -fsSL -o /dev/null -w '%{url_effective}' "https://github.com/Dicklesworthstone/meta_skill/releases/latest" 2>&1); then
+        version="${effective_url##*/}"
+        if [[ -n "$version" && "$version" =~ ^v[0-9] && "$version" != *"/"* ]]; then
+            pass "GitHub releases accessible, latest: $version"
+            return 0
+        fi
+    fi
+
     if response=$(curl -sS "https://api.github.com/repos/Dicklesworthstone/meta_skill/releases/latest" 2>&1); then
         if [[ "$response" == *"tag_name"* ]]; then
-            local version
             version=$(echo "$response" | grep -o '"tag_name": "[^"]*"' | head -1 | cut -d'"' -f4)
             pass "GitHub releases accessible, latest: $version"
             return 0
