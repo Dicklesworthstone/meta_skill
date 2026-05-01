@@ -109,6 +109,35 @@ detect_platform() {
     echo "${arch}-${os}"
 }
 
+is_release_version() {
+    local version="${1#v}"
+    [[ "$version" =~ ^[0-9]+[.][0-9]+[.][0-9]+(-[0-9A-Za-z][0-9A-Za-z.-]*)?([+][0-9A-Za-z][0-9A-Za-z.-]*)?$ ]]
+}
+
+normalize_version() {
+    local version="$1"
+
+    if [[ "$version" == "latest" ]]; then
+        echo "latest"
+        return 0
+    fi
+
+    if ! is_release_version "$version"; then
+        die "Invalid version: $version (expected vX.Y.Z or X.Y.Z)"
+    fi
+
+    echo "v${version#v}"
+}
+
+require_option_value() {
+    local option="$1"
+    local value="${2:-}"
+
+    if [[ -z "$value" || "$value" == --* ]]; then
+        die "$option requires a value"
+    fi
+}
+
 fetch_latest_version_from_redirect() {
     local effective_url version
 
@@ -125,8 +154,8 @@ fetch_latest_version_from_redirect() {
     fi
     version="${effective_url##*/}"
 
-    if [[ -n "$version" && "$version" =~ ^v[0-9] && "$version" != *"/"* ]]; then
-        echo "$version"
+    if is_release_version "$version"; then
+        normalize_version "$version"
         return 0
     fi
 
@@ -271,10 +300,12 @@ parse_args() {
     while [[ $# -gt 0 ]]; do
         case "$1" in
             --install-dir)
+                require_option_value "--install-dir" "${2:-}"
                 INSTALL_DIR="$2"
                 shift 2
                 ;;
             --version)
+                require_option_value "--version" "${2:-}"
                 VERSION="$2"
                 shift 2
                 ;;
@@ -313,6 +344,7 @@ main() {
         log "Fetching latest version..."
         VERSION=$(fetch_latest_version)
     fi
+    VERSION=$(normalize_version "$VERSION")
     log "Installing version: ${GREEN}$VERSION${NC}"
 
     # Create temp directory

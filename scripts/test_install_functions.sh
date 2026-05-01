@@ -25,49 +25,15 @@ skip() { echo -e "${YELLOW}SKIP${NC}: $*"; }
 # Create a test environment
 TEMP_DIR=$(mktemp -d)
 trap 'rm -rf "$TEMP_DIR"' EXIT
+TEST_HOME="$TEMP_DIR/home"
+mkdir -p "$TEST_HOME"
+export HOME="$TEST_HOME"
+ORIGINAL_PATH="$PATH"
 
-# Extract functions from install.sh for testing
-# We do this by creating a modified version that allows sourcing
-cat > "$TEMP_DIR/install_testable.sh" << 'TESTEOF'
-#!/bin/bash
-# Testable version of install.sh
-
-REPO="Dicklesworthstone/meta_skill"
-BINARY_NAME="ms"
-DEFAULT_INSTALL_DIR="${HOME}/.local/bin"
-
-# Colors disabled for testing
-RED='' GREEN='' YELLOW='' BLUE='' BOLD='' NC=''
-
-log()  { echo "[ms] $*"; }
-warn() { echo "[ms] WARNING: $*"; }
-err()  { echo "[ms] ERROR: $*" >&2; }
-die()  { err "$*"; return 1; }
-
-detect_platform() {
-    local os arch
-    os="$(uname -s | tr '[:upper:]' '[:lower:]')"
-    arch="$(uname -m)"
-
-    case "$os" in
-        linux) os="unknown-linux-gnu" ;;
-        darwin) os="apple-darwin" ;;
-        mingw*|msys*|cygwin*) os="pc-windows-msvc" ;;
-        *) die "Unsupported OS: $os"; return 1 ;;
-    esac
-
-    case "$arch" in
-        x86_64|amd64) arch="x86_64" ;;
-        aarch64|arm64) arch="aarch64" ;;
-        *) die "Unsupported architecture: $arch"; return 1 ;;
-    esac
-
-    echo "${arch}-${os}"
-}
-TESTEOF
-
-# Source testable functions
-source "$TEMP_DIR/install_testable.sh"
+# Source the real installer functions. Keeping this pointed at install.sh
+# prevents unit tests from drifting behind installer changes.
+# shellcheck source=scripts/install.sh
+source "$SCRIPT_DIR/install.sh" --source-only
 
 echo "=== Install Script Unit Tests ==="
 echo ""
@@ -114,14 +80,67 @@ test_log_function() {
 
 # Test 4: Die function returns error
 test_die_function() {
-    if die "test error" 2>/dev/null; then
+    if (die "test error") 2>/dev/null; then
         fail "die function did not return error"
     else
         pass "die function returns non-zero"
     fi
 }
 
-# Test 5: Default install dir is set
+# Test 5: Version normalization accepts release tags
+test_normalize_version_prefixed() {
+    local result
+    result=$(normalize_version "v1.2.3")
+
+    if [[ "$result" == "v1.2.3" ]]; then
+        pass "normalize_version preserves v-prefixed releases"
+    else
+        fail "normalize_version returned unexpected prefixed result: $result"
+    fi
+}
+
+# Test 6: Version normalization accepts bare SemVer
+test_normalize_version_bare() {
+    local result
+    result=$(normalize_version "1.2.3")
+
+    if [[ "$result" == "v1.2.3" ]]; then
+        pass "normalize_version adds v prefix to bare releases"
+    else
+        fail "normalize_version returned unexpected bare result: $result"
+    fi
+}
+
+# Test 7: Version normalization rejects unsafe input
+test_normalize_version_rejects_invalid() {
+    if (normalize_version "../v1.2.3") >/dev/null 2>&1; then
+        fail "normalize_version accepted invalid release input"
+    else
+        pass "normalize_version rejects invalid release input"
+    fi
+}
+
+# Test 8: Argument parser reports missing values cleanly
+test_parse_args_requires_values() {
+    if (parse_args --version) >/dev/null 2>&1; then
+        fail "parse_args accepted --version without a value"
+        return
+    fi
+
+    if (parse_args --install-dir) >/dev/null 2>&1; then
+        fail "parse_args accepted --install-dir without a value"
+        return
+    fi
+
+    if (parse_args --version --no-verify) >/dev/null 2>&1; then
+        fail "parse_args accepted another option as the --version value"
+        return
+    fi
+
+    pass "parse_args rejects options missing required values"
+}
+
+# Test 9: Default install dir is set
 test_default_install_dir() {
     if [[ -n "$DEFAULT_INSTALL_DIR" ]]; then
         pass "DEFAULT_INSTALL_DIR is set: $DEFAULT_INSTALL_DIR"
@@ -130,7 +149,7 @@ test_default_install_dir() {
     fi
 }
 
-# Test 6: Binary name is set
+# Test 10: Binary name is set
 test_binary_name() {
     if [[ "$BINARY_NAME" == "ms" ]]; then
         pass "BINARY_NAME is 'ms'"
@@ -139,7 +158,7 @@ test_binary_name() {
     fi
 }
 
-# Test 7: Repo is correctly set
+# Test 11: Repo is correctly set
 test_repo_setting() {
     if [[ "$REPO" == "Dicklesworthstone/meta_skill" ]]; then
         pass "REPO is correctly set"
@@ -148,7 +167,7 @@ test_repo_setting() {
     fi
 }
 
-# Test 8: Architecture detection on current system
+# Test 12: Architecture detection on current system
 test_current_arch() {
     local arch
     arch=$(uname -m)
@@ -163,7 +182,7 @@ test_current_arch() {
     esac
 }
 
-# Test 9: OS detection on current system
+# Test 13: OS detection on current system
 test_current_os() {
     local os
     os=$(uname -s | tr '[:upper:]' '[:lower:]')
@@ -181,7 +200,7 @@ test_current_os() {
     esac
 }
 
-# Test 10: Curl or wget is available
+# Test 14: Curl or wget is available
 test_download_tool_available() {
     if command -v curl >/dev/null 2>&1; then
         pass "curl is available"
@@ -192,7 +211,7 @@ test_download_tool_available() {
     fi
 }
 
-# Test 11: SHA256 tool is available
+# Test 15: SHA256 tool is available
 test_sha_tool_available() {
     if command -v sha256sum >/dev/null 2>&1; then
         pass "sha256sum is available"
@@ -200,6 +219,94 @@ test_sha_tool_available() {
         pass "shasum is available"
     else
         fail "No SHA256 tool is available"
+    fi
+}
+
+# Test 16: Latest-version redirect parsing handles GitHub release redirects
+test_latest_redirect_curl() {
+    local stub_dir result
+    stub_dir="$TEMP_DIR/curl-redirect-bin"
+    mkdir -p "$stub_dir"
+    cat > "$stub_dir/curl" <<'EOF'
+#!/bin/bash
+printf '%s' 'https://github.com/Dicklesworthstone/meta_skill/releases/tag/v9.8.7'
+EOF
+    chmod +x "$stub_dir/curl"
+
+    PATH="$stub_dir:$ORIGINAL_PATH"
+    if result=$(fetch_latest_version_from_redirect); then
+        PATH="$ORIGINAL_PATH"
+    else
+        PATH="$ORIGINAL_PATH"
+        fail "fetch_latest_version_from_redirect failed for valid curl redirect"
+        return
+    fi
+
+    if [[ "$result" == "v9.8.7" ]]; then
+        pass "fetch_latest_version_from_redirect parses curl release redirect"
+    else
+        fail "fetch_latest_version_from_redirect returned unexpected result: $result"
+    fi
+}
+
+# Test 17: Latest-version redirect parsing rejects malformed tags
+test_latest_redirect_rejects_invalid() {
+    local stub_dir
+    stub_dir="$TEMP_DIR/curl-invalid-bin"
+    mkdir -p "$stub_dir"
+    cat > "$stub_dir/curl" <<'EOF'
+#!/bin/bash
+printf '%s' 'https://github.com/Dicklesworthstone/meta_skill/releases/tag/not-a-version'
+EOF
+    chmod +x "$stub_dir/curl"
+
+    PATH="$stub_dir:$ORIGINAL_PATH"
+    if fetch_latest_version_from_redirect >/dev/null 2>&1; then
+        PATH="$ORIGINAL_PATH"
+        fail "fetch_latest_version_from_redirect accepted malformed tag"
+    else
+        PATH="$ORIGINAL_PATH"
+        pass "fetch_latest_version_from_redirect rejects malformed tag"
+    fi
+}
+
+# Test 18: Checksum verification accepts matching release entries
+test_verify_checksum_accepts_match() {
+    local artifact checksum_file artifact_hash
+    artifact="$TEMP_DIR/ms-1.2.3-x86_64-unknown-linux-gnu.tar.gz"
+    checksum_file="$TEMP_DIR/SHA256SUMS.txt"
+    printf '%s' 'release payload' > "$artifact"
+
+    if command -v sha256sum >/dev/null 2>&1; then
+        artifact_hash=$(sha256sum "$artifact" | awk '{print $1}')
+    elif command -v shasum >/dev/null 2>&1; then
+        artifact_hash=$(shasum -a 256 "$artifact" | awk '{print $1}')
+    else
+        skip "No SHA256 tool is available for checksum test"
+        return
+    fi
+
+    printf '%s  %s\r\n' "$artifact_hash" "$(basename "$artifact")" > "$checksum_file"
+
+    if verify_checksum "$artifact" "$checksum_file" >/dev/null 2>&1; then
+        pass "verify_checksum accepts matching artifact entry"
+    else
+        fail "verify_checksum rejected matching artifact entry"
+    fi
+}
+
+# Test 19: Checksum verification rejects missing release entries
+test_verify_checksum_rejects_missing_entry() {
+    local artifact checksum_file
+    artifact="$TEMP_DIR/ms-1.2.3-x86_64-unknown-linux-gnu.tar.gz"
+    checksum_file="$TEMP_DIR/empty-SHA256SUMS.txt"
+    printf '%s' 'release payload' > "$artifact"
+    printf '%s  %s\n' "$(printf '%064d' 0)" "different-artifact.tar.gz" > "$checksum_file"
+
+    if (verify_checksum "$artifact" "$checksum_file") >/dev/null 2>&1; then
+        fail "verify_checksum accepted checksum file without artifact entry"
+    else
+        pass "verify_checksum rejects checksum file without artifact entry"
     fi
 }
 
@@ -214,6 +321,14 @@ echo ""
 echo "Running function tests..."
 test_log_function
 test_die_function
+test_normalize_version_prefixed
+test_normalize_version_bare
+test_normalize_version_rejects_invalid
+test_parse_args_requires_values
+test_latest_redirect_curl
+test_latest_redirect_rejects_invalid
+test_verify_checksum_accepts_match
+test_verify_checksum_rejects_missing_entry
 
 echo ""
 echo "Running configuration tests..."
