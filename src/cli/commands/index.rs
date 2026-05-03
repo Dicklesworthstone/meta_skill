@@ -48,6 +48,41 @@ struct SkillRoot {
 struct DiscoveredSkill {
     path: PathBuf,
     layer: SkillLayer,
+    /// Count of companion files (non-`SKILL.md`, non-junk) found alongside this
+    /// skill in the same package directory tree. Surfaced via the indexing
+    /// summary so operators can spot skills with significant resource bundles
+    /// (scripts, references, fixtures) without indexing the bytes themselves.
+    /// First incremental step toward the package-aware indexing tracked in
+    /// PR #80; the resource files themselves are not stored or searched yet.
+    companion_count: usize,
+}
+
+/// Directory-name segments that are skipped when discovering skill packages.
+/// Conservative list — only entries that are unambiguously build artifacts,
+/// VCS internals, or our own data dirs. We do not skip `.github` or
+/// dotfile-prefixed directories generally because legitimate skills can use
+/// those names.
+const SKILL_DISCOVERY_SKIP_DIRS: &[&str] = &[
+    ".git",
+    ".ms",
+    ".beads",
+    ".cargo",
+    ".direnv",
+    ".venv",
+    "__pycache__",
+    "node_modules",
+    "target",
+    "dist",
+    "build",
+    ".next",
+    ".turbo",
+    ".pytest_cache",
+    ".mypy_cache",
+    ".ruff_cache",
+];
+
+fn is_skipped_skill_discovery_dir(name: &str) -> bool {
+    SKILL_DISCOVERY_SKIP_DIRS.iter().any(|skip| *skip == name)
 }
 
 pub fn run(ctx: &AppContext, args: &IndexArgs) -> Result<()> {
@@ -315,6 +350,12 @@ fn index_robot(ctx: &AppContext, roots: &[SkillRoot], args: &IndexArgs) -> Resul
 
     let elapsed = start.elapsed();
 
+    let total_companions: usize = skill_files.iter().map(|s| s.companion_count).sum();
+    let skills_with_companions: usize = skill_files
+        .iter()
+        .filter(|s| s.companion_count > 0)
+        .count();
+
     println!(
         "{}",
         serde_json::json!({
@@ -322,6 +363,11 @@ fn index_robot(ctx: &AppContext, roots: &[SkillRoot], args: &IndexArgs) -> Resul
             "indexed": indexed,
             "errors": errors,
             "elapsed_ms": elapsed.as_millis() as u64,
+            "package_summary": {
+                "skills_discovered": skill_files.len(),
+                "skills_with_companions": skills_with_companions,
+                "total_companion_files": total_companions,
+            },
         })
     );
 
@@ -336,21 +382,69 @@ fn discover_skill_files(roots: &[SkillRoot]) -> Vec<DiscoveredSkill> {
             continue;
         }
 
-        for entry in WalkDir::new(&root.path)
-            .follow_links(true)
+        // Filter out junk directories (`target/`, `node_modules/`, `.git/`,
+        // etc.) before they ever get walked. Cuts discovery time on large
+        // workspaces and avoids accidentally treating a build artifact tree
+        // as a skill package.
+        let walker = WalkDir::new(&root.path)
+            .follow_links(false)
             .into_iter()
-            .filter_map(std::result::Result::ok)
-        {
+            .filter_entry(|entry| {
+                if entry.file_type().is_dir() {
+                    let name = entry.file_name().to_string_lossy();
+                    !is_skipped_skill_discovery_dir(name.as_ref())
+                } else {
+                    true
+                }
+            })
+            .filter_map(std::result::Result::ok);
+
+        for entry in walker {
             if entry.file_type().is_file() && entry.file_name() == "SKILL.md" {
+                let companion_count = count_companion_files(entry.path());
                 skill_files.push(DiscoveredSkill {
                     path: entry.path().to_path_buf(),
                     layer: root.layer,
+                    companion_count,
                 });
             }
         }
     }
 
     skill_files
+}
+
+/// Count files in the same directory tree as a `SKILL.md`, excluding the
+/// `SKILL.md` itself and any files inside [`SKILL_DISCOVERY_SKIP_DIRS`].
+/// Symlinks are not followed (matches the discovery pass).
+///
+/// This is read-only and side-effect-free — it does not store, hash, or
+/// index the companion files. It exists to surface package shape in the
+/// indexing summary while a deeper schema/storage design for indexed
+/// resources is worked out (PR #80, follow-up bead).
+fn count_companion_files(skill_md: &std::path::Path) -> usize {
+    let pkg_root = match skill_md.parent() {
+        Some(p) => p,
+        None => return 0,
+    };
+    let mut count: usize = 0;
+    let walker = WalkDir::new(pkg_root)
+        .follow_links(false)
+        .into_iter()
+        .filter_entry(|entry| {
+            if entry.file_type().is_dir() {
+                let name = entry.file_name().to_string_lossy();
+                !is_skipped_skill_discovery_dir(name.as_ref())
+            } else {
+                true
+            }
+        });
+    for entry in walker.filter_map(std::result::Result::ok) {
+        if entry.file_type().is_file() && entry.path() != skill_md {
+            count += 1;
+        }
+    }
+    count
 }
 
 fn index_skill_file(
@@ -894,9 +988,144 @@ mod tests {
         let skill = DiscoveredSkill {
             path: PathBuf::from("/test/skill/SKILL.md"),
             layer: SkillLayer::Base,
+            companion_count: 0,
         };
 
         assert_eq!(skill.path, PathBuf::from("/test/skill/SKILL.md"));
         assert_eq!(skill.layer, SkillLayer::Base);
+        assert_eq!(skill.companion_count, 0);
+    }
+
+    // ==================== Junk-dir filter + companion-count tests ====================
+    // First incremental step toward PR #80's package-aware indexing.
+
+    #[test]
+    fn test_is_skipped_skill_discovery_dir_known_names() {
+        for name in [
+            ".git",
+            ".ms",
+            ".beads",
+            ".cargo",
+            "node_modules",
+            "target",
+            "dist",
+            "build",
+            "__pycache__",
+            ".venv",
+            ".pytest_cache",
+        ] {
+            assert!(
+                is_skipped_skill_discovery_dir(name),
+                "expected `{name}` to be skipped"
+            );
+        }
+    }
+
+    #[test]
+    fn test_is_skipped_skill_discovery_dir_does_not_skip_legit_names() {
+        // Legitimate skill-package directories must not be skipped just
+        // because they start with a dot or look like build output.
+        for name in ["scripts", "references", "fixtures", ".github", "src", "tests"] {
+            assert!(
+                !is_skipped_skill_discovery_dir(name),
+                "did not expect `{name}` to be skipped"
+            );
+        }
+    }
+
+    #[test]
+    fn test_count_companion_files_counts_resources_excluding_skill_md() {
+        use std::fs;
+        let temp = tempfile::tempdir().unwrap();
+        let pkg = temp.path().join("my-skill");
+        fs::create_dir(&pkg).unwrap();
+        let skill_md = pkg.join("SKILL.md");
+        fs::write(&skill_md, "# Skill").unwrap();
+        // Three companions in one nested dir + one at the root
+        let scripts_dir = pkg.join("scripts");
+        fs::create_dir(&scripts_dir).unwrap();
+        fs::write(scripts_dir.join("run.sh"), "echo hi").unwrap();
+        fs::write(scripts_dir.join("check.sh"), "echo hi").unwrap();
+        fs::write(pkg.join("README.md"), "# README").unwrap();
+        let refs_dir = pkg.join("references");
+        fs::create_dir(&refs_dir).unwrap();
+        fs::write(refs_dir.join("notes.md"), "notes").unwrap();
+        // A junk dir that should be skipped
+        let target_dir = pkg.join("target");
+        fs::create_dir(&target_dir).unwrap();
+        fs::write(target_dir.join("artifact.bin"), [0u8; 8]).unwrap();
+
+        let count = count_companion_files(&skill_md);
+        assert_eq!(
+            count, 4,
+            "expected 4 companions (run.sh, check.sh, README.md, references/notes.md); \
+             target/artifact.bin must be skipped"
+        );
+    }
+
+    #[test]
+    fn test_count_companion_files_returns_zero_for_skill_md_alone() {
+        use std::fs;
+        let temp = tempfile::tempdir().unwrap();
+        let pkg = temp.path().join("solo");
+        fs::create_dir(&pkg).unwrap();
+        let skill_md = pkg.join("SKILL.md");
+        fs::write(&skill_md, "# Skill").unwrap();
+        assert_eq!(count_companion_files(&skill_md), 0);
+    }
+
+    #[test]
+    fn test_discover_skill_files_skips_junk_dirs() {
+        use std::fs;
+        let temp = tempfile::tempdir().unwrap();
+
+        // Real skill at the top level
+        let pkg = temp.path().join("real-skill");
+        fs::create_dir(&pkg).unwrap();
+        fs::write(pkg.join("SKILL.md"), "# Real").unwrap();
+
+        // SKILL.md hiding inside a build output directory — must be ignored
+        let target = temp.path().join("target").join("debug").join("vendored");
+        fs::create_dir_all(&target).unwrap();
+        fs::write(target.join("SKILL.md"), "# DontIndexMe").unwrap();
+
+        // Another inside .git
+        let git_pack = temp.path().join(".git").join("packs").join("trash");
+        fs::create_dir_all(&git_pack).unwrap();
+        fs::write(git_pack.join("SKILL.md"), "# AlsoNo").unwrap();
+
+        let roots = vec![SkillRoot {
+            path: temp.path().to_path_buf(),
+            layer: SkillLayer::Project,
+        }];
+
+        let discovered = discover_skill_files(&roots);
+        assert_eq!(
+            discovered.len(),
+            1,
+            "discovery must skip target/ and .git/ trees"
+        );
+        assert_eq!(discovered[0].path, pkg.join("SKILL.md"));
+    }
+
+    #[test]
+    fn test_discover_skill_files_records_companion_count() {
+        use std::fs;
+        let temp = tempfile::tempdir().unwrap();
+        let pkg = temp.path().join("with-resources");
+        fs::create_dir(&pkg).unwrap();
+        fs::write(pkg.join("SKILL.md"), "# Hi").unwrap();
+        fs::write(pkg.join("README.md"), "# README").unwrap();
+        let scripts = pkg.join("scripts");
+        fs::create_dir(&scripts).unwrap();
+        fs::write(scripts.join("run.sh"), "echo hi").unwrap();
+
+        let roots = vec![SkillRoot {
+            path: temp.path().to_path_buf(),
+            layer: SkillLayer::Project,
+        }];
+        let discovered = discover_skill_files(&roots);
+        assert_eq!(discovered.len(), 1);
+        assert_eq!(discovered[0].companion_count, 2);
     }
 }
