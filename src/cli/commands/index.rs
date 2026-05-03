@@ -415,8 +415,13 @@ fn discover_skill_files(roots: &[SkillRoot]) -> Vec<DiscoveredSkill> {
 }
 
 /// Count files in the same directory tree as a `SKILL.md`, excluding the
-/// `SKILL.md` itself and any files inside [`SKILL_DISCOVERY_SKIP_DIRS`].
-/// Symlinks are not followed (matches the discovery pass).
+/// `SKILL.md` itself, any files inside [`SKILL_DISCOVERY_SKIP_DIRS`], and any
+/// files belonging to a nested skill package (a subdirectory that has its own
+/// `SKILL.md`). Symlinks are not followed (matches the discovery pass).
+///
+/// Package boundary: a directory is part of this skill iff it does not contain
+/// its own `SKILL.md`. This prevents `parent/SKILL.md` from claiming files
+/// that semantically belong to `parent/child/SKILL.md`.
 ///
 /// This is read-only and side-effect-free — it does not store, hash, or
 /// index the companion files. It exists to surface package shape in the
@@ -432,15 +437,28 @@ fn count_companion_files(skill_md: &std::path::Path) -> usize {
         .follow_links(false)
         .into_iter()
         .filter_entry(|entry| {
-            if entry.file_type().is_dir() {
-                let name = entry.file_name().to_string_lossy();
-                !is_skipped_skill_discovery_dir(name.as_ref())
-            } else {
-                true
+            if !entry.file_type().is_dir() {
+                return true;
             }
+            let name = entry.file_name().to_string_lossy();
+            if is_skipped_skill_discovery_dir(name.as_ref()) {
+                return false;
+            }
+            // Don't recurse into nested skill packages. The pkg_root itself is
+            // allowed (it contains *our* SKILL.md, not a foreign one).
+            if entry.path() != pkg_root && entry.path().join("SKILL.md").is_file() {
+                return false;
+            }
+            true
         });
     for entry in walker.filter_map(std::result::Result::ok) {
-        if entry.file_type().is_file() && entry.path() != skill_md {
+        if entry.file_type().is_file()
+            && entry.path() != skill_md
+            // Defense-in-depth: even if the directory filter missed a nested
+            // skill (race / unusual filesystem), don't count any other
+            // `SKILL.md` as a companion.
+            && entry.file_name() != "SKILL.md"
+        {
             count += 1;
         }
     }
@@ -1072,6 +1090,54 @@ mod tests {
         let skill_md = pkg.join("SKILL.md");
         fs::write(&skill_md, "# Skill").unwrap();
         assert_eq!(count_companion_files(&skill_md), 0);
+    }
+
+    #[test]
+    fn test_count_companion_files_respects_nested_skill_package_boundary() {
+        // Layout:
+        //   parent/
+        //     SKILL.md
+        //     shared.py             <- parent's companion
+        //     scripts/
+        //       run.sh              <- parent's companion (no nested SKILL.md)
+        //     child/
+        //       SKILL.md            <- child's *own* SKILL.md
+        //       helper.py           <- child's companion, NOT parent's
+        //       deeper/
+        //         data.json         <- child's companion, NOT parent's
+        //
+        // Parent's count must be 2 (shared.py + scripts/run.sh), not 5.
+        // Child's count must be 2 (helper.py + deeper/data.json), not 0.
+        use std::fs;
+        let temp = tempfile::tempdir().unwrap();
+        let parent = temp.path().join("parent");
+        fs::create_dir(&parent).unwrap();
+        let parent_skill = parent.join("SKILL.md");
+        fs::write(&parent_skill, "# Parent").unwrap();
+        fs::write(parent.join("shared.py"), "x = 1").unwrap();
+        let scripts = parent.join("scripts");
+        fs::create_dir(&scripts).unwrap();
+        fs::write(scripts.join("run.sh"), "echo hi").unwrap();
+
+        let child = parent.join("child");
+        fs::create_dir(&child).unwrap();
+        let child_skill = child.join("SKILL.md");
+        fs::write(&child_skill, "# Child").unwrap();
+        fs::write(child.join("helper.py"), "y = 2").unwrap();
+        let deeper = child.join("deeper");
+        fs::create_dir(&deeper).unwrap();
+        fs::write(deeper.join("data.json"), "{}").unwrap();
+
+        assert_eq!(
+            count_companion_files(&parent_skill),
+            2,
+            "parent must not claim files inside the nested child skill package"
+        );
+        assert_eq!(
+            count_companion_files(&child_skill),
+            2,
+            "child still owns its own helper.py + deeper/data.json"
+        );
     }
 
     #[test]
