@@ -386,16 +386,20 @@ fn discover_skill_files(roots: &[SkillRoot]) -> Vec<DiscoveredSkill> {
         // etc.) before they ever get walked. Cuts discovery time on large
         // workspaces and avoids accidentally treating a build artifact tree
         // as a skill package.
+        //
+        // Depth-0 (the root the user explicitly named) is exempt: a user who
+        // says `ms index ~/work/build/` is asserting that path IS the
+        // workspace, even if its final component happens to match the
+        // skip-list. We only prune *descendants* whose names match.
         let walker = WalkDir::new(&root.path)
             .follow_links(false)
             .into_iter()
             .filter_entry(|entry| {
-                if entry.file_type().is_dir() {
-                    let name = entry.file_name().to_string_lossy();
-                    !is_skipped_skill_discovery_dir(name.as_ref())
-                } else {
-                    true
+                if !entry.file_type().is_dir() || entry.depth() == 0 {
+                    return true;
                 }
+                let name = entry.file_name().to_string_lossy();
+                !is_skipped_skill_discovery_dir(name.as_ref())
             })
             .filter_map(std::result::Result::ok);
 
@@ -440,13 +444,20 @@ fn count_companion_files(skill_md: &std::path::Path) -> usize {
             if !entry.file_type().is_dir() {
                 return true;
             }
+            // Always allow pkg_root itself (depth 0) — even if its directory
+            // name happens to match the junk skip-list, the user already
+            // demonstrated this *is* a skill package by placing a SKILL.md
+            // here. We only prune descendants.
+            if entry.depth() == 0 {
+                return true;
+            }
             let name = entry.file_name().to_string_lossy();
             if is_skipped_skill_discovery_dir(name.as_ref()) {
                 return false;
             }
-            // Don't recurse into nested skill packages. The pkg_root itself is
-            // allowed (it contains *our* SKILL.md, not a foreign one).
-            if entry.path() != pkg_root && entry.path().join("SKILL.md").is_file() {
+            // Don't recurse into nested skill packages. (pkg_root was already
+            // allowed above; this gate only matters for proper descendants.)
+            if entry.path().join("SKILL.md").is_file() {
                 return false;
             }
             true
@@ -1090,6 +1101,52 @@ mod tests {
         let skill_md = pkg.join("SKILL.md");
         fs::write(&skill_md, "# Skill").unwrap();
         assert_eq!(count_companion_files(&skill_md), 0);
+    }
+
+    #[test]
+    fn test_count_companion_files_pkg_root_with_junk_listed_name_is_not_pruned() {
+        // The junk-list filter only applies to *descendants*, not to the
+        // package root itself. A skill that lives in a directory named
+        // `target/` (because the user happens to call it that) must still
+        // count its companions correctly — the root is depth 0 and exempt.
+        use std::fs;
+        let temp = tempfile::tempdir().unwrap();
+        let pkg = temp.path().join("target"); // dir name in the skip list
+        fs::create_dir(&pkg).unwrap();
+        let skill_md = pkg.join("SKILL.md");
+        fs::write(&skill_md, "# Skill").unwrap();
+        fs::write(pkg.join("companion.txt"), "hi").unwrap();
+        assert_eq!(count_companion_files(&skill_md), 1);
+    }
+
+    #[test]
+    fn test_discover_skill_files_root_with_junk_listed_name_is_not_pruned() {
+        // Symmetric: a SKILL.md sitting directly in a user-supplied root
+        // whose final path component matches the junk list (e.g. `~/work/build/`)
+        // must still be discovered. Junk-list filtering applies only to
+        // descendants below the root the user explicitly asked us to walk.
+        use std::fs;
+        let temp = tempfile::tempdir().unwrap();
+        // The "root" we hand to discover_skill_files is itself named `target`.
+        let target_root = temp.path().join("target");
+        fs::create_dir(&target_root).unwrap();
+        fs::write(target_root.join("SKILL.md"), "# RootSkill").unwrap();
+        // And a nested `target/` should still be pruned.
+        let nested_target = target_root.join("target");
+        fs::create_dir(&nested_target).unwrap();
+        fs::write(nested_target.join("SKILL.md"), "# DontFindMe").unwrap();
+
+        let roots = vec![SkillRoot {
+            path: target_root.clone(),
+            layer: SkillLayer::Project,
+        }];
+        let discovered = discover_skill_files(&roots);
+        assert_eq!(
+            discovered.len(),
+            1,
+            "must discover the root-level SKILL.md but skip the nested target/SKILL.md"
+        );
+        assert_eq!(discovered[0].path, target_root.join("SKILL.md"));
     }
 
     #[test]
