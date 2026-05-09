@@ -30,7 +30,7 @@ clap = { version = "4.5.60", features = ["derive", "cargo", "env", "unicode", "w
 clap_complete = "4.5.65"
 
 # Async runtime
-tokio = { version = "1.51.1", features = ["rt-multi-thread", "macros", "fs", "io-util", "time", "signal"] }
+tokio = { version = "1.52.3", features = ["rt-multi-thread", "macros", "fs", "io-util", "time", "signal"] }
 
 # Error handling
 thiserror = "2.0.17"
