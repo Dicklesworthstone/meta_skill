@@ -84,7 +84,7 @@ tracing = "0.1.44"
 tracing-subscriber = { version = "0.3.23", features = ["env-filter", "fmt", "ansi", "json"] }
 
 # Authentication
-keyring = "3.6.1"
+keyring = "4.0.1"
 atty = "0.2.14"
 open = "5.3.2"
 
