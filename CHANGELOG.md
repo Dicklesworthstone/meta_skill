@@ -54,6 +54,7 @@ Tracking period: 2026-01-23 through 2026-03-21 (latest: [`bab33b7`](https://gith
 - Agent-friendliness report added for ms ([`5e377eb`](https://github.com/Dicklesworthstone/meta_skill/commit/5e377eb2b9e1ca650d0ab51e08f57b0267c4f60b))
 - cargo-deny config fixed and unused imports removed ([`fc73fe7`](https://github.com/Dicklesworthstone/meta_skill/commit/fc73fe796df8f7c0fb22b45db6ccf90c371c9772))
 - Dependency updates across multiple rounds: rusqlite 0.39.0, toml 1.0.7, chrono 0.4.44, clap 4.5.60, tokio, uuid 1.21.0, tempfile 3.27.0, tracing-subscriber 0.3.23, assert_cmd 2.2.0, which 8.0.2, console 0.16.3, criterion 0.8.2, and GH Actions (upload-artifact v7, download-artifact v19, checkout v6, attest-build-provenance v4, sticky-pull-request-comment v3, repository-dispatch v4)
+- Further dependency bumps: clap_complete 4.5.65 → 4.6.5, keyring 3.6.1 → 3.6.3, open 5.3.2 → 5.3.5, assert_cmd 2.2.0 → 2.2.2 ([`02a4693`](https://github.com/Dicklesworthstone/meta_skill/commit/02a46930f06d54907e3ec1cbb15c5d6e91da78a4)). Declined keyring 4.0.x: per upstream release notes, v4 is sample-app only and applications should migrate to `keyring-core` 1.0; our token storage uses the v3 `Entry::new` / `Error::{NoEntry,NoStorageAccess,PlatformFailure}` surface so the migration is a separate piece of work.
 
 ---
 
