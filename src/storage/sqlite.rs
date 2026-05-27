@@ -525,7 +525,29 @@ impl Database {
         Ok(aliases)
     }
 
+    /// Escape a raw user query into a safe FTS5 MATCH expression.
+    ///
+    /// Each whitespace-separated token is wrapped in double quotes (with any
+    /// embedded `"` doubled) so FTS5 syntax characters (`-`, `:`, `*`, `'`,
+    /// parentheses, etc.) are treated as literals rather than operators.
+    /// Tokens are joined with a space, which FTS5 interprets as an implicit
+    /// AND.  Returns an empty string for blank/whitespace-only input.
+    ///
+    /// **Trade-off**: trailing-`*` prefix queries (e.g. `multi*`) become
+    /// literal under this scheme and will not expand to prefix matches.
+    fn to_fts5_match_query(query: &str) -> String {
+        query
+            .split_whitespace()
+            .map(|token| format!("\"{}\"", token.replace('"', "\"\"")))
+            .collect::<Vec<_>>()
+            .join(" ")
+    }
+
     pub fn search_fts(&self, query: &str, limit: usize) -> Result<Vec<SkillSearchCandidate>> {
+        let match_query = Self::to_fts5_match_query(query);
+        if match_query.is_empty() {
+            return Ok(Vec::new());
+        }
         let mut stmt = self.conn.prepare(
             "SELECT s.id, s.source_layer, s.metadata_json, s.quality_score, s.is_deprecated
              FROM skills_fts f
@@ -534,7 +556,7 @@ impl Database {
              ORDER BY bm25(skills_fts)
              LIMIT ?",
         )?;
-        let rows = stmt.query_map(params![query, limit as i64], |row| {
+        let rows = stmt.query_map(params![match_query, limit as i64], |row| {
             Ok(SkillSearchCandidate {
                 id: row.get(0)?,
                 source_layer: row.get(1)?,
@@ -1820,6 +1842,51 @@ mod tests {
         assert_eq!(results[0].id, "rust-errors");
         assert_eq!(results[0].quality_score, 0.9);
         assert!(!results[0].is_deprecated);
+    }
+
+    /// Regression test: FTS5 syntax characters in a user query must not cause
+    /// an error.  Before the fix, `ms search "multi-agent"` raised
+    /// `no such column: agent` because `-` was parsed as an FTS5 operator.
+    #[test]
+    fn test_fts_search_special_characters() {
+        let dir = tempdir().unwrap();
+        let db = Database::open(dir.path().join("test.db")).unwrap();
+        let record = SkillRecord {
+            id: "agent-swarm".to_string(),
+            name: "Agent Swarm Launcher".to_string(),
+            description: "Coordinate a multi-agent swarm".to_string(),
+            version: Some("1.0.0".to_string()),
+            author: None,
+            source_path: "/skills/swarm".to_string(),
+            source_layer: "base".to_string(),
+            git_remote: None,
+            git_commit: None,
+            content_hash: "abc123".to_string(),
+            body: "Launch a multi-agent swarm and coordinate work".to_string(),
+            metadata_json: r#"{"tags":"multi-agent,swarm"}"#.to_string(),
+            assets_json: "{}".to_string(),
+            token_count: 100,
+            quality_score: 0.8,
+            indexed_at: "2026-01-01T00:00:00Z".to_string(),
+            modified_at: "2026-01-01T00:00:00Z".to_string(),
+            is_deprecated: false,
+            deprecation_reason: None,
+        };
+        db.upsert_skill(&record).unwrap();
+
+        // Each of these must return Ok — no panics, no FTS5 syntax errors.
+        for query in ["multi-agent", "a-b", "x-y-z", "a'b", "agent: swarm", "(swarm)"] {
+            db.search_fts(query, 10)
+                .unwrap_or_else(|e| panic!("query {query:?} should not error: {e}"));
+        }
+
+        // The hyphenated phrase must still find the matching skill.
+        let results = db.search_fts("multi-agent", 10).unwrap();
+        assert_eq!(results.len(), 1, "multi-agent query should find agent-swarm");
+        assert_eq!(results[0].id, "agent-swarm");
+
+        // A blank / whitespace-only query must return empty results, not error.
+        assert!(db.search_fts("   ", 10).unwrap().is_empty());
     }
 
     #[test]
