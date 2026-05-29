@@ -64,7 +64,7 @@ crossterm = "0.29.0"
 
 # High-performance text processing
 regex = "1.12.2"
-memchr = "2.7.6"
+memchr = "2.8.1"
 unicode-normalization = "0.1.25"
 reqwest = { version = "0.13.1", default-features = false, features = ["blocking", "json", "rustls"] }
 urlencoding = "2.1.3"
