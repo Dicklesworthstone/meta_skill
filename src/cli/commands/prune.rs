@@ -23,7 +23,9 @@ use crate::search::embeddings::VectorIndex;
 use crate::security::SafetyGate;
 use crate::storage::Database;
 use crate::storage::TombstoneManager;
-use rusqlite::params;
+use fsqlite::compat::{ConnectionExt, RowExt};
+
+use crate::ms_params as params;
 
 #[derive(Args, Debug)]
 pub struct PruneArgs {
@@ -1251,10 +1253,10 @@ fn load_all_skills(db: &Database) -> Result<Vec<crate::storage::sqlite::SkillRec
 }
 
 fn usage_since(db: &Database, skill_id: &str, cutoff: &str) -> Result<u64> {
-    let count: i64 = db.conn().query_row(
+    let count: i64 = db.conn().query_row_map(
         "SELECT COUNT(*) FROM skill_usage WHERE skill_id = ? AND used_at >= ?",
         params![skill_id, cutoff],
-        |row| row.get(0),
+        |row| row.get_typed::<i64>(0),
     )?;
     Ok(count.max(0) as u64)
 }

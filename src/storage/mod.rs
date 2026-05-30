@@ -5,6 +5,7 @@
 pub mod git;
 pub mod migrations;
 pub mod sqlite;
+pub mod sqlite_compat;
 pub mod tombstone;
 pub mod tx;
 

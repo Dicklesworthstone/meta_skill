@@ -6,8 +6,11 @@
 use std::path::PathBuf;
 use std::process::Command;
 
-use rusqlite::Connection;
+use fsqlite::Connection;
+use fsqlite::compat::{ConnectionExt, OptionalExtension, RowExt};
 use serde::{Deserialize, Serialize};
+
+use crate::ms_params as params;
 
 use crate::error::{MsError, Result};
 use crate::security::SafetyGate;
@@ -413,7 +416,10 @@ impl FingerprintCache {
 
     /// Open or create a fingerprint cache at the given path
     pub fn open(path: impl AsRef<std::path::Path>) -> Result<Self> {
-        let conn = Connection::open(path)?;
+        // fsqlite::Connection::open takes `impl Into<String>` instead of a
+        // `Path`, so go through the lossy stringification — the cache path
+        // always derives from a UTF-8 `PathBuf`.
+        let conn = Connection::open(path.as_ref().to_string_lossy().into_owned())?;
 
         // Create table if not exists
         conn.execute(
@@ -422,7 +428,6 @@ impl FingerprintCache {
                 content_hash TEXT NOT NULL,
                 updated_at TEXT NOT NULL DEFAULT (datetime('now'))
             )",
-            [],
         )?;
 
         Ok(Self { conn })
@@ -432,12 +437,12 @@ impl FingerprintCache {
     pub fn is_new_or_changed(&self, session_id: &str, content_hash: &str) -> Result<bool> {
         let cached_hash: Option<String> = self
             .conn
-            .query_row(
+            .query_row_map(
                 "SELECT content_hash FROM cass_fingerprints WHERE session_id = ?",
-                [session_id],
-                |row| row.get(0),
+                params![session_id],
+                |row| row.get_typed::<String>(0),
             )
-            .ok();
+            .optional()?;
 
         match cached_hash {
             None => Ok(true),                             // New session
@@ -448,39 +453,39 @@ impl FingerprintCache {
 
     /// Update the fingerprint for a session
     pub fn update(&self, session_id: &str, content_hash: &str) -> Result<()> {
-        self.conn.execute(
+        self.conn.execute_compat(
             "INSERT INTO cass_fingerprints (session_id, content_hash, updated_at)
              VALUES (?, ?, datetime('now'))
              ON CONFLICT(session_id) DO UPDATE SET
                 content_hash = excluded.content_hash,
                 updated_at = excluded.updated_at",
-            [session_id, content_hash],
+            params![session_id, content_hash],
         )?;
         Ok(())
     }
 
     /// Remove a fingerprint entry
     pub fn remove(&self, session_id: &str) -> Result<()> {
-        self.conn.execute(
+        self.conn.execute_compat(
             "DELETE FROM cass_fingerprints WHERE session_id = ?",
-            [session_id],
+            params![session_id],
         )?;
         Ok(())
     }
 
     /// Clear all fingerprints (force full rescan)
     pub fn clear(&self) -> Result<()> {
-        self.conn.execute("DELETE FROM cass_fingerprints", [])?;
+        self.conn.execute("DELETE FROM cass_fingerprints")?;
         Ok(())
     }
 
     /// Get count of cached fingerprints
     pub fn count(&self) -> Result<usize> {
-        let count: i64 =
-            self.conn
-                .query_row("SELECT COUNT(*) FROM cass_fingerprints", [], |row| {
-                    row.get(0)
-                })?;
+        let count: i64 = self.conn.query_row_map(
+            "SELECT COUNT(*) FROM cass_fingerprints",
+            params![],
+            |row| row.get_typed::<i64>(0),
+        )?;
         Ok(count as usize)
     }
 }

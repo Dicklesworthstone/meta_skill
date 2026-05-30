@@ -5,10 +5,13 @@
 
 use std::collections::{HashMap, HashSet, VecDeque};
 
+use fsqlite::Connection;
+use fsqlite::compat::{ConnectionExt, OptionalExtension, RowExt};
 use parking_lot::RwLock;
-use rusqlite::{Connection, params};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
+
+use crate::ms_params as params;
 
 use crate::core::resolution::{ResolutionWarning, ResolvedSkillSpec};
 use crate::core::skill::SkillSpec;
@@ -205,19 +208,19 @@ impl DependencyGraph {
     pub fn load_from_db(conn: &Connection) -> Result<Self> {
         let mut graph = Self::new();
 
-        let mut stmt = conn
-            .prepare("SELECT skill_id, depends_on, dependency_type FROM skill_dependency_graph")?;
+        let rows: Vec<(String, String, String)> = conn.query_map_collect(
+            "SELECT skill_id, depends_on, dependency_type FROM skill_dependency_graph",
+            params![],
+            |row| {
+                Ok((
+                    row.get_typed::<String>(0)?,
+                    row.get_typed::<String>(1)?,
+                    row.get_typed::<String>(2)?,
+                ))
+            },
+        )?;
 
-        let rows = stmt.query_map([], |row| {
-            Ok((
-                row.get::<_, String>(0)?,
-                row.get::<_, String>(1)?,
-                row.get::<_, String>(2)?,
-            ))
-        })?;
-
-        for row in rows {
-            let (skill_id, depends_on, dep_type) = row?;
+        for (skill_id, depends_on, dep_type) in rows {
             graph.add_dependency(&skill_id, &depends_on, &dep_type);
         }
 
@@ -227,18 +230,23 @@ impl DependencyGraph {
     /// Save to SQLite (replaces all data)
     pub fn save_to_db(&self, conn: &Connection) -> Result<()> {
         // Clear existing data
-        conn.execute("DELETE FROM skill_dependency_graph", [])?;
-
-        let mut stmt = conn.prepare(
-            "INSERT INTO skill_dependency_graph (skill_id, depends_on, dependency_type) VALUES (?, ?, ?)",
-        )?;
+        conn.execute("DELETE FROM skill_dependency_graph")?;
 
         for (skill_id, deps) in &self.dependencies {
             for dep in deps {
                 // Determine type based on whether it's extends or includes
                 // For simplicity, we'll store "dependency" - the exact type can be
-                // derived from the skill spec if needed
-                stmt.execute(params![skill_id, dep, "dependency"])?;
+                // derived from the skill spec if needed.
+                //
+                // fsqlite doesn't expose a reusable `PreparedStatement::execute`
+                // path via the compat layer, so each row goes through
+                // `execute_compat`. Internally fsqlite still caches prepared
+                // statements, so the per-row overhead is comparable to the
+                // rusqlite version.
+                conn.execute_compat(
+                    "INSERT INTO skill_dependency_graph (skill_id, depends_on, dependency_type) VALUES (?, ?, ?)",
+                    params![skill_id, dep, "dependency"],
+                )?;
             }
         }
 
@@ -252,7 +260,7 @@ impl DependencyGraph {
         depends_on: &str,
         dep_type: &str,
     ) -> Result<()> {
-        conn.execute(
+        conn.execute_compat(
             "INSERT OR REPLACE INTO skill_dependency_graph (skill_id, depends_on, dependency_type) VALUES (?, ?, ?)",
             params![skill_id, depends_on, dep_type],
         )?;
@@ -261,7 +269,7 @@ impl DependencyGraph {
 
     /// Remove skill dependencies from SQLite
     pub fn remove_skill_from_db(conn: &Connection, skill_id: &str) -> Result<()> {
-        conn.execute(
+        conn.execute_compat(
             "DELETE FROM skill_dependency_graph WHERE skill_id = ?",
             params![skill_id],
         )?;
@@ -311,36 +319,39 @@ impl ResolutionCache {
         let graph = DependencyGraph::load_from_db(conn)?;
         *self.dependency_graph.write() = graph;
 
-        // Load cached entries into memory
-        let mut stmt = conn.prepare(
-            "SELECT skill_id, resolved_json, cache_key_hash, inheritance_chain, \
-             included_from, dependency_hashes, warnings_json FROM resolved_skill_cache",
-        )?;
-
-        let rows = stmt.query_map([], |row| {
-            Ok((
-                row.get::<_, String>(0)?,
-                row.get::<_, String>(1)?,
-                row.get::<_, String>(2)?,
-                row.get::<_, String>(3)?,
-                row.get::<_, String>(4)?,
-                row.get::<_, String>(5)?,
-                row.get::<_, String>(6)?,
-            ))
-        })?;
+        // Load cached entries into memory. We collect the raw row tuples and
+        // then run the JSON decode pass in Rust so MsError::Serialization
+        // variants can be returned without trying to squeeze them through
+        // the FrankenError-only closure.
+        let rows: Vec<(String, String, String, String, String, String, String)> = conn
+            .query_map_collect(
+                "SELECT skill_id, resolved_json, cache_key_hash, inheritance_chain, \
+                 included_from, dependency_hashes, warnings_json FROM resolved_skill_cache",
+                params![],
+                |row| {
+                    Ok((
+                        row.get_typed::<String>(0)?,
+                        row.get_typed::<String>(1)?,
+                        row.get_typed::<String>(2)?,
+                        row.get_typed::<String>(3)?,
+                        row.get_typed::<String>(4)?,
+                        row.get_typed::<String>(5)?,
+                        row.get_typed::<String>(6)?,
+                    ))
+                },
+            )?;
 
         let mut memory = self.memory.write();
-        for row in rows {
-            let (
-                skill_id,
-                resolved_json,
-                cache_key_hash,
-                chain_json,
-                included_json,
-                dep_hashes_json,
-                warnings_json,
-            ) = row?;
-
+        for (
+            skill_id,
+            resolved_json,
+            cache_key_hash,
+            chain_json,
+            included_json,
+            dep_hashes_json,
+            warnings_json,
+        ) in rows
+        {
             let spec: SkillSpec = serde_json::from_str(&resolved_json)
                 .map_err(|e| MsError::Serialization(format!("failed to parse cached spec: {e}")))?;
             let inheritance_chain: Vec<String> =
@@ -402,76 +413,73 @@ impl ResolutionCache {
             return Ok(Some(entry));
         }
 
-        // Check SQLite
-        let mut stmt = conn.prepare(
-            "SELECT resolved_json, cache_key_hash, inheritance_chain, \
-             included_from, dependency_hashes, warnings_json FROM resolved_skill_cache WHERE skill_id = ?",
-        )?;
+        // Check SQLite. `query_row_map` returns `FrankenError::QueryReturnedNoRows`
+        // when the lookup misses; the compat `optional()` adapter converts that
+        // into `Ok(None)`.
+        let raw: Option<(String, String, String, String, String, String)> = conn
+            .query_row_map(
+                "SELECT resolved_json, cache_key_hash, inheritance_chain, \
+                 included_from, dependency_hashes, warnings_json FROM resolved_skill_cache WHERE skill_id = ?",
+                params![skill_id],
+                |row| {
+                    Ok((
+                        row.get_typed::<String>(0)?,
+                        row.get_typed::<String>(1)?,
+                        row.get_typed::<String>(2)?,
+                        row.get_typed::<String>(3)?,
+                        row.get_typed::<String>(4)?,
+                        row.get_typed::<String>(5)?,
+                    ))
+                },
+            )
+            .optional()?;
 
-        let result = stmt.query_row([skill_id], |row| {
-            Ok((
-                row.get::<_, String>(0)?,
-                row.get::<_, String>(1)?,
-                row.get::<_, String>(2)?,
-                row.get::<_, String>(3)?,
-                row.get::<_, String>(4)?,
-                row.get::<_, String>(5)?,
-            ))
-        });
+        let Some((
+            resolved_json,
+            cache_key_hash,
+            chain_json,
+            included_json,
+            dep_hashes_json,
+            warnings_json,
+        )) = raw
+        else {
+            return Ok(None);
+        };
 
-        match result {
-            Ok((
-                resolved_json,
-                cache_key_hash,
-                chain_json,
-                included_json,
-                dep_hashes_json,
-                warnings_json,
-            )) => {
-                let spec: SkillSpec = serde_json::from_str(&resolved_json).map_err(|e| {
-                    MsError::Serialization(format!("failed to parse cached spec: {e}"))
-                })?;
-                let inheritance_chain: Vec<String> =
-                    serde_json::from_str(&chain_json).map_err(|e| {
-                        MsError::Serialization(format!("failed to parse inheritance chain: {e}"))
-                    })?;
-                let included_from: Vec<String> =
-                    serde_json::from_str(&included_json).map_err(|e| {
-                        MsError::Serialization(format!("failed to parse included_from: {e}"))
-                    })?;
-                let dependency_hashes: HashMap<String, String> =
-                    serde_json::from_str(&dep_hashes_json).map_err(|e| {
-                        MsError::Serialization(format!("failed to parse dependency hashes: {e}"))
-                    })?;
-                let warnings: Vec<ResolutionWarning> = serde_json::from_str(&warnings_json)
-                    .map_err(|e| {
-                        MsError::Serialization(format!("failed to parse warnings: {e}"))
-                    })?;
+        let spec: SkillSpec = serde_json::from_str(&resolved_json)
+            .map_err(|e| MsError::Serialization(format!("failed to parse cached spec: {e}")))?;
+        let inheritance_chain: Vec<String> = serde_json::from_str(&chain_json).map_err(|e| {
+            MsError::Serialization(format!("failed to parse inheritance chain: {e}"))
+        })?;
+        let included_from: Vec<String> = serde_json::from_str(&included_json)
+            .map_err(|e| MsError::Serialization(format!("failed to parse included_from: {e}")))?;
+        let dependency_hashes: HashMap<String, String> = serde_json::from_str(&dep_hashes_json)
+            .map_err(|e| {
+                MsError::Serialization(format!("failed to parse dependency hashes: {e}"))
+            })?;
+        let warnings: Vec<ResolutionWarning> = serde_json::from_str(&warnings_json)
+            .map_err(|e| MsError::Serialization(format!("failed to parse warnings: {e}")))?;
 
-                // Validate dependency hashes
-                if dependency_hashes != *current_dependency_hashes {
-                    return Ok(None);
-                }
-
-                let entry = CachedResolvedSkill {
-                    spec,
-                    inheritance_chain,
-                    included_from,
-                    warnings,
-                    cache_key_hash,
-                    dependency_hashes,
-                };
-
-                // Update memory cache
-                self.memory
-                    .write()
-                    .insert(skill_id.to_string(), entry.clone());
-
-                Ok(Some(entry))
-            }
-            Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
-            Err(e) => Err(e.into()),
+        // Validate dependency hashes
+        if dependency_hashes != *current_dependency_hashes {
+            return Ok(None);
         }
+
+        let entry = CachedResolvedSkill {
+            spec,
+            inheritance_chain,
+            included_from,
+            warnings,
+            cache_key_hash,
+            dependency_hashes,
+        };
+
+        // Update memory cache
+        self.memory
+            .write()
+            .insert(skill_id.to_string(), entry.clone());
+
+        Ok(Some(entry))
     }
 
     /// Cache a resolved skill
@@ -526,7 +534,7 @@ impl ResolutionCache {
         let dep_hashes_json = serde_json::to_string(&dependency_hashes)?;
         let warnings_json = serde_json::to_string(&resolved.warnings)?;
 
-        conn.execute(
+        conn.execute_compat(
             "INSERT OR REPLACE INTO resolved_skill_cache \
              (skill_id, resolved_json, cache_key_hash, inheritance_chain, included_from, dependency_hashes, warnings_json) \
              VALUES (?, ?, ?, ?, ?, ?, ?)",
@@ -587,13 +595,13 @@ impl ResolutionCache {
         let dependents = self.invalidate(skill_id);
 
         // Remove from SQLite
-        conn.execute(
+        conn.execute_compat(
             "DELETE FROM resolved_skill_cache WHERE skill_id = ?",
             params![skill_id],
         )?;
 
         for dependent in &dependents {
-            conn.execute(
+            conn.execute_compat(
                 "DELETE FROM resolved_skill_cache WHERE skill_id = ?",
                 params![dependent],
             )?;
@@ -620,7 +628,7 @@ impl ResolutionCache {
     /// * `compute_hash` - Function to compute content hash for a skill ID
     pub fn get_or_resolve<R, F>(
         &self,
-        conn: &rusqlite::Connection,
+        conn: &Connection,
         skill_id: &str,
         raw_spec: &crate::core::skill::SkillSpec,
         repository: &R,
@@ -674,8 +682,8 @@ impl ResolutionCache {
     /// Clear all cache entries including SQLite
     pub fn clear_db(&self, conn: &Connection) -> Result<()> {
         self.clear();
-        conn.execute("DELETE FROM resolved_skill_cache", [])?;
-        conn.execute("DELETE FROM skill_dependency_graph", [])?;
+        conn.execute("DELETE FROM resolved_skill_cache")?;
+        conn.execute("DELETE FROM skill_dependency_graph")?;
         Ok(())
     }
 

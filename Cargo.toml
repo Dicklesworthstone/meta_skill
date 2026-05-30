@@ -43,8 +43,12 @@ serde_yaml = "0.9.34"
 toml = "1.0.7"
 toon_rust = { package = "tru", git = "https://github.com/Dicklesworthstone/toon_rust" }
 
-# Database
-rusqlite = { version = "0.39.0", features = ["bundled", "modern_sqlite"] }
+# Database — migrated from rusqlite per project-wide policy
+# ("NEVER use rusqlite — frankensqlite ONLY", meta_skill#106).
+# `fsqlite` is the public facade crate published on crates.io.
+fsqlite = { version = "0.1.5", features = ["fts5"] }
+fsqlite-types = "0.1.5"
+fsqlite-error = "0.1.5"
 
 # Search
 tantivy = "0.26.1"
@@ -122,6 +126,12 @@ criterion = { version = "0.8.2", features = ["html_reports"] }
 proptest = "1.9.0"
 proptest-derive = "0.8.0"
 httpmock = "0.8.2"
+# rusqlite is retained as a dev-only dependency for the integration/e2e
+# fixtures in `tests/` that read meta_skill's on-disk SQLite files using the
+# classic C-SQLite implementation. All production storage goes through
+# `fsqlite` per the project-wide "NEVER use rusqlite — frankensqlite ONLY"
+# policy (see meta_skill#106).
+rusqlite = { version = "0.39.0", features = ["bundled", "modern_sqlite"] }
 
 [features]
 default = []

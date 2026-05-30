@@ -1,6 +1,6 @@
 //! Database migrations
 
-use rusqlite::Connection;
+use fsqlite::Connection;
 
 use crate::error::{MsError, Result};
 
@@ -23,8 +23,11 @@ pub const SCHEMA_VERSION: u32 = MIGRATIONS.len() as u32;
 
 /// Run all migrations on the database
 pub fn run_migrations(conn: &Connection) -> Result<u32> {
+    use fsqlite::compat::RowExt;
+
     let current_version: u32 = conn
-        .query_row("PRAGMA user_version;", [], |row| row.get(0))
+        .query_row("PRAGMA user_version;")
+        .and_then(|row| row.get_typed::<u32>(0))
         .map_err(|err| MsError::TransactionFailed(err.to_string()))?;
 
     for (idx, sql) in MIGRATIONS.iter().enumerate() {
@@ -36,7 +39,10 @@ pub fn run_migrations(conn: &Connection) -> Result<u32> {
         conn.execute_batch(sql).map_err(|err| {
             MsError::TransactionFailed(format!("migration {target_version} failed: {err}"))
         })?;
-        conn.pragma_update(None, "user_version", target_version)
+        // fsqlite has no `pragma_update` analogue; PRAGMA writes are issued as
+        // plain SQL statements through `execute`. This matches how the rest of
+        // the fsqlite ecosystem (beads_rust, frankensearch) sets user_version.
+        conn.execute(&format!("PRAGMA user_version = {target_version}"))
             .map_err(|err| {
                 MsError::TransactionFailed(format!(
                     "failed to set user_version {target_version}: {err}"
@@ -52,7 +58,9 @@ mod tests {
     use super::*;
 
     fn get_user_version(conn: &Connection) -> u32 {
-        conn.query_row("PRAGMA user_version;", [], |row| row.get(0))
+        use fsqlite::compat::RowExt;
+        conn.query_row("PRAGMA user_version;")
+            .and_then(|row| row.get_typed::<u32>(0))
             .unwrap()
     }
 
@@ -102,9 +110,16 @@ mod tests {
     // run_migrations tests
     // =========================================================================
 
+    fn count_via_query(conn: &Connection, sql: &str) -> i64 {
+        use fsqlite::compat::RowExt;
+        conn.query_row(sql)
+            .and_then(|row| row.get_typed::<i64>(0))
+            .unwrap()
+    }
+
     #[test]
     fn run_migrations_on_empty_database() {
-        let conn = Connection::open_in_memory().unwrap();
+        let conn = Connection::open(":memory:").unwrap();
         assert_eq!(get_user_version(&conn), 0);
 
         let result = run_migrations(&conn).unwrap();
@@ -114,7 +129,7 @@ mod tests {
 
     #[test]
     fn run_migrations_is_idempotent() {
-        let conn = Connection::open_in_memory().unwrap();
+        let conn = Connection::open(":memory:").unwrap();
 
         // Run migrations twice
         let result1 = run_migrations(&conn).unwrap();
@@ -128,7 +143,7 @@ mod tests {
 
     #[test]
     fn run_migrations_multiple_times() {
-        let conn = Connection::open_in_memory().unwrap();
+        let conn = Connection::open(":memory:").unwrap();
 
         // Run migrations 5 times
         for _ in 0..5 {
@@ -139,13 +154,13 @@ mod tests {
 
     #[test]
     fn run_migrations_already_at_latest() {
-        let conn = Connection::open_in_memory().unwrap();
+        let conn = Connection::open(":memory:").unwrap();
 
         // Run migrations to bring database to latest version
         run_migrations(&conn).unwrap();
 
         // Set version to latest (it should already be, but explicitly confirm)
-        conn.pragma_update(None, "user_version", &SCHEMA_VERSION)
+        conn.execute(&format!("PRAGMA user_version = {SCHEMA_VERSION}"))
             .unwrap();
 
         // Running again should be a no-op
@@ -155,7 +170,7 @@ mod tests {
 
     #[test]
     fn run_migrations_noop_when_fully_migrated() {
-        let conn = Connection::open_in_memory().unwrap();
+        let conn = Connection::open(":memory:").unwrap();
 
         // Run initial migrations
         run_migrations(&conn).unwrap();
@@ -168,50 +183,41 @@ mod tests {
 
     #[test]
     fn run_migrations_creates_skills_table() {
-        let conn = Connection::open_in_memory().unwrap();
+        let conn = Connection::open(":memory:").unwrap();
         run_migrations(&conn).unwrap();
 
         // Verify skills table exists
-        let count: i64 = conn
-            .query_row(
-                "SELECT count(*) FROM sqlite_master WHERE type='table' AND name='skills'",
-                [],
-                |row| row.get(0),
-            )
-            .unwrap();
+        let count = count_via_query(
+            &conn,
+            "SELECT count(*) FROM sqlite_master WHERE type='table' AND name='skills'",
+        );
         assert_eq!(count, 1);
     }
 
     #[test]
     fn run_migrations_creates_tables() {
-        let conn = Connection::open_in_memory().unwrap();
+        let conn = Connection::open(":memory:").unwrap();
         run_migrations(&conn).unwrap();
 
         // Count the number of tables created
-        let count: i64 = conn
-            .query_row(
-                "SELECT count(*) FROM sqlite_master WHERE type='table'",
-                [],
-                |row| row.get(0),
-            )
-            .unwrap();
+        let count = count_via_query(
+            &conn,
+            "SELECT count(*) FROM sqlite_master WHERE type='table'",
+        );
         // Should have created multiple tables
         assert!(count >= 3, "Expected at least 3 tables, got {count}");
     }
 
     #[test]
     fn run_migrations_creates_indexes() {
-        let conn = Connection::open_in_memory().unwrap();
+        let conn = Connection::open(":memory:").unwrap();
         run_migrations(&conn).unwrap();
 
         // Count the number of indexes created
-        let count: i64 = conn
-            .query_row(
-                "SELECT count(*) FROM sqlite_master WHERE type='index'",
-                [],
-                |row| row.get(0),
-            )
-            .unwrap();
+        let count = count_via_query(
+            &conn,
+            "SELECT count(*) FROM sqlite_master WHERE type='index'",
+        );
         // Should have created some indexes
         assert!(count >= 1, "Expected at least 1 index, got {count}");
     }

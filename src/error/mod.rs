@@ -22,7 +22,7 @@ pub use suggestions::{suggest_for_error, suggest_similar_skills};
 #[derive(Error, Debug)]
 pub enum MsError {
     #[error("Database error: {0}")]
-    Database(#[from] rusqlite::Error),
+    Database(#[from] fsqlite_error::FrankenError),
 
     #[error("Git error: {0}")]
     Git(#[from] git2::Error),

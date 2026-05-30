@@ -1,15 +1,42 @@
 //! `SQLite` database layer
+//!
+//! Backed by [`fsqlite`] (frankensqlite). The compat module provides the
+//! `params!`-style binding helpers, `query_row_map`/`query_map_collect`
+//! adapters, and the `RowExt`/`OptionalExtension` traits needed for
+//! rusqlite-style ergonomics.
 
 use std::path::Path;
 
+use fsqlite::Connection;
+use fsqlite::Row;
+use fsqlite::compat::{ConnectionExt, RowExt};
+use fsqlite_error::FrankenError;
 use half::f16;
-use rusqlite::{Connection, Row, params};
 use serde_json::Value as JsonValue;
 use uuid::Uuid;
 
 use crate::error::{MsError, Result};
+use crate::ms_params as params;
 use crate::security::{CommandSafetyEvent, QuarantineRecord};
 use crate::storage::migrations;
+
+/// Convenience type alias for row decoders. fsqlite's row mappers return
+/// `FrankenError` so closures can use `?` against `get_typed` cleanly.
+type RowResult<T> = std::result::Result<T, FrankenError>;
+
+/// Raw row tuple for `command_safety_events`. The `Option<String>` columns
+/// are NULL-able in the schema; the JSON-bearing `decision_json` is
+/// post-processed in Rust because `serde_json::from_str` can fail with
+/// `MsError::Serialization`, which doesn't fit through the FrankenError-only
+/// mapper closure.
+type CommandSafetyRawRow = (
+    Option<String>, // session_id
+    String,         // command
+    Option<String>, // dcg_version
+    Option<String>, // dcg_pack
+    String,         // decision_json
+    String,         // created_at
+);
 
 /// `SQLite` database wrapper for skill registry
 pub struct Database {
@@ -163,7 +190,11 @@ impl Database {
             std::fs::create_dir_all(parent)?;
         }
 
-        let conn = Connection::open(path)?;
+        // fsqlite::Connection::open takes `impl Into<String>` rather than
+        // `Path`, so go through the lossy stringification (the path always
+        // comes from a `PathBuf` or `&Path` derived from valid UTF-8 inputs
+        // here).
+        let conn = Connection::open(path.to_string_lossy().into_owned())?;
 
         Self::configure_pragmas(&conn)?;
         let schema_version = migrations::run_migrations(&conn)?;
@@ -185,39 +216,34 @@ impl Database {
     }
 
     pub fn get_skill(&self, id: &str) -> Result<Option<SkillRecord>> {
-        let mut stmt = self.conn.prepare(
-            "SELECT id, name, description, version, author, source_path, source_layer, \
+        use fsqlite::compat::OptionalExtension;
+        let sql = "SELECT id, name, description, version, author, source_path, source_layer, \
              git_remote, git_commit, content_hash, body, metadata_json, assets_json, \
              token_count, quality_score, indexed_at, modified_at, is_deprecated, deprecation_reason \
-             FROM skills WHERE id = ?",
-        )?;
-        let mut rows = stmt.query([id])?;
-        if let Some(row) = rows.next()? {
-            return Ok(Some(skill_from_row(row)?));
-        }
-        Ok(None)
+             FROM skills WHERE id = ?";
+        let result = self
+            .conn
+            .query_row_map(sql, params![id], skill_from_row)
+            .optional()?;
+        Ok(result)
     }
 
     pub fn list_skills(&self, limit: usize, offset: usize) -> Result<Vec<SkillRecord>> {
-        let mut stmt = self.conn.prepare(
-            "SELECT id, name, description, version, author, source_path, source_layer, \
+        let sql = "SELECT id, name, description, version, author, source_path, source_layer, \
              git_remote, git_commit, content_hash, body, metadata_json, assets_json, \
              token_count, quality_score, indexed_at, modified_at, is_deprecated, deprecation_reason \
-             FROM skills ORDER BY modified_at DESC LIMIT ? OFFSET ?",
+             FROM skills ORDER BY modified_at DESC LIMIT ? OFFSET ?";
+        let results = self.conn.query_map_collect(
+            sql,
+            params![limit as i64, offset as i64],
+            skill_from_row,
         )?;
-        let rows = stmt.query_map(params![limit as i64, offset as i64], |row| {
-            skill_from_row(row)
-        })?;
-        let mut results = Vec::new();
-        for row in rows {
-            results.push(row?);
-        }
         Ok(results)
     }
 
     /// Update quality score for a skill.
     pub fn update_skill_quality(&self, skill_id: &str, quality_score: f64) -> Result<()> {
-        self.conn.execute(
+        self.conn.execute_compat(
             "UPDATE skills SET quality_score = ? WHERE id = ?",
             params![quality_score, skill_id],
         )?;
@@ -231,7 +257,7 @@ impl Database {
         is_deprecated: bool,
         reason: Option<&str>,
     ) -> Result<()> {
-        self.conn.execute(
+        self.conn.execute_compat(
             "UPDATE skills SET is_deprecated = ?, deprecation_reason = ? WHERE id = ?",
             params![i32::from(is_deprecated), reason, skill_id],
         )?;
@@ -240,10 +266,10 @@ impl Database {
 
     /// Count usage events for a skill.
     pub fn count_skill_usage(&self, skill_id: &str) -> Result<u64> {
-        let count: i64 = self.conn.query_row(
+        let count: i64 = self.conn.query_row_map(
             "SELECT COUNT(*) FROM skill_usage WHERE skill_id = ?",
-            [skill_id],
-            |row| row.get(0),
+            params![skill_id],
+            |row| row.get_typed::<i64>(0),
         )?;
         Ok(count.max(0) as u64)
     }
@@ -263,42 +289,41 @@ impl Database {
         // Get total loads
         let total_loads: i64 =
             self.conn
-                .query_row("SELECT COUNT(*) FROM skill_usage", [], |row| row.get(0))?;
+                .query_row_map("SELECT COUNT(*) FROM skill_usage", params![], |row| {
+                    row.get_typed::<i64>(0)
+                })?;
 
         // Get per-skill load counts
-        let mut stmt = self
-            .conn
-            .prepare("SELECT skill_id, COUNT(*) as count FROM skill_usage GROUP BY skill_id")?;
-        let counts: Result<HashMap<String, u64>> = stmt
-            .query_map([], |row| {
-                let skill_id: String = row.get(0)?;
-                let count: i64 = row.get(1)?;
+        let counts: Vec<(String, u64)> = self.conn.query_map_collect(
+            "SELECT skill_id, COUNT(*) as count FROM skill_usage GROUP BY skill_id",
+            params![],
+            |row| {
+                let skill_id: String = row.get_typed(0)?;
+                let count: i64 = row.get_typed(1)?;
                 Ok((skill_id, count.max(0) as u64))
-            })?
-            .map(|r| r.map_err(Into::into))
-            .collect();
-        let skill_load_counts = counts?;
-
-        // Get per-skill last load timestamps
-        let mut stmt = self.conn.prepare(
-            "SELECT skill_id, MAX(used_at) as last_used FROM skill_usage GROUP BY skill_id",
+            },
         )?;
-        let last_loads: Result<HashMap<String, chrono::DateTime<chrono::Utc>>> = stmt
-            .query_map([], |row| {
-                let skill_id: String = row.get(0)?;
-                let used_at: String = row.get(1)?;
+        let skill_load_counts: HashMap<String, u64> = counts.into_iter().collect();
+
+        // Get per-skill last load timestamps (as raw rows; date parsing is
+        // best-effort and discards rows we can't decode).
+        let raw_last: Vec<(String, String)> = self.conn.query_map_collect(
+            "SELECT skill_id, MAX(used_at) as last_used FROM skill_usage GROUP BY skill_id",
+            params![],
+            |row| {
+                let skill_id: String = row.get_typed(0)?;
+                let used_at: String = row.get_typed(1)?;
                 Ok((skill_id, used_at))
-            })?
-            .filter_map(|r| {
-                r.ok().and_then(|(skill_id, used_at)| {
-                    chrono::DateTime::parse_from_rfc3339(&used_at)
-                        .ok()
-                        .map(|dt| (skill_id, dt.with_timezone(&chrono::Utc)))
-                })
+            },
+        )?;
+        let skill_last_load: HashMap<String, chrono::DateTime<chrono::Utc>> = raw_last
+            .into_iter()
+            .filter_map(|(skill_id, used_at)| {
+                chrono::DateTime::parse_from_rfc3339(&used_at)
+                    .ok()
+                    .map(|dt| (skill_id, dt.with_timezone(&chrono::Utc)))
             })
-            .map(Ok)
             .collect();
-        let skill_last_load = last_loads?;
 
         Ok((
             total_loads.max(0) as u64,
@@ -327,7 +352,7 @@ impl Database {
             None
         };
 
-        self.conn.execute(
+        self.conn.execute_compat(
             "INSERT INTO skill_usage (
                 skill_id, project_path, used_at, disclosure_level, context_keywords, success_signal, experiment_id, variant_id
              ) VALUES (?, ?, ?, ?, ?, NULL, ?, ?)",
@@ -346,16 +371,16 @@ impl Database {
 
     /// Count evidence records for a skill.
     pub fn count_skill_evidence(&self, skill_id: &str) -> Result<u64> {
-        let count: i64 = self.conn.query_row(
+        let count: i64 = self.conn.query_row_map(
             "SELECT COUNT(*) FROM skill_evidence WHERE skill_id = ?",
-            [skill_id],
-            |row| row.get(0),
+            params![skill_id],
+            |row| row.get_typed::<i64>(0),
         )?;
         Ok(count.max(0) as u64)
     }
 
     pub fn upsert_skill(&self, skill: &SkillRecord) -> Result<()> {
-        self.conn.execute(
+        self.conn.execute_compat(
             "INSERT INTO skills (
                 id, name, description, version, author, source_path, source_layer,
                 git_remote, git_commit, content_hash, body, metadata_json, assets_json,
@@ -408,37 +433,43 @@ impl Database {
     }
 
     pub fn delete_skill(&self, id: &str) -> Result<()> {
-        self.conn.execute("DELETE FROM skills WHERE id = ?", [id])?;
+        self.conn
+            .execute_compat("DELETE FROM skills WHERE id = ?", params![id])?;
         Ok(())
     }
 
     /// Delete a skill only if it has pending status
     pub fn delete_pending_skill(&self, id: &str) -> Result<()> {
-        self.conn.execute(
+        self.conn.execute_compat(
             "DELETE FROM skills WHERE id = ? AND source_path = 'pending'",
-            [id],
+            params![id],
         )?;
         Ok(())
     }
 
     /// Delete a transaction record from `tx_log`
     pub fn delete_tx_record(&self, id: &str) -> Result<()> {
-        self.conn.execute("DELETE FROM tx_log WHERE id = ?", [id])?;
+        self.conn
+            .execute_compat("DELETE FROM tx_log WHERE id = ?", params![id])?;
         Ok(())
     }
 
     pub fn resolve_alias(&self, alias: &str) -> Result<Option<AliasResolution>> {
-        let mut stmt = self
+        use fsqlite::compat::OptionalExtension;
+        let result = self
             .conn
-            .prepare("SELECT skill_id, alias_type FROM skill_aliases WHERE alias = ?")?;
-        let mut rows = stmt.query([alias])?;
-        if let Some(row) = rows.next()? {
-            return Ok(Some(AliasResolution {
-                canonical_id: row.get(0)?,
-                alias_type: row.get(1)?,
-            }));
-        }
-        Ok(None)
+            .query_row_map(
+                "SELECT skill_id, alias_type FROM skill_aliases WHERE alias = ?",
+                params![alias],
+                |row| {
+                    Ok(AliasResolution {
+                        canonical_id: row.get_typed(0)?,
+                        alias_type: row.get_typed(1)?,
+                    })
+                },
+            )
+            .optional()?;
+        Ok(result)
     }
 
     pub fn upsert_alias(
@@ -448,7 +479,7 @@ impl Database {
         alias_type: &str,
         created_at: &str,
     ) -> Result<()> {
-        self.conn.execute(
+        self.conn.execute_compat(
             "INSERT INTO skill_aliases (alias, skill_id, alias_type, created_at)
              VALUES (?, ?, ?, ?)
              ON CONFLICT(alias) DO UPDATE SET
@@ -464,64 +495,55 @@ impl Database {
     pub fn delete_alias(&self, alias: &str) -> Result<bool> {
         let count = self
             .conn
-            .execute("DELETE FROM skill_aliases WHERE alias = ?", [alias])?;
+            .execute_compat("DELETE FROM skill_aliases WHERE alias = ?", params![alias])?;
         Ok(count > 0)
     }
 
     /// List all aliases, optionally filtered by `skill_id`
     pub fn list_aliases(&self, skill_id: Option<&str>) -> Result<Vec<AliasRecord>> {
-        let mut records = Vec::new();
-
-        if let Some(sid) = skill_id {
-            let mut stmt = self.conn.prepare(
+        let records = if let Some(sid) = skill_id {
+            self.conn.query_map_collect(
                 "SELECT alias, skill_id, alias_type, created_at
                  FROM skill_aliases
                  WHERE skill_id = ?
                  ORDER BY alias",
-            )?;
-            let rows = stmt.query_map([sid], |row| {
-                Ok(AliasRecord {
-                    alias: row.get(0)?,
-                    skill_id: row.get(1)?,
-                    alias_type: row.get(2)?,
-                    created_at: row.get(3)?,
-                })
-            })?;
-            for row in rows {
-                records.push(row?);
-            }
+                params![sid],
+                |row| {
+                    Ok(AliasRecord {
+                        alias: row.get_typed(0)?,
+                        skill_id: row.get_typed(1)?,
+                        alias_type: row.get_typed(2)?,
+                        created_at: row.get_typed(3)?,
+                    })
+                },
+            )?
         } else {
-            let mut stmt = self.conn.prepare(
+            self.conn.query_map_collect(
                 "SELECT alias, skill_id, alias_type, created_at
                  FROM skill_aliases
                  ORDER BY skill_id, alias",
-            )?;
-            let rows = stmt.query_map([], |row| {
-                Ok(AliasRecord {
-                    alias: row.get(0)?,
-                    skill_id: row.get(1)?,
-                    alias_type: row.get(2)?,
-                    created_at: row.get(3)?,
-                })
-            })?;
-            for row in rows {
-                records.push(row?);
-            }
-        }
+                params![],
+                |row| {
+                    Ok(AliasRecord {
+                        alias: row.get_typed(0)?,
+                        skill_id: row.get_typed(1)?,
+                        alias_type: row.get_typed(2)?,
+                        created_at: row.get_typed(3)?,
+                    })
+                },
+            )?
+        };
 
         Ok(records)
     }
 
     /// Get aliases for a specific skill
     pub fn get_aliases_for_skill(&self, skill_id: &str) -> Result<Vec<String>> {
-        let mut stmt = self
-            .conn
-            .prepare("SELECT alias FROM skill_aliases WHERE skill_id = ? ORDER BY alias")?;
-        let rows = stmt.query_map([skill_id], |row| row.get(0))?;
-        let mut aliases = Vec::new();
-        for row in rows {
-            aliases.push(row?);
-        }
+        let aliases = self.conn.query_map_collect(
+            "SELECT alias FROM skill_aliases WHERE skill_id = ? ORDER BY alias",
+            params![skill_id],
+            |row| row.get_typed::<String>(0),
+        )?;
         Ok(aliases)
     }
 
@@ -548,46 +570,47 @@ impl Database {
         if match_query.is_empty() {
             return Ok(Vec::new());
         }
-        let mut stmt = self.conn.prepare(
+        let candidates = self.conn.query_map_collect(
             "SELECT s.id, s.source_layer, s.metadata_json, s.quality_score, s.is_deprecated
              FROM skills_fts f
              JOIN skills s ON s.rowid = f.rowid
              WHERE skills_fts MATCH ?
              ORDER BY bm25(skills_fts)
              LIMIT ?",
+            params![match_query, limit as i64],
+            |row| {
+                Ok(SkillSearchCandidate {
+                    id: row.get_typed(0)?,
+                    source_layer: row.get_typed(1)?,
+                    metadata_json: row.get_typed(2)?,
+                    quality_score: row.get_typed(3)?,
+                    is_deprecated: row.get_typed::<i64>(4)? != 0,
+                })
+            },
         )?;
-        let rows = stmt.query_map(params![match_query, limit as i64], |row| {
-            Ok(SkillSearchCandidate {
-                id: row.get(0)?,
-                source_layer: row.get(1)?,
-                metadata_json: row.get(2)?,
-                quality_score: row.get(3)?,
-                is_deprecated: row.get::<_, i64>(4)? != 0,
-            })
-        })?;
-        let mut candidates = Vec::new();
-        for row in rows {
-            candidates.push(row?);
-        }
         Ok(candidates)
     }
 
     pub fn get_skill_candidate(&self, id: &str) -> Result<Option<SkillSearchCandidate>> {
-        let mut stmt = self.conn.prepare(
-            "SELECT id, source_layer, metadata_json, quality_score, is_deprecated
-             FROM skills WHERE id = ?",
-        )?;
-        let mut rows = stmt.query([id])?;
-        if let Some(row) = rows.next()? {
-            return Ok(Some(SkillSearchCandidate {
-                id: row.get(0)?,
-                source_layer: row.get(1)?,
-                metadata_json: row.get(2)?,
-                quality_score: row.get(3)?,
-                is_deprecated: row.get::<_, i64>(4)? != 0,
-            }));
-        }
-        Ok(None)
+        use fsqlite::compat::OptionalExtension;
+        let result = self
+            .conn
+            .query_row_map(
+                "SELECT id, source_layer, metadata_json, quality_score, is_deprecated
+                 FROM skills WHERE id = ?",
+                params![id],
+                |row| {
+                    Ok(SkillSearchCandidate {
+                        id: row.get_typed(0)?,
+                        source_layer: row.get_typed(1)?,
+                        metadata_json: row.get_typed(2)?,
+                        quality_score: row.get_typed(3)?,
+                        is_deprecated: row.get_typed::<i64>(4)? != 0,
+                    })
+                },
+            )
+            .optional()?;
+        Ok(result)
     }
 
     pub fn upsert_embedding(&self, record: &EmbeddingRecord) -> Result<()> {
@@ -606,7 +629,7 @@ impl Database {
             record.computed_at.clone()
         };
 
-        self.conn.execute(
+        self.conn.execute_compat(
             "INSERT INTO skill_embeddings (
                 skill_id, embedding, dims, embedder_type, content_hash, computed_at, created_at
              ) VALUES (?, ?, ?, ?, ?, ?, ?)
@@ -630,16 +653,21 @@ impl Database {
     }
 
     pub fn get_embedding(&self, skill_id: &str) -> Result<Option<EmbeddingRecord>> {
-        let mut stmt = self.conn.prepare(
-            "SELECT skill_id, embedding, dims, embedder_type, content_hash, computed_at, created_at
-             FROM skill_embeddings
-             WHERE skill_id = ?",
-        )?;
-        let mut rows = stmt.query([skill_id])?;
-        if let Some(row) = rows.next()? {
-            return Ok(Some(embedding_from_row(row)?));
+        use fsqlite::compat::OptionalExtension;
+        let raw = self
+            .conn
+            .query_row_map(
+                "SELECT skill_id, embedding, dims, embedder_type, content_hash, computed_at, created_at
+                 FROM skill_embeddings
+                 WHERE skill_id = ?",
+                params![skill_id],
+                embedding_raw_row,
+            )
+            .optional()?;
+        match raw {
+            Some(raw) => Ok(Some(decode_raw_embedding(raw)?)),
+            None => Ok(None),
         }
-        Ok(None)
     }
 
     pub fn get_embedding_by_hash(
@@ -648,53 +676,48 @@ impl Database {
         embedder_type: &str,
         dims: usize,
     ) -> Result<Option<EmbeddingRecord>> {
-        let mut stmt = self.conn.prepare(
-            "SELECT skill_id, embedding, dims, embedder_type, content_hash, computed_at, created_at
-             FROM skill_embeddings
-             WHERE content_hash = ? AND embedder_type = ? AND dims = ?
-             LIMIT 1",
-        )?;
-        let mut rows = stmt.query(params![content_hash, embedder_type, dims as i64])?;
-        if let Some(row) = rows.next()? {
-            return Ok(Some(embedding_from_row(row)?));
+        use fsqlite::compat::OptionalExtension;
+        let raw = self
+            .conn
+            .query_row_map(
+                "SELECT skill_id, embedding, dims, embedder_type, content_hash, computed_at, created_at
+                 FROM skill_embeddings
+                 WHERE content_hash = ? AND embedder_type = ? AND dims = ?
+                 LIMIT 1",
+                params![content_hash, embedder_type, dims as i64],
+                embedding_raw_row,
+            )
+            .optional()?;
+        match raw {
+            Some(raw) => Ok(Some(decode_raw_embedding(raw)?)),
+            None => Ok(None),
         }
-        Ok(None)
     }
 
     /// Efficiently load all embeddings for the vector index.
     /// Returns pairs of (`skill_id`, `embedding_vector`).
     pub fn get_all_embeddings(&self) -> Result<Vec<(String, Vec<f32>)>> {
-        let mut stmt = self
-            .conn
-            .prepare("SELECT skill_id, embedding, dims FROM skill_embeddings")?;
+        // Pull (skill_id, raw_blob, dims) into Rust-land via fsqlite, then
+        // decode outside the SQL row loop so we can surface the rich
+        // MsError::Serialization variant on bad blobs (FrankenError doesn't
+        // carry an arbitrary downcast like rusqlite's
+        // FromSqlConversionFailure did).
+        let raw: Vec<(String, Vec<u8>, i64)> = self.conn.query_map_collect(
+            "SELECT skill_id, embedding, dims FROM skill_embeddings",
+            params![],
+            |row| {
+                let skill_id: String = row.get_typed(0)?;
+                let blob: Vec<u8> = row.get_typed(1)?;
+                let dims: i64 = row.get_typed(2)?;
+                Ok((skill_id, blob, dims))
+            },
+        )?;
 
-        let rows = stmt.query_map([], |row| {
-            let skill_id: String = row.get(0)?;
-            let blob: Vec<u8> = row.get(1)?;
-            let dims: i64 = row.get(2)?;
+        let mut results = Vec::with_capacity(raw.len());
+        for (skill_id, blob, dims) in raw {
             let dims_usize = if dims <= 0 { 0 } else { dims as usize };
-
-            // We have to decode inside the closure or return the blob to decode outside.
-            // Decoding here is cleaner but might hold the lock longer.
-            // Given we are reading everything, holding the lock is expected.
-            let embedding = match decode_embedding_f16(&blob, dims_usize) {
-                Ok(vec) => vec,
-                Err(e) => {
-                    // Map error to sqlite failure to propagate
-                    return Err(rusqlite::Error::FromSqlConversionFailure(
-                        1,
-                        rusqlite::types::Type::Blob,
-                        Box::new(e),
-                    ));
-                }
-            };
-
-            Ok((skill_id, embedding))
-        })?;
-
-        let mut results = Vec::new();
-        for row in rows {
-            results.push(row?);
+            let embedding = decode_embedding_f16(&blob, dims_usize)?;
+            results.push((skill_id, embedding));
         }
         Ok(results)
     }
@@ -704,7 +727,7 @@ impl Database {
             serde_json::to_string(&record.acip_classification).map_err(|err| {
                 crate::error::MsError::Config(format!("encode classification: {err}"))
             })?;
-        self.conn.execute(
+        self.conn.execute_compat(
             "INSERT INTO injection_quarantine (
                 quarantine_id, session_id, message_index, content_hash, safe_excerpt,
                 classification_json, audit_tag, created_at, replay_command
@@ -727,7 +750,7 @@ impl Database {
     pub fn insert_command_safety_event(&self, event: &CommandSafetyEvent) -> Result<()> {
         let decision_json = serde_json::to_string(&event.decision)
             .map_err(|err| crate::error::MsError::Config(format!("encode decision: {err}")))?;
-        self.conn.execute(
+        self.conn.execute_compat(
             "INSERT INTO command_safety_events (
                 session_id, command, dcg_version, dcg_pack, decision_json, created_at
              ) VALUES (?, ?, ?, ?, ?, ?)",
@@ -744,52 +767,54 @@ impl Database {
     }
 
     pub fn list_command_safety_events(&self, limit: usize) -> Result<Vec<CommandSafetyEvent>> {
-        let mut stmt = self.conn.prepare(
+        // Pull raw rows first, then parse JSON outside the closure so the row
+        // mapper only deals in `FrankenError`. JSON parse failures become
+        // `MsError::Serialization` (preserves the source error context).
+        let raw: Vec<CommandSafetyRawRow> = self.conn.query_map_collect(
             "SELECT session_id, command, dcg_version, dcg_pack, decision_json, created_at
-             FROM command_safety_events
-             ORDER BY created_at DESC
-             LIMIT ?",
+                 FROM command_safety_events
+                 ORDER BY created_at DESC
+                 LIMIT ?",
+            params![limit as i64],
+            |row| {
+                Ok((
+                    row.get_typed(0)?,
+                    row.get_typed(1)?,
+                    row.get_typed(2)?,
+                    row.get_typed(3)?,
+                    row.get_typed(4)?,
+                    row.get_typed(5)?,
+                ))
+            },
         )?;
-        let rows = stmt.query_map(params![limit as i64], |row| {
-            let decision_json: String = row.get(4)?;
-            let decision = serde_json::from_str(&decision_json).map_err(|err| {
-                rusqlite::Error::FromSqlConversionFailure(
-                    4,
-                    rusqlite::types::Type::Text,
-                    Box::new(err),
-                )
-            })?;
-            Ok(CommandSafetyEvent {
-                session_id: row.get(0)?,
-                command: row.get(1)?,
-                dcg_version: row.get(2)?,
-                dcg_pack: row.get(3)?,
-                decision,
-                created_at: row.get(5)?,
-            })
-        })?;
 
-        let mut out = Vec::new();
-        for row in rows {
-            out.push(row?);
+        let mut out = Vec::with_capacity(raw.len());
+        for (session_id, command, dcg_version, dcg_pack, decision_json, created_at) in raw {
+            let decision = serde_json::from_str(&decision_json)
+                .map_err(|err| MsError::Serialization(format!("decode decision: {err}")))?;
+            out.push(CommandSafetyEvent {
+                session_id,
+                command,
+                dcg_version,
+                dcg_pack,
+                decision,
+                created_at,
+            });
         }
         Ok(out)
     }
 
     pub fn list_quarantine_records(&self, limit: usize) -> Result<Vec<QuarantineRecord>> {
-        let mut stmt = self.conn.prepare(
+        let rows = self.conn.query_map_collect(
             "SELECT quarantine_id, session_id, message_index, content_hash, safe_excerpt,
                     classification_json, audit_tag, created_at, replay_command
              FROM injection_quarantine
              ORDER BY created_at DESC
              LIMIT ?",
+            params![limit as i64],
+            quarantine_from_row,
         )?;
-        let mut rows = stmt.query(params![limit as i64])?;
-        let mut out = Vec::new();
-        while let Some(row) = rows.next()? {
-            out.push(quarantine_from_row(row)?);
-        }
-        Ok(out)
+        Ok(rows)
     }
 
     pub fn list_quarantine_records_by_session(
@@ -797,34 +822,33 @@ impl Database {
         session_id: &str,
         limit: usize,
     ) -> Result<Vec<QuarantineRecord>> {
-        let mut stmt = self.conn.prepare(
+        let rows = self.conn.query_map_collect(
             "SELECT quarantine_id, session_id, message_index, content_hash, safe_excerpt,
                     classification_json, audit_tag, created_at, replay_command
              FROM injection_quarantine
              WHERE session_id = ?
              ORDER BY created_at DESC
              LIMIT ?",
+            params![session_id, limit as i64],
+            quarantine_from_row,
         )?;
-        let mut rows = stmt.query(params![session_id, limit as i64])?;
-        let mut out = Vec::new();
-        while let Some(row) = rows.next()? {
-            out.push(quarantine_from_row(row)?);
-        }
-        Ok(out)
+        Ok(rows)
     }
 
     pub fn get_quarantine_record(&self, quarantine_id: &str) -> Result<Option<QuarantineRecord>> {
-        let mut stmt = self.conn.prepare(
-            "SELECT quarantine_id, session_id, message_index, content_hash, safe_excerpt,
-                    classification_json, audit_tag, created_at, replay_command
-             FROM injection_quarantine
-             WHERE quarantine_id = ?",
-        )?;
-        let mut rows = stmt.query([quarantine_id])?;
-        if let Some(row) = rows.next()? {
-            return Ok(Some(quarantine_from_row(row)?));
-        }
-        Ok(None)
+        use fsqlite::compat::OptionalExtension;
+        let result = self
+            .conn
+            .query_row_map(
+                "SELECT quarantine_id, session_id, message_index, content_hash, safe_excerpt,
+                        classification_json, audit_tag, created_at, replay_command
+                 FROM injection_quarantine
+                 WHERE quarantine_id = ?",
+                params![quarantine_id],
+                quarantine_from_row,
+            )
+            .optional()?;
+        Ok(result)
     }
 
     pub fn insert_quarantine_review(
@@ -835,7 +859,7 @@ impl Database {
     ) -> Result<String> {
         let review_id = format!("qr_{}", Uuid::new_v4());
         let created_at = chrono::Utc::now().to_rfc3339();
-        self.conn.execute(
+        self.conn.execute_compat(
             "INSERT INTO injection_quarantine_reviews (
                 id, quarantine_id, action, reason, created_at
              ) VALUES (?, ?, ?, ?, ?)",
@@ -845,23 +869,22 @@ impl Database {
     }
 
     pub fn list_quarantine_reviews(&self, quarantine_id: &str) -> Result<Vec<QuarantineReview>> {
-        let mut stmt = self.conn.prepare(
+        let out = self.conn.query_map_collect(
             "SELECT id, quarantine_id, action, reason, created_at
              FROM injection_quarantine_reviews
              WHERE quarantine_id = ?
              ORDER BY created_at DESC",
+            params![quarantine_id],
+            |row| {
+                Ok(QuarantineReview {
+                    id: row.get_typed(0)?,
+                    quarantine_id: row.get_typed(1)?,
+                    action: row.get_typed(2)?,
+                    reason: row.get_typed(3)?,
+                    created_at: row.get_typed(4)?,
+                })
+            },
         )?;
-        let mut rows = stmt.query([quarantine_id])?;
-        let mut out = Vec::new();
-        while let Some(row) = rows.next()? {
-            out.push(QuarantineReview {
-                id: row.get(0)?,
-                quarantine_id: row.get(1)?,
-                action: row.get(2)?,
-                reason: row.get(3)?,
-                created_at: row.get(4)?,
-            });
-        }
         Ok(out)
     }
 
@@ -871,7 +894,7 @@ impl Database {
 
     /// Insert a transaction record into `tx_log`
     pub fn insert_tx_record(&self, tx: &super::tx::TxRecord) -> Result<()> {
-        self.conn.execute(
+        self.conn.execute_compat(
             "INSERT INTO tx_log (id, entity_type, entity_id, phase, payload_json, created_at)
              VALUES (?, ?, ?, ?, ?, ?)",
             params![
@@ -888,7 +911,7 @@ impl Database {
 
     /// Update transaction phase
     pub fn update_tx_phase(&self, tx_id: &str, phase: super::tx::TxPhase) -> Result<()> {
-        self.conn.execute(
+        self.conn.execute_compat(
             "UPDATE tx_log SET phase = ? WHERE id = ?",
             params![phase.to_string(), tx_id],
         )?;
@@ -897,62 +920,65 @@ impl Database {
 
     /// Check if a transaction exists in `tx_log`
     pub fn tx_exists(&self, tx_id: &str) -> Result<bool> {
-        let exists: i32 = self.conn.query_row(
+        let exists: i32 = self.conn.query_row_map(
             "SELECT EXISTS(SELECT 1 FROM tx_log WHERE id = ?)",
-            [tx_id],
-            |row| row.get(0),
+            params![tx_id],
+            |row| row.get_typed::<i32>(0),
         )?;
         Ok(exists == 1)
     }
 
     /// List incomplete transactions (not in Complete phase)
     pub fn list_incomplete_transactions(&self) -> Result<Vec<super::tx::TxRecord>> {
-        let mut stmt = self.conn.prepare(
-            "SELECT id, entity_type, entity_id, phase, payload_json, created_at
-             FROM tx_log WHERE phase != 'complete'",
-        )?;
+        // Read raw rows; resolve enum + chrono parsing outside the closure so
+        // mapper errors translate cleanly to MsError variants. fsqlite's
+        // FrankenError doesn't carry an arbitrary downcast like rusqlite's
+        // FromSqlConversionFailure did, so we keep the closure pure typed
+        // extraction and decode/validate in Rust afterwards.
+        let raw: Vec<(String, String, String, String, String, String)> =
+            self.conn.query_map_collect(
+                "SELECT id, entity_type, entity_id, phase, payload_json, created_at
+                 FROM tx_log WHERE phase != 'complete'",
+                params![],
+                |row| {
+                    Ok((
+                        row.get_typed(0)?,
+                        row.get_typed(1)?,
+                        row.get_typed(2)?,
+                        row.get_typed(3)?,
+                        row.get_typed(4)?,
+                        row.get_typed(5)?,
+                    ))
+                },
+            )?;
 
-        let txs = stmt
-            .query_map([], |row| {
-                let phase_str: String = row.get(3)?;
-                let phase = match phase_str.as_str() {
-                    "prepare" => super::tx::TxPhase::Prepare,
-                    "pending" => super::tx::TxPhase::Pending,
-                    "committed" => super::tx::TxPhase::Committed,
-                    "complete" => super::tx::TxPhase::Complete,
-                    unknown => {
-                        return Err(rusqlite::Error::FromSqlConversionFailure(
-                            3,
-                            rusqlite::types::Type::Text,
-                            Box::new(std::io::Error::new(
-                                std::io::ErrorKind::InvalidData,
-                                format!("unknown transaction phase: {unknown}"),
-                            )),
-                        ));
-                    }
-                };
+        let mut txs = Vec::with_capacity(raw.len());
+        for (id, entity_type, entity_id, phase_str, payload_json, created_str) in raw {
+            let phase = match phase_str.as_str() {
+                "prepare" => super::tx::TxPhase::Prepare,
+                "pending" => super::tx::TxPhase::Pending,
+                "committed" => super::tx::TxPhase::Committed,
+                "complete" => super::tx::TxPhase::Complete,
+                unknown => {
+                    return Err(MsError::Serialization(format!(
+                        "unknown transaction phase: {unknown}"
+                    )));
+                }
+            };
 
-                let created_str: String = row.get(5)?;
-                let created_at = chrono::DateTime::parse_from_rfc3339(&created_str)
-                    .map(|dt| dt.with_timezone(&chrono::Utc))
-                    .map_err(|e| {
-                        rusqlite::Error::FromSqlConversionFailure(
-                            5,
-                            rusqlite::types::Type::Text,
-                            Box::new(e),
-                        )
-                    })?;
+            let created_at = chrono::DateTime::parse_from_rfc3339(&created_str)
+                .map(|dt| dt.with_timezone(&chrono::Utc))
+                .map_err(|e| MsError::Serialization(format!("parse created_at: {e}")))?;
 
-                Ok(super::tx::TxRecord {
-                    id: row.get(0)?,
-                    entity_type: row.get(1)?,
-                    entity_id: row.get(2)?,
-                    phase,
-                    payload_json: row.get(4)?,
-                    created_at,
-                })
-            })?
-            .collect::<std::result::Result<Vec<_>, _>>()?;
+            txs.push(super::tx::TxRecord {
+                id,
+                entity_type,
+                entity_id,
+                phase,
+                payload_json,
+                created_at,
+            });
+        }
 
         Ok(txs)
     }
@@ -971,7 +997,7 @@ impl Database {
         layer: crate::core::SkillLayer,
         token_count: i64,
     ) -> Result<()> {
-        self.conn.execute(
+        self.conn.execute_compat(
             "INSERT INTO skills (id, name, description, version, author, source_path, source_layer, content_hash, body, metadata_json, assets_json, token_count, quality_score, indexed_at, modified_at) VALUES (?, ?, ?, ?, ?, 'pending', ?, 'pending', '', ?, '{}', ?, 0.0, datetime('now'), datetime('now')) ON CONFLICT(id) DO UPDATE SET name=excluded.name, description=excluded.description, version=excluded.version, author=excluded.author, source_layer=excluded.source_layer, metadata_json=excluded.metadata_json, token_count=excluded.token_count, modified_at=excluded.modified_at",
             params![
                 skill.metadata.id,
@@ -998,7 +1024,7 @@ impl Database {
         content_hash: &str,
         body: &str,
     ) -> Result<()> {
-        self.conn.execute(
+        self.conn.execute_compat(
             "UPDATE skills SET source_path = ?, content_hash = ?, body = ?, modified_at = datetime('now')
              WHERE id = ?",
             params![source_path, content_hash, body, skill_id],
@@ -1008,9 +1034,11 @@ impl Database {
 
     /// Run `SQLite` integrity check
     pub fn integrity_check(&self) -> Result<bool> {
-        let result: String = self
-            .conn
-            .query_row("PRAGMA integrity_check", [], |row| row.get(0))?;
+        let result: String =
+            self.conn
+                .query_row_map("PRAGMA integrity_check", params![], |row| {
+                    row.get_typed::<String>(0)
+                })?;
         Ok(result == "ok")
     }
 
@@ -1020,16 +1048,47 @@ impl Database {
 
     /// Get cached session quality by `session_id`
     pub fn get_session_quality(&self, session_id: &str) -> Result<Option<SessionQualityRecord>> {
-        let mut stmt = self.conn.prepare(
-            "SELECT session_id, content_hash, score, signals_json, missing_json, computed_at
-             FROM session_quality
-             WHERE session_id = ?",
-        )?;
-        let mut rows = stmt.query([session_id])?;
-        if let Some(row) = rows.next()? {
-            return Ok(Some(session_quality_from_row(row)?));
+        use fsqlite::compat::OptionalExtension;
+        // Pull raw row values, then decode JSON-bearing columns in Rust
+        // because the JSON parse can fail with MsError::Config but the
+        // mapper closure must return FrankenError.
+        let raw: Option<(String, String, f64, String, String, String)> = self
+            .conn
+            .query_row_map(
+                "SELECT session_id, content_hash, score, signals_json, missing_json, computed_at
+                 FROM session_quality
+                 WHERE session_id = ?",
+                params![session_id],
+                |row| {
+                    Ok((
+                        row.get_typed(0)?,
+                        row.get_typed(1)?,
+                        row.get_typed(2)?,
+                        row.get_typed(3)?,
+                        row.get_typed(4)?,
+                        row.get_typed(5)?,
+                    ))
+                },
+            )
+            .optional()?;
+
+        match raw {
+            Some((session_id, content_hash, score, signals_json, missing_json, computed_at)) => {
+                let signals: Vec<String> = serde_json::from_str(&signals_json)
+                    .map_err(|err| MsError::Config(format!("decode signals: {err}")))?;
+                let missing: Vec<String> = serde_json::from_str(&missing_json)
+                    .map_err(|err| MsError::Config(format!("decode missing: {err}")))?;
+                Ok(Some(SessionQualityRecord {
+                    session_id,
+                    content_hash,
+                    score: score as f32,
+                    signals,
+                    missing,
+                    computed_at,
+                }))
+            }
+            None => Ok(None),
         }
-        Ok(None)
     }
 
     /// Upsert session quality record
@@ -1039,7 +1098,7 @@ impl Database {
         let missing_json = serde_json::to_string(&record.missing)
             .map_err(|err| MsError::Config(format!("encode missing: {err}")))?;
 
-        self.conn.execute(
+        self.conn.execute_compat(
             "INSERT INTO session_quality (session_id, content_hash, score, signals_json, missing_json, computed_at)
              VALUES (?, ?, ?, ?, ?, ?)
              ON CONFLICT(session_id) DO UPDATE SET
@@ -1079,7 +1138,7 @@ impl Database {
             .map_err(|err| MsError::Config(format!("encode coverage: {err}")))?;
         let updated_at = chrono::Utc::now().to_rfc3339();
 
-        self.conn.execute(
+        self.conn.execute_compat(
             "INSERT INTO skill_evidence (skill_id, rule_id, evidence_json, coverage_json, updated_at)
              VALUES (?, ?, ?, ?, ?)
              ON CONFLICT(skill_id, rule_id) DO UPDATE SET
@@ -1093,25 +1152,20 @@ impl Database {
 
     /// Get all evidence for a skill, reconstructuting the `SkillEvidenceIndex`.
     pub fn get_evidence(&self, skill_id: &str) -> Result<crate::core::SkillEvidenceIndex> {
-        let mut stmt = self.conn.prepare(
+        let raw: Vec<(String, String)> = self.conn.query_map_collect(
             "SELECT rule_id, evidence_json, coverage_json
              FROM skill_evidence
              WHERE skill_id = ?
              ORDER BY rule_id",
+            params![skill_id],
+            |row| Ok((row.get_typed(0)?, row.get_typed(1)?)),
         )?;
 
         let mut rules = std::collections::BTreeMap::new();
         let mut total_confidence = 0.0f32;
         let mut evidence_count = 0usize;
 
-        let rows = stmt.query_map([skill_id], |row| {
-            let rule_id: String = row.get(0)?;
-            let evidence_json: String = row.get(1)?;
-            Ok((rule_id, evidence_json))
-        })?;
-
-        for row in rows {
-            let (rule_id, evidence_json) = row?;
+        for (rule_id, evidence_json) in raw {
             let evidence_refs: Vec<crate::core::EvidenceRef> = serde_json::from_str(&evidence_json)
                 .map_err(|err| {
                     MsError::Config(format!("decode evidence for rule {rule_id}: {err}"))
@@ -1147,40 +1201,45 @@ impl Database {
         skill_id: &str,
         rule_id: &str,
     ) -> Result<Vec<crate::core::EvidenceRef>> {
-        let mut stmt = self.conn.prepare(
-            "SELECT evidence_json FROM skill_evidence WHERE skill_id = ? AND rule_id = ?",
-        )?;
+        use fsqlite::compat::OptionalExtension;
+        let evidence_json: Option<String> = self
+            .conn
+            .query_row_map(
+                "SELECT evidence_json FROM skill_evidence WHERE skill_id = ? AND rule_id = ?",
+                params![skill_id, rule_id],
+                |row| row.get_typed::<String>(0),
+            )
+            .optional()?;
 
-        let mut rows = stmt.query(params![skill_id, rule_id])?;
-        if let Some(row) = rows.next()? {
-            let evidence_json: String = row.get(0)?;
+        if let Some(evidence_json) = evidence_json {
             let evidence_refs: Vec<crate::core::EvidenceRef> = serde_json::from_str(&evidence_json)
                 .map_err(|err| MsError::Config(format!("decode evidence: {err}")))?;
-            return Ok(evidence_refs);
+            Ok(evidence_refs)
+        } else {
+            Ok(vec![])
         }
-        Ok(vec![])
     }
 
     /// List all evidence records for provenance graph export.
     /// Returns (`skill_id`, `rule_id`, `evidence_refs`, `updated_at`) tuples.
     pub fn list_all_evidence(&self) -> Result<Vec<EvidenceRecord>> {
-        let mut stmt = self.conn.prepare(
+        let raw: Vec<(String, String, String, String)> = self.conn.query_map_collect(
             "SELECT skill_id, rule_id, evidence_json, updated_at
              FROM skill_evidence
              ORDER BY skill_id, rule_id",
+            params![],
+            |row| {
+                Ok((
+                    row.get_typed(0)?,
+                    row.get_typed(1)?,
+                    row.get_typed(2)?,
+                    row.get_typed(3)?,
+                ))
+            },
         )?;
 
-        let rows = stmt.query_map([], |row| {
-            let skill_id: String = row.get(0)?;
-            let rule_id: String = row.get(1)?;
-            let evidence_json: String = row.get(2)?;
-            let updated_at: String = row.get(3)?;
-            Ok((skill_id, rule_id, evidence_json, updated_at))
-        })?;
-
-        let mut records = Vec::new();
-        for row in rows {
-            let (skill_id, rule_id, evidence_json, updated_at) = row?;
+        let mut records = Vec::with_capacity(raw.len());
+        for (skill_id, rule_id, evidence_json, updated_at) in raw {
             let evidence: Vec<crate::core::EvidenceRef> = serde_json::from_str(&evidence_json)
                 .map_err(|err| MsError::Config(format!("decode evidence: {err}")))?;
             records.push(EvidenceRecord {
@@ -1195,9 +1254,10 @@ impl Database {
 
     /// Delete all evidence for a skill.
     pub fn delete_skill_evidence(&self, skill_id: &str) -> Result<usize> {
-        let count = self
-            .conn
-            .execute("DELETE FROM skill_evidence WHERE skill_id = ?", [skill_id])?;
+        let count = self.conn.execute_compat(
+            "DELETE FROM skill_evidence WHERE skill_id = ?",
+            params![skill_id],
+        )?;
         Ok(count)
     }
 
@@ -1205,7 +1265,7 @@ impl Database {
         let id = Uuid::new_v4().to_string();
         let created_at = chrono::Utc::now().to_rfc3339();
         let success_signal = i32::from(success);
-        let updated = self.conn.execute(
+        let updated = self.conn.execute_compat(
             "UPDATE skill_usage
              SET success_signal = ?
              WHERE id = (
@@ -1218,7 +1278,7 @@ impl Database {
         )?;
 
         // Append a detailed event record for analysis even when we update summary usage.
-        self.conn.execute(
+        self.conn.execute_compat(
             "INSERT INTO skill_usage_events (id, skill_id, session_id, loaded_at, disclosure_level, discovery_method, outcome, feedback)
              VALUES (?, ?, 'manual', ?, 'full', 'manual', ?, 'null')",
             params![id, skill_id, created_at, if success { "success" } else { "failure" }],
@@ -1240,7 +1300,7 @@ impl Database {
         let id = Uuid::new_v4().to_string();
         let created_at = chrono::Utc::now().to_rfc3339();
 
-        self.conn.execute(
+        self.conn.execute_compat(
             "INSERT INTO skill_feedback (id, skill_id, feedback_type, rating, comment, created_at)
              VALUES (?, ?, ?, ?, ?, ?)",
             params![id, skill_id, feedback_type, rating, comment, created_at],
@@ -1272,26 +1332,31 @@ impl Database {
 
         sql.push_str(" ORDER BY created_at DESC LIMIT ? OFFSET ?");
 
-        // Use a simpler query flow to avoid borrowing issues
-        let mut stmt = self.conn.prepare(&sql)?;
-
-        let mut rows = if let Some(sid) = skill_id {
-            stmt.query(params![sid, limit as i64, offset as i64])?
+        let records = if let Some(sid) = skill_id {
+            self.conn
+                .query_map_collect(&sql, params![sid, limit as i64, offset as i64], |row| {
+                    Ok(SkillFeedbackRecord {
+                        id: row.get_typed(0)?,
+                        skill_id: row.get_typed(1)?,
+                        feedback_type: row.get_typed(2)?,
+                        rating: row.get_typed(3)?,
+                        comment: row.get_typed(4)?,
+                        created_at: row.get_typed(5)?,
+                    })
+                })?
         } else {
-            stmt.query(params![limit as i64, offset as i64])?
+            self.conn
+                .query_map_collect(&sql, params![limit as i64, offset as i64], |row| {
+                    Ok(SkillFeedbackRecord {
+                        id: row.get_typed(0)?,
+                        skill_id: row.get_typed(1)?,
+                        feedback_type: row.get_typed(2)?,
+                        rating: row.get_typed(3)?,
+                        comment: row.get_typed(4)?,
+                        created_at: row.get_typed(5)?,
+                    })
+                })?
         };
-
-        let mut records = Vec::new();
-        while let Some(row) = rows.next()? {
-            records.push(SkillFeedbackRecord {
-                id: row.get(0)?,
-                skill_id: row.get(1)?,
-                feedback_type: row.get(2)?,
-                rating: row.get(3)?,
-                comment: row.get(4)?,
-                created_at: row.get(5)?,
-            });
-        }
         Ok(records)
     }
 
@@ -1308,7 +1373,7 @@ impl Database {
         let id = Uuid::new_v4().to_string();
         let created_at = chrono::Utc::now().to_rfc3339();
 
-        self.conn.execute(
+        self.conn.execute_compat(
             "INSERT OR REPLACE INTO user_preferences (id, skill_id, preference_type, created_at)
              VALUES (?, ?, ?, ?)",
             params![id, skill_id, preference_type, created_at],
@@ -1324,7 +1389,7 @@ impl Database {
 
     /// Remove a user preference for a skill.
     pub fn remove_user_preference(&self, skill_id: &str, preference_type: &str) -> Result<bool> {
-        let deleted = self.conn.execute(
+        let deleted = self.conn.execute_compat(
             "DELETE FROM user_preferences WHERE skill_id = ? AND preference_type = ?",
             params![skill_id, preference_type],
         )?;
@@ -1333,10 +1398,10 @@ impl Database {
 
     /// Check if a skill has a specific preference.
     pub fn has_user_preference(&self, skill_id: &str, preference_type: &str) -> Result<bool> {
-        let count: i64 = self.conn.query_row(
+        let count: i64 = self.conn.query_row_map(
             "SELECT COUNT(*) FROM user_preferences WHERE skill_id = ? AND preference_type = ?",
             params![skill_id, preference_type],
-            |row| row.get(0),
+            |row| row.get_typed::<i64>(0),
         )?;
         Ok(count > 0)
     }
@@ -1348,46 +1413,42 @@ impl Database {
         limit: usize,
         offset: usize,
     ) -> Result<Vec<UserPreferenceRecord>> {
-        let mut stmt = self.conn.prepare(
+        let records = self.conn.query_map_collect(
             "SELECT id, skill_id, preference_type, created_at
              FROM user_preferences
              WHERE preference_type = ?
              ORDER BY created_at DESC
              LIMIT ? OFFSET ?",
+            params![preference_type, limit as i64, offset as i64],
+            |row| {
+                Ok(UserPreferenceRecord {
+                    id: row.get_typed(0)?,
+                    skill_id: row.get_typed(1)?,
+                    preference_type: row.get_typed(2)?,
+                    created_at: row.get_typed(3)?,
+                })
+            },
         )?;
-
-        let mut rows = stmt.query(params![preference_type, limit as i64, offset as i64])?;
-        let mut records = Vec::new();
-        while let Some(row) = rows.next()? {
-            records.push(UserPreferenceRecord {
-                id: row.get(0)?,
-                skill_id: row.get(1)?,
-                preference_type: row.get(2)?,
-                created_at: row.get(3)?,
-            });
-        }
         Ok(records)
     }
 
     /// Get all preferences for a skill.
     pub fn get_skill_preferences(&self, skill_id: &str) -> Result<Vec<UserPreferenceRecord>> {
-        let mut stmt = self.conn.prepare(
+        let records = self.conn.query_map_collect(
             "SELECT id, skill_id, preference_type, created_at
              FROM user_preferences
              WHERE skill_id = ?
              ORDER BY created_at DESC",
+            params![skill_id],
+            |row| {
+                Ok(UserPreferenceRecord {
+                    id: row.get_typed(0)?,
+                    skill_id: row.get_typed(1)?,
+                    preference_type: row.get_typed(2)?,
+                    created_at: row.get_typed(3)?,
+                })
+            },
         )?;
-
-        let mut rows = stmt.query(params![skill_id])?;
-        let mut records = Vec::new();
-        while let Some(row) = rows.next()? {
-            records.push(UserPreferenceRecord {
-                id: row.get(0)?,
-                skill_id: row.get(1)?,
-                preference_type: row.get(2)?,
-                created_at: row.get(3)?,
-            });
-        }
         Ok(records)
     }
 
@@ -1403,7 +1464,7 @@ impl Database {
         let id = Uuid::new_v4().to_string();
         let started_at = chrono::Utc::now().to_rfc3339();
 
-        self.conn.execute(
+        self.conn.execute_compat(
             "INSERT INTO skill_experiments (
                 id, skill_id, scope, scope_id, variants_json, allocation_json, status, started_at
              ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
@@ -1432,25 +1493,29 @@ impl Database {
     }
 
     pub fn get_skill_experiment(&self, id: &str) -> Result<Option<ExperimentRecord>> {
-        let mut stmt = self.conn.prepare(
-            "SELECT id, skill_id, scope, scope_id, variants_json, allocation_json, status, started_at
-             FROM skill_experiments
-             WHERE id = ?",
-        )?;
-        let mut rows = stmt.query(params![id])?;
-        if let Some(row) = rows.next()? {
-            return Ok(Some(ExperimentRecord {
-                id: row.get(0)?,
-                skill_id: row.get(1)?,
-                scope: row.get(2)?,
-                scope_id: row.get(3)?,
-                variants_json: row.get(4)?,
-                allocation_json: row.get(5)?,
-                status: row.get(6)?,
-                started_at: row.get(7)?,
-            }));
-        }
-        Ok(None)
+        use fsqlite::compat::OptionalExtension;
+        let result = self
+            .conn
+            .query_row_map(
+                "SELECT id, skill_id, scope, scope_id, variants_json, allocation_json, status, started_at
+                 FROM skill_experiments
+                 WHERE id = ?",
+                params![id],
+                |row| {
+                    Ok(ExperimentRecord {
+                        id: row.get_typed(0)?,
+                        skill_id: row.get_typed(1)?,
+                        scope: row.get_typed(2)?,
+                        scope_id: row.get_typed(3)?,
+                        variants_json: row.get_typed(4)?,
+                        allocation_json: row.get_typed(5)?,
+                        status: row.get_typed(6)?,
+                        started_at: row.get_typed(7)?,
+                    })
+                },
+            )
+            .optional()?;
+        Ok(result)
     }
 
     pub fn list_skill_experiments(
@@ -1459,7 +1524,7 @@ impl Database {
         limit: usize,
         offset: usize,
     ) -> Result<Vec<ExperimentRecord>> {
-        let mut sql = "SELECT id, skill_id, scope, scope_id, variants_json, allocation_json, status, started_at 
+        let mut sql = "SELECT id, skill_id, scope, scope_id, variants_json, allocation_json, status, started_at
                        FROM skill_experiments".to_string();
 
         if skill_id.is_some() {
@@ -1468,32 +1533,41 @@ impl Database {
 
         sql.push_str(" ORDER BY started_at DESC LIMIT ? OFFSET ?");
 
-        let mut stmt = self.conn.prepare(&sql)?;
-
-        let mut rows = if let Some(sid) = skill_id {
-            stmt.query(params![sid, limit as i64, offset as i64])?
+        let records = if let Some(sid) = skill_id {
+            self.conn
+                .query_map_collect(&sql, params![sid, limit as i64, offset as i64], |row| {
+                    Ok(ExperimentRecord {
+                        id: row.get_typed(0)?,
+                        skill_id: row.get_typed(1)?,
+                        scope: row.get_typed(2)?,
+                        scope_id: row.get_typed(3)?,
+                        variants_json: row.get_typed(4)?,
+                        allocation_json: row.get_typed(5)?,
+                        status: row.get_typed(6)?,
+                        started_at: row.get_typed(7)?,
+                    })
+                })?
         } else {
-            stmt.query(params![limit as i64, offset as i64])?
+            self.conn
+                .query_map_collect(&sql, params![limit as i64, offset as i64], |row| {
+                    Ok(ExperimentRecord {
+                        id: row.get_typed(0)?,
+                        skill_id: row.get_typed(1)?,
+                        scope: row.get_typed(2)?,
+                        scope_id: row.get_typed(3)?,
+                        variants_json: row.get_typed(4)?,
+                        allocation_json: row.get_typed(5)?,
+                        status: row.get_typed(6)?,
+                        started_at: row.get_typed(7)?,
+                    })
+                })?
         };
 
-        let mut records = Vec::new();
-        while let Some(row) = rows.next()? {
-            records.push(ExperimentRecord {
-                id: row.get(0)?,
-                skill_id: row.get(1)?,
-                scope: row.get(2)?,
-                scope_id: row.get(3)?,
-                variants_json: row.get(4)?,
-                allocation_json: row.get(5)?,
-                status: row.get(6)?,
-                started_at: row.get(7)?,
-            });
-        }
         Ok(records)
     }
 
     pub fn update_skill_experiment_status(&self, id: &str, status: &str) -> Result<()> {
-        let updated = self.conn.execute(
+        let updated = self.conn.execute_compat(
             "UPDATE skill_experiments SET status = ? WHERE id = ?",
             params![status, id],
         )?;
@@ -1514,7 +1588,7 @@ impl Database {
     ) -> Result<ExperimentEventRecord> {
         let id = Uuid::new_v4().to_string();
         let created_at = chrono::Utc::now().to_rfc3339();
-        self.conn.execute(
+        self.conn.execute_compat(
             "INSERT INTO skill_experiment_events (
                 id, experiment_id, variant_id, event_type, metrics_json, context_json, session_id, created_at
              ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
@@ -1546,30 +1620,31 @@ impl Database {
         &self,
         experiment_id: &str,
     ) -> Result<Vec<ExperimentEventRecord>> {
-        let mut stmt = self.conn.prepare(
+        let records = self.conn.query_map_collect(
             "SELECT id, experiment_id, variant_id, event_type, metrics_json, context_json, session_id, created_at
              FROM skill_experiment_events
              WHERE experiment_id = ?
              ORDER BY created_at ASC",
+            params![experiment_id],
+            |row| {
+                Ok(ExperimentEventRecord {
+                    id: row.get_typed(0)?,
+                    experiment_id: row.get_typed(1)?,
+                    variant_id: row.get_typed(2)?,
+                    event_type: row.get_typed(3)?,
+                    metrics_json: row.get_typed(4)?,
+                    context_json: row.get_typed(5)?,
+                    session_id: row.get_typed(6)?,
+                    created_at: row.get_typed(7)?,
+                })
+            },
         )?;
-        let mut rows = stmt.query(params![experiment_id])?;
-        let mut records = Vec::new();
-        while let Some(row) = rows.next()? {
-            records.push(ExperimentEventRecord {
-                id: row.get(0)?,
-                experiment_id: row.get(1)?,
-                variant_id: row.get(2)?,
-                event_type: row.get(3)?,
-                metrics_json: row.get(4)?,
-                context_json: row.get(5)?,
-                session_id: row.get(6)?,
-                created_at: row.get(7)?,
-            });
-        }
         Ok(records)
     }
 
     fn configure_pragmas(conn: &Connection) -> Result<()> {
+        // fsqlite's `execute_batch` happily takes multi-statement PRAGMAs;
+        // semicolon-split is handled internally by the compat splitter.
         conn.execute_batch(
             "PRAGMA journal_mode = WAL;
              PRAGMA synchronous = NORMAL;
@@ -1582,54 +1657,70 @@ impl Database {
     }
 }
 
-fn skill_from_row(row: &Row<'_>) -> rusqlite::Result<SkillRecord> {
+fn skill_from_row(row: &Row) -> RowResult<SkillRecord> {
     Ok(SkillRecord {
-        id: row.get(0)?,
-        name: row.get(1)?,
-        description: row.get(2)?,
-        version: row.get(3)?,
-        author: row.get(4)?,
-        source_path: row.get(5)?,
-        source_layer: row.get(6)?,
-        git_remote: row.get(7)?,
-        git_commit: row.get(8)?,
-        content_hash: row.get(9)?,
-        body: row.get(10)?,
-        metadata_json: row.get(11)?,
-        assets_json: row.get(12)?,
-        token_count: row.get(13)?,
-        quality_score: row.get(14)?,
-        indexed_at: row.get(15)?,
-        modified_at: row.get(16)?,
-        is_deprecated: row.get::<_, i64>(17)? != 0,
-        deprecation_reason: row.get(18)?,
+        id: row.get_typed(0)?,
+        name: row.get_typed(1)?,
+        description: row.get_typed(2)?,
+        version: row.get_typed(3)?,
+        author: row.get_typed(4)?,
+        source_path: row.get_typed(5)?,
+        source_layer: row.get_typed(6)?,
+        git_remote: row.get_typed(7)?,
+        git_commit: row.get_typed(8)?,
+        content_hash: row.get_typed(9)?,
+        body: row.get_typed(10)?,
+        metadata_json: row.get_typed(11)?,
+        assets_json: row.get_typed(12)?,
+        token_count: row.get_typed(13)?,
+        quality_score: row.get_typed(14)?,
+        indexed_at: row.get_typed(15)?,
+        modified_at: row.get_typed(16)?,
+        is_deprecated: row.get_typed::<i64>(17)? != 0,
+        deprecation_reason: row.get_typed(18)?,
     })
 }
 
-fn embedding_from_row(row: &Row<'_>) -> Result<EmbeddingRecord> {
-    let skill_id: String = row.get(0)?;
-    let blob: Vec<u8> = row.get(1)?;
-    let dims: i64 = row.get(2)?;
-    let embedder_type: String = row.get(3)?;
-    let content_hash: Option<String> = row.get(4)?;
-    let computed_at: String = row.get(5)?;
-    let created_at: String = row.get(6)?;
+/// Raw row extraction for embedding rows. The `decode_embedding_f16` step
+/// returns `MsError` (not `FrankenError`), so the actual decode happens in the
+/// caller, after the row mapper returns.
+struct EmbeddingRawRow {
+    skill_id: String,
+    blob: Vec<u8>,
+    dims: i64,
+    embedder_type: String,
+    content_hash: Option<String>,
+    computed_at: String,
+    created_at: String,
+}
 
-    let dims_usize = if dims <= 0 { 0 } else { dims as usize };
-    let computed_at = if computed_at.is_empty() {
-        created_at
+fn embedding_raw_row(row: &Row) -> RowResult<EmbeddingRawRow> {
+    Ok(EmbeddingRawRow {
+        skill_id: row.get_typed(0)?,
+        blob: row.get_typed(1)?,
+        dims: row.get_typed(2)?,
+        embedder_type: row.get_typed(3)?,
+        content_hash: row.get_typed(4)?,
+        computed_at: row.get_typed(5)?,
+        created_at: row.get_typed(6)?,
+    })
+}
+
+fn decode_raw_embedding(raw: EmbeddingRawRow) -> Result<EmbeddingRecord> {
+    let dims_usize = if raw.dims <= 0 { 0 } else { raw.dims as usize };
+    let computed_at = if raw.computed_at.is_empty() {
+        raw.created_at
     } else {
-        computed_at
+        raw.computed_at
     };
-
-    let embedding = decode_embedding_f16(&blob, dims_usize)?;
+    let embedding = decode_embedding_f16(&raw.blob, dims_usize)?;
 
     Ok(EmbeddingRecord {
-        skill_id,
+        skill_id: raw.skill_id,
         embedding,
         dims: dims_usize,
-        embedder_type,
-        content_hash,
+        embedder_type: raw.embedder_type,
+        content_hash: raw.content_hash,
         computed_at,
     })
 }
@@ -1661,44 +1752,34 @@ fn decode_embedding_f16(bytes: &[u8], dims: usize) -> Result<Vec<f32>> {
     Ok(out)
 }
 
-fn quarantine_from_row(row: &Row<'_>) -> std::result::Result<QuarantineRecord, rusqlite::Error> {
-    let classification_json: String = row.get(5)?;
-    let classification: JsonValue = serde_json::from_str(&classification_json).map_err(|err| {
-        rusqlite::Error::FromSqlConversionFailure(5, rusqlite::types::Type::Text, Box::new(err))
-    })?;
-    let acip_classification = serde_json::from_value(classification).map_err(|err| {
-        rusqlite::Error::FromSqlConversionFailure(5, rusqlite::types::Type::Text, Box::new(err))
-    })?;
+/// Row mapper used inside `query_map_collect` closures. JSON decoding of the
+/// `classification_json` column would normally raise an `MsError::Config`,
+/// but the closure must return `FrankenError`. We surface JSON parse errors
+/// as `FrankenError::TypeMismatch` here so the surrounding `?` propagates
+/// cleanly; the outer `MsError::Database` wrapping preserves the error text.
+fn quarantine_from_row(row: &Row) -> RowResult<QuarantineRecord> {
+    let classification_json: String = row.get_typed(5)?;
+    let classification: JsonValue =
+        serde_json::from_str(&classification_json).map_err(|err| FrankenError::TypeMismatch {
+            expected: "AcipClassification JSON (string)".into(),
+            actual: format!("invalid JSON: {err}"),
+        })?;
+    let acip_classification =
+        serde_json::from_value(classification).map_err(|err| FrankenError::TypeMismatch {
+            expected: "AcipClassification (typed)".into(),
+            actual: format!("decode error: {err}"),
+        })?;
 
     Ok(QuarantineRecord {
-        quarantine_id: row.get(0)?,
-        session_id: row.get(1)?,
-        message_index: row.get::<_, i64>(2)? as usize,
-        content_hash: row.get(3)?,
-        safe_excerpt: row.get(4)?,
+        quarantine_id: row.get_typed(0)?,
+        session_id: row.get_typed(1)?,
+        message_index: row.get_typed::<i64>(2)? as usize,
+        content_hash: row.get_typed(3)?,
+        safe_excerpt: row.get_typed(4)?,
         acip_classification,
-        audit_tag: row.get(6)?,
-        created_at: row.get(7)?,
-        replay_command: row.get(8)?,
-    })
-}
-
-fn session_quality_from_row(row: &Row<'_>) -> Result<SessionQualityRecord> {
-    let signals_json: String = row.get(3)?;
-    let missing_json: String = row.get(4)?;
-
-    let signals: Vec<String> = serde_json::from_str(&signals_json)
-        .map_err(|err| MsError::Config(format!("decode signals: {err}")))?;
-    let missing: Vec<String> = serde_json::from_str(&missing_json)
-        .map_err(|err| MsError::Config(format!("decode missing: {err}")))?;
-
-    Ok(SessionQualityRecord {
-        session_id: row.get(0)?,
-        content_hash: row.get(1)?,
-        score: row.get::<_, f64>(2)? as f32,
-        signals,
-        missing,
-        computed_at: row.get(5)?,
+        audit_tag: row.get_typed(6)?,
+        created_at: row.get_typed(7)?,
+        replay_command: row.get_typed(8)?,
     })
 }
 
@@ -1724,7 +1805,8 @@ mod tests {
         let db = Database::open(dir.path().join("test.db")).unwrap();
         let mode: String = db
             .conn()
-            .query_row("PRAGMA journal_mode;", [], |row| row.get(0))
+            .query_row("PRAGMA journal_mode;")
+            .and_then(|row| row.get_typed::<String>(0))
             .unwrap();
         assert_eq!(mode.to_lowercase(), "wal");
     }
@@ -1769,10 +1851,10 @@ mod tests {
         for table in tables {
             let exists: i32 = db
                 .conn()
-                .query_row(
+                .query_row_map(
                     "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name=?",
-                    [table],
-                    |row| row.get(0),
+                    params![table],
+                    |row| row.get_typed::<i32>(0),
                 )
                 .unwrap();
             assert_eq!(exists, 1, "Table {} should exist", table);
@@ -1875,14 +1957,25 @@ mod tests {
         db.upsert_skill(&record).unwrap();
 
         // Each of these must return Ok — no panics, no FTS5 syntax errors.
-        for query in ["multi-agent", "a-b", "x-y-z", "a'b", "agent: swarm", "(swarm)"] {
+        for query in [
+            "multi-agent",
+            "a-b",
+            "x-y-z",
+            "a'b",
+            "agent: swarm",
+            "(swarm)",
+        ] {
             db.search_fts(query, 10)
                 .unwrap_or_else(|e| panic!("query {query:?} should not error: {e}"));
         }
 
         // The hyphenated phrase must still find the matching skill.
         let results = db.search_fts("multi-agent", 10).unwrap();
-        assert_eq!(results.len(), 1, "multi-agent query should find agent-swarm");
+        assert_eq!(
+            results.len(),
+            1,
+            "multi-agent query should find agent-swarm"
+        );
         assert_eq!(results[0].id, "agent-swarm");
 
         // A blank / whitespace-only query must return empty results, not error.
