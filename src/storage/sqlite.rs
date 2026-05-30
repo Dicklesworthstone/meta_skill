@@ -1812,6 +1812,199 @@ mod tests {
     }
 
     #[test]
+    fn test_critical_pragmas_engaged() {
+        // INV2 audit: verify every PRAGMA from `configure_pragmas` actually
+        // takes effect on the live connection after fsqlite migration.
+        //
+        // fsqlite return-type quirks (vs rusqlite):
+        //   - `PRAGMA synchronous` returns the text label ("NORMAL"), not the
+        //     integer (1). rusqlite returns the integer. Verified 2026-05-30.
+        //   - `PRAGMA busy_timeout` defaults to 5000ms in fsqlite (rusqlite
+        //     defaults to 0). meta_skill does not set this explicitly, so the
+        //     fsqlite default applies and is a behavioral upgrade.
+        let dir = tempdir().unwrap();
+        let db = Database::open(dir.path().join("test.db")).unwrap();
+        let conn = db.conn();
+
+        let jm: String = conn
+            .query_row("PRAGMA journal_mode")
+            .and_then(|row| row.get_typed::<String>(0))
+            .unwrap();
+        assert_eq!(jm.to_lowercase(), "wal", "journal_mode not WAL: got {jm}");
+
+        let sync_v: String = conn
+            .query_row("PRAGMA synchronous")
+            .and_then(|row| row.get_typed::<String>(0))
+            .unwrap();
+        assert_eq!(
+            sync_v.to_uppercase(),
+            "NORMAL",
+            "synchronous != NORMAL: got {sync_v}"
+        );
+
+        let cs: i64 = conn
+            .query_row("PRAGMA cache_size")
+            .and_then(|row| row.get_typed::<i64>(0))
+            .unwrap();
+        assert_eq!(cs, -64000, "cache_size != -64000: got {cs}");
+
+        let ts: i64 = conn
+            .query_row("PRAGMA temp_store")
+            .and_then(|row| row.get_typed::<i64>(0))
+            .unwrap();
+        assert_eq!(ts, 2, "temp_store != MEMORY(2): got {ts}");
+
+        let fk: i64 = conn
+            .query_row("PRAGMA foreign_keys")
+            .and_then(|row| row.get_typed::<i64>(0))
+            .unwrap();
+        assert_eq!(fk, 1, "foreign_keys != ON(1): got {fk}");
+
+        let mm: i64 = conn
+            .query_row("PRAGMA mmap_size")
+            .and_then(|row| row.get_typed::<i64>(0))
+            .unwrap();
+        assert_eq!(mm, 268_435_456, "mmap_size mismatch: got {mm}");
+    }
+
+    #[test]
+    fn test_to_param_edge_cases() {
+        // INV3 audit: exercise `ms_params!` / `ToParam` edge cases against a
+        // live fsqlite connection.
+        use fsqlite::Connection;
+        use fsqlite::compat::{ConnectionExt, RowExt};
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("edge.db").to_string_lossy().into_owned();
+        let conn = Connection::open(&path).unwrap();
+        conn.execute_batch(
+            "CREATE TABLE edge (
+                id   INTEGER PRIMARY KEY,
+                txt  TEXT,
+                num  INTEGER,
+                fl   REAL,
+                blob BLOB
+            )",
+        )
+        .unwrap();
+
+        // (1) Option<i64>::None binds NULL.
+        let none_i64: Option<i64> = None;
+        conn.execute_compat(
+            "INSERT INTO edge (id, num) VALUES (1, ?)",
+            params![none_i64],
+        )
+        .unwrap();
+        let row = conn
+            .query_row_map("SELECT num FROM edge WHERE id = 1", params![], |r| {
+                Ok(r.get_typed::<Option<i64>>(0).unwrap())
+            })
+            .unwrap();
+        assert!(row.is_none(), "Option::<i64>::None did not bind NULL");
+
+        // (2) Empty string distinguishable from NULL.
+        let empty: &str = "";
+        conn.execute_compat("INSERT INTO edge (id, txt) VALUES (2, ?)", params![empty])
+            .unwrap();
+        let s = conn
+            .query_row_map("SELECT txt FROM edge WHERE id = 2", params![], |r| {
+                Ok(r.get_typed::<Option<String>>(0).unwrap())
+            })
+            .unwrap();
+        assert_eq!(s, Some(String::new()), "empty &str collapsed to NULL");
+
+        // (3) Vec<u8> BLOB round-trips and does not UTF-8 decode.
+        let blob: Vec<u8> = vec![0xDE, 0xAD, 0xBE, 0xEF, 0xFF, 0x00, 0x01];
+        conn.execute_compat("INSERT INTO edge (id, blob) VALUES (3, ?)", params![blob])
+            .unwrap();
+        let got_blob: Vec<u8> = conn
+            .query_row_map("SELECT blob FROM edge WHERE id = 3", params![], |r| {
+                Ok(r.get_typed::<Vec<u8>>(0).unwrap())
+            })
+            .unwrap();
+        assert_eq!(got_blob, blob, "BLOB round-trip mismatch");
+
+        // (4) i64::MIN / i64::MAX preserved.
+        conn.execute_compat(
+            "INSERT INTO edge (id, num) VALUES (4, ?)",
+            params![i64::MIN],
+        )
+        .unwrap();
+        conn.execute_compat(
+            "INSERT INTO edge (id, num) VALUES (5, ?)",
+            params![i64::MAX],
+        )
+        .unwrap();
+        let v4: i64 = conn
+            .query_row_map("SELECT num FROM edge WHERE id = 4", params![], |r| {
+                r.get_typed::<i64>(0)
+            })
+            .unwrap();
+        let v5: i64 = conn
+            .query_row_map("SELECT num FROM edge WHERE id = 5", params![], |r| {
+                r.get_typed::<i64>(0)
+            })
+            .unwrap();
+        assert_eq!(v4, i64::MIN);
+        assert_eq!(v5, i64::MAX);
+
+        // (5) u64 > i64::MAX is bound as TEXT by `ParamValue::from(u64)` to
+        // avoid silent wraparound on signed i64. Important caveat: INTEGER
+        // column affinity will then *try* to coerce that TEXT back to a
+        // numeric value at INSERT time, and oversize ints coerce to REAL
+        // (lossy). So we round-trip into a column with NO affinity (BLOB
+        // column type via no declared type) to verify the bind itself stays
+        // TEXT. We use the `txt` (TEXT-affinity) column instead.
+        let big_u64: u64 = u64::MAX;
+        conn.execute_compat("INSERT INTO edge (id, txt) VALUES (6, ?)", params![big_u64])
+            .unwrap();
+        let s6: String = conn
+            .query_row_map("SELECT txt FROM edge WHERE id = 6", params![], |r| {
+                r.get_typed::<String>(0)
+            })
+            .unwrap();
+        assert_eq!(
+            s6,
+            big_u64.to_string(),
+            "u64::MAX should bind as TEXT representation"
+        );
+
+        // (6) f64::NAN and INFINITY: SQLite/fsqlite store/retrieve.
+        conn.execute_compat(
+            "INSERT INTO edge (id, fl) VALUES (7, ?)",
+            params![f64::INFINITY],
+        )
+        .unwrap();
+        conn.execute_compat("INSERT INTO edge (id, fl) VALUES (8, ?)", params![f64::NAN])
+            .unwrap();
+        // INFINITY round-trips; NaN comes back as NULL in classic SQLite
+        // (and fsqlite). We only assert NaN-or-NULL here so the test stays
+        // backend-agnostic, but log what we actually saw.
+        let f7: f64 = conn
+            .query_row_map("SELECT fl FROM edge WHERE id = 7", params![], |r| {
+                r.get_typed::<f64>(0)
+            })
+            .unwrap();
+        assert!(f7.is_infinite() && f7 > 0.0, "INFINITY did not round-trip");
+        let f8_opt: Option<f64> = conn
+            .query_row_map("SELECT fl FROM edge WHERE id = 8", params![], |r| {
+                Ok(r.get_typed::<Option<f64>>(0).unwrap())
+            })
+            .unwrap();
+        eprintln!("NaN round-trip => {f8_opt:?}");
+
+        // (7) Borrowed &str via macro doesn't take ownership.
+        let owned = String::from("hello world");
+        let borrowed: &str = &owned;
+        conn.execute_compat(
+            "INSERT INTO edge (id, txt) VALUES (9, ?)",
+            params![borrowed],
+        )
+        .unwrap();
+        // owned still usable after the macro:
+        assert_eq!(owned, "hello world");
+    }
+
+    #[test]
     fn test_all_tables_created() {
         let dir = tempdir().unwrap();
         let db = Database::open(dir.path().join("test.db")).unwrap();

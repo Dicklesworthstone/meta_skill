@@ -73,7 +73,11 @@ impl ToParam for [u8] {
 }
 impl ToParam for Vec<u8> {
     fn to_param(&self) -> ParamValue {
-        ParamValue(SqliteValue::Blob(self.clone().into()))
+        // Bind through the &[u8] path so the BLOB lands in a single
+        // `Arc::from(slice)` allocation instead of cloning the Vec into a
+        // fresh owned buffer first and then reboxing it into the Arc.
+        // This shaves one full-buffer clone per embedding INSERT.
+        ParamValue::from(self.as_slice())
     }
 }
 impl<T: ToParam + ?Sized> ToParam for &T {
