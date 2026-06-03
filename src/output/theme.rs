@@ -1331,7 +1331,8 @@ pub fn detect_hyperlink_support() -> bool {
         || env_flag("KITTY_WINDOW_ID")     // Kitty
         || env_flag("KONSOLE_VERSION")     // Konsole
         || env_flag("WEZTERM_EXECUTABLE")  // WezTerm
-        || env_flag("GHOSTTY_RESOURCES_DIR") // Ghostty
+        || env_flag("GHOSTTY_RESOURCES_DIR")
+    // Ghostty
     {
         return true;
     }

@@ -731,10 +731,7 @@ mod tests {
             parse_source("tool").unwrap(),
             ContentSource::ToolOutput
         ));
-        assert!(matches!(
-            parse_source("file").unwrap(),
-            ContentSource::File
-        ));
+        assert!(matches!(parse_source("file").unwrap(), ContentSource::File));
         assert!(parse_source("unknown").is_err());
     }
 
@@ -747,7 +744,10 @@ mod tests {
         let hash3 = hash_content("world");
 
         assert_eq!(hash1, hash2, "same input should produce same hash");
-        assert_ne!(hash1, hash3, "different input should produce different hash");
+        assert_ne!(
+            hash1, hash3,
+            "different input should produce different hash"
+        );
         assert_eq!(hash1.len(), 64, "SHA-256 hex should be 64 chars");
     }
 }

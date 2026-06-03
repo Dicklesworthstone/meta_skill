@@ -40,7 +40,8 @@ impl AppContext {
                 // Try writable first; if the write lock is busy (another process),
                 // fall back to read-only mode so concurrent MCP servers and CLI
                 // commands can coexist without "LockBusy" errors.
-                SearchIndex::open(&index_path).or_else(|_| SearchIndex::open_readonly(&index_path))?
+                SearchIndex::open(&index_path)
+                    .or_else(|_| SearchIndex::open_readonly(&index_path))?
             }),
             robot_mode: cli.robot,
             output_format: cli.output_format(),

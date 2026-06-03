@@ -43,7 +43,11 @@ fn test_template_list() -> Result<()> {
     );
 
     let count = json["count"].as_u64().unwrap_or(0);
-    assert!(count >= 3, "Should have at least 3 built-in templates, got {}", count);
+    assert!(
+        count >= 3,
+        "Should have at least 3 built-in templates, got {}",
+        count
+    );
 
     let templates = json["templates"].as_array().expect("templates array");
     println!("[VERIFY] Found {} templates", templates.len());
@@ -64,10 +68,7 @@ fn test_template_list() -> Result<()> {
     }
 
     // Verify known built-in templates exist
-    let template_ids: Vec<&str> = templates
-        .iter()
-        .filter_map(|t| t["id"].as_str())
-        .collect();
+    let template_ids: Vec<&str> = templates.iter().filter_map(|t| t["id"].as_str()).collect();
     assert!(
         template_ids.contains(&"debugging"),
         "Should contain 'debugging' template"
@@ -91,7 +92,14 @@ fn test_template_show() -> Result<()> {
 
     fixture.log_step("checkpoint:template:select");
     fixture.log_step("Show debugging template in JSON format");
-    let output = fixture.run_ms(&["--robot", "template", "show", "debugging", "--format", "json"]);
+    let output = fixture.run_ms(&[
+        "--robot",
+        "template",
+        "show",
+        "debugging",
+        "--format",
+        "json",
+    ]);
     fixture.assert_success(&output, "template show json");
 
     let json = output.json();
@@ -111,10 +119,7 @@ fn test_template_show() -> Result<()> {
 
     let body = json["body"].as_str().unwrap_or("");
     assert!(!body.is_empty(), "Template body should not be empty");
-    println!(
-        "[VERIFY] Template body length: {} chars",
-        body.len()
-    );
+    println!("[VERIFY] Template body length: {} chars", body.len());
 
     // Body should contain template placeholders
     assert!(
@@ -364,10 +369,7 @@ fn test_template_overwrite() -> Result<()> {
     ]);
 
     // Should fail because skill already exists
-    assert!(
-        !output.success,
-        "Creating duplicate skill should fail"
-    );
+    assert!(!output.success, "Creating duplicate skill should fail");
     println!(
         "[VERIFY] Duplicate creation correctly rejected: exit_code={}",
         output.exit_code
@@ -460,10 +462,7 @@ fn test_template_layers() -> Result<()> {
 
     let json = output.json();
     assert_eq!(json["status"].as_str().unwrap_or(""), "ok");
-    assert_eq!(
-        json["skill_id"].as_str().unwrap_or(""),
-        "org-debug-skill"
-    );
+    assert_eq!(json["skill_id"].as_str().unwrap_or(""), "org-debug-skill");
 
     // Verify skill was created
     fixture.log_step("checkpoint:template:verify");

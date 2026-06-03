@@ -511,18 +511,10 @@ fn test_prune_apply_requires_approval() -> Result<()> {
     let mut fixture = setup_prune_fixture("prune_apply_no_approval")?;
 
     fixture.log_step("Attempt apply without --approve flag");
-    let output = fixture.run_ms(&[
-        "--robot",
-        "prune",
-        "apply",
-        "deprecate:rust-error-handling",
-    ]);
+    let output = fixture.run_ms(&["--robot", "prune", "apply", "deprecate:rust-error-handling"]);
 
     // Should fail because --approve is required
-    assert!(
-        !output.success,
-        "Apply without --approve should fail"
-    );
+    assert!(!output.success, "Apply without --approve should fail");
 
     let combined = format!("{}{}", output.stdout, output.stderr);
     assert!(

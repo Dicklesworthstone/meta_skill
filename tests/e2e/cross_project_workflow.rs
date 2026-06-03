@@ -116,10 +116,7 @@ fn test_cross_project_summary_zero_limit() -> Result<()> {
     fixture.log_step("Run summary with limit=0");
     let output = fixture.run_ms(&["--robot", "cross-project", "summary", "--limit", "0"]);
 
-    assert!(
-        !output.success,
-        "Summary with limit=0 should fail"
-    );
+    assert!(!output.success, "Summary with limit=0 should fail");
 
     fixture.checkpoint("cross-project:post-summary-zero-limit");
 
@@ -144,10 +141,7 @@ fn test_cross_project_patterns_zero_limit() -> Result<()> {
     fixture.log_step("Run patterns with limit=0");
     let output = fixture.run_ms(&["--robot", "cross-project", "patterns", "--limit", "0"]);
 
-    assert!(
-        !output.success,
-        "Patterns with limit=0 should fail"
-    );
+    assert!(!output.success, "Patterns with limit=0 should fail");
 
     fixture.checkpoint("cross-project:post-patterns-zero-limit");
 
@@ -178,10 +172,7 @@ fn test_cross_project_patterns_zero_min_projects() -> Result<()> {
         "0",
     ]);
 
-    assert!(
-        !output.success,
-        "Patterns with min-projects=0 should fail"
-    );
+    assert!(!output.success, "Patterns with min-projects=0 should fail");
 
     fixture.checkpoint("cross-project:post-patterns-zero-min-projects");
 
@@ -206,10 +197,7 @@ fn test_cross_project_gaps_zero_limit() -> Result<()> {
     fixture.log_step("Run gaps with limit=0");
     let output = fixture.run_ms(&["--robot", "cross-project", "gaps", "--limit", "0"]);
 
-    assert!(
-        !output.success,
-        "Gaps with limit=0 should fail"
-    );
+    assert!(!output.success, "Gaps with limit=0 should fail");
 
     fixture.checkpoint("cross-project:post-gaps-zero-limit");
 
@@ -232,18 +220,9 @@ fn test_cross_project_gaps_zero_min_projects() -> Result<()> {
     fixture.checkpoint("cross-project:pre-gaps-zero-min-projects");
 
     fixture.log_step("Run gaps with min-projects=0");
-    let output = fixture.run_ms(&[
-        "--robot",
-        "cross-project",
-        "gaps",
-        "--min-projects",
-        "0",
-    ]);
+    let output = fixture.run_ms(&["--robot", "cross-project", "gaps", "--min-projects", "0"]);
 
-    assert!(
-        !output.success,
-        "Gaps with min-projects=0 should fail"
-    );
+    assert!(!output.success, "Gaps with min-projects=0 should fail");
 
     fixture.checkpoint("cross-project:post-gaps-zero-min-projects");
 
@@ -278,10 +257,7 @@ fn test_cross_project_summary_cass_unavailable() -> Result<()> {
         "/nonexistent/cass/binary",
     ]);
 
-    assert!(
-        !output.success,
-        "Summary with unavailable CASS should fail"
-    );
+    assert!(!output.success, "Summary with unavailable CASS should fail");
 
     fixture.checkpoint("cross-project:post-summary-no-cass");
 
@@ -346,10 +322,7 @@ fn test_cross_project_gaps_cass_unavailable() -> Result<()> {
         "/nonexistent/cass/binary",
     ]);
 
-    assert!(
-        !output.success,
-        "Gaps with unavailable CASS should fail"
-    );
+    assert!(!output.success, "Gaps with unavailable CASS should fail");
 
     fixture.checkpoint("cross-project:post-gaps-no-cass");
 
@@ -653,10 +626,7 @@ fn test_cross_project_gaps_json_output() -> Result<()> {
         json["scanned_sessions"].is_number(),
         "Response should have scanned_sessions"
     );
-    assert!(
-        json["gaps"].is_array(),
-        "Response should have gaps array"
-    );
+    assert!(json["gaps"].is_array(), "Response should have gaps array");
 
     fixture.emit_event(
         LogLevel::Info,
@@ -681,13 +651,7 @@ fn test_cross_project_gaps_min_score() -> Result<()> {
     fixture.checkpoint("cross-project:pre-gaps-min-score");
 
     fixture.log_step("Run gaps with high min-score to include more gaps");
-    let output = fixture.run_ms(&[
-        "--robot",
-        "cross-project",
-        "gaps",
-        "--min-score",
-        "100.0",
-    ]);
+    let output = fixture.run_ms(&["--robot", "cross-project", "gaps", "--min-score", "100.0"]);
     fixture.assert_success(&output, "cross-project gaps min-score");
 
     fixture.checkpoint("cross-project:post-gaps-min-score");
@@ -695,10 +659,7 @@ fn test_cross_project_gaps_min_score() -> Result<()> {
     let json = output.json();
     // With a very high min_score, all patterns should appear as gaps
     // (unless perfectly matched)
-    assert!(
-        json["gaps"].is_array(),
-        "Should return gaps array"
-    );
+    assert!(json["gaps"].is_array(), "Should return gaps array");
 
     fixture.emit_event(
         LogLevel::Info,
@@ -723,22 +684,13 @@ fn test_cross_project_gaps_search_limit() -> Result<()> {
     fixture.checkpoint("cross-project:pre-gaps-search-limit");
 
     fixture.log_step("Run gaps with search-limit=1");
-    let output = fixture.run_ms(&[
-        "--robot",
-        "cross-project",
-        "gaps",
-        "--search-limit",
-        "1",
-    ]);
+    let output = fixture.run_ms(&["--robot", "cross-project", "gaps", "--search-limit", "1"]);
     fixture.assert_success(&output, "cross-project gaps search-limit");
 
     fixture.checkpoint("cross-project:post-gaps-search-limit");
 
     let json = output.json();
-    assert!(
-        json["gaps"].is_array(),
-        "Should return gaps array"
-    );
+    assert!(json["gaps"].is_array(), "Should return gaps array");
 
     fixture.emit_event(
         LogLevel::Info,
@@ -759,18 +711,9 @@ fn test_cross_project_gaps_zero_search_limit() -> Result<()> {
     fixture.checkpoint("cross-project:pre-gaps-zero-search-limit");
 
     fixture.log_step("Run gaps with search-limit=0");
-    let output = fixture.run_ms(&[
-        "--robot",
-        "cross-project",
-        "gaps",
-        "--search-limit",
-        "0",
-    ]);
+    let output = fixture.run_ms(&["--robot", "cross-project", "gaps", "--search-limit", "0"]);
 
-    assert!(
-        !output.success,
-        "Gaps with search-limit=0 should fail"
-    );
+    assert!(!output.success, "Gaps with search-limit=0 should fail");
 
     fixture.checkpoint("cross-project:post-gaps-zero-search-limit");
 

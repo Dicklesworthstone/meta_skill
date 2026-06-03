@@ -623,9 +623,7 @@ impl BeadsTracker {
                 // Non-blocking: log warning but don't fail the build
                 eprintln!(
                     "{} failed to update bead {}: {}",
-                    "Warning:",
-                    self.bead_id,
-                    e
+                    "Warning:", self.bead_id, e
                 );
                 Ok(())
             }
@@ -638,9 +636,7 @@ impl BeadsTracker {
         if let Err(e) = self.append_completion_note(&completion) {
             eprintln!(
                 "{} failed to append completion note for {}: {}",
-                "Warning:",
-                self.bead_id,
-                e
+                "Warning:", self.bead_id, e
             );
         }
 
@@ -649,18 +645,14 @@ impl BeadsTracker {
                 Ok(_) => {
                     eprintln!(
                         "{} {} closed (build successful: {})",
-                        "Bead:",
-                        self.bead_id,
-                        skill_name
+                        "Bead:", self.bead_id, skill_name
                     );
                     Ok(())
                 }
                 Err(e) => {
                     eprintln!(
                         "{} failed to close bead {}: {}",
-                        "Warning:",
-                        self.bead_id,
-                        e
+                        "Warning:", self.bead_id, e
                     );
                     Ok(())
                 }
@@ -668,9 +660,7 @@ impl BeadsTracker {
         } else {
             eprintln!(
                 "{} {} build completed (close disabled: {})",
-                "Bead:",
-                self.bead_id,
-                skill_name
+                "Bead:", self.bead_id, skill_name
             );
             Ok(())
         }
@@ -681,19 +671,13 @@ impl BeadsTracker {
         let completion = BuildCompletion::failure(self.duration_secs(), error);
         match self.append_completion_note(&completion) {
             Ok(()) => {
-                eprintln!(
-                    "{} {} updated with failure note",
-                    "Bead:",
-                    self.bead_id
-                );
+                eprintln!("{} {} updated with failure note", "Bead:", self.bead_id);
                 Ok(())
             }
             Err(e) => {
                 eprintln!(
                     "{} failed to update bead {}: {}",
-                    "Warning:",
-                    self.bead_id,
-                    e
+                    "Warning:", self.bead_id, e
                 );
                 Ok(())
             }
@@ -1443,8 +1427,7 @@ fn output_timeout(
     } else {
         println!(
             "\n{} Build timed out at phase: {}",
-            "Timeout:",
-            session.phase
+            "Timeout:", session.phase
         );
         println!("  Progress: {:.0}%", session.overall_progress() * 100.0);
         println!("  Checkpoint saved. Resume with:");
@@ -1464,11 +1447,7 @@ fn output_no_sessions(ctx: &AppContext, session: &BuildSession, query: &str) -> 
         });
         println!("{}", serde_json::to_string_pretty(&output)?);
     } else {
-        println!(
-            "{} No sessions found matching query: {}",
-            "Error:",
-            query
-        );
+        println!("{} No sessions found matching query: {}", "Error:", query);
     }
     Ok(())
 }
@@ -1632,8 +1611,7 @@ fn run_resume(
         } else {
             println!(
                 "{} No checkpoint found for session: {}",
-                "Error:",
-                session_id
+                "Error:", session_id
             );
             println!("\nTo list available checkpoints:");
             println!("  ls {}/.ms/checkpoints/", ctx.ms_root.display());
@@ -1655,9 +1633,7 @@ fn run_resume(
         } else {
             println!(
                 "{} Checkpoint {} is not from a build operation (type: {})",
-                "Error:",
-                session_id,
-                checkpoint.operation_type
+                "Error:", session_id, checkpoint.operation_type
             );
         }
         return Ok(());
@@ -1714,10 +1690,7 @@ fn run_resume(
                 });
 
             if ctx.output_format == OutputFormat::Human {
-                println!(
-                    "\n{} Checkpoint indicates Brenner wizard session",
-                    "Info:"
-                );
+                println!("\n{} Checkpoint indicates Brenner wizard session", "Info:");
                 println!("  Use --guided flag to continue wizard workflow:");
                 println!(
                     "    ms build --guided --from-cass \"{}\" --output {:?}",
@@ -1751,8 +1724,7 @@ fn run_resume(
             if ctx.output_format == OutputFormat::Human {
                 println!(
                     "\n{} Unknown checkpoint phase: {}",
-                    "Warning:",
-                    checkpoint.phase
+                    "Warning:", checkpoint.phase
                 );
                 println!("  This checkpoint may be from an older version.");
             }
@@ -2882,10 +2854,7 @@ mod tests {
             format!("  Min confidence: 80%"),
         ];
         for line in &lines {
-            assert!(
-                !line.contains("\x1b["),
-                "line should have no ANSI: {line}"
-            );
+            assert!(!line.contains("\x1b["), "line should have no ANSI: {line}");
         }
     }
 

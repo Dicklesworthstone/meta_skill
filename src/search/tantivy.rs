@@ -93,7 +93,10 @@ impl Bm25Index {
         let path = path.as_ref();
         if !path.join("meta.json").exists() {
             return Err(MsError::SearchIndex(tantivy::TantivyError::InternalError(
-                format!("Index directory does not exist or is empty: {}", path.display()),
+                format!(
+                    "Index directory does not exist or is empty: {}",
+                    path.display()
+                ),
             )));
         }
 

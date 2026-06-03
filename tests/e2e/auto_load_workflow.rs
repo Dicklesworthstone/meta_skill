@@ -182,7 +182,10 @@ fn test_auto_load_rust_project() -> Result<()> {
     index_skills(&mut fixture);
 
     fixture.log_step("Create Rust project markers");
-    fs::write(fixture.root.join("Cargo.toml"), "[package]\nname = \"test\"")?;
+    fs::write(
+        fixture.root.join("Cargo.toml"),
+        "[package]\nname = \"test\"",
+    )?;
     fs::create_dir_all(fixture.root.join("src"))?;
     fs::write(fixture.root.join("src/main.rs"), "fn main() {}")?;
 
@@ -191,25 +194,30 @@ fn test_auto_load_rust_project() -> Result<()> {
     fixture.assert_success(&output, "auto-load dry_run");
 
     let json = output.json();
-    let would_load = json["data"]["would_load"].as_array().expect("would_load array");
+    let would_load = json["data"]["would_load"]
+        .as_array()
+        .expect("would_load array");
 
     // Rust skill should be in the candidates
-    let rust_found = would_load.iter().any(|s| {
-        s["skill_id"].as_str().unwrap_or_default() == "rust-errors"
-    });
+    let rust_found = would_load
+        .iter()
+        .any(|s| s["skill_id"].as_str().unwrap_or_default() == "rust-errors");
     assert!(rust_found, "Rust skill should be detected in Rust project");
 
     // Node skill should NOT be in candidates (wrong project type)
-    let node_found = would_load.iter().any(|s| {
-        s["skill_id"].as_str().unwrap_or_default() == "node-testing"
-    });
+    let node_found = would_load
+        .iter()
+        .any(|s| s["skill_id"].as_str().unwrap_or_default() == "node-testing");
     assert!(!node_found, "Node skill should not match Rust project");
 
     // Generic skill (no context) should not be returned
-    let generic_found = would_load.iter().any(|s| {
-        s["skill_id"].as_str().unwrap_or_default() == "git-workflow"
-    });
-    assert!(!generic_found, "Generic skill without context should not match");
+    let generic_found = would_load
+        .iter()
+        .any(|s| s["skill_id"].as_str().unwrap_or_default() == "git-workflow");
+    assert!(
+        !generic_found,
+        "Generic skill without context should not match"
+    );
 
     Ok(())
 }
@@ -240,18 +248,20 @@ fn test_auto_load_node_project() -> Result<()> {
     fixture.assert_success(&output, "auto-load dry_run");
 
     let json = output.json();
-    let would_load = json["data"]["would_load"].as_array().expect("would_load array");
+    let would_load = json["data"]["would_load"]
+        .as_array()
+        .expect("would_load array");
 
     // Node skill should be detected
-    let node_found = would_load.iter().any(|s| {
-        s["skill_id"].as_str().unwrap_or_default() == "node-testing"
-    });
+    let node_found = would_load
+        .iter()
+        .any(|s| s["skill_id"].as_str().unwrap_or_default() == "node-testing");
     assert!(node_found, "Node skill should be detected in Node project");
 
     // Rust skill should NOT match
-    let rust_found = would_load.iter().any(|s| {
-        s["skill_id"].as_str().unwrap_or_default() == "rust-errors"
-    });
+    let rust_found = would_load
+        .iter()
+        .any(|s| s["skill_id"].as_str().unwrap_or_default() == "rust-errors");
     assert!(!rust_found, "Rust skill should not match Node project");
 
     Ok(())
@@ -283,13 +293,18 @@ fn test_auto_load_python_project() -> Result<()> {
     fixture.assert_success(&output, "auto-load dry_run");
 
     let json = output.json();
-    let would_load = json["data"]["would_load"].as_array().expect("would_load array");
+    let would_load = json["data"]["would_load"]
+        .as_array()
+        .expect("would_load array");
 
     // Python skill should be detected
-    let python_found = would_load.iter().any(|s| {
-        s["skill_id"].as_str().unwrap_or_default() == "python-hints"
-    });
-    assert!(python_found, "Python skill should be detected in Python project");
+    let python_found = would_load
+        .iter()
+        .any(|s| s["skill_id"].as_str().unwrap_or_default() == "python-hints");
+    assert!(
+        python_found,
+        "Python skill should be detected in Python project"
+    );
 
     Ok(())
 }
@@ -313,22 +328,34 @@ fn test_auto_load_file_patterns() -> Result<()> {
     fs::write(fixture.root.join("docs/guide.md"), "# Guide")?;
 
     fixture.log_step("Auto-load with --dry_run");
-    let output = fixture.run_ms(&["--robot", "load", "--auto", "--dry_run", "--threshold", "0.1"]);
+    let output = fixture.run_ms(&[
+        "--robot",
+        "load",
+        "--auto",
+        "--dry_run",
+        "--threshold",
+        "0.1",
+    ]);
     fixture.assert_success(&output, "auto-load dry_run");
 
     let json = output.json();
-    let would_load = json["data"]["would_load"].as_array().expect("would_load array");
+    let would_load = json["data"]["would_load"]
+        .as_array()
+        .expect("would_load array");
 
     // Markdown skill should be detected via file patterns
-    let md_found = would_load.iter().any(|s| {
-        s["skill_id"].as_str().unwrap_or_default() == "markdown-docs"
-    });
-    assert!(md_found, "Markdown skill should be detected via file patterns");
+    let md_found = would_load
+        .iter()
+        .any(|s| s["skill_id"].as_str().unwrap_or_default() == "markdown-docs");
+    assert!(
+        md_found,
+        "Markdown skill should be detected via file patterns"
+    );
 
     // Verify breakdown shows file_patterns contribution
-    let md_skill = would_load.iter().find(|s| {
-        s["skill_id"].as_str().unwrap_or_default() == "markdown-docs"
-    });
+    let md_skill = would_load
+        .iter()
+        .find(|s| s["skill_id"].as_str().unwrap_or_default() == "markdown-docs");
     if let Some(skill) = md_skill {
         let file_patterns_score = skill["breakdown"]["file_patterns"].as_f64().unwrap_or(0.0);
         assert!(
@@ -355,19 +382,24 @@ fn test_auto_load_tool_detection() -> Result<()> {
     index_skills(&mut fixture);
 
     fixture.log_step("Create Rust project markers");
-    fs::write(fixture.root.join("Cargo.toml"), "[package]\nname = \"test\"")?;
+    fs::write(
+        fixture.root.join("Cargo.toml"),
+        "[package]\nname = \"test\"",
+    )?;
 
     fixture.log_step("Auto-load with --dry_run and check tool scoring");
     let output = fixture.run_ms(&["--robot", "load", "--auto", "--dry_run"]);
     fixture.assert_success(&output, "auto-load dry_run");
 
     let json = output.json();
-    let would_load = json["data"]["would_load"].as_array().expect("would_load array");
+    let would_load = json["data"]["would_load"]
+        .as_array()
+        .expect("would_load array");
 
     // Rust skill should have tool match (cargo, rustc are usually in PATH)
-    let rust_skill = would_load.iter().find(|s| {
-        s["skill_id"].as_str().unwrap_or_default() == "rust-errors"
-    });
+    let rust_skill = would_load
+        .iter()
+        .find(|s| s["skill_id"].as_str().unwrap_or_default() == "rust-errors");
 
     if let Some(skill) = rust_skill {
         // Verify tool detection contributed to the score
@@ -399,7 +431,10 @@ fn test_auto_load_signals() -> Result<()> {
     index_skills(&mut fixture);
 
     fixture.log_step("Create Rust project with thiserror usage");
-    fs::write(fixture.root.join("Cargo.toml"), "[package]\nname = \"test\"")?;
+    fs::write(
+        fixture.root.join("Cargo.toml"),
+        "[package]\nname = \"test\"",
+    )?;
     fs::create_dir_all(fixture.root.join("src"))?;
     fs::write(
         fixture.root.join("src/error.rs"),
@@ -415,19 +450,28 @@ pub enum MyError {
     )?;
 
     fixture.log_step("Auto-load with --dry_run");
-    let output = fixture.run_ms(&["--robot", "load", "--auto", "--dry_run", "--threshold", "0.1"]);
+    let output = fixture.run_ms(&[
+        "--robot",
+        "load",
+        "--auto",
+        "--dry_run",
+        "--threshold",
+        "0.1",
+    ]);
     fixture.assert_success(&output, "auto-load dry_run");
 
     let json = output.json();
-    let would_load = json["data"]["would_load"].as_array().expect("would_load array");
+    let would_load = json["data"]["would_load"]
+        .as_array()
+        .expect("would_load array");
 
     // Both Rust skills should be detected
-    let thiserror_found = would_load.iter().any(|s| {
-        s["skill_id"].as_str().unwrap_or_default() == "thiserror-patterns"
-    });
-    let rust_found = would_load.iter().any(|s| {
-        s["skill_id"].as_str().unwrap_or_default() == "rust-errors"
-    });
+    let thiserror_found = would_load
+        .iter()
+        .any(|s| s["skill_id"].as_str().unwrap_or_default() == "thiserror-patterns");
+    let rust_found = would_load
+        .iter()
+        .any(|s| s["skill_id"].as_str().unwrap_or_default() == "rust-errors");
 
     assert!(rust_found, "Rust errors skill should be detected");
     // Signal matching may not work in E2E if content isn't captured by collector
@@ -451,14 +495,31 @@ fn test_auto_load_threshold() -> Result<()> {
     index_skills(&mut fixture);
 
     fixture.log_step("Create Rust project");
-    fs::write(fixture.root.join("Cargo.toml"), "[package]\nname = \"test\"")?;
+    fs::write(
+        fixture.root.join("Cargo.toml"),
+        "[package]\nname = \"test\"",
+    )?;
 
     fixture.log_step("Auto-load with HIGH threshold (0.9)");
-    let output_high = fixture.run_ms(&["--robot", "load", "--auto", "--dry_run", "--threshold", "0.9"]);
+    let output_high = fixture.run_ms(&[
+        "--robot",
+        "load",
+        "--auto",
+        "--dry_run",
+        "--threshold",
+        "0.9",
+    ]);
     fixture.assert_success(&output_high, "auto-load high threshold");
 
     fixture.log_step("Auto-load with LOW threshold (0.1)");
-    let output_low = fixture.run_ms(&["--robot", "load", "--auto", "--dry_run", "--threshold", "0.1"]);
+    let output_low = fixture.run_ms(&[
+        "--robot",
+        "load",
+        "--auto",
+        "--dry_run",
+        "--threshold",
+        "0.1",
+    ]);
     fixture.assert_success(&output_low, "auto-load low threshold");
 
     let high_json = output_high.json();
@@ -508,7 +569,10 @@ fn test_auto_load_dry_run() -> Result<()> {
     index_skills(&mut fixture);
 
     fixture.log_step("Create Rust project");
-    fs::write(fixture.root.join("Cargo.toml"), "[package]\nname = \"test\"")?;
+    fs::write(
+        fixture.root.join("Cargo.toml"),
+        "[package]\nname = \"test\"",
+    )?;
 
     fixture.log_step("Auto-load with --dry_run");
     let output = fixture.run_ms(&["--robot", "load", "--auto", "--dry_run"]);
@@ -557,7 +621,10 @@ fn test_auto_load_confirm() -> Result<()> {
     index_skills(&mut fixture);
 
     fixture.log_step("Create Rust project");
-    fs::write(fixture.root.join("Cargo.toml"), "[package]\nname = \"test\"")?;
+    fs::write(
+        fixture.root.join("Cargo.toml"),
+        "[package]\nname = \"test\"",
+    )?;
 
     // In robot mode, --confirm flag is ignored (no interactive prompts)
     fixture.log_step("Auto-load with --confirm in robot mode");
@@ -592,7 +659,10 @@ fn test_auto_load_no_skills() -> Result<()> {
     // Don't create or index any skills
 
     fixture.log_step("Create Rust project");
-    fs::write(fixture.root.join("Cargo.toml"), "[package]\nname = \"test\"")?;
+    fs::write(
+        fixture.root.join("Cargo.toml"),
+        "[package]\nname = \"test\"",
+    )?;
 
     fixture.log_step("Auto-load with no skills indexed");
     let output = fixture.run_ms(&["--robot", "load", "--auto", "--dry_run"]);
@@ -606,7 +676,11 @@ fn test_auto_load_no_skills() -> Result<()> {
     // Should indicate no skills indexed
     let message = json["data"]["message"].as_str().unwrap_or("");
     assert!(
-        message.contains("No skills indexed") || json["data"]["candidates"].as_array().map(|a| a.is_empty()).unwrap_or(true),
+        message.contains("No skills indexed")
+            || json["data"]["candidates"]
+                .as_array()
+                .map(|a| a.is_empty())
+                .unwrap_or(true),
         "Should indicate no skills available"
     );
 
@@ -629,33 +703,45 @@ fn test_auto_load_multi_language() -> Result<()> {
 
     fixture.log_step("Create multi-language project");
     // Project with both Rust and Python
-    fs::write(fixture.root.join("Cargo.toml"), "[package]\nname = \"test\"")?;
-    fs::write(fixture.root.join("pyproject.toml"), "[project]\nname = \"test\"")?;
+    fs::write(
+        fixture.root.join("Cargo.toml"),
+        "[package]\nname = \"test\"",
+    )?;
+    fs::write(
+        fixture.root.join("pyproject.toml"),
+        "[project]\nname = \"test\"",
+    )?;
 
     fixture.log_step("Auto-load with --dry_run");
     let output = fixture.run_ms(&["--robot", "load", "--auto", "--dry_run"]);
     fixture.assert_success(&output, "auto-load dry_run");
 
     let json = output.json();
-    let would_load = json["data"]["would_load"].as_array().expect("would_load array");
+    let would_load = json["data"]["would_load"]
+        .as_array()
+        .expect("would_load array");
 
     // Both skills should be detected
-    let rust_found = would_load.iter().any(|s| {
-        s["skill_id"].as_str().unwrap_or_default() == "rust-errors"
-    });
-    let python_found = would_load.iter().any(|s| {
-        s["skill_id"].as_str().unwrap_or_default() == "python-hints"
-    });
+    let rust_found = would_load
+        .iter()
+        .any(|s| s["skill_id"].as_str().unwrap_or_default() == "rust-errors");
+    let python_found = would_load
+        .iter()
+        .any(|s| s["skill_id"].as_str().unwrap_or_default() == "python-hints");
 
-    assert!(rust_found, "Rust skill should be detected in multi-lang project");
-    assert!(python_found, "Python skill should be detected in multi-lang project");
+    assert!(
+        rust_found,
+        "Rust skill should be detected in multi-lang project"
+    );
+    assert!(
+        python_found,
+        "Python skill should be detected in multi-lang project"
+    );
 
     // Verify context shows both project types
     let project_types = json["data"]["context"]["project_types"].as_array();
     if let Some(types) = project_types {
-        let type_names: Vec<&str> = types.iter()
-            .filter_map(|t| t["type"].as_str())
-            .collect();
+        let type_names: Vec<&str> = types.iter().filter_map(|t| t["type"].as_str()).collect();
         assert!(
             type_names.iter().any(|t| *t == "rust"),
             "Context should detect Rust"

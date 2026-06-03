@@ -120,10 +120,7 @@ fn test_backup_create_auto_id() -> Result<()> {
     let backup_id = json["id"].as_str().expect("backup should have id");
 
     // Auto-generated IDs should be numeric timestamp format
-    assert!(
-        !backup_id.is_empty(),
-        "Backup ID should not be empty"
-    );
+    assert!(!backup_id.is_empty(), "Backup ID should not be empty");
 
     fixture.emit_event(
         LogLevel::Info,
@@ -333,13 +330,7 @@ fn test_backup_restore_by_id() -> Result<()> {
     fixture.checkpoint("backup:pre-restore");
 
     fixture.log_step("Restore backup by ID");
-    let output = fixture.run_ms(&[
-        "--robot",
-        "backup",
-        "restore",
-        "restore-test",
-        "--approve",
-    ]);
+    let output = fixture.run_ms(&["--robot", "backup", "restore", "restore-test", "--approve"]);
     fixture.assert_success(&output, "backup restore");
 
     fixture.checkpoint("backup:post-restore");
@@ -413,10 +404,7 @@ fn test_backup_restore_requires_approval() -> Result<()> {
     let output = fixture.run_ms(&["--robot", "backup", "restore", "needs-approve"]);
 
     // Restore without --approve should fail
-    assert!(
-        !output.success,
-        "Restore without --approve should fail"
-    );
+    assert!(!output.success, "Restore without --approve should fail");
 
     fixture.checkpoint("backup:post-restore-no-approve");
 
@@ -440,17 +428,11 @@ fn test_backup_create_invalid_id() -> Result<()> {
 
     fixture.log_step("Attempt backup create with path traversal ID");
     let output = fixture.run_ms(&["--robot", "backup", "create", "--id", "../escape"]);
-    assert!(
-        !output.success,
-        "Backup with path traversal ID should fail"
-    );
+    assert!(!output.success, "Backup with path traversal ID should fail");
 
     fixture.log_step("Attempt backup create with slash in ID");
     let output = fixture.run_ms(&["--robot", "backup", "create", "--id", "a/b"]);
-    assert!(
-        !output.success,
-        "Backup with slash in ID should fail"
-    );
+    assert!(!output.success, "Backup with slash in ID should fail");
 
     fixture.checkpoint("backup:post-create-invalid");
 
@@ -578,10 +560,7 @@ fn test_backup_restore_not_found() -> Result<()> {
         "does-not-exist",
         "--approve",
     ]);
-    assert!(
-        !output.success,
-        "Restore of nonexistent backup should fail"
-    );
+    assert!(!output.success, "Restore of nonexistent backup should fail");
 
     fixture.checkpoint("backup:post-restore-missing");
 
@@ -619,10 +598,7 @@ fn test_backup_manifest_structure() -> Result<()> {
     let manifest: serde_json::Value = serde_json::from_str(&manifest_raw)?;
 
     // Verify required manifest fields
-    assert!(
-        manifest["id"].is_string(),
-        "Manifest should have string id"
-    );
+    assert!(manifest["id"].is_string(), "Manifest should have string id");
     assert!(
         manifest["created_at"].is_string(),
         "Manifest should have created_at"

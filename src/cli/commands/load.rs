@@ -725,10 +725,7 @@ fn output_auto_human(ctx: &AppContext, result: &AutoLoadResult, _args: &LoadArgs
     println!("Detecting context...");
     if !result.context_summary.project_types.is_empty() {
         for (ptype, confidence) in &result.context_summary.project_types {
-            println!(
-                "  Project type: {} (confidence: {:.2})",
-                ptype, confidence
-            );
+            println!("  Project type: {} (confidence: {:.2})", ptype, confidence);
         }
     }
     println!(
@@ -758,10 +755,7 @@ fn output_auto_human(ctx: &AppContext, result: &AutoLoadResult, _args: &LoadArgs
             };
             println!(
                 "  {} [{:.2}] {} - {}",
-                status,
-                candidate.score,
-                candidate.skill_id,
-                candidate.skill_name
+                status, candidate.score, candidate.skill_id, candidate.skill_name
             );
         }
         println!();
@@ -1794,7 +1788,13 @@ mod tests {
         let result = make_load_result("success-skill", 300);
         assert_eq!(result.name, "success-skill");
         assert!(result.disclosed.body.is_some());
-        assert!(result.disclosed.frontmatter.description.contains("success-skill"));
+        assert!(
+            result
+                .disclosed
+                .frontmatter
+                .description
+                .contains("success-skill")
+        );
     }
 
     // ── 6. test_load_render_conflict_diff ───────────────────────────

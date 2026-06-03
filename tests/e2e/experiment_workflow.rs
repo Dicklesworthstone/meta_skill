@@ -95,10 +95,7 @@ fn create_experiment(fixture: &mut E2EFixture) -> Result<String> {
         .as_str()
         .expect("experiment should have id")
         .to_string();
-    println!(
-        "[VERIFY] Created experiment: {}",
-        experiment_id
-    );
+    println!("[VERIFY] Created experiment: {}", experiment_id);
     Ok(experiment_id)
 }
 
@@ -195,15 +192,11 @@ fn test_experiment_variants() -> Result<()> {
     fixture.log_step("checkpoint:experiment:configure");
 
     let json = output.json();
-    let variants_str = json["experiment"]["variants_json"]
-        .as_str()
-        .unwrap_or("{}");
+    let variants_str = json["experiment"]["variants_json"].as_str().unwrap_or("{}");
     println!("[VERIFY] Variants JSON: {}", variants_str);
 
     // Verify the variants are stored
-    let experiment_id = json["experiment"]["id"]
-        .as_str()
-        .expect("experiment id");
+    let experiment_id = json["experiment"]["id"].as_str().expect("experiment id");
 
     // Check status shows variants
     fixture.log_step("Get experiment status to verify variants");
@@ -219,10 +212,7 @@ fn test_experiment_variants() -> Result<()> {
 
     // Verify variants exist in the output
     if let Some(variants) = json.get("variants").and_then(|v| v.as_array()) {
-        assert!(
-            variants.len() >= 2,
-            "Should have at least 2 variant stats"
-        );
+        assert!(variants.len() >= 2, "Should have at least 2 variant stats");
         for v in variants {
             let id = v["id"].as_str().unwrap_or("unknown");
             println!("[VERIFY] Variant: {}", id);
@@ -328,14 +318,8 @@ fn test_experiment_start() -> Result<()> {
             .iter()
             .map(|v| v["assignments"].as_u64().unwrap_or(0))
             .sum();
-        println!(
-            "[VERIFY] Total assignments: {}",
-            total_assignments
-        );
-        assert!(
-            total_assignments >= 3,
-            "Should have at least 3 assignments"
-        );
+        println!("[VERIFY] Total assignments: {}", total_assignments);
+        assert!(total_assignments >= 3, "Should have at least 3 assignments");
     }
 
     fixture.log_step("checkpoint:experiment:teardown");
@@ -649,7 +633,11 @@ fn test_experiment_list() -> Result<()> {
     );
 
     let count = json["count"].as_u64().unwrap_or(0);
-    assert!(count >= 2, "Should have at least 2 experiments, got {}", count);
+    assert!(
+        count >= 2,
+        "Should have at least 2 experiments, got {}",
+        count
+    );
 
     if let Some(experiments) = json["experiments"].as_array() {
         for exp in experiments {
@@ -816,7 +804,10 @@ fn test_experiment_full_lifecycle() -> Result<()> {
         "Final status should be concluded"
     );
 
-    println!("[VERIFY] Full A/B lifecycle complete for experiment {}", experiment_id);
+    println!(
+        "[VERIFY] Full A/B lifecycle complete for experiment {}",
+        experiment_id
+    );
 
     fixture.log_step("checkpoint:experiment:teardown");
     fixture.checkpoint("experiment_lifecycle_done");

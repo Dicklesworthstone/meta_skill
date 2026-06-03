@@ -351,10 +351,8 @@ fn index_robot(ctx: &AppContext, roots: &[SkillRoot], args: &IndexArgs) -> Resul
     let elapsed = start.elapsed();
 
     let total_companions: usize = skill_files.iter().map(|s| s.companion_count).sum();
-    let skills_with_companions: usize = skill_files
-        .iter()
-        .filter(|s| s.companion_count > 0)
-        .count();
+    let skills_with_companions: usize =
+        skill_files.iter().filter(|s| s.companion_count > 0).count();
 
     println!(
         "{}",
@@ -1054,7 +1052,14 @@ mod tests {
     fn test_is_skipped_skill_discovery_dir_does_not_skip_legit_names() {
         // Legitimate skill-package directories must not be skipped just
         // because they start with a dot or look like build output.
-        for name in ["scripts", "references", "fixtures", ".github", "src", "tests"] {
+        for name in [
+            "scripts",
+            "references",
+            "fixtures",
+            ".github",
+            "src",
+            "tests",
+        ] {
             assert!(
                 !is_skipped_skill_discovery_dir(name),
                 "did not expect `{name}` to be skipped"

@@ -125,7 +125,11 @@ impl<'a> SuccessRenderer<'a> {
 
     /// Render with rich styling.
     fn render_rich(&self) {
-        let icon = self.output.theme().icons.get("success", self.output.use_unicode());
+        let icon = self
+            .output
+            .theme()
+            .icons
+            .get("success", self.output.use_unicode());
         let styled_msg = self.output.format_styled(&self.message, "bold green");
 
         println!();
@@ -141,7 +145,9 @@ impl<'a> SuccessRenderer<'a> {
             let label = self.output.format_styled("Next steps:", "bold");
             println!("  {label}");
             for (i, step) in self.next_steps.iter().enumerate() {
-                let num = self.output.format_styled(&format!("{}.", i + 1), "bold cyan");
+                let num = self
+                    .output
+                    .format_styled(&format!("{}.", i + 1), "bold cyan");
                 println!("    {num} {step}");
             }
         }
@@ -238,7 +244,11 @@ impl<'a> InfoRenderer<'a> {
 
     /// Render with rich styling.
     fn render_rich(&self) {
-        let icon = self.output.theme().icons.get("info", self.output.use_unicode());
+        let icon = self
+            .output
+            .theme()
+            .icons
+            .get("info", self.output.use_unicode());
         let styled_msg = self.output.format_styled(&self.message, "cyan");
         println!("{icon} {styled_msg}");
 
@@ -309,7 +319,11 @@ impl<'a> HintDisplay<'a> {
 
     /// Render with rich styling.
     fn render_rich(&self) {
-        let icon = self.output.theme().icons.get("hint", self.output.use_unicode());
+        let icon = self
+            .output
+            .theme()
+            .icons
+            .get("hint", self.output.use_unicode());
         let label = self.label.as_deref().unwrap_or("Tip");
         let styled_label = self.output.format_styled(label, "dim bold");
         let styled_msg = self.output.format_styled(&self.message, "dim");
@@ -408,12 +422,15 @@ impl<'a> StatusTracker<'a> {
                 }
             }
             OutputMode::Rich => {
-                let icon = self.output.theme().icons.get("success", self.output.use_unicode());
+                let icon = self
+                    .output
+                    .theme()
+                    .icons
+                    .get("success", self.output.use_unicode());
                 let styled_desc = self.output.format_styled(description, "green");
-                let num = self.output.format_styled(
-                    &format!("[{}]", self.current_step),
-                    "dim",
-                );
+                let num = self
+                    .output
+                    .format_styled(&format!("[{}]", self.current_step), "dim");
                 println!("  {icon} {num} {styled_desc}");
             }
             OutputMode::Plain => {
@@ -451,7 +468,11 @@ impl<'a> StatusTracker<'a> {
                 let box_chars = self.output.theme().box_style.chars();
                 let width = self.output.width().saturating_sub(4).min(30);
                 println!("  {}", box_chars.horizontal.repeat(width));
-                let icon = self.output.theme().icons.get("success", self.output.use_unicode());
+                let icon = self
+                    .output
+                    .theme()
+                    .icons
+                    .get("success", self.output.use_unicode());
                 let styled = self.output.format_styled(summary, "bold green");
                 println!("  {icon} {styled}");
                 println!();
@@ -489,7 +510,11 @@ impl<'a> StatusTracker<'a> {
                 }
             }
             OutputMode::Rich => {
-                let icon = self.output.theme().icons.get("error", self.output.use_unicode());
+                let icon = self
+                    .output
+                    .theme()
+                    .icons
+                    .get("error", self.output.use_unicode());
                 let styled = self.output.format_styled(error, "bold red");
                 eprintln!("  {icon} {styled}");
             }
@@ -546,8 +571,7 @@ mod tests {
     #[test]
     fn test_success_renderer_with_detail() {
         let output = plain_output();
-        let renderer = SuccessRenderer::new(&output, "Validated")
-            .detail("All 5 checks passed");
+        let renderer = SuccessRenderer::new(&output, "Validated").detail("All 5 checks passed");
         renderer.render();
     }
 
@@ -583,8 +607,7 @@ mod tests {
     #[test]
     fn test_info_renderer_json() {
         let output = json_output();
-        let renderer = InfoRenderer::new(&output, "Processing")
-            .context("items", "10");
+        let renderer = InfoRenderer::new(&output, "Processing").context("items", "10");
         renderer.render();
     }
 
@@ -602,8 +625,7 @@ mod tests {
     #[test]
     fn test_hint_display_custom_label() {
         let output = plain_output();
-        let hint = HintDisplay::new(&output, "Ctrl+C to cancel")
-            .label("Shortcut");
+        let hint = HintDisplay::new(&output, "Ctrl+C to cancel").label("Shortcut");
         hint.render();
     }
 

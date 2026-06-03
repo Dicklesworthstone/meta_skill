@@ -225,10 +225,7 @@ fn show_evidence_index_human(
 
             println!(
                 "    {} session:{} msgs:{}-{}",
-                level_str,
-                eref.session_id,
-                eref.message_range.0,
-                eref.message_range.1
+                level_str, eref.session_id, eref.message_range.0, eref.message_range.1
             );
 
             if show_excerpts {
@@ -246,9 +243,7 @@ fn show_evidence_index_human(
     }
 
     println!();
-    println!(
-        "Jump to source: ms evidence show {skill_id} --rule <rule-id>"
-    );
+    println!("Jump to source: ms evidence show {skill_id} --rule <rule-id>");
 
     Ok(())
 }
@@ -673,10 +668,7 @@ mod tests {
     #[test]
     fn test_evidence_plain_output_format() {
         let eref = make_evidence_ref("sess-001", 0.7);
-        let line = format!(
-            "[1] Excerpt ({:.0}% confidence)",
-            eref.confidence * 100.0
-        );
+        let line = format!("[1] Excerpt ({:.0}% confidence)", eref.confidence * 100.0);
         assert!(line.contains("70%"));
         assert!(!line.contains("\x1b["), "plain output must have no ANSI");
     }

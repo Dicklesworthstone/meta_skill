@@ -179,10 +179,7 @@ fn test_suggest_cold_start() -> Result<()> {
         .and_then(|v| v.as_array());
 
     if let Some(items) = suggestions {
-        println!(
-            "[VERIFY] Cold start returned {} suggestions",
-            items.len()
-        );
+        println!("[VERIFY] Cold start returned {} suggestions", items.len());
         // With 5 skills indexed, should get some suggestions
         assert!(
             !items.is_empty(),
@@ -401,10 +398,7 @@ fn test_suggest_bandit_learning() -> Result<()> {
 
     let initial_stats = output.json();
     let initial_selections = initial_stats["total_selections"].as_u64().unwrap_or(999);
-    println!(
-        "[VERIFY] Initial total_selections: {}",
-        initial_selections
-    );
+    println!("[VERIFY] Initial total_selections: {}", initial_selections);
 
     // Record positive feedback to update bandit
     fixture.log_step("Record feedback to trigger bandit learning");
@@ -477,18 +471,12 @@ fn test_suggest_bandit_stats() -> Result<()> {
         json.get("total_selections").is_some(),
         "Stats should include total_selections"
     );
-    assert!(
-        json.get("config").is_some(),
-        "Stats should include config"
-    );
+    assert!(json.get("config").is_some(), "Stats should include config");
     assert!(
         json.get("weights").is_some(),
         "Stats should include weights"
     );
-    assert!(
-        json.get("arms").is_some(),
-        "Stats should include arms"
-    );
+    assert!(json.get("arms").is_some(), "Stats should include arms");
 
     // Verify config fields
     let config = &json["config"];
@@ -566,7 +554,10 @@ fn test_suggest_bandit_reset() -> Result<()> {
     let total = json["total_selections"].as_u64().unwrap_or(999);
     assert_eq!(total, 0, "Total selections should be 0 after reset");
 
-    println!("[VERIFY] Bandit successfully reset, total_selections={}", total);
+    println!(
+        "[VERIFY] Bandit successfully reset, total_selections={}",
+        total
+    );
 
     fixture.log_step("checkpoint:suggest:teardown");
     fixture.checkpoint("suggest_bandit_reset_done");
@@ -686,10 +677,7 @@ fn test_suggest_explain_mode() -> Result<()> {
         .and_then(|v| v.as_array());
 
     if let Some(items) = suggestions {
-        println!(
-            "[VERIFY] Explain mode returned {} suggestions",
-            items.len()
-        );
+        println!("[VERIFY] Explain mode returned {} suggestions", items.len());
 
         // In explain mode, suggestions should have breakdown data
         for (i, item) in items.iter().enumerate() {

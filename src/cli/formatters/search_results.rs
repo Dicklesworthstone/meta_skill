@@ -563,7 +563,10 @@ mod tests {
             output.contains("1 results"),
             "Should show result count: got {output}"
         );
-        assert!(output.contains("Skill skill-1"), "Should contain skill name");
+        assert!(
+            output.contains("Skill skill-1"),
+            "Should contain skill name"
+        );
         assert!(output.contains("bm25"), "Should show search type");
     }
 
@@ -619,10 +622,7 @@ mod tests {
             header.contains("semantic"),
             "Header should contain search type"
         );
-        assert!(
-            header.contains("in 15ms"),
-            "Header should contain duration"
-        );
+        assert!(header.contains("in 15ms"), "Header should contain duration");
     }
 
     #[test]
@@ -642,11 +642,19 @@ mod tests {
 
         let output = results.format(OutputFormat::Plain);
         let lines: Vec<&str> = output.lines().collect();
-        assert_eq!(lines.len(), 2, "Plain output should have one line per result");
+        assert_eq!(
+            lines.len(),
+            2,
+            "Plain output should have one line per result"
+        );
 
         for line in &lines {
             let fields: Vec<&str> = line.split('\t').collect();
-            assert_eq!(fields.len(), 4, "Each line should be SCORE\\tNAME\\tLAYER\\tDESC");
+            assert_eq!(
+                fields.len(),
+                4,
+                "Each line should be SCORE\\tNAME\\tLAYER\\tDESC"
+            );
         }
     }
 
@@ -766,8 +774,7 @@ mod tests {
         assert!(!output.is_empty(), "TOON output should not be empty");
         // TOON is not valid JSON (different format)
         assert!(
-            serde_json::from_str::<serde_json::Value>(&output).is_err()
-                || output.contains("test"),
+            serde_json::from_str::<serde_json::Value>(&output).is_err() || output.contains("test"),
             "TOON output should contain data or be a different format from JSON"
         );
     }
@@ -780,8 +787,14 @@ mod tests {
         let plain_empty = results.format_empty_results(false);
 
         // Both should mention the query and give suggestions
-        assert!(rich_empty.contains("nothing"), "Rich empty should contain query");
-        assert!(plain_empty.contains("nothing"), "Plain empty should contain query");
+        assert!(
+            rich_empty.contains("nothing"),
+            "Rich empty should contain query"
+        );
+        assert!(
+            plain_empty.contains("nothing"),
+            "Plain empty should contain query"
+        );
         assert!(
             rich_empty.contains("different keywords"),
             "Rich empty should suggest alternatives"

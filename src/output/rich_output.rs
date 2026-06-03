@@ -1177,9 +1177,7 @@ impl RichOutput {
             let abs_path = if path.is_absolute() {
                 path.to_path_buf()
             } else {
-                std::env::current_dir()
-                    .unwrap_or_default()
-                    .join(path)
+                std::env::current_dir().unwrap_or_default().join(path)
             };
             let url = format!("file://{}", abs_path.display());
             self.format_hyperlink(text, &url)

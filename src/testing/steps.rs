@@ -845,8 +845,7 @@ mod tests {
     #[test]
     fn test_execute_set_with_expansion() {
         let mut ctx = TestContext::default();
-        ctx.variables
-            .insert("base".to_string(), "/tmp".to_string());
+        ctx.variables.insert("base".to_string(), "/tmp".to_string());
 
         let step = SetStep {
             name: "full_path".to_string(),
@@ -877,10 +876,7 @@ mod tests {
     fn test_execute_run_with_env() {
         let mut ctx = TestContext::default();
         let mut env = HashMap::new();
-        env.insert(
-            "MS_TEST_MARKER".to_string(),
-            "test_value_42".to_string(),
-        );
+        env.insert("MS_TEST_MARKER".to_string(), "test_value_42".to_string());
         let step = RunStep {
             cmd: "echo $MS_TEST_MARKER".to_string(),
             cwd: None,

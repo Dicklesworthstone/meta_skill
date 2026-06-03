@@ -180,10 +180,7 @@ fn show_human_plain(skill: &SkillRecord, args: &ShowArgs) -> Result<()> {
 
     // Core fields
     println!("ID:      {}", skill.id);
-    println!(
-        "Version: {}",
-        skill.version.as_deref().unwrap_or("-")
-    );
+    println!("Version: {}", skill.version.as_deref().unwrap_or("-"));
     if let Some(ref author) = skill.author {
         println!("Author:  {author}");
     }
@@ -573,8 +570,7 @@ mod tests {
             ("Layer", normalize_layer(&skill.source_layer)),
             ("Source", skill.source_path.clone()),
         ];
-        let table_data: Vec<(&str, &str)> =
-            pairs.iter().map(|(k, v)| (*k, v.as_str())).collect();
+        let table_data: Vec<(&str, &str)> = pairs.iter().map(|(k, v)| (*k, v.as_str())).collect();
         let table = key_value_table(&table_data);
         let rendered = table.render_plain(80);
         assert!(rendered.contains("sk-abc123"), "table should contain ID");
@@ -642,10 +638,7 @@ mod tests {
         let skill = make_skill();
         // Plain format produces YAML-like key-value pairs
         let meta: serde_json::Value = serde_json::from_str(&skill.metadata_json).unwrap();
-        let skill_type = meta
-            .get("type")
-            .and_then(|t| t.as_str())
-            .unwrap_or("skill");
+        let skill_type = meta.get("type").and_then(|t| t.as_str()).unwrap_or("skill");
         assert_eq!(skill_type, "tool");
 
         // Verify all plain output fields are available
@@ -722,8 +715,8 @@ mod tests {
         let hash_trunc = &skill.content_hash[..skill.content_hash.len().min(16)];
         assert_eq!(hash_trunc, "abcdef0123456789");
 
-        let commit_trunc = &skill.git_commit.as_ref().unwrap()
-            [..skill.git_commit.as_ref().unwrap().len().min(8)];
+        let commit_trunc =
+            &skill.git_commit.as_ref().unwrap()[..skill.git_commit.as_ref().unwrap().len().min(8)];
         assert_eq!(commit_trunc, "deadbeef");
     }
 
@@ -777,10 +770,7 @@ mod tests {
         skill.is_deprecated = true;
         skill.deprecation_reason = Some("Use v2 instead".to_string());
 
-        let warn = warning_panel(
-            "DEPRECATED",
-            skill.deprecation_reason.as_deref().unwrap(),
-        );
+        let warn = warning_panel("DEPRECATED", skill.deprecation_reason.as_deref().unwrap());
         let rendered = format!("{warn}");
         assert!(!rendered.is_empty(), "warning panel should render");
     }
@@ -791,10 +781,7 @@ mod tests {
     fn test_show_deps_parsing() {
         let skill = make_skill();
         let meta: serde_json::Value = serde_json::from_str(&skill.metadata_json).unwrap();
-        let requires = meta
-            .get("requires")
-            .and_then(|d| d.as_array())
-            .unwrap();
+        let requires = meta.get("requires").and_then(|d| d.as_array()).unwrap();
         assert_eq!(requires.len(), 2);
         assert_eq!(requires[0].as_str().unwrap(), "dep-a");
         assert_eq!(requires[1].as_str().unwrap(), "dep-b");

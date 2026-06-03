@@ -132,7 +132,12 @@ fn visual_search_results_empty() {
 
 #[test]
 fn visual_search_results_single() {
-    let results = vec![("debug-rust", 0.95_f32, "project", "Debug Rust builds and compiler errors")];
+    let results = vec![(
+        "debug-rust",
+        0.95_f32,
+        "project",
+        "Debug Rust builds and compiler errors",
+    )];
     let table = search_results_table(&results, 80);
     let output = table.render_plain(80);
     assert_snapshot!("search_results_single", output);
@@ -141,11 +146,31 @@ fn visual_search_results_single() {
 #[test]
 fn visual_search_results_multiple() {
     let results = vec![
-        ("debug-rust", 0.95, "project", "Debug Rust builds and compiler errors"),
+        (
+            "debug-rust",
+            0.95,
+            "project",
+            "Debug Rust builds and compiler errors",
+        ),
         ("test-runner", 0.88, "org", "Run test suites efficiently"),
-        ("git-workflow", 0.82, "global", "Git workflow helpers for feature branches"),
-        ("perf-tuning", 0.75, "project", "Performance optimization and profiling"),
-        ("code-review", 0.71, "org", "Code review checklist and guidelines"),
+        (
+            "git-workflow",
+            0.82,
+            "global",
+            "Git workflow helpers for feature branches",
+        ),
+        (
+            "perf-tuning",
+            0.75,
+            "project",
+            "Performance optimization and profiling",
+        ),
+        (
+            "code-review",
+            0.71,
+            "org",
+            "Code review checklist and guidelines",
+        ),
     ];
     let table = search_results_table(&results, 100);
     let output = table.render_plain(100);

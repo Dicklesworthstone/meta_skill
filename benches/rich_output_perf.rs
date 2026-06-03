@@ -11,16 +11,16 @@
 use criterion::{Criterion, Throughput, criterion_group, criterion_main};
 use std::hint::black_box;
 
-use ms::output::{
-    OutputDecision, OutputDecisionReason, OutputDetector, OutputEnvironment, RichOutput,
-    Theme, detect_terminal_capabilities,
+use ms::cli::output::OutputFormat;
+use ms::output::builders::{
+    error_panel, quality_bar, quality_bar_plain, search_results_table, skill_panel_with_width,
+    success_panel, success_panel_with_width, warning_panel,
 };
 use ms::output::messages::{HintDisplay, InfoRenderer, StatusTracker, SuccessRenderer};
-use ms::output::builders::{
-    error_panel, quality_bar, quality_bar_plain, search_results_table,
-    skill_panel_with_width, success_panel, success_panel_with_width, warning_panel,
+use ms::output::{
+    OutputDecision, OutputDecisionReason, OutputDetector, OutputEnvironment, RichOutput, Theme,
+    detect_terminal_capabilities,
 };
-use ms::cli::output::OutputFormat;
 
 // =============================================================================
 // Detection Benchmarks
@@ -44,13 +44,7 @@ fn detection_benchmarks(c: &mut Criterion) {
 
     // Detection from live environment (includes env var lookups)
     group.bench_function("detect_from_env", |b| {
-        b.iter(|| {
-            OutputDetector::new(
-                black_box(OutputFormat::Human),
-                black_box(false),
-            )
-            .decide()
-        });
+        b.iter(|| OutputDetector::new(black_box(OutputFormat::Human), black_box(false)).decide());
     });
 
     // Terminal capabilities detection (color system, unicode, hyperlinks)
@@ -128,19 +122,14 @@ fn hyperlink_benchmarks(c: &mut Criterion) {
     // Format hyperlink (plain mode - no OSC 8)
     group.bench_function("format_hyperlink_plain", |b| {
         b.iter(|| {
-            plain.format_hyperlink(
-                black_box("click here"),
-                black_box("https://example.com"),
-            )
+            plain.format_hyperlink(black_box("click here"), black_box("https://example.com"))
         });
     });
 
     // Format file hyperlink (plain mode)
     group.bench_function("format_file_hyperlink_plain", |b| {
         let path = std::path::Path::new("/usr/local/bin/ms");
-        b.iter(|| {
-            plain.format_file_hyperlink(black_box("ms"), black_box(path))
-        });
+        b.iter(|| plain.format_file_hyperlink(black_box("ms"), black_box(path)));
     });
 
     // Format hyperlink same text/url (short-circuit path)
@@ -165,12 +154,7 @@ fn builder_benchmarks(c: &mut Criterion) {
 
     // Success panel
     group.bench_function("success_panel", |b| {
-        b.iter(|| {
-            success_panel(
-                black_box("Created"),
-                black_box("Skill saved successfully"),
-            )
-        });
+        b.iter(|| success_panel(black_box("Created"), black_box("Skill saved successfully")));
     });
 
     group.bench_function("success_panel_80w", |b| {
@@ -236,14 +220,12 @@ fn table_benchmarks(c: &mut Criterion) {
 
     // Small table (5 rows)
     let small_results: Vec<(&str, f32, &str, &str)> = (0..5)
-        .map(|i| {
-            match i {
-                0 => ("debug-rust", 0.95, "project", "Debug Rust builds"),
-                1 => ("test-runner", 0.88, "org", "Run test suites"),
-                2 => ("git-workflow", 0.82, "global", "Git workflow helpers"),
-                3 => ("perf-tuning", 0.75, "project", "Performance optimization"),
-                _ => ("code-review", 0.71, "org", "Code review checklist"),
-            }
+        .map(|i| match i {
+            0 => ("debug-rust", 0.95, "project", "Debug Rust builds"),
+            1 => ("test-runner", 0.88, "org", "Run test suites"),
+            2 => ("git-workflow", 0.82, "global", "Git workflow helpers"),
+            3 => ("perf-tuning", 0.75, "project", "Performance optimization"),
+            _ => ("code-review", 0.71, "org", "Code review checklist"),
         })
         .collect();
 
@@ -286,8 +268,7 @@ fn message_benchmarks(c: &mut Criterion) {
     // SuccessRenderer
     group.bench_function("success_renderer_simple", |b| {
         b.iter(|| {
-            SuccessRenderer::new(black_box(&plain), black_box("Skill created"))
-                .render();
+            SuccessRenderer::new(black_box(&plain), black_box("Skill created")).render();
         });
     });
 
@@ -304,8 +285,7 @@ fn message_benchmarks(c: &mut Criterion) {
     // InfoRenderer
     group.bench_function("info_renderer_simple", |b| {
         b.iter(|| {
-            InfoRenderer::new(black_box(&plain), black_box("Indexing 42 skills"))
-                .render();
+            InfoRenderer::new(black_box(&plain), black_box("Indexing 42 skills")).render();
         });
     });
 
@@ -321,8 +301,7 @@ fn message_benchmarks(c: &mut Criterion) {
     // HintDisplay
     group.bench_function("hint_display", |b| {
         b.iter(|| {
-            HintDisplay::new(black_box(&plain), black_box("Use --explain for details"))
-                .render();
+            HintDisplay::new(black_box(&plain), black_box("Use --explain for details")).render();
         });
     });
 
@@ -365,9 +344,7 @@ fn theme_benchmarks(c: &mut Criterion) {
     // Theme adapt for terminal
     group.bench_function("theme_adapt_terminal", |b| {
         let caps = detect_terminal_capabilities();
-        b.iter(|| {
-            Theme::default().adapted_for_terminal(black_box(&caps))
-        });
+        b.iter(|| Theme::default().adapted_for_terminal(black_box(&caps)));
     });
 
     group.finish();
