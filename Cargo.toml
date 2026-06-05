@@ -54,7 +54,7 @@ fsqlite-error = "0.1.5"
 tantivy = "0.26.1"
 
 # Git (use vendored-openssl for musl cross-compilation)
-git2 = { version = "0.20.3", features = ["vendored-openssl"] }
+git2 = { version = "0.21.0", features = ["vendored-openssl"] }
 
 # Terminal output
 colored = "3.0.0"
