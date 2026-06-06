@@ -48,7 +48,7 @@ toon_rust = { package = "tru", git = "https://github.com/Dicklesworthstone/toon_
 # `fsqlite` is the public facade crate published on crates.io.
 fsqlite = { version = "0.1.7", features = ["fts5"] }
 fsqlite-types = "0.1.7"
-fsqlite-error = "0.1.7"
+fsqlite-error = "0.1.8"
 # Transitive pins required by the fsqlite 0.1.7 family (meta_skill#112).
 # fsqlite-types 0.1.7 calls `asupersync::Cx::for_request_with_budget`, which was
 # REMOVED in asupersync 0.3.2; its dep req `^0.3.1` otherwise resolves up to 0.3.2

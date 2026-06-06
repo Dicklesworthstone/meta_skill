@@ -1724,9 +1724,9 @@ dependencies = [
 
 [[package]]
 name = "fsqlite-error"
-version = "0.1.7"
+version = "0.1.8"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f0b8a1b284edc9baba49dd752046a927e1bcbfec7cf48dc28942df8616faa34d"
+checksum = "78787816e9aefa018a1f1d721058a2ec21a3fb5175f266a1adf1a0ad9d3fda62"
 dependencies = [
  "thiserror 2.0.18",
 ]
