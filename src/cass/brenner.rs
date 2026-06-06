@@ -818,7 +818,7 @@ pub fn run_interactive(
                         let mut sessions = Vec::new();
                         for &idx in selected {
                             if let Some(match_data) = results.get(idx) {
-                                match client.get_session(&match_data.session_id) {
+                                match client.get_session(&match_data.path) {
                                     Ok(session) => {
                                         let quality = quality_scorer.score(&session);
                                         sessions.push(SelectedSession {

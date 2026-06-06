@@ -236,7 +236,14 @@ impl GitArchive {
         for oid in revwalk.take(limit) {
             let oid = oid.map_err(MsError::Git)?;
             let commit = self.repo.find_commit(oid)?;
-            let message = commit.summary().unwrap_or_default().to_string();
+            // git2 0.21: `summary()` returns `Result<Option<&str>, Error>`
+            // (errors on non-UTF8). Fall back to an empty summary in either case.
+            let message = commit
+                .summary()
+                .ok()
+                .flatten()
+                .unwrap_or_default()
+                .to_string();
             commits.push(SkillCommit {
                 oid: oid.to_string(),
                 message,

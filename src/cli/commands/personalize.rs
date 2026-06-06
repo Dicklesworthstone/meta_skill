@@ -268,7 +268,7 @@ fn extract_style_from_sessions(
 
     // Collect code samples from sessions
     for session_match in sessions.iter().take(10) {
-        if let Ok(session) = cass.get_session(&session_match.session_id) {
+        if let Ok(session) = cass.get_session(&session_match.path) {
             for msg in &session.messages {
                 // Look for code blocks in assistant messages
                 if msg.role == "assistant" {

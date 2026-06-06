@@ -1108,7 +1108,7 @@ fn run_auto(
         // Update phase progress
         session.phase_progress = (i + 1) as f64 / total_to_process as f64;
 
-        match cass_client.get_session(&session_match.session_id) {
+        match cass_client.get_session(&session_match.path) {
             Ok(cass_session) => {
                 let quality = quality_scorer.score(&cass_session);
                 if quality.passes_threshold(&quality_config) {

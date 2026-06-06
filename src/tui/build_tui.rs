@@ -527,7 +527,7 @@ impl BuildTui {
                 for &idx in selected {
                     if let Some(match_data) = results.get(idx) {
                         // Attempt to load full session
-                        match client.get_session(&match_data.session_id) {
+                        match client.get_session(&match_data.path) {
                             Ok(session) => {
                                 let quality = quality_scorer.score(&session);
                                 sessions.push(SelectedSession {

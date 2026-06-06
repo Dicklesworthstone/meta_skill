@@ -276,7 +276,9 @@ impl ContextCollector {
             revwalk.push_head().ok()?;
             for oid in revwalk.take(5).flatten() {
                 if let Ok(commit) = repo.find_commit(oid) {
-                    if let Some(summary) = commit.summary() {
+                    // git2 0.21: `summary()` returns `Result<Option<&str>, Error>`
+                    // (errors on non-UTF8). Skip commits whose summary isn't valid UTF-8.
+                    if let Ok(Some(summary)) = commit.summary() {
                         recent_commits.push(summary.to_string());
                     }
                 }

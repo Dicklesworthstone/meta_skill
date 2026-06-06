@@ -1314,7 +1314,9 @@ fn push_git_repo(
 fn ensure_origin_url(repo: &Repository, url: &str) -> Result<()> {
     match repo.find_remote("origin") {
         Ok(remote) => {
-            if remote.url() != Some(url) {
+            // git2 0.21: `url()` returns `Result<&str, Error>` (errors on
+            // non-UTF8). Treat a missing/non-UTF8 URL as "needs updating".
+            if remote.url().ok() != Some(url) {
                 repo.remote_set_url("origin", url).map_err(MsError::Git)?;
             }
         }

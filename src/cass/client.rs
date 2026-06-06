@@ -97,14 +97,31 @@ impl CassClient {
         let results: CassSearchResults = serde_json::from_slice(&output)
             .map_err(|e| MsError::CassUnavailable(format!("Failed to parse search output: {e}")))?;
 
-        Ok(results.hits)
+        Ok(results.hits.into_iter().map(normalize_match).collect())
     }
 
-    /// Get full session content by ID
-    pub fn get_session(&self, session_id: &str) -> Result<Session> {
-        let output = self.run_command(&["show", session_id, "--robot"])?;
-        serde_json::from_slice(&output)
-            .map_err(|e| MsError::CassUnavailable(format!("Failed to parse session: {e}")))
+    /// Fetch a full session by its file path.
+    ///
+    /// cass 0.6.x removed `cass show`; the conversation body is now obtained via
+    /// `cass export <path> --format json`, which returns a JSON array of messages.
+    pub fn get_session(&self, session_path: &str) -> Result<Session> {
+        let output = self.run_command(&["export", session_path, "--format", "json"])?;
+        let mut messages: Vec<SessionMessage> = serde_json::from_slice(&output).map_err(|e| {
+            MsError::CassUnavailable(format!("Failed to parse session export: {e}"))
+        })?;
+        // cass export does not emit a per-message index; assign positional indices
+        // so downstream consumers that key on `SessionMessage::index`
+        // (e.g. mining taint tracking) get stable, distinct values.
+        for (i, message) in messages.iter_mut().enumerate() {
+            message.index = i;
+        }
+        Ok(Session {
+            id: session_id_from_path(session_path),
+            path: session_path.to_string(),
+            messages,
+            metadata: SessionMetadata::default(),
+            content_hash: content_hash_of(&output),
+        })
     }
 
     /// Expand a session with context window
@@ -151,16 +168,17 @@ impl CassClient {
 
         let results: CassSearchResults = serde_json::from_slice(&output)
             .map_err(|e| MsError::CassUnavailable(format!("Failed to parse search output: {e}")))?;
+        let hits: Vec<SessionMatch> = results.hits.into_iter().map(normalize_match).collect();
 
         // If no fingerprint cache, return all results
         let cache = match &self.fingerprint_cache {
             Some(c) => c,
-            None => return Ok(results.hits),
+            None => return Ok(hits),
         };
 
         // Filter to only new or changed sessions
         let mut delta = Vec::new();
-        for m in results.hits {
+        for m in hits {
             let content_hash = m.content_hash.as_deref().unwrap_or("");
             if cache.is_new_or_changed(&m.session_id, content_hash)? {
                 delta.push(m);
@@ -185,11 +203,16 @@ impl CassClient {
             .map_err(|e| MsError::CassUnavailable(format!("Failed to parse capabilities: {e}")))
     }
 
-    /// Get session metadata (project, agent, timestamp)
-    pub fn session_metadata(&self, session_id: &str) -> Result<SessionMetadata> {
-        let output = self.run_command(&["metadata", session_id, "--robot"])?;
-        serde_json::from_slice(&output)
-            .map_err(|e| MsError::CassUnavailable(format!("Failed to parse metadata: {e}")))
+    /// Get lightweight session metadata.
+    ///
+    /// cass 0.6.x removed `cass metadata`, so this derives what it can from the
+    /// exported conversation (currently the message count).
+    pub fn session_metadata(&self, session_path: &str) -> Result<SessionMetadata> {
+        let session = self.get_session(session_path)?;
+        Ok(SessionMetadata {
+            message_count: session.messages.len(),
+            ..SessionMetadata::default()
+        })
     }
 
     /// Run a CASS command and return stdout
@@ -278,6 +301,64 @@ fn classify_cass_error(exit_code: i32, stderr: &str) -> MsError {
     MsError::CassUnavailable(format!("CASS command failed (exit {exit_code}): {stderr}"))
 }
 
+/// Derive a stable session id from a session file path: the file stem
+/// (e.g. `/…/<uuid>.jsonl` → `<uuid>`).
+fn session_id_from_path(path: &str) -> String {
+    std::path::Path::new(path)
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .map_or_else(|| path.to_string(), str::to_string)
+}
+
+/// Fill in fields cass 0.6.x no longer emits (currently the derived `session_id`).
+fn normalize_match(mut m: SessionMatch) -> SessionMatch {
+    if m.session_id.is_empty() {
+        m.session_id = session_id_from_path(&m.path);
+    }
+    m
+}
+
+/// SHA-256 of the raw export bytes, used as a change-detection fingerprint
+/// (cass 0.6.x no longer emits a `content_hash`).
+fn content_hash_of(bytes: &[u8]) -> String {
+    use sha2::{Digest, Sha256};
+    let mut hasher = Sha256::new();
+    hasher.update(bytes);
+    hasher
+        .finalize()
+        .iter()
+        .map(|b| format!("{b:02x}"))
+        .collect()
+}
+
+/// Deserialize an optional timestamp that cass may emit as an epoch-ms integer
+/// (`created_at`) or a string, into `Option<String>`.
+fn de_opt_timestamp<'de, D>(deserializer: D) -> std::result::Result<Option<String>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    use serde::Deserialize;
+    let value = serde_json::Value::deserialize(deserializer)?;
+    Ok(match value {
+        serde_json::Value::Number(n) => Some(n.to_string()),
+        serde_json::Value::String(s) => Some(s),
+        _ => None,
+    })
+}
+
+/// Deserialize a message string field (`role`, `content`) that cass may emit as
+/// a JSON string or `null` (some messages — e.g. tool-only turns — carry no
+/// textual body, and some carry no role). `#[serde(default)]` alone does not
+/// cover a present-but-`null` value, which would otherwise fail the whole
+/// session export with "invalid type: null, expected a string".
+fn de_string_or_null<'de, D>(deserializer: D) -> std::result::Result<String, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    use serde::Deserialize;
+    Ok(Option::<String>::deserialize(deserializer)?.unwrap_or_default())
+}
+
 // =============================================================================
 // Data Types
 // =============================================================================
@@ -287,34 +368,45 @@ fn classify_cass_error(exit_code: i32, stderr: &str) -> MsError {
 pub struct CassSearchResults {
     #[serde(alias = "matches")]
     pub hits: Vec<SessionMatch>,
-    #[serde(default)]
+    #[serde(default, alias = "total_matches")]
     pub total_count: usize,
-    #[serde(default)]
+    #[serde(default, alias = "hits_clamped")]
     pub truncated: bool,
 }
 
-/// A match from CASS search
+/// A match from CASS search.
+///
+/// cass 0.6.x emits hits as `{ source_path, score, snippet, workspace, created_at, … }`
+/// with no `session_id`. We alias the renamed fields, default everything optional, and
+/// derive `session_id` from the path in [`CassClient::search`].
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SessionMatch {
-    /// Session ID (normalized)
+    /// Session ID. Not emitted by cass 0.6.x — derived from `path` after parsing.
+    #[serde(default)]
     pub session_id: String,
 
-    /// Path to session file
+    /// Path to session file (cass 0.6.x: `source_path`).
+    #[serde(alias = "source_path")]
     pub path: String,
 
     /// Relevance score
+    #[serde(default)]
     pub score: f32,
 
     /// Preview snippet
+    #[serde(default)]
     pub snippet: Option<String>,
 
-    /// Content hash for change detection
+    /// Content hash for change detection. Not emitted by cass 0.6.x.
+    #[serde(default)]
     pub content_hash: Option<String>,
 
-    /// Project associated with session
+    /// Project / workspace associated with the session (cass 0.6.x: `workspace`).
+    #[serde(default, alias = "workspace")]
     pub project: Option<String>,
 
-    /// Timestamp of session
+    /// Session timestamp. cass 0.6.x emits epoch-ms `created_at`; coerced to a string.
+    #[serde(default, alias = "created_at", deserialize_with = "de_opt_timestamp")]
     pub timestamp: Option<String>,
 }
 
@@ -331,8 +423,11 @@ pub struct Session {
 /// A message within a session
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SessionMessage {
+    #[serde(default)]
     pub index: usize,
+    #[serde(default, deserialize_with = "de_string_or_null")]
     pub role: String,
+    #[serde(default, deserialize_with = "de_string_or_null")]
     pub content: String,
     #[serde(default)]
     pub tool_calls: Vec<ToolCall>,

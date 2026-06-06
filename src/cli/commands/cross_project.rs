@@ -456,7 +456,7 @@ fn collect_pattern_aggregates(
             continue;
         }
 
-        let session = match cass.get_session(&m.session_id) {
+        let session = match cass.get_session(&m.path) {
             Ok(session) => session,
             Err(err) => {
                 if ctx.output_format == OutputFormat::Human {
