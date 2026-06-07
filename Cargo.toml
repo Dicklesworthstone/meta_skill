@@ -46,18 +46,13 @@ toon_rust = { package = "tru", git = "https://github.com/Dicklesworthstone/toon_
 # Database — migrated from rusqlite per project-wide policy
 # ("NEVER use rusqlite — frankensqlite ONLY", meta_skill#106).
 # `fsqlite` is the public facade crate published on crates.io.
-fsqlite = { version = "0.1.7", features = ["fts5"] }
-fsqlite-types = "0.1.7"
-fsqlite-error = "0.1.7"
-# Transitive pins required by the fsqlite 0.1.7 family (meta_skill#112).
-# fsqlite-types 0.1.7 calls `asupersync::Cx::for_request_with_budget`, which was
-# REMOVED in asupersync 0.3.2; its dep req `^0.3.1` otherwise resolves up to 0.3.2
-# and fails to build. asupersync 0.3.1 in turn only compiles against
-# franken-decision 0.3.1 (0.3.2 made a breaking `DecisionOutcome`/`update_posterior`
-# change). Pin both to the only mutually-compatible set until the upstream
-# fsqlite/asupersync chain is realigned. Not used directly by meta_skill.
-asupersync = "=0.3.1"
-franken-decision = "=0.3.1"
+fsqlite = { version = "0.1.8", features = ["fts5"] }
+fsqlite-types = "0.1.8"
+fsqlite-error = "0.1.8"
+# (The `asupersync = "=0.3.1"` / `franken-decision = "=0.3.1"` transitive pins
+# that the 0.1.7 family required are no longer needed: frankensqlite 0.1.8
+# (#108) stops calling the test-internals-gated asupersync constructor, so it
+# builds cleanly against asupersync 0.3.2 — the chain is realigned.)
 
 # Search
 tantivy = "0.26.1"
