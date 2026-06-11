@@ -11,7 +11,7 @@ homepage = "https://github.com/Dicklesworthstone/meta_skill"
 keywords = ["cli", "skills", "ai", "claude", "cass"]
 categories = ["command-line-utilities", "development-tools"]
 readme = "README.md"
-rust-version = "1.85"
+rust-version = "1.89"
 exclude = [
     ".github/",
     ".beads/",
