@@ -1,3 +1,11 @@
+# Pinned to a specific nightly so CI is reproducible. The codebase requires
+# nightly because the fsqlite 0.1.8 dependency family uses feature(portable_simd).
+# An unpinned `nightly` channel let clippy drift across toolchains: newer nightlies
+# strengthen the pedantic/nursery lint groups (enabled below at warn), and CI runs
+# `cargo clippy --all-targets -- -D warnings`, so every newly-introduced pedantic
+# lint turned the build red without any code change. Pinning a known-good date
+# (matching the sibling beads_rust repo) keeps lint results stable. Bump this
+# deliberately, re-running clippy, rather than floating.
 [toolchain]
-channel = "nightly"
+channel = "nightly-2026-02-19"
 components = ["rustfmt", "clippy"]

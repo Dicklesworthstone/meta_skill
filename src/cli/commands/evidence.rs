@@ -627,7 +627,7 @@ mod tests {
 
     #[test]
     fn test_evidence_render_timeline() {
-        let refs = vec![
+        let refs = [
             make_evidence_ref("sess-001", 0.8),
             make_evidence_ref("sess-002", 0.9),
         ];
@@ -654,7 +654,7 @@ mod tests {
 
     #[test]
     fn test_evidence_render_summary() {
-        let records = vec![
+        let records = [
             make_evidence_record("skill-a", "rule-1"),
             make_evidence_record("skill-a", "rule-2"),
         ];
@@ -677,7 +677,7 @@ mod tests {
 
     #[test]
     fn test_evidence_json_output_format() {
-        let records = vec![make_evidence_record("skill-a", "rule-1")];
+        let records = [make_evidence_record("skill-a", "rule-1")];
         let output = serde_json::json!({
             "status": "ok",
             "count": records.len(),
@@ -710,7 +710,7 @@ mod tests {
 
     #[test]
     fn test_evidence_timeline_ordering() {
-        let mut records = vec![
+        let mut records = [
             make_evidence_record("skill-b", "rule-1"),
             make_evidence_record("skill-a", "rule-1"),
         ];

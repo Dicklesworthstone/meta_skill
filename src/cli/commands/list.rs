@@ -423,7 +423,7 @@ mod tests {
 
     #[test]
     fn test_list_filter_display() {
-        let skills = vec![
+        let skills = [
             make_skill("alpha", "base", false),
             make_skill("beta", "project", false),
         ];
@@ -492,7 +492,7 @@ mod tests {
 
     #[test]
     fn test_list_json_output_format() {
-        let skills = vec![make_skill("alpha", "base", false)];
+        let skills = [make_skill("alpha", "base", false)];
         let entries: Vec<SkillEntry> = skills.iter().map(SkillEntry::from).collect();
         let output = serde_json::json!({
             "status": "ok",
@@ -584,7 +584,7 @@ mod tests {
 
     #[test]
     fn test_list_sort_by_name() {
-        let mut skills = vec![
+        let mut skills = [
             make_skill("zulu", "base", false),
             make_skill("alpha", "base", false),
             make_skill("mike", "base", false),
