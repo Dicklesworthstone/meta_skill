@@ -135,7 +135,7 @@ httpmock = "0.8.2"
 # classic C-SQLite implementation. All production storage goes through
 # `fsqlite` per the project-wide "NEVER use rusqlite — frankensqlite ONLY"
 # policy (see meta_skill#106).
-rusqlite = { version = "0.39.0", features = ["bundled", "modern_sqlite"] }
+rusqlite = { version = "0.40.1", features = ["bundled", "modern_sqlite"] }
 
 [features]
 default = []
