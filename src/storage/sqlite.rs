@@ -547,47 +547,65 @@ impl Database {
         Ok(aliases)
     }
 
-    /// Escape a raw user query into a safe FTS5 MATCH expression.
-    ///
-    /// Each whitespace-separated token is wrapped in double quotes (with any
-    /// embedded `"` doubled) so FTS5 syntax characters (`-`, `:`, `*`, `'`,
-    /// parentheses, etc.) are treated as literals rather than operators.
-    /// Tokens are joined with a space, which FTS5 interprets as an implicit
-    /// AND.  Returns an empty string for blank/whitespace-only input.
-    ///
-    /// **Trade-off**: trailing-`*` prefix queries (e.g. `multi*`) become
-    /// literal under this scheme and will not expand to prefix matches.
-    fn to_fts5_match_query(query: &str) -> String {
+    /// Tokenize a raw user query into lowercased whitespace-separated terms for
+    /// the lexical substring search. Returns an empty vec for blank input.
+    fn search_tokens(query: &str) -> Vec<String> {
         query
             .split_whitespace()
-            .map(|token| format!("\"{}\"", token.replace('"', "\"\"")))
-            .collect::<Vec<_>>()
-            .join(" ")
+            .map(str::to_lowercase)
+            .collect()
     }
 
+    /// Lexical (BM25-slot) skill search.
+    ///
+    /// fsqlite 0.1.10 does not route FTS5 `MATCH` through its SQL planner — FTS5
+    /// is only reachable via a programmatic API, so `WHERE skills_fts MATCH ?`
+    /// fails with `column not found: skills_fts`, and the external-content FTS
+    /// triggers additionally raise `PrimaryKeyViolation` (meta_skill#120). Lexical
+    /// search therefore runs as a bounded, case-insensitive substring scan over
+    /// the indexed text columns (`name`, `description`, `body`): a skill matches
+    /// when *every* query token appears in the concatenated text. The skill corpus
+    /// is small, so a single scan + in-memory filter is cheap; rows are pre-ordered
+    /// by `quality_score` so the truncation keeps the strongest matches, and the
+    /// hybrid path re-ranks via RRF.
     pub fn search_fts(&self, query: &str, limit: usize) -> Result<Vec<SkillSearchCandidate>> {
-        let match_query = Self::to_fts5_match_query(query);
-        if match_query.is_empty() {
+        let tokens = Self::search_tokens(query);
+        if tokens.is_empty() || limit == 0 {
             return Ok(Vec::new());
         }
-        let candidates = self.conn.query_map_collect(
-            "SELECT s.id, s.source_layer, s.metadata_json, s.quality_score, s.is_deprecated
-             FROM skills_fts f
-             JOIN skills s ON s.rowid = f.rowid
-             WHERE skills_fts MATCH ?
-             ORDER BY bm25(skills_fts)
-             LIMIT ?",
-            params![match_query, limit as i64],
+        let rows: Vec<(SkillSearchCandidate, String)> = self.conn.query_map_collect(
+            "SELECT id, source_layer, metadata_json, quality_score, is_deprecated, \
+                    name, description, body \
+             FROM skills ORDER BY quality_score DESC, id ASC",
+            params![],
             |row| {
-                Ok(SkillSearchCandidate {
+                let candidate = SkillSearchCandidate {
                     id: row.get_typed(0)?,
                     source_layer: row.get_typed(1)?,
                     metadata_json: row.get_typed(2)?,
                     quality_score: row.get_typed(3)?,
                     is_deprecated: row.get_typed::<i64>(4)? != 0,
-                })
+                };
+                let haystack = format!(
+                    "{}\n{}\n{}",
+                    row.get_typed::<String>(5)?,
+                    row.get_typed::<String>(6)?,
+                    row.get_typed::<String>(7)?,
+                )
+                .to_lowercase();
+                Ok((candidate, haystack))
             },
         )?;
+
+        let mut candidates = Vec::new();
+        for (candidate, haystack) in rows {
+            if tokens.iter().all(|token| haystack.contains(token.as_str())) {
+                candidates.push(candidate);
+                if candidates.len() >= limit {
+                    break;
+                }
+            }
+        }
         Ok(candidates)
     }
 
@@ -2011,7 +2029,8 @@ mod tests {
         let tables = [
             "skills",
             "skill_aliases",
-            "skills_fts",
+            // skills_fts (FTS5) is intentionally dropped by migration 013 — fsqlite
+            // can't query it via SQL MATCH; search is a substring scan (#120).
             "skill_embeddings",
             "skill_packs",
             "skill_slices",
@@ -2173,6 +2192,64 @@ mod tests {
 
         // A blank / whitespace-only query must return empty results, not error.
         assert!(db.search_fts("   ", 10).unwrap().is_empty());
+    }
+
+    /// Regression test for meta_skill#120: lexical search must work end-to-end on
+    /// a fresh db — index a skill (name/description/body all searchable), re-index
+    /// via the upsert path (stale terms gone, new terms found), and delete (no
+    /// longer found). Before the fix `ms index` errored in the FTS triggers and
+    /// `ms search` failed with `column not found: skills_fts`. Multi-token queries
+    /// are ANDed across the concatenated text.
+    #[test]
+    fn test_fts_lifecycle_insert_update_delete() {
+        let dir = tempdir().unwrap();
+        let db = Database::open(dir.path().join("test.db")).unwrap();
+        let mut record = SkillRecord {
+            id: "deploy-helper".to_string(),
+            name: "Deploy Helper".to_string(),
+            description: "Ship releases safely".to_string(),
+            version: Some("1.0.0".to_string()),
+            author: None,
+            source_path: "/skills/deploy".to_string(),
+            source_layer: "base".to_string(),
+            git_remote: None,
+            git_commit: None,
+            content_hash: "h1".to_string(),
+            body: "rollout the artifact to production".to_string(),
+            metadata_json: r#"{"tags":["kubernetes","canary"]}"#.to_string(),
+            assets_json: "{}".to_string(),
+            token_count: 120,
+            quality_score: 0.7,
+            indexed_at: "2026-01-01T00:00:00Z".to_string(),
+            modified_at: "2026-01-01T00:00:00Z".to_string(),
+            is_deprecated: false,
+            deprecation_reason: None,
+        };
+
+        // INSERT: terms from name, description, and body are all searchable.
+        db.upsert_skill(&record).unwrap();
+        assert_eq!(db.search_fts("artifact", 10).unwrap().len(), 1, "body term");
+        assert_eq!(db.search_fts("deploy", 10).unwrap().len(), 1, "name term");
+        assert_eq!(db.search_fts("releases", 10).unwrap().len(), 1, "desc term");
+        // Multi-token queries are ANDed across the concatenated text.
+        assert_eq!(db.search_fts("deploy artifact", 10).unwrap().len(), 1);
+        assert_eq!(db.search_fts("deploy nonexistent", 10).unwrap().len(), 0);
+
+        // UPDATE (upsert ON CONFLICT path): the search reads live `skills` rows, so
+        // stale terms disappear and new terms appear with no separate index to sync.
+        record.body = "rollback the deployment instead".to_string();
+        db.upsert_skill(&record).unwrap();
+        assert_eq!(
+            db.search_fts("artifact", 10).unwrap().len(),
+            0,
+            "stale body term gone after re-index"
+        );
+        assert_eq!(db.search_fts("rollback", 10).unwrap().len(), 1);
+
+        // DELETE: the skill is no longer found.
+        db.delete_skill("deploy-helper").unwrap();
+        assert_eq!(db.search_fts("rollback", 10).unwrap().len(), 0);
+        assert_eq!(db.search_fts("deploy", 10).unwrap().len(), 0);
     }
 
     #[test]
