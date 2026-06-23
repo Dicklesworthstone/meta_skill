@@ -16,4 +16,5 @@ mod more_cli_tests;
 mod output_format_tests;
 mod security_tests;
 mod skill_md_tests;
+mod ubs_staged_tests;
 mod workflow_tests;
