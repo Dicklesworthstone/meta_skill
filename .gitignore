@@ -121,3 +121,6 @@ storage.sqlite3-wal.corrupt-*
 .beads/*.pre_repair_*
 .beads/*.repair_candidate_*
 .beads/*.bak-corrupt
+
+# Isolated cargo target dirs from build gates (machine-local, never tracked)
+target-gate*/
