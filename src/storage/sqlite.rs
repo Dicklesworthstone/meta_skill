@@ -550,10 +550,7 @@ impl Database {
     /// Tokenize a raw user query into lowercased whitespace-separated terms for
     /// the lexical substring search. Returns an empty vec for blank input.
     fn search_tokens(query: &str) -> Vec<String> {
-        query
-            .split_whitespace()
-            .map(str::to_lowercase)
-            .collect()
+        query.split_whitespace().map(str::to_lowercase).collect()
     }
 
     /// Lexical (BM25-slot) skill search.

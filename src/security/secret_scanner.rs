@@ -347,7 +347,7 @@ fn calculate_entropy(s: &str) -> f64 {
 /// Check if a string looks like base64.
 fn is_likely_base64(s: &str) -> bool {
     // Base64 must have length divisible by 4
-    if s.len() % 4 != 0 {
+    if !s.len().is_multiple_of(4) {
         return false;
     }
     // Padding can only be 0, 1, or 2 '=' characters at the end
@@ -364,7 +364,7 @@ fn is_likely_base64(s: &str) -> bool {
 
 /// Check if a string looks like hex.
 fn is_likely_hex(s: &str) -> bool {
-    s.len() % 2 == 0 && s.chars().all(|c| c.is_ascii_hexdigit())
+    s.len().is_multiple_of(2) && s.chars().all(|c| c.is_ascii_hexdigit())
 }
 
 /// Check if content contains any secrets.
