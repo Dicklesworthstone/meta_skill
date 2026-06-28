@@ -74,13 +74,41 @@ impl PartialOrd for BeadsVersion {
     }
 }
 
-/// Minimum bd version this client supports.
+/// Which beads implementation a binary is.
+///
+/// The two implementations version themselves on independent lines, so a raw
+/// version number is only meaningful once paired with the flavor that produced
+/// it (e.g. `br 0.2.x` is current, while `bd 0.2.x` would be ancient).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BeadsFlavor {
+    /// `br` — beads_rust, the current fleet tool. Uses its own 0.x version line.
+    Br,
+    /// `bd` — the legacy Go beads implementation.
+    Bd,
+}
+
+/// Minimum legacy `bd` (Go beads) version this client supports.
 pub static MINIMUM_SUPPORTED_VERSION: LazyLock<BeadsVersion> =
     LazyLock::new(|| BeadsVersion::new(0, 9, 0));
 
-/// Recommended bd version for full feature support.
+/// Recommended legacy `bd` (Go beads) version for full feature support.
 pub static RECOMMENDED_VERSION: LazyLock<BeadsVersion> =
     LazyLock::new(|| BeadsVersion::new(1, 0, 0));
+
+/// Minimum `br` (beads_rust) version this client supports.
+///
+/// beads_rust reset versioning to its own 0.x line, so the legacy `bd`
+/// thresholds (0.9.0 / 1.0.0) do not apply to it. Everything ms relies on
+/// (`version`/`list`/`ready`/`show`/`create`/`update`/`close --json`, `dep`,
+/// `sync`, `doctor`, `init`) is present throughout the `br` 0.2.x series, so we
+/// accept the whole 0.2 line. Bump deliberately if a future `br` feature becomes
+/// a hard requirement.
+pub static MINIMUM_SUPPORTED_BR_VERSION: LazyLock<BeadsVersion> =
+    LazyLock::new(|| BeadsVersion::new(0, 2, 0));
+
+/// Recommended `br` (beads_rust) version for full feature support.
+pub static RECOMMENDED_BR_VERSION: LazyLock<BeadsVersion> =
+    LazyLock::new(|| BeadsVersion::new(0, 2, 0));
 
 #[derive(Debug, Clone)]
 pub enum VersionCompatibility {

@@ -41,9 +41,9 @@ impl ConcurrentTestEnv {
             None,
         );
 
-        // Initialize database
+        // Initialize database (prefer `br`, fall back to legacy `bd`).
         log.info("INIT", "Initializing test database", None);
-        let status = Command::new("bd")
+        let status = Command::new(crate::beads::resolve_beads_binary())
             .args(["init"])
             .env("BEADS_DB", &db_path)
             .current_dir(temp_dir.path())

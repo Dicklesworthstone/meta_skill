@@ -68,14 +68,15 @@ impl RealBeadsEnv {
     ///
     /// Returns None if bd is not available.
     fn new(test_name: &str) -> Option<Self> {
-        // Check if bd is available
-        if !Command::new("bd")
+        // Check if beads is available (prefer `br`, fall back to legacy `bd`).
+        let beads_bin = ms::beads::resolve_beads_binary();
+        if !Command::new(&beads_bin)
             .arg("--version")
             .output()
             .map(|o| o.status.success())
             .unwrap_or(false)
         {
-            eprintln!("[{}] SKIP: bd not available", test_name);
+            eprintln!("[{}] SKIP: beads not available", test_name);
             return None;
         }
 
@@ -88,7 +89,7 @@ impl RealBeadsEnv {
         let db_path = beads_dir.join("beads.db");
 
         // Initialize database using BEADS_DB env var
-        let init_status = Command::new("bd")
+        let init_status = Command::new(&beads_bin)
             .args(["init"])
             .env("BEADS_DB", &db_path)
             .current_dir(&project_dir)
