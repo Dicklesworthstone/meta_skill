@@ -16,11 +16,24 @@ db-path = "~/.cargo/advisory-db"
 db-urls = ["https://github.com/rustsec/advisory-db"]
 # Check for yanked crates
 yanked = "warn"
-# Ignore specific advisories (keep this list minimal!)
-# yaml-rust is unmaintained but is pulled in transitively via syntect -> rich_rust
-# No upgrade path available until syntect migrates to yaml-rust2
-# gix-date non-utf8 string issue — requires vergen-gix 9.x (major version bump)
-ignore = ["RUSTSEC-2024-0320", "RUSTSEC-2025-0140"]
+# Ignore specific advisories (keep this list minimal!). Each entry below is an
+# *unmaintained* advisory (informational), not an exploitable vulnerability, and
+# is reached only transitively with no safe drop-in upgrade available today.
+ignore = [
+    # yaml-rust is unmaintained; pulled in transitively via syntect -> rich_rust.
+    # No upgrade path until syntect migrates to yaml-rust2.
+    "RUSTSEC-2024-0320",
+    # gix-date non-utf8 string issue — requires vergen-gix 9.x (major version bump).
+    "RUSTSEC-2025-0140",
+    # atty (0.2.14) is unmaintained — the maintainer recommends std::io::IsTerminal
+    # (stable since Rust 1.70). Reached transitively; no safe drop-in replacement at
+    # the pinned dep versions. Used only for TTY detection, so risk is negligible.
+    "RUSTSEC-2024-0375",
+    # bincode 1.3.3 is unmaintained — the team permanently ceased development and
+    # considers 1.3.3 a complete release (not a vulnerability). Reached transitively
+    # via syntect -> rich_rust; no safe upgrade path (bincode 2.x is a breaking API).
+    "RUSTSEC-2025-0141",
+]
 
 [licenses]
 # Allow these licenses
@@ -37,6 +50,14 @@ allow = [
     "CC0-1.0",
     "MPL-2.0",
     "BSL-1.0",
+    # Custom (non-SPDX) license used across the first-party "fleet" crates
+    # (asupersync, the fsqlite-* family, franken-decision, rich_rust, tru, ...).
+    # It is an MIT license with an OpenAI/Anthropic rider; because it is not a
+    # registered SPDX identifier, cargo-deny rejects it unless explicitly allowed.
+    # These are all first-party Dicklesworthstone crates, so we allow the exact
+    # LicenseRef rather than per-crate exceptions (which would need ~28 entries and
+    # break every time a new fleet crate is added).
+    "LicenseRef-MIT-OpenAI-Anthropic-Rider",
 ]
 # Confidence threshold for detecting license from file contents
 confidence-threshold = 0.8
@@ -48,8 +69,6 @@ multiple-versions = "warn"
 skip = []
 # Skip tree checking for workspace crates
 wildcards = "allow"
-# Allow build dependencies to be duplicated
-allow-build-scripts = ["*"]
 # Highlight exact duplicates
 highlight = "all"
 # Deny specific crates
@@ -57,14 +76,30 @@ deny = [
     # Crates with known security issues or that are unmaintained
 ]
 
+# Build-script policy.
+#
+# cargo-deny 0.19 moved build-script control out of `[bans].allow-build-scripts`
+# into `[bans.build].allow-build-scripts`, and that key is now a list of concrete
+# package specs (no glob). The old `allow-build-scripts = ["*"]` no longer means
+# "all" — "*" is parsed as a literal crate name that matches nothing, which would
+# reject every build script in the graph (aws-lc-sys, blake3, ring/curve25519,
+# the gix family, etc. all legitimately need build scripts).
+#
+# Intent here is "allow all build scripts". In the current schema that is achieved
+# by NOT specifying `allow-build-scripts` at all (build-script banning is opt-in:
+# absent => unrestricted). We therefore leave `[bans.build]` unset on purpose.
+
 [sources]
 # Allow crates from these sources
 unknown-registry = "deny"
 unknown-git = "deny"
 # Allow crates.io as a source
 allow-registry = ["https://github.com/rust-lang/crates.io-index"]
-# Allow these private git repositories
-allow-git = []
+# Allow these private git repositories.
+# tru (toon_rust) is a first-party fleet crate consumed as a git dependency
+# (git+https://github.com/Dicklesworthstone/toon_rust); it is not published to
+# crates.io, so its git source must be explicitly allowed.
+allow-git = ["https://github.com/Dicklesworthstone/toon_rust"]
 
 [sources.allow-org]
 # Allow crates from these GitHub orgs
