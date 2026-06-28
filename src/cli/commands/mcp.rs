@@ -1788,7 +1788,9 @@ mod tests {
 
     #[test]
     fn test_strip_ansi_preserves_json() {
-        let input = r#"{"status": "\x1b[32mok\x1b[0m"}"#;
+        // Normal (non-raw) literal so `\x1b` is a real ESC byte, not the 4-char
+        // text "\x1b"; otherwise strip_ansi has nothing to strip.
+        let input = "{\"status\": \"\x1b[32mok\x1b[0m\"}";
         let expected = r#"{"status": "ok"}"#;
         assert_eq!(strip_ansi(input), expected);
     }
@@ -1844,7 +1846,9 @@ mod tests {
 
     #[test]
     fn test_validate_mcp_json_with_ansi() {
-        let json = r#"{"result": "\x1b[32mok\x1b[0m"}"#;
+        // Normal (non-raw) literal so `\x1b` is a real ESC byte, not the 4-char
+        // text "\x1b"; otherwise the JSON contains no ANSI to reject.
+        let json = "{\"result\": \"\x1b[32mok\x1b[0m\"}";
         assert!(validate_mcp_json(json).is_err());
     }
 
