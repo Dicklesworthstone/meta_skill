@@ -251,31 +251,40 @@ pub struct IfStep {
 }
 
 /// Conditions for skipping tests
+///
+/// Authored in YAML as a single-key map, e.g. `platform: windows` or
+/// `command_missing: foo`. Modelled as an `untagged` enum with struct variants
+/// whose field name is the YAML key: serde_yaml 0.9 deserialises externally
+/// tagged enums only from the `!tag value` form, so the map form requires this
+/// representation.
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
+#[serde(untagged)]
 pub enum SkipCondition {
     /// Skip on specific platform
-    Platform(String),
+    Platform { platform: String },
     /// Skip if command not found
-    CommandMissing(String),
+    CommandMissing { command_missing: String },
     /// Skip if file doesn't exist
-    FileMissing(String),
+    FileMissing { file_missing: String },
     /// Skip if environment variable not set
-    EnvMissing(String),
+    EnvMissing { env_missing: String },
 }
 
 /// System requirements
+///
+/// Authored in YAML as a single-key map, e.g. `command: git` or `env: HOME`.
+/// See [`SkipCondition`] for why this is an `untagged` struct-variant enum.
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
+#[serde(untagged)]
 pub enum Requirement {
     /// Requires a command to be available
-    Command(String),
+    Command { command: String },
     /// Requires a file to exist
-    File(String),
+    File { file: String },
     /// Requires an environment variable
-    Env(String),
+    Env { env: String },
     /// Requires a specific platform
-    Platform(String),
+    Platform { platform: String },
 }
 
 impl TestSpec {
@@ -302,23 +311,25 @@ impl TestSpec {
         let conditions = self.skip_if.as_ref()?;
         for condition in conditions {
             match condition {
-                SkipCondition::Platform(p) => {
+                SkipCondition::Platform { platform: p } => {
                     let current = std::env::consts::OS;
                     if current == p {
                         return Some(format!("skip on platform: {p}"));
                     }
                 }
-                SkipCondition::CommandMissing(cmd) => {
+                SkipCondition::CommandMissing {
+                    command_missing: cmd,
+                } => {
                     if which::which(cmd).is_err() {
                         return Some(format!("command not found: {cmd}"));
                     }
                 }
-                SkipCondition::FileMissing(f) => {
+                SkipCondition::FileMissing { file_missing: f } => {
                     if !std::path::Path::new(f).exists() {
                         return Some(format!("file missing: {f}"));
                     }
                 }
-                SkipCondition::EnvMissing(var) => {
+                SkipCondition::EnvMissing { env_missing: var } => {
                     if std::env::var(var).is_err() {
                         return Some(format!("env var missing: {var}"));
                     }
@@ -336,28 +347,28 @@ impl TestSpec {
         };
         for req in requirements {
             match req {
-                Requirement::Command(cmd) => {
+                Requirement::Command { command: cmd } => {
                     if which::which(cmd).is_err() {
                         return Err(MsError::ValidationFailed(format!(
                             "required command not found: {cmd}"
                         )));
                     }
                 }
-                Requirement::File(path) => {
+                Requirement::File { file: path } => {
                     if !std::path::Path::new(path).exists() {
                         return Err(MsError::ValidationFailed(format!(
                             "required file not found: {path}"
                         )));
                     }
                 }
-                Requirement::Env(var) => {
+                Requirement::Env { env: var } => {
                     if std::env::var(var).is_err() {
                         return Err(MsError::ValidationFailed(format!(
                             "required env var not set: {var}"
                         )));
                     }
                 }
-                Requirement::Platform(platform) => {
+                Requirement::Platform { platform } => {
                     let current = std::env::consts::OS;
                     if current != platform {
                         return Err(MsError::ValidationFailed(format!(
@@ -659,9 +670,15 @@ skip_if:
         let spec = TestSpec::from_yaml(yaml).unwrap();
         let skip_if = spec.skip_if.as_ref().unwrap();
         assert_eq!(skip_if.len(), 3);
-        matches!(&skip_if[0], SkipCondition::Platform(p) if p == "windows");
-        matches!(&skip_if[1], SkipCondition::CommandMissing(c) if c == "nonexistent-cmd");
-        matches!(&skip_if[2], SkipCondition::EnvMissing(v) if v == "NONEXISTENT_VAR");
+        assert!(
+            matches!(&skip_if[0], SkipCondition::Platform { platform } if platform == "windows")
+        );
+        assert!(
+            matches!(&skip_if[1], SkipCondition::CommandMissing { command_missing } if command_missing == "nonexistent-cmd")
+        );
+        assert!(
+            matches!(&skip_if[2], SkipCondition::EnvMissing { env_missing } if env_missing == "NONEXISTENT_VAR")
+        );
     }
 
     #[test]
@@ -677,9 +694,9 @@ requires:
         let spec = TestSpec::from_yaml(yaml).unwrap();
         let reqs = spec.requires.as_ref().unwrap();
         assert_eq!(reqs.len(), 3);
-        matches!(&reqs[0], Requirement::Command(c) if c == "git");
-        matches!(&reqs[1], Requirement::Env(e) if e == "HOME");
-        matches!(&reqs[2], Requirement::Platform(p) if p == "linux");
+        assert!(matches!(&reqs[0], Requirement::Command { command } if command == "git"));
+        assert!(matches!(&reqs[1], Requirement::Env { env } if env == "HOME"));
+        assert!(matches!(&reqs[2], Requirement::Platform { platform } if platform == "linux"));
     }
 
     #[test]
