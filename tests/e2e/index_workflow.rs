@@ -431,8 +431,7 @@ fn test_index_readonly_index_reports_clear_error() -> Result<()> {
     // `ms mcp serve`. The `ms index` subprocess below will find the index busy,
     // fall back to a read-only handle, and must reject the write up front.
     let index_dir = fixture.ms_root.join("index");
-    let _writer_guard =
-        Bm25Index::open(&index_dir).expect("open index writable in test process");
+    let _writer_guard = Bm25Index::open(&index_dir).expect("open index writable in test process");
 
     let output = fixture.run_ms(&["index"]);
 

@@ -65,7 +65,9 @@ impl AppContext {
     /// and the index that was selected.
     pub fn require_writable_search(&self) -> Result<()> {
         if self.search.is_readonly() {
-            Err(MsError::SearchIndexReadOnly(self.readonly_search_diagnostic()))
+            Err(MsError::SearchIndexReadOnly(
+                self.readonly_search_diagnostic(),
+            ))
         } else {
             Ok(())
         }
