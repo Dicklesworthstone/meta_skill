@@ -42,6 +42,13 @@ pub enum MsError {
     #[error("Search index error: {0}")]
     SearchIndex(#[from] tantivy::TantivyError),
 
+    /// A write operation was requested but the search index could only be
+    /// opened read-only — the Tantivy writer lock is held by another process
+    /// (e.g. a live `ms mcp serve`) or the index lives on a read-only
+    /// filesystem. Carries a fully formatted, actionable message. See #133.
+    #[error("{0}")]
+    SearchIndexReadOnly(String),
+
     #[error("JSON serialization error: {0}")]
     Json(#[from] serde_json::Error),
 
@@ -133,6 +140,7 @@ impl MsError {
             Self::InvalidSkill(_) => ErrorCode::SkillInvalid,
             Self::ValidationFailed(_) => ErrorCode::ValidationFailed,
             Self::SearchIndex(_) => ErrorCode::IndexCorrupted,
+            Self::SearchIndexReadOnly(_) => ErrorCode::IndexBusy,
             Self::Json(_) | Self::Yaml(_) | Self::Serialization(_) => ErrorCode::SerializationError,
             Self::QueryParse(_) => ErrorCode::SearchQueryInvalid,
             Self::CassUnavailable(_) => ErrorCode::CassUnavailable,
