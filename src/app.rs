@@ -7,6 +7,7 @@ use crate::error::{MsError, Result};
 use crate::search::SearchIndex;
 use crate::storage::{Database, GitArchive};
 
+#[derive(Clone)]
 pub struct AppContext {
     pub ms_root: PathBuf,
     pub config_path: PathBuf,
@@ -18,6 +19,73 @@ pub struct AppContext {
     pub robot_mode: bool,
     pub output_format: OutputFormat,
     pub verbosity: u8,
+}
+
+/// Inode-level identity of a single filesystem path (device + inode on Unix).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct InodeId {
+    dev: u64,
+    ino: u64,
+}
+
+/// Cheap identity of the on-disk backing store — the SQLite db file and the
+/// search-index directory — used by the long-running MCP server to detect that
+/// the state directory was rebuilt/replaced underneath it and reopen before
+/// serving (issue #135).
+///
+/// Only inode identity is used (never mtime/len), so ordinary writes never
+/// change the fingerprint: SQLite updates the main db file in place, and the
+/// index directory keeps its inode as segment files come and go. The
+/// fingerprint changes only when the files are *replaced* — a fresh state dir
+/// swapped in for the old one — which is exactly the rebuild that otherwise
+/// strands a running server following the renamed (orphaned) inodes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct StoreIdentity {
+    db: Option<InodeId>,
+    index: Option<InodeId>,
+}
+
+impl StoreIdentity {
+    /// Whether the SQLite database is currently present on disk. Used to avoid
+    /// reopening onto a half-built store mid-rebuild (e.g. the directory has
+    /// been swapped in but the fresh db file has not been created yet).
+    #[must_use]
+    pub const fn db_present(&self) -> bool {
+        self.db.is_some()
+    }
+}
+
+#[cfg(unix)]
+fn inode_of(meta: &std::fs::Metadata) -> InodeId {
+    use std::os::unix::fs::MetadataExt;
+    InodeId {
+        dev: meta.dev(),
+        ino: meta.ino(),
+    }
+}
+
+#[cfg(not(unix))]
+fn inode_of(meta: &std::fs::Metadata) -> InodeId {
+    // No portable stable inode off-Unix. Approximate a regular file's identity
+    // from (len, mtime-nanos); directories get a constant so the index dir does
+    // not churn as segment files are written. The rename-under-open-handles bug
+    // this guards against is POSIX-specific, so this fallback is best-effort.
+    if meta.is_dir() {
+        return InodeId { dev: 0, ino: 0 };
+    }
+    let mtime = meta
+        .modified()
+        .ok()
+        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+        .map_or(0u64, |d| u64::try_from(d.as_nanos()).unwrap_or(u64::MAX));
+    InodeId {
+        dev: meta.len(),
+        ino: mtime,
+    }
+}
+
+fn path_inode(path: &Path) -> Option<InodeId> {
+    std::fs::metadata(path).ok().map(|m| inode_of(&m))
 }
 
 impl AppContext {
@@ -47,6 +115,57 @@ impl AppContext {
             output_format: cli.output_format(),
             verbosity: cli.verbose,
         })
+    }
+
+    /// Path of the SQLite database backing this context.
+    fn db_path(&self) -> PathBuf {
+        self.ms_root.join("ms.db")
+    }
+
+    /// Path of the search-index directory backing this context.
+    fn index_path(&self) -> PathBuf {
+        self.ms_root.join("index")
+    }
+
+    /// Cheap snapshot of the on-disk backing store's identity.
+    ///
+    /// The long-running MCP server records this at startup and re-checks it
+    /// before serving each request; a change means the state directory was
+    /// rebuilt/replaced and the server must [`reopen_stores`](Self::reopen_stores)
+    /// so it stops following the stale (renamed) inodes (issue #135).
+    #[must_use]
+    pub fn store_identity(&self) -> StoreIdentity {
+        StoreIdentity {
+            db: path_inode(&self.db_path()),
+            index: path_inode(&self.index_path()),
+        }
+    }
+
+    /// Reopen the SQLite database, git archive, and search index from
+    /// `ms_root`, replacing the handles this context currently holds.
+    ///
+    /// Called by the long-running MCP server after [`store_identity`](Self::store_identity)
+    /// shows the on-disk state directory was rebuilt/replaced, so it stops
+    /// serving reads and landing writes on the stale (renamed) inodes. Fresh
+    /// handles are built into locals first and only swapped in once all three
+    /// succeed, so a failure (e.g. a half-written rebuild) leaves the context
+    /// on its current, consistent handles rather than half-reopened. The
+    /// previous `Arc`s — and their open file descriptors / Tantivy writer lock
+    /// on the now-renamed directory — are released once their last in-flight
+    /// reference is dropped.
+    pub fn reopen_stores(&mut self) -> Result<()> {
+        let index_path = self.index_path();
+        let db = Arc::new(Database::open(self.db_path())?);
+        let git = Arc::new(GitArchive::open(self.ms_root.join("archive"))?);
+        // Match `from_cli`: prefer a writable index, fall back to read-only if
+        // the writer lock is held (e.g. by a concurrent rebuild still running).
+        let search = Arc::new(
+            SearchIndex::open(&index_path).or_else(|_| SearchIndex::open_readonly(&index_path))?,
+        );
+        self.db = db;
+        self.git = git;
+        self.search = search;
+        Ok(())
     }
 
     /// Ensure the search index was opened for writing.
@@ -170,4 +289,128 @@ fn find_upwards(start: &Path, name: &str) -> Result<Option<PathBuf>> {
         current = dir.parent();
     }
     Ok(None)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::storage::sqlite::SkillRecord;
+
+    /// A minimal, self-consistent skill row for exercising the `skills` table
+    /// (the root table — no foreign keys — so it is safe to insert standalone).
+    fn sample_skill(id: &str) -> SkillRecord {
+        SkillRecord {
+            id: id.to_string(),
+            name: id.to_string(),
+            description: String::new(),
+            version: Some("0.1.0".to_string()),
+            author: None,
+            source_path: format!("/tmp/{id}/SKILL.md"),
+            source_layer: "local".to_string(),
+            git_remote: None,
+            git_commit: None,
+            content_hash: format!("hash-{id}"),
+            body: String::new(),
+            metadata_json: "{}".to_string(),
+            assets_json: "[]".to_string(),
+            token_count: 0,
+            quality_score: 0.0,
+            indexed_at: "2026-01-01T00:00:00Z".to_string(),
+            modified_at: "2026-01-01T00:00:00Z".to_string(),
+            is_deprecated: false,
+            deprecation_reason: None,
+        }
+    }
+
+    /// Build an `AppContext` rooted at `ms_root`, opening the DB, git archive,
+    /// and search index there (mirrors the store fields of `from_cli`).
+    fn ctx_at(ms_root: &Path) -> AppContext {
+        std::fs::create_dir_all(ms_root).unwrap();
+        let index_path = ms_root.join("index");
+        AppContext {
+            ms_root: ms_root.to_path_buf(),
+            config_path: ms_root.join("config.toml"),
+            config: Config::default(),
+            db: Arc::new(Database::open(ms_root.join("ms.db")).unwrap()),
+            git: Arc::new(GitArchive::open(ms_root.join("archive")).unwrap()),
+            search: Arc::new(
+                SearchIndex::open(&index_path)
+                    .or_else(|_| SearchIndex::open_readonly(&index_path))
+                    .unwrap(),
+            ),
+            robot_mode: false,
+            output_format: OutputFormat::default(),
+            verbosity: 0,
+        }
+    }
+
+    /// Issue #135: after the state directory is renamed out from under a
+    /// long-lived context and replaced with a fresh one, `reopen_stores` must
+    /// switch to the new store — so reads and writes stop landing in the
+    /// orphaned (renamed) directory.
+    #[test]
+    fn reopen_stores_follows_rebuilt_state_dir() {
+        let tmp = tempfile::tempdir().unwrap();
+        let state = tmp.path().join("state");
+
+        // Original store A, with one skill written through it.
+        let mut ctx = ctx_at(&state);
+        ctx.db.upsert_skill(&sample_skill("skill-a")).unwrap();
+        assert_eq!(ctx.db.list_skills(100, 0).unwrap().len(), 1);
+
+        let id_a = ctx.store_identity();
+        assert!(id_a.db_present());
+
+        // Simulate a rebuild: rename the live dir to a backup (open FDs keep
+        // following it — this is the bug) and write a fresh, empty store in
+        // its place. `ctx` still holds handles into the renamed backup.
+        let backup = tmp.path().join("state.bak");
+        std::fs::rename(&state, &backup).unwrap();
+        // Fresh, empty store B at the original path. Building it here also
+        // ensures ms.db exists so the reopen does not skip on `db_present`.
+        drop(ctx_at(&state));
+
+        // The on-disk identity must now differ from what the context has open.
+        let id_b = ctx.store_identity();
+        assert!(id_b.db_present());
+        assert_ne!(
+            id_a, id_b,
+            "state dir rename must change the store identity"
+        );
+
+        // Before reopening, the context still reads/writes the orphaned backup:
+        // its skill row is visible via the stale handle.
+        assert_eq!(
+            ctx.db.list_skills(100, 0).unwrap().len(),
+            1,
+            "stale handle should still see the pre-rebuild row (the bug)"
+        );
+
+        // Reopen: the context must now serve the fresh, empty store B.
+        ctx.reopen_stores().unwrap();
+        assert_eq!(
+            ctx.db.list_skills(100, 0).unwrap().len(),
+            0,
+            "after reopen the context must read the rebuilt store, not the backup"
+        );
+
+        // A write now lands in the live store, and the orphaned backup is
+        // untouched by it.
+        ctx.db.upsert_skill(&sample_skill("skill-b")).unwrap();
+        assert_eq!(ctx.db.list_skills(100, 0).unwrap().len(), 1);
+    }
+
+    /// An unchanged store yields a stable identity, so the server does not
+    /// churn through pointless reopens on every request.
+    #[test]
+    fn store_identity_is_stable_without_rebuild() {
+        let tmp = tempfile::tempdir().unwrap();
+        let state = tmp.path().join("state");
+        let ctx = ctx_at(&state);
+
+        let before = ctx.store_identity();
+        // An ordinary write must not change the store identity.
+        ctx.db.upsert_skill(&sample_skill("skill-a")).unwrap();
+        assert_eq!(before, ctx.store_identity());
+    }
 }
