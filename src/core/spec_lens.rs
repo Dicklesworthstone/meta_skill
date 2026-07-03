@@ -88,13 +88,20 @@ pub fn parse_markdown(content: &str) -> Result<SkillSpec> {
             continue;
         }
 
-        if let Some(title) = line.strip_prefix("# ") {
+        // Consult the code-fence state BEFORE heading detection. A start-of-line
+        // `# ` / `## ` that appears inside a fenced code block is code (e.g. a
+        // shell comment), not a markdown heading. Without the `!in_code_block`
+        // guard these lines hit the heading branches and `continue`, so they
+        // never reach the code accumulator below — truncating/emptying the
+        // fenced block and mis-splitting sections in the normalized SKILL.md
+        // that `ms load --full` and the MCP `load` server serve (issue #134).
+        if let Some(title) = line.strip_prefix("# ").filter(|_| !in_code_block) {
             name = title.trim().to_string();
             in_description = true;
             continue;
         }
 
-        if let Some(title) = line.strip_prefix("## ") {
+        if let Some(title) = line.strip_prefix("## ").filter(|_| !in_code_block) {
             if let Some(section) = current_section.as_mut() {
                 flush_paragraph(section, &mut paragraph_lines);
             }
@@ -291,7 +298,71 @@ fn json_equivalent(left: &JsonValue, right: &JsonValue) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::{compile_markdown, parse_markdown};
+    use super::{BlockType, compile_markdown, parse_markdown};
+
+    #[test]
+    fn fenced_hash_comments_are_not_parsed_as_headings() {
+        // A `## Demo` section whose bash fence contains start-of-line `#`/`##`
+        // comment lines must round-trip with the code block INTACT: the comment
+        // lines must be preserved inside a single code block, NOT swallowed as
+        // headings that truncate the block or mis-split the document (issue #134).
+        let md = "# Real Skill\n\nA description.\n\n## Demo\n\n```bash\n# not a heading\n## also not a heading\necho hi\n```\n";
+        let parsed = parse_markdown(md).expect("parse");
+
+        // The H1-derived name must survive (not overwritten by `# not a heading`).
+        assert_eq!(parsed.metadata.name, "Real Skill");
+
+        // Exactly one section, titled from the real `## Demo` heading — the
+        // `## also not a heading` fence line must NOT open a second section.
+        assert_eq!(
+            parsed.sections.len(),
+            1,
+            "expected exactly one section, got: {:?}",
+            parsed
+                .sections
+                .iter()
+                .map(|s| s.title.clone())
+                .collect::<Vec<_>>()
+        );
+        let section = &parsed.sections[0];
+        assert_eq!(section.title, "Demo");
+
+        // The section must contain a single code block that preserves all three
+        // fenced lines (both `#` comments and the command), fences included.
+        let code_blocks: Vec<&_> = section
+            .blocks
+            .iter()
+            .filter(|b| b.block_type == BlockType::Code)
+            .collect();
+        assert_eq!(
+            code_blocks.len(),
+            1,
+            "expected exactly one code block, got {}",
+            code_blocks.len()
+        );
+        let code = &code_blocks[0].content;
+        assert!(
+            code.contains("# not a heading"),
+            "code block lost the `#` comment line: {code:?}"
+        );
+        assert!(
+            code.contains("## also not a heading"),
+            "code block lost the `##` comment line: {code:?}"
+        );
+        assert!(
+            code.contains("echo hi"),
+            "code block lost the command line: {code:?}"
+        );
+
+        // End-to-end: recompiling must still contain the comment lines (the
+        // normalized copy served by `ms load --full` is not garbled).
+        let compiled = compile_markdown(&parsed);
+        assert!(compiled.contains("# not a heading"), "compiled: {compiled}");
+        assert!(
+            compiled.contains("## also not a heading"),
+            "compiled: {compiled}"
+        );
+    }
 
     #[test]
     fn roundtrip_simple_markdown() {
