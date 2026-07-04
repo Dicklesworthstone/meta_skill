@@ -181,12 +181,20 @@ pub fn parse_markdown(content: &str) -> Result<SkillSpec> {
         sections.push(section);
     }
 
+    // Derive the skill id honoring the Anthropic SKILL.md contract where `name`
+    // is the required identity field. Precedence: an explicit frontmatter `id:`,
+    // then an H1 `# ` title, then the frontmatter `name:`. A name-only SKILL.md
+    // (no `id:`, no H1, body starting with prose or `## `) must still yield a
+    // stable slugified id rather than an empty one that `ms index` rejects
+    // (issue #141).
     let id = if !metadata.id.is_empty() {
         metadata.id.clone()
-    } else if name.is_empty() {
-        String::new()
-    } else {
+    } else if !name.is_empty() {
         slugify(&name)
+    } else if !metadata.name.is_empty() {
+        slugify(&metadata.name)
+    } else {
+        String::new()
     };
 
     // If description wasn't in frontmatter, use extracted one
@@ -380,5 +388,34 @@ mod tests {
         let parsed = parse_markdown(md).expect("parse");
         assert_eq!(parsed.metadata.name, "Tagged Skill");
         assert_eq!(parsed.metadata.tags, vec!["rust", "backend"]);
+    }
+
+    #[test]
+    fn name_only_frontmatter_derives_id_from_name() {
+        // A SKILL.md that follows the Anthropic contract — a `name:` in the
+        // frontmatter but no explicit `id:` and no `# ` H1, with a body that
+        // begins with prose and a `## ` section — must derive a stable
+        // slugified id from `name` rather than yielding an empty id that
+        // `ms index` rejects (issue #141).
+        let md = "---\nname: My Cool Skill\ndescription: Does cool things\n---\n\nThis skill does cool things without an H1.\n\n## Usage\n\nRun it.\n";
+        let parsed = parse_markdown(md).expect("parse");
+        assert_eq!(
+            parsed.metadata.id, "my-cool-skill",
+            "id should be slugified from the frontmatter name"
+        );
+        assert_eq!(parsed.metadata.name, "My Cool Skill");
+        // The description from frontmatter is preserved.
+        assert_eq!(parsed.metadata.description, "Does cool things");
+        // The `## Usage` section is still parsed (body prose did not swallow it).
+        assert!(parsed.sections.iter().any(|s| s.title == "Usage"));
+    }
+
+    #[test]
+    fn explicit_id_wins_over_name_derivation() {
+        // When an explicit `id:` is present it must take precedence over any
+        // name-derived slug.
+        let md = "---\nid: custom-id\nname: A Different Name\n---\n\nBody text.\n\n## Section\n\nContent.\n";
+        let parsed = parse_markdown(md).expect("parse");
+        assert_eq!(parsed.metadata.id, "custom-id");
     }
 }

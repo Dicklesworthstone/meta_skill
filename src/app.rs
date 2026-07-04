@@ -28,10 +28,11 @@ struct InodeId {
     ino: u64,
 }
 
-/// Cheap identity of the on-disk backing store — the SQLite db file and the
-/// search-index directory — used by the long-running MCP server to detect that
-/// the state directory was rebuilt/replaced underneath it and reopen before
-/// serving (issue #135).
+/// Cheap identity of the on-disk backing store.
+///
+/// Combines the SQLite db file and the search-index directory — used by the
+/// long-running MCP server to detect that the state directory was
+/// rebuilt/replaced underneath it and reopen before serving (issue #135).
 ///
 /// Only inode identity is used (never mtime/len), so ordinary writes never
 /// change the fingerprint: SQLite updates the main db file in place, and the
