@@ -553,7 +553,14 @@ impl Database {
         query.split_whitespace().map(str::to_lowercase).collect()
     }
 
-    /// Lexical (BM25-slot) skill search.
+    /// Lexical skill search — **fallback only** (issue #144).
+    ///
+    /// The primary lexical backend for `ms search` is the Tantivy BM25 index
+    /// (`crate::search::Bm25Index`), which ranks by true relevance. This
+    /// substring scan is used only when that index is unavailable (never
+    /// built / empty state dir) or errors; it has no relevance signal, so
+    /// results come back in `quality_score DESC, id ASC` order with
+    /// all-tokens AND semantics.
     ///
     /// fsqlite 0.1.10 does not route FTS5 `MATCH` through its SQL planner — FTS5
     /// is only reachable via a programmatic API, so `WHERE skills_fts MATCH ?`
