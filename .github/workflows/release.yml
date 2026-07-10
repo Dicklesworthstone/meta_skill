@@ -112,11 +112,16 @@ jobs:
 
       - name: Install Rust toolchain
         # nightly is required: rust-toolchain.toml pins nightly and the fsqlite
-        # 0.1.7 dependency family uses feature(portable_simd), which only builds
-        # on nightly. @stable installed the target on the wrong toolchain and the
-        # build failed (exit 101) once the rusqlite->frankensqlite migration landed.
-        uses: dtolnay/rust-toolchain@nightly
+        # dependency family uses feature(portable_simd), which only builds on
+        # nightly. The toolchain MUST match the rust-toolchain.toml pin exactly:
+        # @stable and @nightly both install the cross target's std for the WRONG
+        # toolchain (whatever they resolve to), while cargo obeys the pin — the
+        # v0.1.4 release died with E0463 "can't find crate for `core`" on
+        # aarch64-unknown-linux-gnu for exactly this reason. Keep this in sync
+        # with rust-toolchain.toml when bumping the pin.
+        uses: dtolnay/rust-toolchain@master
         with:
+          toolchain: nightly-2026-02-19
           targets: ${{ matrix.target }}
 
       - uses: Swatinem/rust-cache@v2
