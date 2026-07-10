@@ -380,7 +380,8 @@ fn test_search_relevance_beats_alphabetical_order() -> Result<()> {
         );
         let top_id = results[0]["id"].as_str().unwrap_or_default();
         assert_eq!(
-            top_id, "helm-validation",
+            top_id,
+            "helm-validation",
             "{search_type}: the skill about helm must outrank alphabetical decoys \
              that merely mention it (issue #144); got order {:?}",
             results
