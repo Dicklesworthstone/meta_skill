@@ -165,7 +165,8 @@ fn test_index_preserves_and_searches_distinct_h1_preamble() -> Result<()> {
     ]);
     fixture.assert_success(&output, "search preamble-only token");
 
-    let results = output.json()["results"]
+    let json = output.json();
+    let results = json["results"]
         .as_array()
         .expect("search results array")
         .iter()
