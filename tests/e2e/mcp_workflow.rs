@@ -673,8 +673,13 @@ fn test_mcp_list_show_tools() -> Result<()> {
     let show_text = response.tool_text().expect("Should have tool text");
     let show_result: Value = serde_json::from_str(show_text).expect("Should be valid JSON");
     assert!(
-        show_result["skill"].is_object(),
-        "Should have skill object in show result"
+        show_result.is_object(),
+        "Show result should be a skill object"
+    );
+    assert_eq!(
+        show_result["id"].as_str(),
+        Some(first_skill_id),
+        "Show result should describe the requested skill"
     );
 
     client.kill();

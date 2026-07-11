@@ -314,6 +314,14 @@ fn run_auto_load(ctx: &AppContext, args: &LoadArgs) -> Result<()> {
             .unwrap_or(std::cmp::Ordering::Equal)
     });
 
+    // Dry-run has a stable robot schema even when no candidate clears the
+    // requested threshold. In particular, callers must still receive
+    // `would_load: []` and the effective threshold instead of the ordinary
+    // non-dry-run `candidates`/`loaded` envelope.
+    if args.dry_run {
+        return output_dry_run(ctx, &context_summary, &candidates, args);
+    }
+
     if candidates.is_empty() {
         match ctx.output_format {
             OutputFormat::Json | OutputFormat::Jsonl | OutputFormat::Toon => {
@@ -344,11 +352,6 @@ fn run_auto_load(ctx: &AppContext, args: &LoadArgs) -> Result<()> {
             }
         }
         return Ok(());
-    }
-
-    // Dry-run mode: just show what would be loaded
-    if args.dry_run {
-        return output_dry_run(ctx, &context_summary, &candidates, args);
     }
 
     // Load skills (with optional confirmation)
@@ -429,7 +432,13 @@ fn convert_to_scoring_context(collected: &CollectedContext) -> WorkingContext {
             collected
                 .recent_files
                 .iter()
-                .map(|f| f.path.to_string_lossy().to_string())
+                .map(|f| {
+                    f.path
+                        .strip_prefix(&collected.cwd)
+                        .unwrap_or(&f.path)
+                        .to_string_lossy()
+                        .to_string()
+                })
                 .collect(),
         )
         .with_tools(collected.detected_tools.iter().cloned())

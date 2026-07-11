@@ -212,7 +212,7 @@ fn parse_weight_entries(entries: &[String]) -> Result<HashMap<String, f32>> {
     let mut out = HashMap::new();
     for entry in entries {
         let (key, value) = entry.split_once(':').ok_or_else(|| {
-            MsError::ValidationFailed(format!("weight must be key:value ({entry})",))
+            MsError::ValidationFailed(format!("weight must be key:value ({entry})"))
         })?;
         let key = key.trim();
         if key.is_empty() {

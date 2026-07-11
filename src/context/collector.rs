@@ -31,6 +31,7 @@ impl Default for ContextCollectorConfig {
             scan_depth: 3,
             ignore_patterns: vec![
                 ".git".to_string(),
+                ".ms".to_string(),
                 "node_modules".to_string(),
                 "target".to_string(),
                 "dist".to_string(),
@@ -322,6 +323,7 @@ mod tests {
         assert_eq!(config.max_recent_files, 20);
         assert_eq!(config.scan_depth, 3);
         assert!(config.ignore_patterns.contains(&".git".to_string()));
+        assert!(config.ignore_patterns.contains(&".ms".to_string()));
     }
 
     #[test]

@@ -9,17 +9,38 @@
 //! - JSON output format verification
 
 use std::process::Command;
+use std::sync::OnceLock;
 
-use super::fixture::{E2EFixture, LogLevel};
+use super::fixture::{CommandOutput, E2EFixture, LogLevel};
 use ms::error::Result;
 
-/// Check if the `cass` binary is available on PATH.
-/// Tests that require CASS should call this and return early if unavailable.
+/// Check that `cass` is executable and backed by a usable outer index.
+///
+/// The E2E fixture deliberately replaces `HOME`, so `cass --version` alone
+/// cannot establish that a real-CASS scenario will be able to query sessions.
 fn cass_available() -> bool {
-    Command::new("cass")
-        .arg("--version")
-        .output()
-        .is_ok_and(|o| o.status.success())
+    static CASS_READY: OnceLock<bool> = OnceLock::new();
+
+    *CASS_READY.get_or_init(|| {
+        Command::new("cass")
+            .args([
+                "search",
+                "__ms_e2e_readiness_probe__",
+                "--robot",
+                "--limit",
+                "1",
+            ])
+            .output()
+            .is_ok_and(|output| output.status.success())
+    })
+}
+
+/// Run a real-CASS scenario with the caller's indexed CASS data while keeping
+/// all Meta Skill state inside the isolated fixture.
+fn run_ms_with_real_cass(fixture: &mut E2EFixture, args: &[&str]) -> CommandOutput {
+    let data_home = dirs::data_dir().expect("real-CASS E2E requires a platform data directory");
+    let data_home = data_home.to_string_lossy();
+    fixture.run_ms_with_env(args, &[("XDG_DATA_HOME", data_home.as_ref())])
 }
 
 // ============================================================================
@@ -353,7 +374,7 @@ fn test_cross_project_summary_json_output() -> Result<()> {
     fixture.checkpoint("cross-project:pre-summary");
 
     fixture.log_step("Run cross-project summary with robot mode");
-    let output = fixture.run_ms(&["--robot", "cross-project", "summary"]);
+    let output = run_ms_with_real_cass(&mut fixture, &["--robot", "cross-project", "summary"]);
     fixture.assert_success(&output, "cross-project summary");
 
     fixture.checkpoint("cross-project:post-summary");
@@ -403,7 +424,10 @@ fn test_cross_project_summary_top_limit() -> Result<()> {
     fixture.checkpoint("cross-project:pre-summary-top");
 
     fixture.log_step("Run summary with --top 2");
-    let output = fixture.run_ms(&["--robot", "cross-project", "summary", "--top", "2"]);
+    let output = run_ms_with_real_cass(
+        &mut fixture,
+        &["--robot", "cross-project", "summary", "--top", "2"],
+    );
     fixture.assert_success(&output, "cross-project summary top");
 
     fixture.checkpoint("cross-project:post-summary-top");
@@ -439,7 +463,10 @@ fn test_cross_project_summary_with_query() -> Result<()> {
     fixture.checkpoint("cross-project:pre-summary-query");
 
     fixture.log_step("Run summary with specific query");
-    let output = fixture.run_ms(&["--robot", "cross-project", "summary", "--query", "rust"]);
+    let output = run_ms_with_real_cass(
+        &mut fixture,
+        &["--robot", "cross-project", "summary", "--query", "rust"],
+    );
     fixture.assert_success(&output, "cross-project summary with query");
 
     fixture.checkpoint("cross-project:post-summary-query");
@@ -474,13 +501,16 @@ fn test_cross_project_summary_min_sessions() -> Result<()> {
     fixture.checkpoint("cross-project:pre-summary-min-sessions");
 
     fixture.log_step("Run summary with high min-sessions threshold");
-    let output = fixture.run_ms(&[
-        "--robot",
-        "cross-project",
-        "summary",
-        "--min-sessions",
-        "999999",
-    ]);
+    let output = run_ms_with_real_cass(
+        &mut fixture,
+        &[
+            "--robot",
+            "cross-project",
+            "summary",
+            "--min-sessions",
+            "999999",
+        ],
+    );
     fixture.assert_success(&output, "cross-project summary min-sessions");
 
     fixture.checkpoint("cross-project:post-summary-min-sessions");
@@ -520,7 +550,10 @@ fn test_cross_project_patterns_json_output() -> Result<()> {
     fixture.checkpoint("cross-project:pre-patterns");
 
     fixture.log_step("Run cross-project patterns with robot mode");
-    let output = fixture.run_ms(&["--robot", "cross-project", "patterns"]);
+    let output = run_ms_with_real_cass(
+        &mut fixture,
+        &["--robot", "cross-project", "patterns", "--limit", "2"],
+    );
     fixture.assert_success(&output, "cross-project patterns");
 
     fixture.checkpoint("cross-project:post-patterns");
@@ -564,13 +597,18 @@ fn test_cross_project_patterns_high_thresholds() -> Result<()> {
     fixture.checkpoint("cross-project:pre-patterns-high-thresholds");
 
     fixture.log_step("Run patterns with very high occurrence threshold");
-    let output = fixture.run_ms(&[
-        "--robot",
-        "cross-project",
-        "patterns",
-        "--min-occurrences",
-        "999999",
-    ]);
+    let output = run_ms_with_real_cass(
+        &mut fixture,
+        &[
+            "--robot",
+            "cross-project",
+            "patterns",
+            "--limit",
+            "2",
+            "--min-occurrences",
+            "999999",
+        ],
+    );
     fixture.assert_success(&output, "cross-project patterns high thresholds");
 
     fixture.checkpoint("cross-project:post-patterns-high-thresholds");
@@ -610,7 +648,10 @@ fn test_cross_project_gaps_json_output() -> Result<()> {
     fixture.checkpoint("cross-project:pre-gaps");
 
     fixture.log_step("Run cross-project gaps with robot mode");
-    let output = fixture.run_ms(&["--robot", "cross-project", "gaps"]);
+    let output = run_ms_with_real_cass(
+        &mut fixture,
+        &["--robot", "cross-project", "gaps", "--limit", "2"],
+    );
     fixture.assert_success(&output, "cross-project gaps");
 
     fixture.checkpoint("cross-project:post-gaps");
@@ -651,7 +692,18 @@ fn test_cross_project_gaps_min_score() -> Result<()> {
     fixture.checkpoint("cross-project:pre-gaps-min-score");
 
     fixture.log_step("Run gaps with high min-score to include more gaps");
-    let output = fixture.run_ms(&["--robot", "cross-project", "gaps", "--min-score", "100.0"]);
+    let output = run_ms_with_real_cass(
+        &mut fixture,
+        &[
+            "--robot",
+            "cross-project",
+            "gaps",
+            "--limit",
+            "2",
+            "--min-score",
+            "100.0",
+        ],
+    );
     fixture.assert_success(&output, "cross-project gaps min-score");
 
     fixture.checkpoint("cross-project:post-gaps-min-score");
@@ -684,7 +736,18 @@ fn test_cross_project_gaps_search_limit() -> Result<()> {
     fixture.checkpoint("cross-project:pre-gaps-search-limit");
 
     fixture.log_step("Run gaps with search-limit=1");
-    let output = fixture.run_ms(&["--robot", "cross-project", "gaps", "--search-limit", "1"]);
+    let output = run_ms_with_real_cass(
+        &mut fixture,
+        &[
+            "--robot",
+            "cross-project",
+            "gaps",
+            "--limit",
+            "2",
+            "--search-limit",
+            "1",
+        ],
+    );
     fixture.assert_success(&output, "cross-project gaps search-limit");
 
     fixture.checkpoint("cross-project:post-gaps-search-limit");

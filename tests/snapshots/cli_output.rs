@@ -10,7 +10,7 @@ fn test_list_output_human() {
     let output = fixture.run_ms(&["list"]);
     assert!(output.success, "list failed: {}", output.stderr);
 
-    let sanitized = sanitize_human(&output.stdout);
+    let sanitized = sanitize_human(&output.stdout, &fixture.root);
     assert_snapshot!("list_human", sanitized);
 }
 
@@ -31,7 +31,7 @@ fn test_search_output_human() {
     let output = fixture.run_ms(&["search", "rust"]);
     assert!(output.success, "search failed: {}", output.stderr);
 
-    let sanitized = sanitize_human(&output.stdout);
+    let sanitized = sanitize_human(&output.stdout, &fixture.root);
     assert_snapshot!("search_human", sanitized);
 }
 
@@ -52,7 +52,7 @@ fn test_show_output_human() {
     let output = fixture.run_ms(&["show", "rust-error-handling"]);
     assert!(output.success, "show failed: {}", output.stderr);
 
-    let sanitized = sanitize_human(&output.stdout);
+    let sanitized = sanitize_human(&output.stdout, &fixture.root);
     assert_snapshot!("show_human", sanitized);
 }
 
@@ -67,16 +67,17 @@ fn test_show_output_robot_json() {
     assert_json_snapshot!("show_robot_json", json);
 }
 
-fn sanitize_human(input: &str) -> String {
+fn sanitize_human(input: &str, temp_root: &std::path::Path) -> String {
     let re_iso = Regex::new(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z?").unwrap();
     let re_space = Regex::new(r"\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}").unwrap();
     let re_date = Regex::new(r"\d{4}-\d{2}-\d{2}").unwrap();
-    let re_tmp = Regex::new(r"/tmp/\.tmp[a-zA-Z0-9]+").unwrap();
 
     let mut out = re_iso.replace_all(input, "[TIMESTAMP]").to_string();
     out = re_space.replace_all(&out, "[TIMESTAMP]").to_string();
     out = re_date.replace_all(&out, "[DATE]").to_string();
-    out = re_tmp.replace_all(&out, "/tmp/[TEMP_DIR]").to_string();
+    out = out.replace(temp_root.to_string_lossy().as_ref(), "[TEMP_DIR]");
+    // Snapshot path separators must be stable across Unix and Windows runners.
+    out = out.replace('\\', "/");
     out
 }
 
