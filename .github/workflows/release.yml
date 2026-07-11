@@ -121,7 +121,7 @@ jobs:
         # with rust-toolchain.toml when bumping the pin.
         uses: dtolnay/rust-toolchain@master
         with:
-          toolchain: nightly-2026-02-19
+          toolchain: nightly-2026-04-22
           targets: ${{ matrix.target }}
 
       - uses: Swatinem/rust-cache@v2

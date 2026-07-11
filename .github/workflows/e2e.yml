@@ -42,7 +42,7 @@ jobs:
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@master
         with:
-          toolchain: nightly-2026-02-19
+          toolchain: nightly-2026-04-22
 
       - uses: Swatinem/rust-cache@v2
         with:
@@ -70,7 +70,7 @@ jobs:
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@master
         with:
-          toolchain: nightly-2026-02-19
+          toolchain: nightly-2026-04-22
 
       - uses: Swatinem/rust-cache@v2
         with:
@@ -225,7 +225,7 @@ jobs:
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@master
         with:
-          toolchain: nightly-2026-02-19
+          toolchain: nightly-2026-04-22
 
       - uses: Swatinem/rust-cache@v2
         with:
