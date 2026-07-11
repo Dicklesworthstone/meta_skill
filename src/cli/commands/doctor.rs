@@ -1,5 +1,6 @@
 //! ms doctor - Health checks and repairs
 
+#[cfg(target_os = "linux")]
 use std::path::Path;
 use std::sync::Arc;
 

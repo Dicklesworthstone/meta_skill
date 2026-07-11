@@ -277,7 +277,7 @@ impl SearchResults {
         header
     }
 
-    /// Format as plain TSV (bd-olwb spec: SCORE<TAB>NAME<TAB>LAYER<TAB>DESCRIPTION).
+    /// Format as plain TSV (bd-olwb spec: `SCORE<TAB>NAME<TAB>LAYER<TAB>DESCRIPTION`).
     ///
     /// No headers, just data rows for easy parsing with cut/awk.
     fn format_plain(&self) -> String {

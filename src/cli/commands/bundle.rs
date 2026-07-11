@@ -97,7 +97,7 @@ pub struct BundlePublishArgs {
     #[arg(long)]
     pub token: Option<String>,
 
-    /// Release tag (defaults to v<bundle version>)
+    /// Release tag (defaults to `v<bundle version>`)
     #[arg(long)]
     pub tag: Option<String>,
 
