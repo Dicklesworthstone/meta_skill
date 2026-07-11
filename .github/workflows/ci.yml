@@ -156,10 +156,10 @@ jobs:
         run: cargo deny check
       - name: Run security audit
         # RUSTSEC-2025-0140: gix-date — requires vergen-gix major version bump
-        # `cargo deny check` immediately above has already populated the shared
-        # advisory DB. Reuse it: a second fetch can race the restored cache and
-        # fail while trying to clone into the non-empty advisory-db directory.
-        run: cargo audit --no-fetch --ignore RUSTSEC-2025-0140
+        # Keep cargo-audit's clone outside CARGO_HOME. cargo-deny uses a different
+        # RustSec DB layout, while rust-cache may restore a partial advisory-db;
+        # either one makes cargo-audit fail before it scans the lockfile.
+        run: cargo audit --db "$RUNNER_TEMP/cargo-audit-db" --ignore RUSTSEC-2025-0140
       - name: Security summary
         if: always()
         run: |
