@@ -687,7 +687,7 @@ impl E2EFixture {
             if let Ok(val) = std::env::var(var) {
                 // Truncate PATH to avoid noise
                 let val = if var == "PATH" && val.len() > 100 {
-                    format!("{}...", &val[..100])
+                    truncate(&val, 100)
                 } else {
                     val
                 };
@@ -877,7 +877,7 @@ impl E2EFixture {
                                 let s = String::from_utf8_lossy(t);
                                 // Truncate long text values
                                 if s.len() > 100 {
-                                    serde_json::json!(format!("{}...", &s[..100]))
+                                    serde_json::json!(truncate(s.as_ref(), 100))
                                 } else {
                                     serde_json::json!(s)
                                 }
@@ -1265,7 +1265,7 @@ impl E2EFixture {
         println!("[CMD] Exit: {} ({:?})", result.exit_code, elapsed);
         if !stdout.is_empty() {
             let preview = if stdout.len() > 500 {
-                format!("{}...", &stdout[..500])
+                truncate(&stdout, 500)
             } else {
                 stdout.clone()
             };
@@ -1366,7 +1366,7 @@ impl E2EFixture {
         println!("[CMD] Exit: {} ({:?})", result.exit_code, elapsed);
         if !stdout.is_empty() {
             let preview = if stdout.len() > 500 {
-                format!("{}...", &stdout[..500])
+                truncate(&stdout, 500)
             } else {
                 stdout.clone()
             };

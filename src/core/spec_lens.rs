@@ -5,6 +5,8 @@ use serde_json::Value as JsonValue;
 use super::skill::{BlockType, SkillBlock, SkillMetadata, SkillSection, SkillSpec};
 use crate::error::{MsError, Result};
 
+const PREAMBLE_SECTION_ID: &str = "__preamble";
+
 /// Bidirectional mapping between `SkillSpec` and SKILL.md.
 pub struct SpecLens;
 
@@ -97,6 +99,11 @@ pub fn parse_markdown(content: &str) -> Result<SkillSpec> {
         // that `ms load --full` and the MCP `load` server serve (issue #134).
         if let Some(title) = line.strip_prefix("# ").filter(|_| !in_code_block) {
             name = title.trim().to_string();
+            // The first paragraph may be either the canonical description
+            // repeated by `compile_markdown`, or distinct body prose written
+            // below the H1. Collect it first and disambiguate after parsing so
+            // canonical output remains stable while real preamble content is
+            // retained (issue #150).
             in_description = true;
             continue;
         }
@@ -126,6 +133,14 @@ pub fn parse_markdown(content: &str) -> Result<SkillSpec> {
                 description_lines.push(line.trim_end().to_string());
             }
             continue;
+        }
+
+        if current_section.is_none() && !line.trim().is_empty() {
+            current_section = Some(SkillSection {
+                id: PREAMBLE_SECTION_ID.to_string(),
+                title: String::new(),
+                blocks: Vec::new(),
+            });
         }
 
         let Some(section) = current_section.as_mut() else {
@@ -197,9 +212,44 @@ pub fn parse_markdown(content: &str) -> Result<SkillSpec> {
         String::new()
     };
 
-    // If description wasn't in frontmatter, use extracted one
+    let extracted_description = description_lines.join("\n").trim().to_string();
+
+    // Without frontmatter, the first post-H1 paragraph is the description. If
+    // frontmatter already supplied a description, an exact repeated paragraph
+    // is compiler-generated canonical text; any distinct paragraph is body
+    // content and belongs at the front of the heading-less preamble section.
     if metadata.description.is_empty() {
-        metadata.description = description_lines.join("\n").trim().to_string();
+        metadata.description = extracted_description;
+    } else if !extracted_description.is_empty()
+        && extracted_description.trim() != metadata.description.trim()
+    {
+        let preamble = if sections
+            .first()
+            .is_some_and(|section| section.id == PREAMBLE_SECTION_ID)
+        {
+            &mut sections[0]
+        } else {
+            sections.insert(
+                0,
+                SkillSection {
+                    id: PREAMBLE_SECTION_ID.to_string(),
+                    title: String::new(),
+                    blocks: Vec::new(),
+                },
+            );
+            &mut sections[0]
+        };
+        preamble.blocks.insert(
+            0,
+            SkillBlock {
+                id: String::new(),
+                block_type: BlockType::Text,
+                content: extracted_description,
+            },
+        );
+        for (index, block) in preamble.blocks.iter_mut().enumerate() {
+            block.id = format!("{PREAMBLE_SECTION_ID}-block-{}", index + 1);
+        }
     }
 
     // If name wasn't in frontmatter, use extracted one
@@ -248,7 +298,9 @@ pub fn compile_markdown(spec: &SkillSpec) -> String {
     }
 
     for section in &spec.sections {
-        output.push_str(&format!("## {}\n\n", section.title));
+        if section.id != PREAMBLE_SECTION_ID || !section.title.is_empty() {
+            output.push_str(&format!("## {}\n\n", section.title));
+        }
         for block in &section.blocks {
             if block.block_type == BlockType::Code {
                 let content = block.content.trim_end();
@@ -306,7 +358,7 @@ fn json_equivalent(left: &JsonValue, right: &JsonValue) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::{BlockType, compile_markdown, parse_markdown};
+    use super::{BlockType, PREAMBLE_SECTION_ID, compile_markdown, parse_markdown};
 
     #[test]
     fn fenced_hash_comments_are_not_parsed_as_headings() {
@@ -391,6 +443,44 @@ mod tests {
     }
 
     #[test]
+    fn frontmatter_description_does_not_discard_distinct_h1_preamble() {
+        let md = "---\nname: Preamble Skill\ndescription: Short catalog summary\n---\n\n# Preamble Skill\n\nThis intro carries unique token preamblecanary.\n\nA second intro paragraph must survive too.\n\n## Notes\n\nSection content.\n";
+        let parsed = parse_markdown(md).expect("parse");
+
+        assert_eq!(parsed.metadata.description, "Short catalog summary");
+        let preamble = parsed
+            .sections
+            .first()
+            .expect("heading-less preamble section");
+        assert_eq!(preamble.id, PREAMBLE_SECTION_ID);
+        assert!(preamble.title.is_empty());
+        assert_eq!(preamble.blocks.len(), 2);
+        assert!(preamble.blocks[0].content.contains("preamblecanary"));
+        assert!(
+            preamble.blocks[1]
+                .content
+                .contains("second intro paragraph")
+        );
+
+        let compiled = compile_markdown(&parsed);
+        assert!(compiled.contains("preamblecanary"));
+        assert!(compiled.contains("A second intro paragraph must survive too."));
+        assert!(!compiled.contains("## \n"));
+
+        let reparsed = parse_markdown(&compiled).expect("reparse canonical markdown");
+        assert_eq!(
+            reparsed.sections[0].blocks.len(),
+            2,
+            "the canonical metadata description must not reappear as a body block"
+        );
+        assert!(
+            reparsed.sections[0].blocks[0]
+                .content
+                .contains("preamblecanary")
+        );
+    }
+
+    #[test]
     fn name_only_frontmatter_derives_id_from_name() {
         // A SKILL.md that follows the Anthropic contract — a `name:` in the
         // frontmatter but no explicit `id:` and no `# ` H1, with a body that
@@ -408,6 +498,12 @@ mod tests {
         assert_eq!(parsed.metadata.description, "Does cool things");
         // The `## Usage` section is still parsed (body prose did not swallow it).
         assert!(parsed.sections.iter().any(|s| s.title == "Usage"));
+        assert!(
+            parsed.sections[0].blocks[0]
+                .content
+                .contains("without an H1"),
+            "body prose before the first H2 must not be discarded"
+        );
     }
 
     #[test]

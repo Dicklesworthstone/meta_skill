@@ -59,6 +59,21 @@ Use pytest for all testing needs.
 - Use fixtures for setup
 "#;
 
+const SKILL_WITH_DISTINCT_PREAMBLE: &str = r#"---
+name: Preamble Recall
+description: Short catalog summary
+tags: [search, regression]
+---
+
+# Preamble Recall
+
+The distinct intro contains unique token preamblecanary.
+
+## Notes
+
+Section content remains searchable too.
+"#;
+
 #[allow(dead_code)]
 const SKILL_INVALID: &str = r#"---
 name:
@@ -122,6 +137,45 @@ fn test_index_workspace() -> Result<()> {
     assert_eq!(count, 3, "List should return 3 skills after indexing");
 
     fixture.generate_report();
+    Ok(())
+}
+
+#[test]
+fn test_index_preserves_and_searches_distinct_h1_preamble() -> Result<()> {
+    let mut fixture = E2EFixture::new("index_preamble_recall");
+
+    fixture.log_step("Initialize ms");
+    let output = fixture.init();
+    fixture.assert_success(&output, "init");
+
+    fixture.log_step("Create skill with body preamble distinct from frontmatter description");
+    fixture.create_skill("preamble-recall", SKILL_WITH_DISTINCT_PREAMBLE)?;
+
+    fixture.log_step("Index skill");
+    let output = fixture.run_ms(&["--robot", "index"]);
+    fixture.assert_success(&output, "index");
+
+    fixture.log_step("Search for preamble-only token");
+    let output = fixture.run_ms(&[
+        "--robot",
+        "search",
+        "preamblecanary",
+        "--search-type",
+        "bm25",
+    ]);
+    fixture.assert_success(&output, "search preamble-only token");
+
+    let results = output.json()["results"]
+        .as_array()
+        .expect("search results array")
+        .iter()
+        .filter_map(|result| result["id"].as_str())
+        .collect::<Vec<_>>();
+    assert!(
+        results.contains(&"preamble-recall"),
+        "preamble-only token must reach the stored body and Tantivy index: {results:?}"
+    );
+
     Ok(())
 }
 

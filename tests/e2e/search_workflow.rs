@@ -61,14 +61,14 @@ fn setup_search_fixture(scenario: &str) -> Result<E2EFixture> {
         "--robot",
         "config",
         "skill_paths.global",
-        r#"[\"./global_skills\"]"#,
+        r#"["./global_skills"]"#,
     ]);
     fixture.assert_success(&output, "config skill_paths.global");
     let output = fixture.run_ms(&[
         "--robot",
         "config",
         "skill_paths.local",
-        r#"[\"./local_skills\"]"#,
+        r#"["./local_skills"]"#,
     ]);
     fixture.assert_success(&output, "config skill_paths.local");
 

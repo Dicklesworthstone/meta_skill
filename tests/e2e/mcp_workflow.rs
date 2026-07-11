@@ -332,6 +332,15 @@ fn setup_mcp_fixture(scenario: &str) -> Result<E2EFixture> {
     let output = fixture.init();
     fixture.assert_success(&output, "init");
 
+    fixture.log_step("Configure global skill path");
+    let output = fixture.run_ms(&[
+        "--robot",
+        "config",
+        "skill_paths.global",
+        r#"["./global_skills"]"#,
+    ]);
+    fixture.assert_success(&output, "config skill_paths.global");
+
     fixture.log_step("Create test skills");
     fixture.create_skill_in_layer("rust-error-handling", SKILL_RUST_ERROR, "project")?;
     fixture.create_skill_in_layer("rust-testing", SKILL_RUST_TESTING, "project")?;

@@ -189,8 +189,8 @@ fn test_auto_load_rust_project() -> Result<()> {
     fs::create_dir_all(fixture.root.join("src"))?;
     fs::write(fixture.root.join("src/main.rs"), "fn main() {}")?;
 
-    fixture.log_step("Auto-load with --dry_run");
-    let output = fixture.run_ms(&["--robot", "load", "--auto", "--dry_run"]);
+    fixture.log_step("Auto-load with --dry-run");
+    let output = fixture.run_ms(&["--robot", "load", "--auto", "--dry-run"]);
     fixture.assert_success(&output, "auto-load dry_run");
 
     let json = output.json();
@@ -243,8 +243,8 @@ fn test_auto_load_node_project() -> Result<()> {
     )?;
     fs::write(fixture.root.join("index.ts"), "console.log('hello');")?;
 
-    fixture.log_step("Auto-load with --dry_run");
-    let output = fixture.run_ms(&["--robot", "load", "--auto", "--dry_run"]);
+    fixture.log_step("Auto-load with --dry-run");
+    let output = fixture.run_ms(&["--robot", "load", "--auto", "--dry-run"]);
     fixture.assert_success(&output, "auto-load dry_run");
 
     let json = output.json();
@@ -288,8 +288,8 @@ fn test_auto_load_python_project() -> Result<()> {
     )?;
     fs::write(fixture.root.join("main.py"), "print('hello')")?;
 
-    fixture.log_step("Auto-load with --dry_run");
-    let output = fixture.run_ms(&["--robot", "load", "--auto", "--dry_run"]);
+    fixture.log_step("Auto-load with --dry-run");
+    let output = fixture.run_ms(&["--robot", "load", "--auto", "--dry-run"]);
     fixture.assert_success(&output, "auto-load dry_run");
 
     let json = output.json();
@@ -327,12 +327,12 @@ fn test_auto_load_file_patterns() -> Result<()> {
     fs::create_dir_all(fixture.root.join("docs"))?;
     fs::write(fixture.root.join("docs/guide.md"), "# Guide")?;
 
-    fixture.log_step("Auto-load with --dry_run");
+    fixture.log_step("Auto-load with --dry-run");
     let output = fixture.run_ms(&[
         "--robot",
         "load",
         "--auto",
-        "--dry_run",
+        "--dry-run",
         "--threshold",
         "0.1",
     ]);
@@ -387,8 +387,8 @@ fn test_auto_load_tool_detection() -> Result<()> {
         "[package]\nname = \"test\"",
     )?;
 
-    fixture.log_step("Auto-load with --dry_run and check tool scoring");
-    let output = fixture.run_ms(&["--robot", "load", "--auto", "--dry_run"]);
+    fixture.log_step("Auto-load with --dry-run and check tool scoring");
+    let output = fixture.run_ms(&["--robot", "load", "--auto", "--dry-run"]);
     fixture.assert_success(&output, "auto-load dry_run");
 
     let json = output.json();
@@ -449,12 +449,12 @@ pub enum MyError {
 "#,
     )?;
 
-    fixture.log_step("Auto-load with --dry_run");
+    fixture.log_step("Auto-load with --dry-run");
     let output = fixture.run_ms(&[
         "--robot",
         "load",
         "--auto",
-        "--dry_run",
+        "--dry-run",
         "--threshold",
         "0.1",
     ]);
@@ -505,7 +505,7 @@ fn test_auto_load_threshold() -> Result<()> {
         "--robot",
         "load",
         "--auto",
-        "--dry_run",
+        "--dry-run",
         "--threshold",
         "0.9",
     ]);
@@ -516,7 +516,7 @@ fn test_auto_load_threshold() -> Result<()> {
         "--robot",
         "load",
         "--auto",
-        "--dry_run",
+        "--dry-run",
         "--threshold",
         "0.1",
     ]);
@@ -574,8 +574,8 @@ fn test_auto_load_dry_run() -> Result<()> {
         "[package]\nname = \"test\"",
     )?;
 
-    fixture.log_step("Auto-load with --dry_run");
-    let output = fixture.run_ms(&["--robot", "load", "--auto", "--dry_run"]);
+    fixture.log_step("Auto-load with --dry-run");
+    let output = fixture.run_ms(&["--robot", "load", "--auto", "--dry-run"]);
     fixture.assert_success(&output, "auto-load dry_run");
 
     let json = output.json();
@@ -665,7 +665,7 @@ fn test_auto_load_no_skills() -> Result<()> {
     )?;
 
     fixture.log_step("Auto-load with no skills indexed");
-    let output = fixture.run_ms(&["--robot", "load", "--auto", "--dry_run"]);
+    let output = fixture.run_ms(&["--robot", "load", "--auto", "--dry-run"]);
     fixture.assert_success(&output, "auto-load no skills");
 
     let json = output.json();
@@ -712,8 +712,8 @@ fn test_auto_load_multi_language() -> Result<()> {
         "[project]\nname = \"test\"",
     )?;
 
-    fixture.log_step("Auto-load with --dry_run");
-    let output = fixture.run_ms(&["--robot", "load", "--auto", "--dry_run"]);
+    fixture.log_step("Auto-load with --dry-run");
+    let output = fixture.run_ms(&["--robot", "load", "--auto", "--dry-run"]);
     fixture.assert_success(&output, "auto-load dry_run");
 
     let json = output.json();
