@@ -25,10 +25,6 @@ ignore = [
     "RUSTSEC-2024-0320",
     # gix-date non-utf8 string issue — requires vergen-gix 9.x (major version bump).
     "RUSTSEC-2025-0140",
-    # atty (0.2.14) is unmaintained — the maintainer recommends std::io::IsTerminal
-    # (stable since Rust 1.70). Reached transitively; no safe drop-in replacement at
-    # the pinned dep versions. Used only for TTY detection, so risk is negligible.
-    "RUSTSEC-2024-0375",
     # bincode 1.3.3 is unmaintained — the team permanently ceased development and
     # considers 1.3.3 a complete release (not a vulnerability). Reached transitively
     # via syntect -> rich_rust; no safe upgrade path (bincode 2.x is a breaking API).

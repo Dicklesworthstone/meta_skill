@@ -40,7 +40,9 @@ jobs:
       - uses: actions/checkout@v7
 
       - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: nightly-2026-02-19
 
       - uses: Swatinem/rust-cache@v2
         with:
@@ -66,7 +68,9 @@ jobs:
       - uses: actions/checkout@v7
 
       - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: nightly-2026-02-19
 
       - uses: Swatinem/rust-cache@v2
         with:
@@ -86,8 +90,13 @@ jobs:
       - name: Run E2E tests
         id: e2e
         run: |
+          set +e
+          set -o pipefail
           cargo test --test '*' -- --nocapture 2>&1 | tee e2e-output.log
-          echo "exit_code=$?" >> $GITHUB_OUTPUT
+          exit_code=${PIPESTATUS[0]}
+          set -e
+          echo "exit_code=$exit_code" >> "$GITHUB_OUTPUT"
+          exit "$exit_code"
 
       - name: E2E Summary
         if: always()
@@ -214,7 +223,9 @@ jobs:
       - uses: actions/checkout@v7
 
       - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: nightly-2026-02-19
 
       - uses: Swatinem/rust-cache@v2
         with:

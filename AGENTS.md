@@ -111,7 +111,7 @@ If data was lost, check these locations for recovery:
 We only use **Cargo** in this project, NEVER any other package manager.
 
 - **Edition:** Rust 2024 (nightly required)
-- **Minimum Rust version:** 1.85
+- **Manifest API floor:** Rust 1.89; builds require the pinned `nightly-2026-02-19` toolchain
 - **Dependency versions:** Explicit versions for stability
 - **Configuration:** Single-crate project (not a workspace)
 - **Unsafe code:** Denied (`#[deny(unsafe_code)]`), with `#[allow(unsafe_code)]` permitted in test modules for `env::set_var`/`remove_var`

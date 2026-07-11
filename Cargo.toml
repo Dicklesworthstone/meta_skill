@@ -93,7 +93,6 @@ tracing-subscriber = { version = "0.3.23", features = ["env-filter", "fmt", "ans
 
 # Authentication
 keyring = "4.1.1"
-atty = "0.2.14"
 open = "5.3.5"
 
 # Utilities
@@ -316,9 +315,8 @@ filter_next = "allow"
 extend_with_drain = "allow"
 double_must_use = "allow"
 comparison_chain = "allow"
-# nursery: flags use of std file-locking (try_lock_exclusive/unlock, stable since
-# 1.89) while the declared MSRV is 1.85. The MSRV job uses `cargo check`, not
-# clippy, so this does not gate clippy; see src/storage/tx.rs.
+# Kept explicit for older nightly clippy behavior around the std file-locking
+# APIs stabilized at the manifest's Rust 1.89 API floor; see src/storage/tx.rs.
 incompatible_msrv = "allow"
 
 # --- lints that only fire in the test/integration/e2e targets ---

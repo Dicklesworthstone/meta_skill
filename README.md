@@ -25,7 +25,7 @@ cargo install --path .
 cargo run -- <COMMAND>
 ```
 
-<p><em>Works on Linux, macOS, and Windows. Requires Rust 1.85+ (Edition 2024).</em></p>
+<p><em>Works on Linux, macOS, and Windows. Requires the pinned <code>nightly-2026-02-19</code> toolchain (Edition 2024; manifest API floor Rust 1.89).</em></p>
 </div>
 
 ---
