@@ -46,9 +46,9 @@ toon_rust = { package = "tru", git = "https://github.com/Dicklesworthstone/toon_
 # Database — migrated from rusqlite per project-wide policy
 # ("NEVER use rusqlite — frankensqlite ONLY", meta_skill#106).
 # `fsqlite` is the public facade crate published on crates.io.
-fsqlite = { version = "0.1.10", features = ["fts5"] }
-fsqlite-types = "0.1.10"
-fsqlite-error = "0.1.10"
+fsqlite = { version = "0.1.18", features = ["fts5"] }
+fsqlite-types = "0.1.18"
+fsqlite-error = "0.1.18"
 # (The `asupersync = "=0.3.1"` / `franken-decision = "=0.3.1"` transitive pins
 # that the 0.1.7 family required are no longer needed: frankensqlite 0.1.8
 # (#108) stops calling the test-internals-gated asupersync constructor, so it
