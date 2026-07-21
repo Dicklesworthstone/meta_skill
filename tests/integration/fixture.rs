@@ -309,6 +309,27 @@ impl TestFixture {
             .spawn()
             .expect("Failed to spawn ms command");
 
+        // Drain stdout/stderr CONCURRENTLY with the wait loop. Reading only
+        // after exit deadlocks: once the child fills the ~64KB pipe buffer
+        // (e.g. the e2e workflow exports RUST_LOG=debug, so every `ms`
+        // invocation logs megabytes to stderr) it blocks on write while we
+        // block waiting for it to exit — every fixture-driven test then dies
+        // as a 30s "Command timed out" (#150's 76 CI-only e2e failures).
+        let stdout_reader = child.stdout.take().map(|mut out| {
+            std::thread::spawn(move || {
+                let mut buf = String::new();
+                let _ = out.read_to_string(&mut buf);
+                buf
+            })
+        });
+        let stderr_reader = child.stderr.take().map(|mut err| {
+            std::thread::spawn(move || {
+                let mut buf = String::new();
+                let _ = err.read_to_string(&mut buf);
+                buf
+            })
+        });
+
         // Wait with timeout
         let result: Result<std::process::ExitStatus, String> = loop {
             match child.try_wait() {
@@ -316,6 +337,8 @@ impl TestFixture {
                 Ok(None) => {
                     if start.elapsed() > timeout {
                         let _ = child.kill();
+                        // Reap the killed child so the reader threads see EOF.
+                        let _ = child.wait();
                         break Err("Command timed out".to_string());
                     }
                     std::thread::sleep(Duration::from_millis(50));
@@ -326,24 +349,30 @@ impl TestFixture {
 
         let elapsed = start.elapsed();
 
+        // Join the reader threads regardless of outcome so a timed-out
+        // command still reports whatever it managed to print.
+        let stdout_str = stdout_reader
+            .and_then(|handle| handle.join().ok())
+            .unwrap_or_default();
+        let stderr_str = stderr_reader
+            .and_then(|handle| handle.join().ok())
+            .unwrap_or_default();
+
         let (success, exit_code, stdout, stderr) = match result {
-            Ok(status) => {
-                let mut stdout_str = String::new();
-                let mut stderr_str = String::new();
-                if let Some(mut out) = child.stdout.take() {
-                    let _ = out.read_to_string(&mut stdout_str);
-                }
-                if let Some(mut err) = child.stderr.take() {
-                    let _ = err.read_to_string(&mut stderr_str);
-                }
-                (
-                    status.success(),
-                    status.code().unwrap_or(-1),
-                    stdout_str,
-                    stderr_str,
-                )
+            Ok(status) => (
+                status.success(),
+                status.code().unwrap_or(-1),
+                stdout_str,
+                stderr_str,
+            ),
+            Err(msg) => {
+                let stderr = if stderr_str.is_empty() {
+                    msg
+                } else {
+                    format!("{msg}\n{stderr_str}")
+                };
+                (false, -1, stdout_str, stderr)
             }
-            Err(msg) => (false, -1, String::new(), msg),
         };
 
         println!("[CMD] Exit code: {exit_code}");

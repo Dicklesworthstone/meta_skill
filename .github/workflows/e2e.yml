@@ -21,7 +21,7 @@ on:
 
 # Cancel in-progress runs for the same branch
 concurrency:
-  group: ${{ github.workflow }}-${{ github.head_ref || github.run_id }}
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
 
 env:
@@ -104,9 +104,11 @@ jobs:
           echo "## E2E Test Results" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           if [ -f e2e-output.log ]; then
-            # Count passed/failed
-            PASSED=$(grep -c "test .* ok" e2e-output.log 2>/dev/null || echo "0")
-            FAILED=$(grep -c "test .* FAILED" e2e-output.log 2>/dev/null || echo "0")
+            # Count passed/failed. NB: `grep -c` prints "0" AND exits 1 on no
+            # match, so `|| echo 0` would yield the two-line string "0\n0" and
+            # break the -gt integer test below; `|| true` keeps the clean "0".
+            PASSED=$(grep -c "test .* ok" e2e-output.log 2>/dev/null || true)
+            FAILED=$(grep -c "test .* FAILED" e2e-output.log 2>/dev/null || true)
             echo "- **Passed**: $PASSED" >> $GITHUB_STEP_SUMMARY
             echo "- **Failed**: $FAILED" >> $GITHUB_STEP_SUMMARY
             echo "" >> $GITHUB_STEP_SUMMARY
@@ -151,6 +153,11 @@ jobs:
       - name: Test robot mode JSON output
         id: robot
         run: |
+          # Without pipefail, `if cmd | tee file` tests tee's exit status and a
+          # failing ms command could slip through as long as stale/partial JSON
+          # satisfied jq (#150).
+          set -o pipefail
+
           # Create isolated test directory
           TEMP_MS=$(mktemp -d)
           cd "$TEMP_MS"

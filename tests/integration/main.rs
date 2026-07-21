@@ -16,5 +16,9 @@ mod more_cli_tests;
 mod output_format_tests;
 mod security_tests;
 mod skill_md_tests;
+// The ubs_staged tests drive a POSIX shell stub, so the whole module is
+// unix-only; gating the `mod` keeps its imports from tripping
+// `-D unused-imports` on Windows.
+#[cfg(unix)]
 mod ubs_staged_tests;
 mod workflow_tests;
