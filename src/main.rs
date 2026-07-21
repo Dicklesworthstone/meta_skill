@@ -2,6 +2,7 @@
 //!
 //! Mine CASS sessions to generate production-quality Claude Code skills.
 
+use std::io::IsTerminal;
 use std::process::ExitCode;
 
 use clap::Parser;
@@ -68,10 +69,15 @@ fn init_tracing(cli: &Cli) {
             .with(fmt::layer().json().with_writer(std::io::stderr))
             .init();
     } else {
-        // Human-readable logging
+        // Human-readable logging. Only emit ANSI styling when stderr is an
+        // interactive terminal and neither NO_COLOR nor an AI-agent
+        // environment (CLAUDE_CODE, CURSOR_AI, ...) demands plain output.
+        let ansi = std::io::stderr().is_terminal()
+            && std::env::var_os("NO_COLOR").is_none()
+            && !ms::output::is_agent_environment();
         tracing_subscriber::registry()
             .with(env_filter)
-            .with(fmt::layer().with_writer(std::io::stderr))
+            .with(fmt::layer().with_ansi(ansi).with_writer(std::io::stderr))
             .init();
     }
 }
