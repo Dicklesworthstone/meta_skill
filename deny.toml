@@ -58,6 +58,113 @@ allow = [
 # Confidence threshold for detecting license from file contents
 confidence-threshold = 0.8
 
+# The published fsqlite 0.1.18 crates carry no `license` field in their
+# manifests, and their LICENSE file is the custom MIT+OpenAI/Anthropic-rider
+# text, which cargo-deny's detector scores at 0.43 — below the 0.8 confidence
+# threshold — so every crate in the family lands as error[unlicensed] (#150).
+# Clarify each one explicitly: same first-party license as the rest of the
+# fleet, pinned to the LICENSE file's content hash so a changed license text
+# re-surfaces for review.
+[[licenses.clarify]]
+crate = "fsqlite"
+expression = "LicenseRef-MIT-OpenAI-Anthropic-Rider"
+license-files = [{ path = "LICENSE", hash = 0x3e2e0c66 }]
+
+[[licenses.clarify]]
+crate = "fsqlite-ast"
+expression = "LicenseRef-MIT-OpenAI-Anthropic-Rider"
+license-files = [{ path = "LICENSE", hash = 0x3e2e0c66 }]
+
+[[licenses.clarify]]
+crate = "fsqlite-btree"
+expression = "LicenseRef-MIT-OpenAI-Anthropic-Rider"
+license-files = [{ path = "LICENSE", hash = 0x3e2e0c66 }]
+
+[[licenses.clarify]]
+crate = "fsqlite-core"
+expression = "LicenseRef-MIT-OpenAI-Anthropic-Rider"
+license-files = [{ path = "LICENSE", hash = 0x3e2e0c66 }]
+
+[[licenses.clarify]]
+crate = "fsqlite-error"
+expression = "LicenseRef-MIT-OpenAI-Anthropic-Rider"
+license-files = [{ path = "LICENSE", hash = 0x3e2e0c66 }]
+
+[[licenses.clarify]]
+crate = "fsqlite-ext-fts5"
+expression = "LicenseRef-MIT-OpenAI-Anthropic-Rider"
+license-files = [{ path = "LICENSE", hash = 0x3e2e0c66 }]
+
+[[licenses.clarify]]
+crate = "fsqlite-ext-icu"
+expression = "LicenseRef-MIT-OpenAI-Anthropic-Rider"
+license-files = [{ path = "LICENSE", hash = 0x3e2e0c66 }]
+
+[[licenses.clarify]]
+crate = "fsqlite-ext-json"
+expression = "LicenseRef-MIT-OpenAI-Anthropic-Rider"
+license-files = [{ path = "LICENSE", hash = 0x3e2e0c66 }]
+
+[[licenses.clarify]]
+crate = "fsqlite-ext-misc"
+expression = "LicenseRef-MIT-OpenAI-Anthropic-Rider"
+license-files = [{ path = "LICENSE", hash = 0x3e2e0c66 }]
+
+[[licenses.clarify]]
+crate = "fsqlite-ext-rtree"
+expression = "LicenseRef-MIT-OpenAI-Anthropic-Rider"
+license-files = [{ path = "LICENSE", hash = 0x3e2e0c66 }]
+
+[[licenses.clarify]]
+crate = "fsqlite-func"
+expression = "LicenseRef-MIT-OpenAI-Anthropic-Rider"
+license-files = [{ path = "LICENSE", hash = 0x3e2e0c66 }]
+
+[[licenses.clarify]]
+crate = "fsqlite-mvcc"
+expression = "LicenseRef-MIT-OpenAI-Anthropic-Rider"
+license-files = [{ path = "LICENSE", hash = 0x3e2e0c66 }]
+
+[[licenses.clarify]]
+crate = "fsqlite-observability"
+expression = "LicenseRef-MIT-OpenAI-Anthropic-Rider"
+license-files = [{ path = "LICENSE", hash = 0x3e2e0c66 }]
+
+[[licenses.clarify]]
+crate = "fsqlite-pager"
+expression = "LicenseRef-MIT-OpenAI-Anthropic-Rider"
+license-files = [{ path = "LICENSE", hash = 0x3e2e0c66 }]
+
+[[licenses.clarify]]
+crate = "fsqlite-parser"
+expression = "LicenseRef-MIT-OpenAI-Anthropic-Rider"
+license-files = [{ path = "LICENSE", hash = 0x3e2e0c66 }]
+
+[[licenses.clarify]]
+crate = "fsqlite-planner"
+expression = "LicenseRef-MIT-OpenAI-Anthropic-Rider"
+license-files = [{ path = "LICENSE", hash = 0x3e2e0c66 }]
+
+[[licenses.clarify]]
+crate = "fsqlite-types"
+expression = "LicenseRef-MIT-OpenAI-Anthropic-Rider"
+license-files = [{ path = "LICENSE", hash = 0x3e2e0c66 }]
+
+[[licenses.clarify]]
+crate = "fsqlite-vdbe"
+expression = "LicenseRef-MIT-OpenAI-Anthropic-Rider"
+license-files = [{ path = "LICENSE", hash = 0x3e2e0c66 }]
+
+[[licenses.clarify]]
+crate = "fsqlite-vfs"
+expression = "LicenseRef-MIT-OpenAI-Anthropic-Rider"
+license-files = [{ path = "LICENSE", hash = 0x3e2e0c66 }]
+
+[[licenses.clarify]]
+crate = "fsqlite-wal"
+expression = "LicenseRef-MIT-OpenAI-Anthropic-Rider"
+license-files = [{ path = "LICENSE", hash = 0x3e2e0c66 }]
+
 [bans]
 # Deny multiple versions of the same crate
 multiple-versions = "warn"

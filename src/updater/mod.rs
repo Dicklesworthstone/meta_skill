@@ -516,8 +516,9 @@ fn extract_from_zip(archive: &Path, dest: &Path) -> Result<()> {
 /// `.tar.gz` verbatim) into a loud failure instead of a silent brick. It
 /// checks, in order:
 ///
-/// * the path is a regular, non-trivially-sized file;
+/// * the path is a regular file;
 /// * the leading bytes are not a compressed-archive magic (gzip/zip/xz/...);
+/// * the file is not trivially small (truncated download);
 /// * the leading bytes are a native executable magic — ELF or Mach-O on Unix,
 ///   `MZ` on Windows;
 /// * on Unix, the executable bit is set.
@@ -536,16 +537,12 @@ pub fn verify_executable_format(path: &Path) -> Result<()> {
         )));
     }
 
-    if metadata.len() < MIN_BINARY_BYTES {
-        return Err(MsError::ValidationFailed(format!(
-            "update candidate {} is only {} bytes; refusing to install a truncated binary",
-            path.display(),
-            metadata.len()
-        )));
-    }
-
     let magic = read_magic(path, 8)?;
 
+    // Check the archive magics BEFORE the size floor: a tiny gzip/zip is still
+    // an archive, and "this is an archive, extract `ms` first" is the specific,
+    // actionable diagnosis for the #159 failure class. The size floor would
+    // otherwise shadow it for small archives.
     for (bytes, label) in ARCHIVE_MAGICS {
         if magic.starts_with(bytes) {
             return Err(MsError::ValidationFailed(format!(
@@ -554,6 +551,14 @@ pub fn verify_executable_format(path: &Path) -> Result<()> {
                 path.display()
             )));
         }
+    }
+
+    if metadata.len() < MIN_BINARY_BYTES {
+        return Err(MsError::ValidationFailed(format!(
+            "update candidate {} is only {} bytes; refusing to install a truncated binary",
+            path.display(),
+            metadata.len()
+        )));
     }
 
     if !has_native_executable_magic(&magic) {

@@ -379,13 +379,21 @@ mod tests {
             "state dir rename must change the store identity"
         );
 
-        // Before reopening, the context still reads/writes the orphaned backup:
-        // its skill row is visible via the stale handle.
-        assert_eq!(
-            ctx.db.list_skills(100, 0).unwrap().len(),
-            1,
-            "stale handle should still see the pre-rebuild row (the bug)"
-        );
+        // Before reopening, the context does NOT serve the rebuilt store: the
+        // stale handle either still reads the orphaned backup (pre-fsqlite-0.1.18
+        // behavior: open FDs follow the rename) or errors outright (fsqlite
+        // 0.1.18+ re-resolves the path and refuses the mismatched store). Both
+        // manifest the bug that `reopen_stores` exists to fix; what must never
+        // happen is the stale handle silently serving the fresh, empty store B.
+        match ctx.db.list_skills(100, 0) {
+            Ok(rows) => assert_eq!(
+                rows.len(),
+                1,
+                "a stale handle that still answers must serve the pre-rebuild \
+                 row, not the rebuilt store"
+            ),
+            Err(_) => {} // stale handle refusing to answer is also "the bug"
+        }
 
         // Reopen: the context must now serve the fresh, empty store B.
         ctx.reopen_stores().unwrap();

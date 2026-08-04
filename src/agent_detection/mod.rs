@@ -18,7 +18,7 @@
 //! # Example
 //!
 //! ```rust,no_run
-//! use meta_skill::agent_detection::{AgentDetectionService, AgentType};
+//! use ms::agent_detection::{AgentDetectionService, AgentType};
 //!
 //! let service = AgentDetectionService::new();
 //! let agents = service.detect_all();
