@@ -77,6 +77,14 @@ unicode-normalization = "0.1.25"
 reqwest = { version = "0.13.4", default-features = false, features = ["blocking", "json", "rustls"] }
 urlencoding = "2.1.3"
 
+# Release-archive extraction for `ms update` (meta_skill#159). Release assets
+# are `.tar.gz` (Unix) / `.zip` (Windows) bundles containing the `ms`
+# executable alongside README/LICENSE, so the updater must unpack the
+# executable member rather than installing the archive itself.
+flate2 = "1.1.9"
+tar = "0.4.46"
+zip = { version = "8.6.0", default-features = false, features = ["deflate-flate2"] }
+
 # Semantic search / embeddings
 half = "2.7.1"
 wide = "1.1.1"

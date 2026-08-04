@@ -253,6 +253,9 @@ fn run_interactive(
     downloader.cleanup()?;
 
     println!("\n✓ Successfully updated to v{}", release.version);
+    if let Some(backup) = &result.backup_path {
+        println!("  Previous binary backed up to: {}", backup.display());
+    }
     if result.restart_required {
         println!("\nPlease restart ms for changes to take effect.");
     }
