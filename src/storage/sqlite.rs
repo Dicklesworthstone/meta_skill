@@ -449,19 +449,51 @@ impl Database {
     }
 
     pub fn delete_skill(&self, id: &str) -> Result<()> {
+        // `PRAGMA foreign_keys = ON` is deliberately engaged on every
+        // connection, and most child tables reference skills(id) WITHOUT
+        // `ON DELETE CASCADE` (only skill_aliases cascades). Deleting the
+        // parent row while any child row exists is therefore an FK violation
+        // — a latent bug that surfaced once `prune stale-sources --remove`
+        // started deleting skills that can have usage history (issue #158).
+        // Children go first; the skills row goes last.
+        //
+        // skill_experiment_events references skill_experiments(id), so it is
+        // a grandchild and must be cleared before its parent experiments.
+        self.conn.execute_compat(
+            "DELETE FROM skill_experiment_events WHERE experiment_id IN \
+             (SELECT id FROM skill_experiments WHERE skill_id = ?)",
+            params![id],
+        )?;
+        for sql in [
+            "DELETE FROM skill_experiments WHERE skill_id = ?",
+            "DELETE FROM skill_packs WHERE skill_id = ?",
+            "DELETE FROM skill_slices WHERE skill_id = ?",
+            "DELETE FROM skill_evidence WHERE skill_id = ?",
+            "DELETE FROM skill_rules WHERE skill_id = ?",
+            "DELETE FROM skill_usage WHERE skill_id = ?",
+            "DELETE FROM skill_usage_events WHERE skill_id = ?",
+            "DELETE FROM rule_outcomes WHERE skill_id = ?",
+            "DELETE FROM skill_dependencies WHERE skill_id = ? OR depends_on = ?",
+            "DELETE FROM skill_capabilities WHERE skill_id = ?",
+            "DELETE FROM skill_feedback WHERE skill_id = ?",
+            "DELETE FROM user_preferences WHERE skill_id = ?",
+            "DELETE FROM skill_embeddings WHERE skill_id = ?",
+            // Not FK-constrained, but derived state must not outlive the
+            // skill: an orphaned origin row would produce phantom
+            // stale-source reports, and a stale resolution cache entry would
+            // keep resolving a deleted skill.
+            "DELETE FROM skill_origins WHERE skill_id = ?",
+            "DELETE FROM resolved_skill_cache WHERE skill_id = ?",
+            "DELETE FROM skill_dependency_graph WHERE skill_id = ? OR depends_on = ?",
+        ] {
+            if sql.contains("OR depends_on") {
+                self.conn.execute_compat(sql, params![id, id])?;
+            } else {
+                self.conn.execute_compat(sql, params![id])?;
+            }
+        }
         self.conn
             .execute_compat("DELETE FROM skills WHERE id = ?", params![id])?;
-        // Derived state must not outlive the skill row: an orphaned embedding
-        // would keep surfacing the id in vector search, and an orphaned origin
-        // row would produce phantom stale-source reports.
-        self.conn.execute_compat(
-            "DELETE FROM skill_embeddings WHERE skill_id = ?",
-            params![id],
-        )?;
-        self.conn.execute_compat(
-            "DELETE FROM skill_origins WHERE skill_id = ?",
-            params![id],
-        )?;
         Ok(())
     }
 
@@ -2877,7 +2909,8 @@ mod tests {
     fn test_delete_skill_cleans_up_origin_and_embedding() {
         let dir = tempdir().unwrap();
         let db = Database::open(dir.path().join("test.db")).unwrap();
-        db.upsert_skill(&origin_test_skill("origin-doomed")).unwrap();
+        db.upsert_skill(&origin_test_skill("origin-doomed"))
+            .unwrap();
         db.record_skill_origin("origin-doomed", "/roots/b/doomed/SKILL.md", "/roots/b")
             .unwrap();
         db.upsert_embedding(&EmbeddingRecord {
@@ -2900,6 +2933,41 @@ mod tests {
             embeddings.iter().all(|(id, _)| id != "origin-doomed"),
             "embedding row must not outlive the skill"
         );
+    }
+
+    /// Regression test (issue #158 follow-on): `PRAGMA foreign_keys = ON` is
+    /// engaged and most child tables reference skills(id) without CASCADE, so
+    /// deleting a skill that has usage/feedback history used to raise
+    /// `ForeignKeyViolation`. `prune stale-sources --remove` must be able to
+    /// delete such skills.
+    #[test]
+    fn test_delete_skill_with_usage_history() {
+        let dir = tempdir().unwrap();
+        let db = Database::open(dir.path().join("test.db")).unwrap();
+        db.upsert_skill(&origin_test_skill("origin-used")).unwrap();
+
+        db.conn()
+            .execute_compat(
+                "INSERT INTO skill_usage (skill_id, used_at, disclosure_level) \
+                 VALUES ('origin-used', datetime('now'), 1)",
+                params![],
+            )
+            .unwrap();
+        db.conn()
+            .execute_compat(
+                "INSERT INTO skill_feedback (id, skill_id, feedback_type, created_at) \
+                 VALUES ('fb-1', 'origin-used', 'helpful', datetime('now'))",
+                params![],
+            )
+            .unwrap();
+        assert_eq!(db.count_skill_usage("origin-used").unwrap(), 1);
+        assert_eq!(db.count_skill_feedback("origin-used").unwrap(), 1);
+
+        db.delete_skill("origin-used").unwrap();
+
+        assert!(db.get_skill("origin-used").unwrap().is_none());
+        assert_eq!(db.count_skill_usage("origin-used").unwrap(), 0);
+        assert_eq!(db.count_skill_feedback("origin-used").unwrap(), 0);
     }
 
     #[test]

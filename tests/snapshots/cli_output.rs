@@ -92,6 +92,9 @@ fn sanitize_json(value: &mut Value) {
                 "updated_at",
                 "started_at",
                 "source_path",
+                // Absolute discovery-time paths (issue #158) — machine-specific.
+                "origin_path",
+                "origin_root",
             ];
             for key in keys_to_remove {
                 map.remove(key);

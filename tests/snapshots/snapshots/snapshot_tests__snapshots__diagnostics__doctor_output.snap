@@ -7,6 +7,7 @@ ms doctor - Health Checks
 Checking lock status... [ok] No lock held
 Checking database... [ok] OK
 Checking Git archive... [ok] OK
+Checking skill source origins... [ok] OK (0 tracked)
 Checking transactions... [ok] OK
 
 [ok] All checks passed

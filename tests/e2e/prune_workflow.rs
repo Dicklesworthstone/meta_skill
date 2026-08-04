@@ -632,8 +632,9 @@ fn test_prune_stale_sources_detect_and_remove() -> Result<()> {
     let old_dir = skills_dir.join("rust-error-handling");
     let new_dir = skills_dir.join("rust-errors-v2");
     std::fs::rename(&old_dir, &new_dir)?;
-    let renamed_content =
-        SKILL_RUST_ERRORS.replace("name: Rust Error Handling", "name: Rust Errors V2");
+    // Replace every occurrence: the id is derived from the H1 title (or an
+    // explicit frontmatter id), not just the frontmatter name.
+    let renamed_content = SKILL_RUST_ERRORS.replace("Rust Error Handling", "Rust Errors V2");
     std::fs::write(new_dir.join("SKILL.md"), renamed_content)?;
 
     fixture.log_step("Re-index after rename");
@@ -665,7 +666,7 @@ fn test_prune_stale_sources_detect_and_remove() -> Result<()> {
     let output = fixture.run_ms(&["--robot", "doctor"]);
     let doctor_issues = output.json()["issues_found"].as_u64().unwrap_or(0);
     assert!(
-        doctor_issues >= baseline_issues + 1,
+        doctor_issues > baseline_issues,
         "doctor should flag the stale source (baseline {baseline_issues}, got {doctor_issues})"
     );
 
@@ -732,7 +733,13 @@ fn test_prune_stale_sources_detect_and_remove() -> Result<()> {
 
     // Search must not surface the removed id either (the original complaint
     // was near-duplicate search results).
-    let output = fixture.run_ms(&["--robot", "search", "error handling", "--search-type", "bm25"]);
+    let output = fixture.run_ms(&[
+        "--robot",
+        "search",
+        "error handling",
+        "--search-type",
+        "bm25",
+    ]);
     fixture.assert_success(&output, "search after removal");
     assert!(
         !output.stdout.contains("rust-error-handling"),

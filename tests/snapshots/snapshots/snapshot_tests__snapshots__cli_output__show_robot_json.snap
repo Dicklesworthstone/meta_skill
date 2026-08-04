@@ -12,11 +12,11 @@ expression: json
     "author": null,
     "layer": "project",
     "deprecation_reason": null,
+    "is_deprecated": false,
+    "quality_score": 0.48500001430511475,
     "git_remote": null,
     "git_commit": null,
     "content_hash": "3f3bce240b546ff4bf6bd021b7b81c739cdc311aeddf8c90d06fc3ab7a6d0c80",
-    "token_count": 87,
-    "quality_score": 0.48500001430511475,
-    "is_deprecated": false
+    "token_count": 87
   }
 }

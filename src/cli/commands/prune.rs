@@ -241,11 +241,8 @@ fn run_stale_sources(ctx: &AppContext, args: &StaleSourcesArgs, dry_run: bool) -
         // fail fast if the search index is read-only (e.g. a live
         // `ms mcp serve` holds the writer lock).
         ctx.require_writable_search()?;
-        let tx_mgr = crate::storage::TxManager::new(
-            ctx.db.clone(),
-            ctx.git.clone(),
-            ctx.ms_root.clone(),
-        )?;
+        let tx_mgr =
+            crate::storage::TxManager::new(ctx.db.clone(), ctx.git.clone(), ctx.ms_root.clone())?;
         for entry in &stale {
             // 2PC delete: git archive commit + SQLite row (which also drops
             // the origin + embedding side rows). Content stays recoverable

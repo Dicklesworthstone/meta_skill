@@ -596,10 +596,18 @@ fn index_skill_file(
 /// under. Import/bundle/template paths never call this — absence of a row
 /// means "origin unknown" and is exempt from stale-source detection.
 fn record_skill_origin(ctx: &AppContext, skill_id: &str, skill: &DiscoveredSkill) -> Result<()> {
+    // Absolutize before persisting: users can run `ms index ./skills`, and a
+    // relative origin would false-flag as missing whenever `ms doctor` /
+    // `ms prune stale-sources` later runs from a different working directory.
+    // `std::path::absolute` (unlike `canonicalize`) does not resolve symlinks
+    // or require the path to exist, so it cannot fail on the just-discovered
+    // path for filesystem reasons; fall back to the literal path if it does.
+    let origin_path = std::path::absolute(&skill.path).unwrap_or_else(|_| skill.path.clone());
+    let origin_root = std::path::absolute(&skill.root).unwrap_or_else(|_| skill.root.clone());
     ctx.db.record_skill_origin(
         skill_id,
-        &skill.path.display().to_string(),
-        &skill.root.display().to_string(),
+        &origin_path.display().to_string(),
+        &origin_root.display().to_string(),
     )
 }
 
