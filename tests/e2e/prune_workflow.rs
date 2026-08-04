@@ -588,3 +588,205 @@ fn test_prune_apply_dry_run() -> Result<()> {
     fixture.generate_report();
     Ok(())
 }
+
+// ============================================================================
+// Stale-source detection and pruning (issue #158)
+// ============================================================================
+
+/// Regression test for issue #158: renaming a skill's markdown source (new id,
+/// same tree) leaves the old id's row indexed forever, and `ms list`/`ms
+/// search` surface near-duplicates. `ms prune stale-sources` must detect the
+/// orphan (origin path gone, origin root still present) and `--remove` must
+/// delete it end-to-end (DB + search index), while `ms doctor` flags it in the
+/// default check run.
+#[test]
+fn test_prune_stale_sources_detect_and_remove() -> Result<()> {
+    let mut fixture = setup_prune_fixture("prune_stale_sources")?;
+
+    // Baseline: freshly indexed skills all have live sources.
+    fixture.log_step("Baseline stale-sources scan");
+    let output = fixture.run_ms(&["--robot", "prune", "stale-sources"]);
+    fixture.assert_success(&output, "stale-sources baseline");
+    let json = output.json();
+    assert_eq!(
+        json["count"].as_u64(),
+        Some(0),
+        "fresh index must have no stale sources"
+    );
+
+    // Baseline doctor issue count (environment-dependent checks may differ,
+    // so later assertions compare against this delta rather than zero).
+    let output = fixture.run_ms(&["--robot", "doctor"]);
+    fixture.assert_success(&output, "doctor baseline");
+    let baseline_issues = output.json()["issues_found"].as_u64().unwrap_or(0);
+
+    // Simulate the issue #158 scenario: the skill source is renamed to a new
+    // id under the same skills root. The new id gets indexed; the old id's
+    // row lingers as a stale near-duplicate.
+    fixture.log_step("Rename skill source to a new id");
+    let skills_dir = fixture
+        .skills_dirs
+        .get("project")
+        .expect("project skills dir")
+        .clone();
+    let old_dir = skills_dir.join("rust-error-handling");
+    let new_dir = skills_dir.join("rust-errors-v2");
+    std::fs::rename(&old_dir, &new_dir)?;
+    let renamed_content =
+        SKILL_RUST_ERRORS.replace("name: Rust Error Handling", "name: Rust Errors V2");
+    std::fs::write(new_dir.join("SKILL.md"), renamed_content)?;
+
+    fixture.log_step("Re-index after rename");
+    let output = fixture.run_ms(&["--robot", "index"]);
+    fixture.assert_success(&output, "re-index after rename");
+    fixture.checkpoint("stale:reindexed");
+
+    // The stale row is still listed (this is the bug being detected).
+    let output = fixture.run_ms(&["--robot", "list"]);
+    fixture.assert_success(&output, "list after rename");
+    let json = output.json();
+    let skill_ids: Vec<&str> = json["skills"]
+        .as_array()
+        .expect("skills array")
+        .iter()
+        .filter_map(|s| s["id"].as_str())
+        .collect();
+    assert!(
+        skill_ids.contains(&"rust-error-handling"),
+        "old id should still be indexed after rename (the stale row)"
+    );
+    assert!(
+        skill_ids.contains(&"rust-errors-v2"),
+        "new id should be indexed after rename"
+    );
+
+    // `ms doctor` (default run) must now flag the stale origin.
+    fixture.log_step("Doctor flags the stale source");
+    let output = fixture.run_ms(&["--robot", "doctor"]);
+    let doctor_issues = output.json()["issues_found"].as_u64().unwrap_or(0);
+    assert!(
+        doctor_issues >= baseline_issues + 1,
+        "doctor should flag the stale source (baseline {baseline_issues}, got {doctor_issues})"
+    );
+
+    // Detection: exactly the old id, with reference counts surfaced.
+    fixture.log_step("Detect stale source");
+    let output = fixture.run_ms(&["--robot", "prune", "stale-sources"]);
+    fixture.assert_success(&output, "stale-sources detect");
+    let json = output.json();
+    assert_eq!(json["count"].as_u64(), Some(1), "exactly one stale source");
+    let entry = &json["stale_sources"][0];
+    assert_eq!(entry["skill_id"].as_str(), Some("rust-error-handling"));
+    assert!(entry["usage_count"].is_u64(), "usage_count surfaced");
+    assert!(entry["feedback_count"].is_u64(), "feedback_count surfaced");
+    assert_eq!(
+        json["removed"].as_array().map(std::vec::Vec::len),
+        Some(0),
+        "detection must not remove anything"
+    );
+
+    // --remove with --dry-run must not delete.
+    fixture.log_step("Dry-run remove");
+    let output = fixture.run_ms(&["--robot", "prune", "stale-sources", "--remove", "--dry-run"]);
+    fixture.assert_success(&output, "stale-sources dry-run remove");
+    let json = output.json();
+    assert_eq!(json["removed"].as_array().map(std::vec::Vec::len), Some(0));
+    assert_eq!(json["dry_run"].as_bool(), Some(true));
+
+    // Actual removal.
+    fixture.log_step("Remove stale source");
+    let output = fixture.run_ms(&["--robot", "prune", "stale-sources", "--remove"]);
+    fixture.assert_success(&output, "stale-sources remove");
+    let json = output.json();
+    let removed_ids: Vec<&str> = json["removed"]
+        .as_array()
+        .expect("removed array")
+        .iter()
+        .filter_map(|v| v.as_str())
+        .collect();
+    assert_eq!(
+        removed_ids,
+        vec!["rust-error-handling"],
+        "stale skill should be removed"
+    );
+    fixture.checkpoint("stale:removed");
+
+    // The stale row is gone from list; the renamed skill survives.
+    let output = fixture.run_ms(&["--robot", "list"]);
+    fixture.assert_success(&output, "list after removal");
+    let json = output.json();
+    let skill_ids: Vec<&str> = json["skills"]
+        .as_array()
+        .expect("skills array")
+        .iter()
+        .filter_map(|s| s["id"].as_str())
+        .collect();
+    assert!(
+        !skill_ids.contains(&"rust-error-handling"),
+        "stale row must be gone after removal"
+    );
+    assert!(
+        skill_ids.contains(&"rust-errors-v2"),
+        "renamed skill must survive removal"
+    );
+
+    // Search must not surface the removed id either (the original complaint
+    // was near-duplicate search results).
+    let output = fixture.run_ms(&["--robot", "search", "error handling", "--search-type", "bm25"]);
+    fixture.assert_success(&output, "search after removal");
+    assert!(
+        !output.stdout.contains("rust-error-handling"),
+        "search must not surface the removed stale id"
+    );
+
+    // Doctor is back to baseline, and the scan is clean + idempotent.
+    let output = fixture.run_ms(&["--robot", "doctor"]);
+    let post_issues = output.json()["issues_found"].as_u64().unwrap_or(0);
+    assert_eq!(
+        post_issues, baseline_issues,
+        "doctor should be back to baseline after removal"
+    );
+    let output = fixture.run_ms(&["--robot", "prune", "stale-sources"]);
+    fixture.assert_success(&output, "stale-sources idempotent rescan");
+    assert_eq!(output.json()["count"].as_u64(), Some(0));
+
+    fixture.generate_report();
+    Ok(())
+}
+
+/// A whole index root disappearing (unmounted tree) must NOT be treated as a
+/// stale source — only individual origin paths going missing while their root
+/// survives are flagged (issue #158's false-positive guard).
+#[test]
+fn test_prune_stale_sources_absent_root_not_flagged() -> Result<()> {
+    let mut fixture = setup_prune_fixture("prune_stale_sources_absent_root")?;
+
+    // Simulate the project skills root being unplugged by renaming the whole
+    // tree aside (no deletion; the tree still exists under another name).
+    let skills_dir = fixture
+        .skills_dirs
+        .get("project")
+        .expect("project skills dir")
+        .clone();
+    let parked = skills_dir.with_file_name("skills-parked");
+    std::fs::rename(&skills_dir, &parked)?;
+
+    let output = fixture.run_ms(&["--robot", "prune", "stale-sources"]);
+    fixture.assert_success(&output, "stale-sources with absent root");
+    let json = output.json();
+    assert_eq!(
+        json["count"].as_u64(),
+        Some(0),
+        "absent index root must not flag its skills as stale"
+    );
+    assert!(
+        json["unrooted_count"].as_u64().unwrap_or(0) >= 1,
+        "absent-root skills should be counted as unrooted"
+    );
+
+    // Restore the tree so fixture teardown sees the expected layout.
+    std::fs::rename(&parked, &skills_dir)?;
+
+    fixture.generate_report();
+    Ok(())
+}

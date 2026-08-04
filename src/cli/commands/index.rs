@@ -48,6 +48,11 @@ struct SkillRoot {
 struct DiscoveredSkill {
     path: PathBuf,
     layer: SkillLayer,
+    /// The configured index root this skill was discovered under. Persisted
+    /// alongside the discovered path (`skill_origins` table) so `ms doctor`
+    /// and `ms prune stale-sources` can later answer "is this skill's true
+    /// source still present?" scoped per root (issue #158).
+    root: PathBuf,
     /// Count of companion files (non-`SKILL.md`, non-junk) found alongside this
     /// skill in the same package directory tree. Surfaced via the indexing
     /// summary so operators can spot skills with significant resource bundles
@@ -418,6 +423,7 @@ fn discover_skill_files(roots: &[SkillRoot]) -> Vec<DiscoveredSkill> {
                 skill_files.push(DiscoveredSkill {
                     path: entry.path().to_path_buf(),
                     layer: root.layer,
+                    root: root.path.clone(),
                     companion_count,
                 });
             }
@@ -514,6 +520,11 @@ fn index_skill_file(
             // Check content hash to skip unchanged skills
             let same_layer = existing.source_layer == skill.layer.as_str();
             if existing.content_hash == new_hash && same_layer {
+                // Even when content is unchanged, refresh the recorded origin:
+                // the source may have MOVED without a content change, and a
+                // stale origin path would otherwise false-positive in
+                // `ms doctor` / `ms prune stale-sources`.
+                record_skill_origin(ctx, &spec.metadata.id, skill)?;
                 return Ok(()); // Skip unchanged
             }
         }
@@ -521,6 +532,15 @@ fn index_skill_file(
 
     // Write using 2PC transaction manager (stores raw spec)
     tx_mgr.write_skill_with_layer(&spec, skill.layer)?;
+
+    // Record where this skill actually came from. Deliberately outside the
+    // 2PC transaction: provenance is derived metadata, and a crash between
+    // commit and this write leaves the row's origin NULL, which the
+    // stale-source checks treat as "unknown" (never stale). The 2PC payload
+    // is a serialized `SkillSpec` (also used by crash recovery), so threading
+    // the discovered path through it would change the recovery format for no
+    // durability benefit.
+    record_skill_origin(ctx, &spec.metadata.id, skill)?;
 
     // Compute and persist quality score
     let scorer = crate::quality::QualityScorer::with_defaults();
@@ -566,6 +586,21 @@ fn index_skill_file(
     }
 
     Ok(())
+}
+
+/// Persist the discovered filesystem origin of a skill (issue #158).
+///
+/// `skills.source_path` gets finalized to the internal git-archive location
+/// by the 2PC commit, so this side-table row is the only record of where the
+/// skill's `SKILL.md` really lives and which configured root it was found
+/// under. Import/bundle/template paths never call this — absence of a row
+/// means "origin unknown" and is exempt from stale-source detection.
+fn record_skill_origin(ctx: &AppContext, skill_id: &str, skill: &DiscoveredSkill) -> Result<()> {
+    ctx.db.record_skill_origin(
+        skill_id,
+        &skill.path.display().to_string(),
+        &skill.root.display().to_string(),
+    )
 }
 
 /// Build a SkillRecord from a resolved SkillSpec for search indexing
@@ -1026,11 +1061,13 @@ mod tests {
         let skill = DiscoveredSkill {
             path: PathBuf::from("/test/skill/SKILL.md"),
             layer: SkillLayer::Base,
+            root: PathBuf::from("/test"),
             companion_count: 0,
         };
 
         assert_eq!(skill.path, PathBuf::from("/test/skill/SKILL.md"));
         assert_eq!(skill.layer, SkillLayer::Base);
+        assert_eq!(skill.root, PathBuf::from("/test"));
         assert_eq!(skill.companion_count, 0);
     }
 

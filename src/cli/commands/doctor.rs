@@ -109,6 +109,11 @@ pub fn run(ctx: &AppContext, args: &DoctorArgs) -> Result<()> {
         issues_found += check_git_archive(ctx, verbose)?;
     }
 
+    // Check that indexed skills' true sources still exist (issue #158)
+    if run_only.is_none() {
+        issues_found += check_skill_origins(ctx, verbose)?;
+    }
+
     // Check for incomplete transactions
     if run_only.is_none() {
         issues_found += check_transactions(ctx, args.fix, verbose, &mut issues_fixed)?;
@@ -127,11 +132,12 @@ pub fn run(ctx: &AppContext, args: &DoctorArgs) -> Result<()> {
             "recovery" => run_comprehensive_check(ctx, args.fix, verbose, &mut issues_fixed)?,
             "perf" => check_perf(ctx, verbose)?,
             "output" | "output-mode" => check_output_mode(ctx, verbose)?,
+            "origins" => check_skill_origins(ctx, verbose)?,
             other => {
                 say!(ctx, "{} Unknown check: {}", "[!]", other);
                 say!(
                     ctx,
-                    "  Available checks: safety, security, recovery, perf, output"
+                    "  Available checks: safety, security, recovery, perf, output, origins"
                 );
                 1
             }
@@ -342,6 +348,75 @@ fn check_git_archive(ctx: &AppContext, verbose: bool) -> Result<usize> {
             Ok(1)
         }
     }
+}
+
+/// Check that each indexed skill's true source is still present (issue #158).
+///
+/// Uses the `skill_origins` provenance table populated by `ms index` — NOT
+/// `skills.source_path`, which the 2PC commit finalizes to ms's own archive
+/// location and therefore always exists. A skill is flagged only when its
+/// recorded origin path is gone while the configured root it was indexed from
+/// still exists: that is the rename/removal signature. A whole root going
+/// missing (unmounted / intentionally removed tree) is reported as a note,
+/// not an issue, to avoid false-positive floods. Skills with no recorded
+/// origin (pre-migration rows, imports, bundles) are exempt.
+fn check_skill_origins(ctx: &AppContext, verbose: bool) -> Result<usize> {
+    say_inline!(ctx, "Checking skill source origins... ");
+
+    let origins = ctx.db.list_skill_origins()?;
+    let mut stale: Vec<&crate::storage::SkillOriginRecord> = Vec::new();
+    let mut unrooted: usize = 0;
+    for origin in &origins {
+        if std::path::Path::new(&origin.origin_path).exists() {
+            continue;
+        }
+        if std::path::Path::new(&origin.origin_root).exists() {
+            stale.push(origin);
+        } else {
+            unrooted += 1;
+        }
+    }
+
+    if stale.is_empty() {
+        say!(ctx, "{} OK ({} tracked)", "[ok]", origins.len());
+        if verbose && unrooted > 0 {
+            say!(
+                ctx,
+                "  note: {} skill(s) come from index roots that are currently absent \
+                 (unmounted or removed tree?) — not flagged as stale",
+                unrooted
+            );
+        }
+        return Ok(0);
+    }
+
+    say!(
+        ctx,
+        "{} {} skill(s) whose source was renamed or removed",
+        "[!]",
+        stale.len()
+    );
+    for origin in &stale {
+        say!(
+            ctx,
+            "  {} — source gone: {}",
+            origin.skill_id,
+            origin.origin_path
+        );
+    }
+    if unrooted > 0 {
+        say!(
+            ctx,
+            "  note: {} additional skill(s) have absent index roots — not flagged",
+            unrooted
+        );
+    }
+    say!(
+        ctx,
+        "  Run 'ms prune stale-sources' to review (add --remove to delete)"
+    );
+
+    Ok(stale.len())
 }
 
 /// Check command safety (DCG) availability
@@ -1170,6 +1245,7 @@ mod tests {
             "perf",
             "output",
             "output-mode",
+            "origins",
         ];
 
         for check in &available_checks {

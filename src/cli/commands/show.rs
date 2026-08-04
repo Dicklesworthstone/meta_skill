@@ -57,11 +57,11 @@ fn display_skill(ctx: &AppContext, skill: &SkillRecord, args: &ShowArgs) -> Resu
 
     let result = match ctx.output_format {
         OutputFormat::Human => show_human(ctx, skill, args),
-        OutputFormat::Json => show_json(skill, args, true),
-        OutputFormat::Jsonl => show_json(skill, args, false),
+        OutputFormat::Json => show_json(ctx, skill, args, true),
+        OutputFormat::Jsonl => show_json(ctx, skill, args, false),
         OutputFormat::Plain => show_plain(skill),
         OutputFormat::Tsv => show_tsv(skill),
-        OutputFormat::Toon => show_toon(skill, args),
+        OutputFormat::Toon => show_toon(ctx, skill, args),
     };
 
     debug!(target: "show", stage = "render_complete");
@@ -283,7 +283,12 @@ fn show_deps(skill: &SkillRecord) {
     }
 }
 
-fn show_json(skill: &SkillRecord, args: &ShowArgs, pretty: bool) -> Result<()> {
+fn show_json(ctx: &AppContext, skill: &SkillRecord, args: &ShowArgs, pretty: bool) -> Result<()> {
+    // The true filesystem origin (issue #158): `source_path` is ms's own
+    // archive location once indexed, so downstream tooling needs the recorded
+    // origin to check whether a skill's real source still exists. `null` when
+    // unknown (pre-migration rows, imports, bundles).
+    let origin = ctx.db.get_skill_origin(&skill.id).unwrap_or(None);
     let mut output = serde_json::json!({
         "status": "ok",
         "skill": {
@@ -294,6 +299,8 @@ fn show_json(skill: &SkillRecord, args: &ShowArgs, pretty: bool) -> Result<()> {
             "author": skill.author,
             "layer": skill.source_layer,
             "source_path": skill.source_path,
+            "origin_path": origin.as_ref().map(|(path, _)| path.clone()),
+            "origin_root": origin.as_ref().map(|(_, root)| root.clone()),
             "git_remote": skill.git_remote,
             "git_commit": skill.git_commit,
             "content_hash": skill.content_hash,
@@ -411,7 +418,8 @@ fn show_tsv(skill: &SkillRecord) -> Result<()> {
     Ok(())
 }
 
-fn show_toon(skill: &SkillRecord, args: &ShowArgs) -> Result<()> {
+fn show_toon(ctx: &AppContext, skill: &SkillRecord, args: &ShowArgs) -> Result<()> {
+    let origin = ctx.db.get_skill_origin(&skill.id).unwrap_or(None);
     let mut output = serde_json::json!({
         "status": "ok",
         "skill": {
@@ -422,6 +430,8 @@ fn show_toon(skill: &SkillRecord, args: &ShowArgs) -> Result<()> {
             "author": skill.author,
             "layer": skill.source_layer,
             "source_path": skill.source_path,
+            "origin_path": origin.as_ref().map(|(path, _)| path.clone()),
+            "origin_root": origin.as_ref().map(|(_, root)| root.clone()),
             "git_remote": skill.git_remote,
             "git_commit": skill.git_commit,
             "content_hash": skill.content_hash,

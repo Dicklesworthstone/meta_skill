@@ -66,6 +66,9 @@ pub enum PruneCommand {
 
     /// Apply a specific proposal
     Apply(ApplyArgs),
+
+    /// Detect skills whose original source was renamed or removed (issue #158)
+    StaleSources(StaleSourcesArgs),
 }
 
 #[derive(Args, Debug)]
@@ -159,6 +162,15 @@ pub struct RestoreArgs {
     pub id: String,
 }
 
+#[derive(Args, Debug)]
+pub struct StaleSourcesArgs {
+    /// Remove the stale skills (default is report-only). Deletion goes
+    /// through the 2PC transaction manager, so the skill content remains
+    /// recoverable from the git archive history.
+    #[arg(long)]
+    pub remove: bool,
+}
+
 pub fn run(ctx: &AppContext, args: &PruneArgs) -> Result<()> {
     let command = args.command.as_ref().unwrap_or(&PruneCommand::List);
 
@@ -171,7 +183,140 @@ pub fn run(ctx: &AppContext, args: &PruneArgs) -> Result<()> {
         PruneCommand::Proposals(proposals_args) => run_proposals(ctx, proposals_args, args.dry_run),
         PruneCommand::Review(review_args) => run_review(ctx, review_args, args.dry_run),
         PruneCommand::Apply(apply_args) => run_apply(ctx, apply_args, args.dry_run),
+        PruneCommand::StaleSources(stale_args) => run_stale_sources(ctx, stale_args, args.dry_run),
     }
+}
+
+/// A skill whose recorded origin path no longer exists while the index root
+/// it was discovered under still does — the rename/removal signature.
+#[derive(Debug, Clone, serde::Serialize)]
+struct StaleSourceEntry {
+    skill_id: String,
+    name: String,
+    origin_path: String,
+    origin_root: String,
+    usage_count: u64,
+    feedback_count: u64,
+}
+
+/// Detect (and optionally remove) skills whose true source is gone.
+///
+/// Detection is based on the `skill_origins` provenance table written by
+/// `ms index` — NOT on `skills.source_path`, which the 2PC commit points at
+/// ms's own archive location (a path that always exists and therefore can
+/// never go stale). Scoping the check to "origin path gone, origin root still
+/// present" distinguishes a renamed/removed skill source from a whole tree
+/// being unplugged, which is what made naive external-root checks flood with
+/// false positives (issue #158). Skills without a recorded origin
+/// (pre-migration rows, imports, bundles) are exempt.
+fn run_stale_sources(ctx: &AppContext, args: &StaleSourcesArgs, dry_run: bool) -> Result<()> {
+    let origins = ctx.db.list_skill_origins()?;
+
+    let mut stale: Vec<StaleSourceEntry> = Vec::new();
+    let mut unrooted: usize = 0;
+    for origin in origins {
+        if std::path::Path::new(&origin.origin_path).exists() {
+            continue;
+        }
+        if !std::path::Path::new(&origin.origin_root).exists() {
+            // The whole configured root is absent (unmounted / removed tree).
+            // Likely intentional — never auto-flag, and never auto-remove.
+            unrooted += 1;
+            continue;
+        }
+        stale.push(StaleSourceEntry {
+            usage_count: ctx.db.count_skill_usage(&origin.skill_id)?,
+            feedback_count: ctx.db.count_skill_feedback(&origin.skill_id)?,
+            skill_id: origin.skill_id,
+            name: origin.skill_name,
+            origin_path: origin.origin_path,
+            origin_root: origin.origin_root,
+        });
+    }
+
+    let remove = args.remove && !dry_run;
+    let mut removed: Vec<String> = Vec::new();
+    if remove && !stale.is_empty() {
+        // Removal touches the Tantivy index as well as the DB/archive, so
+        // fail fast if the search index is read-only (e.g. a live
+        // `ms mcp serve` holds the writer lock).
+        ctx.require_writable_search()?;
+        let tx_mgr = crate::storage::TxManager::new(
+            ctx.db.clone(),
+            ctx.git.clone(),
+            ctx.ms_root.clone(),
+        )?;
+        for entry in &stale {
+            // 2PC delete: git archive commit + SQLite row (which also drops
+            // the origin + embedding side rows). Content stays recoverable
+            // from the archive's git history.
+            tx_mgr.delete_skill_locked(&entry.skill_id)?;
+            ctx.search.delete_skill(&entry.skill_id)?;
+            removed.push(entry.skill_id.clone());
+        }
+        ctx.search.commit()?;
+    }
+
+    if ctx.output_format != OutputFormat::Human {
+        let output = json!({
+            "stale_sources": stale,
+            "count": stale.len(),
+            "unrooted_count": unrooted,
+            "removed": removed,
+            "dry_run": dry_run,
+        });
+        println!("{}", serde_json::to_string_pretty(&output)?);
+        return Ok(());
+    }
+
+    if stale.is_empty() {
+        println!("No stale skill sources found.");
+        if unrooted > 0 {
+            println!(
+                "  ({unrooted} skill(s) come from index roots that are currently absent — \
+                 not flagged)"
+            );
+        }
+        return Ok(());
+    }
+
+    println!("{}", "Stale Skill Sources".bold());
+    println!("{}", "─".repeat(60));
+    println!();
+    for entry in &stale {
+        println!("{}  ({})", entry.skill_id.cyan(), entry.name.dimmed());
+        println!("    source gone: {}", entry.origin_path);
+        println!("    index root:  {}", entry.origin_root.dimmed());
+        println!(
+            "    references:  {} usage, {} feedback",
+            entry.usage_count, entry.feedback_count
+        );
+        if removed.iter().any(|id| id == &entry.skill_id) {
+            println!("    {}", "removed".red());
+        }
+        println!();
+    }
+    println!(
+        "Total: {} stale skill(s){}",
+        stale.len().to_string().cyan(),
+        if unrooted > 0 {
+            format!(" ({unrooted} skipped: index root absent)")
+        } else {
+            String::new()
+        }
+    );
+    if remove {
+        println!(
+            "Removed {} skill(s). Content remains recoverable from the archive git history.",
+            removed.len()
+        );
+    } else if args.remove && dry_run {
+        println!("  (dry run - no changes made)");
+    } else {
+        println!("Run 'ms prune stale-sources --remove' to delete these rows.");
+    }
+
+    Ok(())
 }
 
 #[derive(Debug, Clone, serde::Serialize)]
@@ -1916,6 +2061,35 @@ mod tests {
     fn parse_prune_stats_subcommand() {
         let cli = TestCli::try_parse_from(["test", "stats"]).unwrap();
         assert!(matches!(cli.prune.command, Some(PruneCommand::Stats)));
+    }
+
+    #[test]
+    fn parse_prune_stale_sources_defaults() {
+        let cli = TestCli::try_parse_from(["test", "stale-sources"]).unwrap();
+        match cli.prune.command {
+            Some(PruneCommand::StaleSources(args)) => assert!(!args.remove),
+            other => panic!("expected StaleSources, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parse_prune_stale_sources_remove() {
+        let cli = TestCli::try_parse_from(["test", "stale-sources", "--remove"]).unwrap();
+        match cli.prune.command {
+            Some(PruneCommand::StaleSources(args)) => assert!(args.remove),
+            other => panic!("expected StaleSources, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parse_prune_stale_sources_remove_dry_run() {
+        let cli =
+            TestCli::try_parse_from(["test", "stale-sources", "--remove", "--dry-run"]).unwrap();
+        assert!(cli.prune.dry_run);
+        match cli.prune.command {
+            Some(PruneCommand::StaleSources(args)) => assert!(args.remove),
+            other => panic!("expected StaleSources, got {other:?}"),
+        }
     }
 
     #[test]

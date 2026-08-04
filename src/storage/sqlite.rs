@@ -75,6 +75,22 @@ pub struct SkillRecord {
     pub deprecation_reason: Option<String>,
 }
 
+/// Provenance of an indexed skill: where its `SKILL.md` was actually
+/// discovered on disk, and which configured index root it was found under.
+///
+/// Distinct from `skills.source_path`, which the 2PC commit finalizes to
+/// ms's own git-archive location (`.ms/archive/skills/by-id/<id>`) — a path
+/// that always exists from ms's point of view and therefore can never answer
+/// "is this skill's true source still present?" (issue #158).
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+pub struct SkillOriginRecord {
+    pub skill_id: String,
+    pub skill_name: String,
+    pub origin_path: String,
+    pub origin_root: String,
+    pub recorded_at: String,
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct EmbeddingRecord {
     pub skill_id: String,
@@ -435,7 +451,92 @@ impl Database {
     pub fn delete_skill(&self, id: &str) -> Result<()> {
         self.conn
             .execute_compat("DELETE FROM skills WHERE id = ?", params![id])?;
+        // Derived state must not outlive the skill row: an orphaned embedding
+        // would keep surfacing the id in vector search, and an orphaned origin
+        // row would produce phantom stale-source reports.
+        self.conn.execute_compat(
+            "DELETE FROM skill_embeddings WHERE skill_id = ?",
+            params![id],
+        )?;
+        self.conn.execute_compat(
+            "DELETE FROM skill_origins WHERE skill_id = ?",
+            params![id],
+        )?;
         Ok(())
+    }
+
+    /// Record (or refresh) the filesystem origin of an indexed skill.
+    ///
+    /// Called by `ms index` after a successful skill write, and again on the
+    /// unchanged-skip path so a moved-but-identical source keeps its origin
+    /// current. Skills without a filesystem origin (imports, bundles,
+    /// templates) simply never get a row here — absence means "origin
+    /// unknown" and is exempt from stale-source checks.
+    pub fn record_skill_origin(
+        &self,
+        skill_id: &str,
+        origin_path: &str,
+        origin_root: &str,
+    ) -> Result<()> {
+        self.conn.execute_compat(
+            "INSERT INTO skill_origins (skill_id, origin_path, origin_root, recorded_at) \
+             VALUES (?, ?, ?, datetime('now')) \
+             ON CONFLICT(skill_id) DO UPDATE SET \
+                 origin_path = excluded.origin_path, \
+                 origin_root = excluded.origin_root, \
+                 recorded_at = excluded.recorded_at",
+            params![skill_id, origin_path, origin_root],
+        )?;
+        Ok(())
+    }
+
+    /// Get the recorded filesystem origin for a skill, if one exists.
+    pub fn get_skill_origin(&self, skill_id: &str) -> Result<Option<(String, String)>> {
+        use fsqlite::compat::OptionalExtension;
+        let result = self
+            .conn
+            .query_row_map(
+                "SELECT origin_path, origin_root FROM skill_origins WHERE skill_id = ?",
+                params![skill_id],
+                |row| Ok((row.get_typed::<String>(0)?, row.get_typed::<String>(1)?)),
+            )
+            .optional()?;
+        Ok(result)
+    }
+
+    /// List all recorded skill origins, joined against live skill rows.
+    ///
+    /// The join guarantees callers only see origins for skills that still
+    /// exist in the registry (origin rows for deleted skills are cleaned up
+    /// by [`Self::delete_skill`], but the join is defense-in-depth).
+    pub fn list_skill_origins(&self) -> Result<Vec<SkillOriginRecord>> {
+        let results = self.conn.query_map_collect(
+            "SELECT o.skill_id, s.name, o.origin_path, o.origin_root, o.recorded_at \
+             FROM skill_origins o \
+             JOIN skills s ON s.id = o.skill_id \
+             ORDER BY o.skill_id",
+            params![],
+            |row| {
+                Ok(SkillOriginRecord {
+                    skill_id: row.get_typed::<String>(0)?,
+                    skill_name: row.get_typed::<String>(1)?,
+                    origin_path: row.get_typed::<String>(2)?,
+                    origin_root: row.get_typed::<String>(3)?,
+                    recorded_at: row.get_typed::<String>(4)?,
+                })
+            },
+        )?;
+        Ok(results)
+    }
+
+    /// Count feedback rows for a skill (companion to [`Self::count_skill_usage`]).
+    pub fn count_skill_feedback(&self, skill_id: &str) -> Result<u64> {
+        let count: i64 = self.conn.query_row_map(
+            "SELECT COUNT(*) FROM skill_feedback WHERE skill_id = ?",
+            params![skill_id],
+            |row| row.get_typed::<i64>(0),
+        )?;
+        Ok(count.max(0) as u64)
     }
 
     /// Delete a skill only if it has pending status
@@ -2685,5 +2786,126 @@ mod tests {
         // Still only one rule with evidence
         let count = db.count_skill_evidence("update-skill").unwrap();
         assert_eq!(count, 1);
+    }
+
+    // =========================================================================
+    // Skill origin tests (issue #158)
+    // =========================================================================
+
+    fn origin_test_skill(id: &str) -> SkillRecord {
+        SkillRecord {
+            id: id.to_string(),
+            name: format!("{id} name"),
+            description: "origin test".to_string(),
+            version: Some("1.0.0".to_string()),
+            author: None,
+            source_path: format!("/archive/skills/by-id/{id}"),
+            source_layer: "project".to_string(),
+            git_remote: None,
+            git_commit: None,
+            content_hash: "hash".to_string(),
+            body: "body".to_string(),
+            metadata_json: "{}".to_string(),
+            assets_json: "{}".to_string(),
+            token_count: 10,
+            quality_score: 0.5,
+            indexed_at: "2026-01-01T00:00:00Z".to_string(),
+            modified_at: "2026-01-01T00:00:00Z".to_string(),
+            is_deprecated: false,
+            deprecation_reason: None,
+        }
+    }
+
+    #[test]
+    fn test_skill_origin_roundtrip_and_refresh() {
+        let dir = tempdir().unwrap();
+        let db = Database::open(dir.path().join("test.db")).unwrap();
+        db.upsert_skill(&origin_test_skill("origin-a")).unwrap();
+
+        // No origin recorded yet: unknown, not an error.
+        assert_eq!(db.get_skill_origin("origin-a").unwrap(), None);
+
+        db.record_skill_origin("origin-a", "/roots/one/origin-a/SKILL.md", "/roots/one")
+            .unwrap();
+        assert_eq!(
+            db.get_skill_origin("origin-a").unwrap(),
+            Some((
+                "/roots/one/origin-a/SKILL.md".to_string(),
+                "/roots/one".to_string()
+            ))
+        );
+
+        // Re-recording (e.g. skill moved to another configured root) upserts.
+        db.record_skill_origin("origin-a", "/roots/two/origin-a/SKILL.md", "/roots/two")
+            .unwrap();
+        assert_eq!(
+            db.get_skill_origin("origin-a").unwrap(),
+            Some((
+                "/roots/two/origin-a/SKILL.md".to_string(),
+                "/roots/two".to_string()
+            ))
+        );
+    }
+
+    #[test]
+    fn test_list_skill_origins_joins_live_skills_only() {
+        let dir = tempdir().unwrap();
+        let db = Database::open(dir.path().join("test.db")).unwrap();
+        db.upsert_skill(&origin_test_skill("origin-live")).unwrap();
+        db.record_skill_origin("origin-live", "/roots/a/origin-live/SKILL.md", "/roots/a")
+            .unwrap();
+
+        // An origin row without a matching skill row must not surface
+        // (defense-in-depth against phantom stale-source reports).
+        db.conn()
+            .execute_compat(
+                "INSERT INTO skill_origins (skill_id, origin_path, origin_root, recorded_at) \
+                 VALUES ('origin-ghost', '/roots/a/ghost/SKILL.md', '/roots/a', datetime('now'))",
+                params![],
+            )
+            .unwrap();
+
+        let origins = db.list_skill_origins().unwrap();
+        assert_eq!(origins.len(), 1);
+        assert_eq!(origins[0].skill_id, "origin-live");
+        assert_eq!(origins[0].skill_name, "origin-live name");
+        assert_eq!(origins[0].origin_path, "/roots/a/origin-live/SKILL.md");
+        assert_eq!(origins[0].origin_root, "/roots/a");
+    }
+
+    #[test]
+    fn test_delete_skill_cleans_up_origin_and_embedding() {
+        let dir = tempdir().unwrap();
+        let db = Database::open(dir.path().join("test.db")).unwrap();
+        db.upsert_skill(&origin_test_skill("origin-doomed")).unwrap();
+        db.record_skill_origin("origin-doomed", "/roots/b/doomed/SKILL.md", "/roots/b")
+            .unwrap();
+        db.upsert_embedding(&EmbeddingRecord {
+            skill_id: "origin-doomed".to_string(),
+            embedding: vec![0.1, 0.2, 0.3],
+            dims: 3,
+            embedder_type: "hash".to_string(),
+            content_hash: Some("hash".to_string()),
+            computed_at: "2026-01-01T00:00:00Z".to_string(),
+        })
+        .unwrap();
+
+        db.delete_skill("origin-doomed").unwrap();
+
+        assert!(db.get_skill("origin-doomed").unwrap().is_none());
+        assert_eq!(db.get_skill_origin("origin-doomed").unwrap(), None);
+        assert!(db.list_skill_origins().unwrap().is_empty());
+        let embeddings = db.get_all_embeddings().unwrap();
+        assert!(
+            embeddings.iter().all(|(id, _)| id != "origin-doomed"),
+            "embedding row must not outlive the skill"
+        );
+    }
+
+    #[test]
+    fn test_count_skill_feedback_empty() {
+        let dir = tempdir().unwrap();
+        let db = Database::open(dir.path().join("test.db")).unwrap();
+        assert_eq!(db.count_skill_feedback("nope").unwrap(), 0);
     }
 }

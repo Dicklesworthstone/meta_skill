@@ -4,7 +4,7 @@ use fsqlite::Connection;
 
 use crate::error::{MsError, Result};
 
-const MIGRATIONS: [&str; 13] = [
+const MIGRATIONS: [&str; 14] = [
     include_str!("../../migrations/001_initial_schema.sql"),
     include_str!("../../migrations/002_add_fts.sql"),
     include_str!("../../migrations/003_add_vectors.sql"),
@@ -18,6 +18,7 @@ const MIGRATIONS: [&str; 13] = [
     include_str!("../../migrations/011_add_user_preferences.sql"),
     include_str!("../../migrations/012_add_resolution_warnings.sql"),
     include_str!("../../migrations/013_fix_fts.sql"),
+    include_str!("../../migrations/014_add_skill_origins.sql"),
 ];
 
 pub const SCHEMA_VERSION: u32 = MIGRATIONS.len() as u32;
@@ -75,8 +76,20 @@ mod tests {
     }
 
     #[test]
-    fn schema_version_is_13() {
-        assert_eq!(SCHEMA_VERSION, 13);
+    fn schema_version_is_14() {
+        assert_eq!(SCHEMA_VERSION, 14);
+    }
+
+    #[test]
+    fn run_migrations_creates_skill_origins_table() {
+        let conn = Connection::open(":memory:").unwrap();
+        run_migrations(&conn).unwrap();
+
+        let count = count_via_query(
+            &conn,
+            "SELECT count(*) FROM sqlite_master WHERE type='table' AND name='skill_origins'",
+        );
+        assert_eq!(count, 1);
     }
 
     // =========================================================================
