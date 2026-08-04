@@ -119,7 +119,11 @@ impl BundleManifest {
                     skill.name
                 )));
             }
-            if skill.path.is_absolute() {
+            // `has_root` in addition to `is_absolute`: on Windows a path like
+            // "/etc/passwd" is rooted but NOT absolute (no drive prefix), yet
+            // it still escapes the bundle root, and a manifest is portable
+            // across platforms — reject it with the same diagnosis everywhere.
+            if skill.path.is_absolute() || skill.path.has_root() {
                 return Err(MsError::ValidationFailed(format!(
                     "skill path must be relative for {}: {}",
                     skill.name,

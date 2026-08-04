@@ -350,6 +350,12 @@ mod tests {
     /// switch to the new store — so reads and writes stop landing in the
     /// orphaned (renamed) directory.
     #[test]
+    #[cfg_attr(
+        windows,
+        ignore = "Windows refuses to rename a directory while handles into it are open \
+                  (ERROR_ACCESS_DENIED), so the swap-the-state-dir-under-a-live-context \
+                  scenario this test simulates cannot be constructed there"
+    )]
     fn reopen_stores_follows_rebuilt_state_dir() {
         let tmp = tempfile::tempdir().unwrap();
         let state = tmp.path().join("state");

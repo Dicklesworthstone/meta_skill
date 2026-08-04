@@ -1181,7 +1181,19 @@ impl RichOutput {
             } else {
                 std::env::current_dir().unwrap_or_default().join(path)
             };
-            let url = format!("file://{}", abs_path.display());
+            // RFC 8089 file URLs use forward slashes and an empty authority:
+            // "file:///C:/dir/file" on Windows, "file:///dir/file" on Unix. A
+            // naive format!("file://{}", display) emits backslashes and drops
+            // the third slash for drive-letter paths, which terminals reject.
+            let mut url_path = abs_path.display().to_string();
+            if cfg!(windows) {
+                url_path = url_path.replace('\\', "/");
+            }
+            let url = if url_path.starts_with('/') {
+                format!("file://{url_path}")
+            } else {
+                format!("file:///{url_path}")
+            };
             self.format_hyperlink(text, &url)
         } else {
             text.to_string()
@@ -1371,8 +1383,16 @@ mod tests {
         output.mode = OutputMode::Rich;
         output.supports_hyperlinks = true;
 
-        let result = output.format_file_hyperlink("main.rs", std::path::Path::new("/src/main.rs"));
-        assert!(result.contains("\x1b]8;;file:///src/main.rs\x1b\\"));
+        // An absolute path spelled the platform's way must yield an RFC 8089
+        // file URL: forward slashes, empty authority, leading slash before
+        // the drive letter on Windows.
+        #[cfg(not(windows))]
+        let (path, expected_link) = ("/src/main.rs", "\x1b]8;;file:///src/main.rs\x1b\\");
+        #[cfg(windows)]
+        let (path, expected_link) = (r"C:\src\main.rs", "\x1b]8;;file:///C:/src/main.rs\x1b\\");
+
+        let result = output.format_file_hyperlink("main.rs", std::path::Path::new(path));
+        assert!(result.contains(expected_link));
         assert!(result.contains("main.rs"));
         assert!(result.ends_with("\x1b]8;;\x1b\\"));
     }

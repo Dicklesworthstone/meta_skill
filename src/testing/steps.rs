@@ -800,8 +800,10 @@ mod tests {
 
     #[test]
     fn test_evaluate_condition_env_exists() {
+        // PATH is set on every supported platform; HOME is absent on Windows
+        // (where the equivalent is USERPROFILE).
         let cond = Condition {
-            env_exists: Some("HOME".to_string()),
+            env_exists: Some("PATH".to_string()),
             ..Default::default()
         };
         assert!(evaluate_condition(&cond));
@@ -877,8 +879,15 @@ mod tests {
         let mut ctx = TestContext::default();
         let mut env = HashMap::new();
         env.insert("MS_TEST_MARKER".to_string(), "test_value_42".to_string());
+        // execute_run shells out via `sh -c` on Unix and `cmd /C` on Windows;
+        // each expands environment variables with its own syntax.
+        let cmd = if cfg!(windows) {
+            "echo %MS_TEST_MARKER%"
+        } else {
+            "echo $MS_TEST_MARKER"
+        };
         let step = RunStep {
-            cmd: "echo $MS_TEST_MARKER".to_string(),
+            cmd: cmd.to_string(),
             cwd: None,
             env,
             stdin: None,

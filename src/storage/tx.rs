@@ -111,8 +111,35 @@ pub struct GlobalLock {
     lock_path: PathBuf,
 }
 
+/// Whether an I/O error means "the lock is held by someone else" (contention)
+/// rather than a real failure.
+///
+/// `try_lock_exclusive` reports contention as `EWOULDBLOCK`/`EAGAIN` on Unix
+/// (mapped to `ErrorKind::WouldBlock`) but as `ERROR_LOCK_VIOLATION` (os error
+/// 33, which maps to `ErrorKind::Uncategorized`) on Windows, so a bare
+/// `WouldBlock` check misclassifies Windows contention as a hard error (#150).
+/// fs2 exposes the platform's canonical contention error for exactly this.
+fn is_lock_contended(err: &std::io::Error) -> bool {
+    err.kind() == std::io::ErrorKind::WouldBlock
+        || err.raw_os_error() == fs2::lock_contended_error().raw_os_error()
+}
+
 impl GlobalLock {
     const LOCK_FILENAME: &'static str = "ms.lock";
+
+    /// Sidecar file carrying the advisory holder info as JSON.
+    ///
+    /// Holder info is ALSO written through the locked `ms.lock` handle (legacy
+    /// location), but readers prefer this sidecar: on Windows the exclusive
+    /// `LockFileEx` range lock on `ms.lock` is mandatory, so *other* handles
+    /// cannot read the lock file while it is held — which is precisely when
+    /// `status()` is most interesting. The sidecar is never locked, so holder
+    /// info stays readable on every platform (#150).
+    const HOLDER_FILENAME: &'static str = "ms.lock.holder";
+
+    fn holder_path(ms_root: &Path) -> PathBuf {
+        ms_root.join(Self::HOLDER_FILENAME)
+    }
 
     /// Acquire exclusive lock (blocking)
     pub fn acquire(ms_root: &Path) -> Result<Self> {
@@ -133,7 +160,7 @@ impl GlobalLock {
             .map_err(|e| MsError::TransactionFailed(format!("acquire exclusive lock: {e}")))?;
 
         // Write lock holder info through the locked file handle
-        Self::write_holder_info(&lock_file)?;
+        Self::write_holder_info(&lock_file, ms_root)?;
 
         debug!("Acquired global lock at {:?}", lock_path);
         Ok(Self {
@@ -160,7 +187,7 @@ impl GlobalLock {
             Ok(()) => {
                 // Lock acquired
             }
-            Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {
+            Err(e) if is_lock_contended(&e) => {
                 debug!("Lock held by another process");
                 return Ok(None);
             }
@@ -170,7 +197,7 @@ impl GlobalLock {
         }
 
         // Write lock holder info through the locked file handle
-        Self::write_holder_info(&lock_file)?;
+        Self::write_holder_info(&lock_file, ms_root)?;
 
         debug!("Acquired global lock (non-blocking) at {:?}", lock_path);
         Ok(Some(Self {
@@ -206,10 +233,20 @@ impl GlobalLock {
             return Ok(None);
         }
 
-        let content = fs::read_to_string(&lock_path)?;
-        if content.is_empty() {
-            return Ok(None);
-        }
+        // Prefer the unlocked sidecar: on Windows the mandatory range lock on
+        // ms.lock makes the legacy in-file holder info unreadable while the
+        // lock is held. An absent/empty/unreadable sidecar falls back to the
+        // legacy location so pre-sidecar holders are still reported.
+        let content = match fs::read_to_string(Self::holder_path(ms_root)) {
+            Ok(sidecar) if !sidecar.is_empty() => sidecar,
+            _ => {
+                let legacy = fs::read_to_string(&lock_path)?;
+                if legacy.is_empty() {
+                    return Ok(None);
+                }
+                legacy
+            }
+        };
 
         let holder: LockHolder = serde_json::from_str(&content)
             .map_err(|e| MsError::TransactionFailed(format!("parse lock holder: {e}")))?;
@@ -260,7 +297,7 @@ impl GlobalLock {
                 lock_file.unlock().ok();
                 Ok(false)
             }
-            Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {
+            Err(e) if is_lock_contended(&e) => {
                 // Lock is held by another process
                 Ok(true)
             }
@@ -303,6 +340,14 @@ impl GlobalLock {
                 .read_to_string(&mut content)
                 .map_err(|e| MsError::TransactionFailed(format!("read lock file: {e}")))?;
 
+            // The sidecar may carry holder info the legacy location lacks
+            // (it is the preferred write target since #150's Windows fix).
+            if content.is_empty()
+                && let Ok(sidecar) = fs::read_to_string(Self::holder_path(ms_root))
+            {
+                content = sidecar;
+            }
+
             // 2. Tombstone the content if not empty
             if !content.is_empty() {
                 let tombstones = ms_root.join("tombstones").join("locks");
@@ -325,10 +370,11 @@ impl GlobalLock {
                 }
             }
 
-            // 3. Truncate the file to clear it
+            // 3. Truncate the file (and holder sidecar) to clear them
             lock.lock_file
                 .set_len(0)
                 .map_err(|e| MsError::TransactionFailed(format!("truncate lock file: {e}")))?;
+            let _ = fs::write(Self::holder_path(ms_root), b"");
 
             info!("Stale lock file cleared (truncated)");
             Ok(true)
@@ -341,8 +387,12 @@ impl GlobalLock {
         }
     }
 
-    /// Write lock holder info through the given file handle.
-    fn write_holder_info(file: &File) -> Result<()> {
+    /// Write lock holder info through the given (locked) file handle, and
+    /// mirror it to the unlocked sidecar so other processes can read it even
+    /// on Windows, where the exclusive lock blocks reads of `ms.lock` itself.
+    /// Both writes happen while holding the flock, so they cannot race a
+    /// competing holder.
+    fn write_holder_info(file: &File, ms_root: &Path) -> Result<()> {
         use std::io::{Seek, SeekFrom, Write};
 
         let holder = LockHolder {
@@ -371,6 +421,9 @@ impl GlobalLock {
             .sync_all()
             .map_err(|e| MsError::TransactionFailed(format!("sync lock file: {e}")))?;
 
+        fs::write(Self::holder_path(ms_root), holder_json.as_bytes())
+            .map_err(|e| MsError::TransactionFailed(format!("write lock holder sidecar: {e}")))?;
+
         Ok(())
     }
 }
@@ -383,6 +436,13 @@ impl Drop for GlobalLock {
         // after acquiring, so truncation here cannot lose their data.)
         if let Err(e) = self.lock_file.set_len(0) {
             debug!("Failed to clear lock holder info: {}", e);
+        }
+        // Clear the sidecar too (truncate, never delete: waiters may be about
+        // to rewrite it, and a missing file vs empty file is not meaningful).
+        if let Some(dir) = self.lock_path.parent()
+            && let Err(e) = fs::write(dir.join(Self::HOLDER_FILENAME), b"")
+        {
+            debug!("Failed to clear lock holder sidecar: {}", e);
         }
         // fs2's unlock is safe and cross-platform
         if let Err(e) = self.lock_file.unlock() {
@@ -961,6 +1021,30 @@ mod tests {
         // Now should succeed
         let lock3 = GlobalLock::try_acquire(&ms_root).unwrap();
         assert!(lock3.is_some(), "Should acquire lock after release");
+    }
+
+    /// The holder-info sidecar (`ms.lock.holder`) is the read path that keeps
+    /// `status()` working on Windows, where the mandatory exclusive lock makes
+    /// `ms.lock` itself unreadable while held (#150). Its lifecycle must hold
+    /// on every platform: populated with the holder JSON while the lock is
+    /// held, truncated (not deleted) on clean release.
+    #[test]
+    fn test_holder_sidecar_lifecycle() {
+        let dir = tempdir().unwrap();
+        let ms_root = dir.path().to_path_buf();
+        let sidecar = ms_root.join("ms.lock.holder");
+
+        let lock = GlobalLock::acquire(&ms_root).unwrap();
+        let content = fs::read_to_string(&sidecar).unwrap();
+        let holder: LockHolder = serde_json::from_str(&content).unwrap();
+        assert_eq!(holder.pid, std::process::id());
+
+        drop(lock);
+        assert!(sidecar.exists(), "sidecar is truncated, never deleted");
+        assert!(
+            fs::read_to_string(&sidecar).unwrap().is_empty(),
+            "sidecar must be cleared on clean release"
+        );
     }
 
     #[test]
