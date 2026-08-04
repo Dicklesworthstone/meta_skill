@@ -86,6 +86,17 @@ fn is_skipped_skill_discovery_dir(name: &str) -> bool {
 }
 
 pub fn run(ctx: &AppContext, args: &IndexArgs) -> Result<()> {
+    // Fail fast with a clear, actionable diagnostic if the search index is
+    // read-only, BEFORE doing any work. `AppContext::from_cli` transparently
+    // falls back to a read-only index when the writable open fails (e.g. a live
+    // `ms mcp serve` holds the Tantivy writer lock, or the index is on a
+    // read-only mount). Without this guard, indexing would write skills into the
+    // SQLite DB and Git archive and only then abort mid-run at the Tantivy
+    // commit with the opaque "Index opened in read-only mode" error — the
+    // failure reported in issue #133. Checking here (before acquiring the global
+    // lock) also avoids creating an `ms.lock` on this doomed path.
+    ctx.require_writable_search()?;
+
     // Acquire global lock for indexing (exclusive write operation)
     let lock_result = GlobalLock::acquire_timeout(&ctx.ms_root, Duration::from_secs(30))?;
     let _lock = lock_result.ok_or_else(|| {

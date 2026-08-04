@@ -110,7 +110,7 @@ fn setup_list_fixture(scenario: &str) -> Result<E2EFixture> {
         "--robot",
         "config",
         "skill_paths.global",
-        r#"[\"./global_skills\"]"#,
+        r#"["./global_skills"]"#,
     ]);
     fixture.assert_success(&output, "config skill_paths.global");
 
@@ -118,7 +118,7 @@ fn setup_list_fixture(scenario: &str) -> Result<E2EFixture> {
         "--robot",
         "config",
         "skill_paths.local",
-        r#"[\"./local_skills\"]"#,
+        r#"["./local_skills"]"#,
     ]);
     fixture.assert_success(&output, "config skill_paths.local");
 
@@ -268,8 +268,8 @@ fn test_list_all() -> Result<()> {
         "Should contain rust-error-handling"
     );
     assert!(
-        skill_ids.contains(&"rust-async"),
-        "Should contain rust-async"
+        skill_ids.contains(&"rust-async-programming"),
+        "Should contain rust-async-programming"
     );
     assert!(
         skill_ids.contains(&"go-error-handling"),
@@ -312,7 +312,7 @@ fn test_list_by_tag() -> Result<()> {
     let skill_ids: Vec<&str> = skills.iter().filter_map(|s| s["id"].as_str()).collect();
 
     assert!(skill_ids.contains(&"rust-error-handling"));
-    assert!(skill_ids.contains(&"rust-async"));
+    assert!(skill_ids.contains(&"rust-async-programming"));
     assert!(!skill_ids.contains(&"go-error-handling"));
     assert!(!skill_ids.contains(&"python-testing"));
 

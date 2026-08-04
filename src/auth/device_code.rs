@@ -11,6 +11,7 @@
 //! 5. After user verifies, CLI receives access + refresh tokens
 
 use serde::{Deserialize, Serialize};
+use std::io::IsTerminal;
 use std::time::{Duration, Instant};
 use tracing::{debug, info};
 
@@ -241,7 +242,7 @@ pub fn run_device_code_flow(
 
 /// Check if we're running in a TTY (interactive terminal).
 pub fn is_tty() -> bool {
-    atty::is(atty::Stream::Stdout) && atty::is(atty::Stream::Stdin)
+    std::io::stdout().is_terminal() && std::io::stdin().is_terminal()
 }
 
 /// Try to open the verification URL in the user's browser.

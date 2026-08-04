@@ -245,7 +245,7 @@ fn test_error_codes_consistency() {
 
     for args in &error_scenarios {
         let mut full_args = vec!["-O", "json"];
-        full_args.extend(args.iter().map(|s| *s));
+        full_args.extend(args.iter().copied());
 
         let output = fixture.run_ms(&full_args);
         if !output.success {

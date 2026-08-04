@@ -108,13 +108,53 @@ pub fn run(ctx: &AppContext, args: &SearchArgs) -> Result<()> {
     }
 }
 
+/// Ranked lexical (BM25) candidates for the CLI search path.
+///
+/// Prefers the Tantivy BM25 index (`ctx.search`), which ranks by true BM25
+/// relevance across name/description/body/tags/aliases — the same engine the
+/// MCP server uses. Falls back to the SQLite substring scan only when the
+/// index is unavailable: never built / empty (e.g. a state dir produced by an
+/// older binary) or erroring (corrupt segment, unparsable query syntax). The
+/// fallback assigns descending pseudo-scores so downstream RRF fusion still
+/// sees a rank ordering (issue #144).
+fn bm25_ranked(ctx: &AppContext, query: &str, fetch_limit: usize) -> Result<Vec<(String, f32)>> {
+    if ctx.search.is_empty() {
+        debug!(
+            target: "search",
+            "bm25: tantivy index empty; falling back to substring scan"
+        );
+    } else {
+        match ctx.search.search(query, fetch_limit) {
+            Ok(hits) => {
+                debug!(target: "search", backend = "tantivy", hits = hits.len(), "bm25 candidates");
+                return Ok(hits.into_iter().map(|r| (r.skill_id, r.score)).collect());
+            }
+            Err(err) => {
+                debug!(
+                    target: "search",
+                    error = %err,
+                    "bm25: tantivy search failed; falling back to substring scan"
+                );
+            }
+        }
+    }
+
+    let candidates = ctx.db.search_fts(query, fetch_limit)?;
+    debug!(target: "search", backend = "substring", hits = candidates.len(), "bm25 candidates");
+    Ok(candidates
+        .into_iter()
+        .enumerate()
+        .map(|(i, c)| (c.id, 1.0 / (i + 1) as f32)) // Convert rank to pseudo-score
+        .collect())
+}
+
 fn search_hybrid(ctx: &AppContext, args: &SearchArgs, filters: &SearchFilters) -> Result<()> {
     // Fetch enough results from both systems for fusion
     // Increase limit to allow for filtering
     let fetch_limit = args.limit * 50;
 
-    // BM25 search using SQLite FTS
-    let bm25_candidates = ctx.db.search_fts(&args.query, fetch_limit)?;
+    // BM25 search (Tantivy, with substring-scan fallback)
+    let bm25_results = bm25_ranked(ctx, &args.query, fetch_limit)?;
 
     // Build semantic search using embeddings
     let embedder = build_embedder(&ctx.config.search)?;
@@ -131,13 +171,6 @@ fn search_hybrid(ctx: &AppContext, args: &SearchArgs, filters: &SearchFilters) -
     // Semantic search
     let semantic_results = vector_index.search(&query_embedding, fetch_limit);
 
-    // Convert to (id, score) format
-    let bm25_results: Vec<(String, f32)> = bm25_candidates
-        .iter()
-        .enumerate()
-        .map(|(i, c)| (c.id.clone(), 1.0 / (i + 1) as f32)) // Convert rank to pseudo-score
-        .collect();
-
     // RRF fusion
     let config = RrfConfig::with_weights(
         ctx.config.search.bm25_weight,
@@ -148,14 +181,9 @@ fn search_hybrid(ctx: &AppContext, args: &SearchArgs, filters: &SearchFilters) -
     // Fetch full skill records and apply filters
     let mut results = Vec::new();
     for (skill_id, score) in fused {
-        // Optimization: Check metadata first
-        let candidate = if let Some(c) = bm25_candidates.iter().find(|c| c.id == skill_id) {
-            Some(c.clone())
-        } else {
-            ctx.db.get_skill_candidate(&skill_id)?
-        };
-
-        if let Some(candidate) = candidate {
+        // Check lightweight metadata first; only load the full skill if it
+        // passes the filters.
+        if let Some(candidate) = ctx.db.get_skill_candidate(&skill_id)? {
             let skill_tags = parse_tags_from_metadata(&candidate.metadata_json);
 
             // Apply filters on metadata
@@ -165,7 +193,6 @@ fn search_hybrid(ctx: &AppContext, args: &SearchArgs, filters: &SearchFilters) -
                 candidate.quality_score as f32,
                 candidate.is_deprecated,
             ) {
-                // Only load full skill if it passes filters
                 if let Some(skill) = ctx.db.get_skill(&skill_id)? {
                     results.push((skill, score));
                 }
@@ -182,21 +209,22 @@ fn search_hybrid(ctx: &AppContext, args: &SearchArgs, filters: &SearchFilters) -
 
 fn search_bm25(ctx: &AppContext, args: &SearchArgs, filters: &SearchFilters) -> Result<()> {
     // Increase limit to allow for filtering
-    let candidates = ctx.db.search_fts(&args.query, args.limit * 50)?;
+    let ranked = bm25_ranked(ctx, &args.query, args.limit * 50)?;
 
     let mut results = Vec::new();
-    for (i, candidate) in candidates.iter().enumerate() {
-        let skill_tags = parse_tags_from_metadata(&candidate.metadata_json);
+    for (skill_id, score) in ranked {
+        if let Some(candidate) = ctx.db.get_skill_candidate(&skill_id)? {
+            let skill_tags = parse_tags_from_metadata(&candidate.metadata_json);
 
-        if filters.matches(
-            &skill_tags,
-            &candidate.source_layer,
-            candidate.quality_score as f32,
-            candidate.is_deprecated,
-        ) {
-            if let Some(skill) = ctx.db.get_skill(&candidate.id)? {
-                let score = 1.0 / (i + 1) as f32;
-                results.push((skill, score));
+            if filters.matches(
+                &skill_tags,
+                &candidate.source_layer,
+                candidate.quality_score as f32,
+                candidate.is_deprecated,
+            ) {
+                if let Some(skill) = ctx.db.get_skill(&skill_id)? {
+                    results.push((skill, score));
+                }
             }
         }
 

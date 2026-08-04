@@ -51,7 +51,7 @@ mod concurrent_tests;
 #[cfg(test)]
 mod wal_safety_tests;
 
-pub use client::{BeadsClient, SyncStatus};
+pub use client::{BeadsClient, SyncStatus, resolve_beads_binary};
 pub use mock::{BeadsErrorKind, BeadsOperations, ErrorInjection, MockBeadsClient, test_issue};
 pub use test_logger::{LogEntry, LogLevel, TestLogger, TestReport};
 pub use types::{

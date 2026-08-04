@@ -50,10 +50,38 @@ mod tests {
 
     #[test]
     fn current_branch_in_git_repo_returns_some() {
-        // Running tests from within the meta_skill repo, should have a branch
-        let result = current_branch().unwrap();
-        // In a git repo, we expect Some(branch_name)
-        assert!(result.is_some(), "Should detect branch in git repo");
+        let temp = TempDir::new().unwrap();
+        let init = std::process::Command::new("git")
+            .args(["init", "--initial-branch", "fixture-branch"])
+            .current_dir(temp.path())
+            .status()
+            .unwrap();
+        assert!(init.success(), "test repository should initialize");
+
+        std::fs::write(temp.path().join("tracked.txt"), "fixture").unwrap();
+        let add = std::process::Command::new("git")
+            .args(["add", "tracked.txt"])
+            .current_dir(temp.path())
+            .status()
+            .unwrap();
+        assert!(add.success(), "fixture file should stage");
+        let commit = std::process::Command::new("git")
+            .args([
+                "-c",
+                "user.name=Meta Skill Tests",
+                "-c",
+                "user.email=tests@example.invalid",
+                "commit",
+                "-m",
+                "fixture",
+            ])
+            .current_dir(temp.path())
+            .status()
+            .unwrap();
+        assert!(commit.success(), "fixture commit should succeed");
+
+        let result = current_branch_in(Some(temp.path())).unwrap();
+        assert_eq!(result.as_deref(), Some("fixture-branch"));
     }
 
     #[test]

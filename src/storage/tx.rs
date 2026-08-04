@@ -214,7 +214,8 @@ impl GlobalLock {
         let holder: LockHolder = serde_json::from_str(&content)
             .map_err(|e| MsError::TransactionFailed(format!("parse lock holder: {e}")))?;
 
-        // Check if process is still alive using /proc on Linux
+        // Cheap fast path: check if the recorded process is still alive using
+        // /proc on Linux. A dead holder means the lock is stale.
         #[cfg(target_os = "linux")]
         {
             let proc_path = format!("/proc/{}", holder.pid);
@@ -224,8 +225,15 @@ impl GlobalLock {
             }
         }
 
-        // On other platforms, we trust the lock file content
-        // The lock itself is enforced by the OS-level flock
+        // Cross-platform authoritative check: the holder info in the file is
+        // only advisory. On platforms without a /proc liveness probe (macOS,
+        // Windows) - and even on Linux when a PID has been recycled - the
+        // recorded holder can outlive the actual OS-level flock. If nobody
+        // holds the flock right now, the recorded holder is stale and the
+        // lock is effectively free.
+        if !Self::is_locked(ms_root)? {
+            return Ok(None);
+        }
 
         Ok(Some(holder))
     }
@@ -369,6 +377,13 @@ impl GlobalLock {
 
 impl Drop for GlobalLock {
     fn drop(&mut self) {
+        // Clear the advisory holder info while we still hold the flock so
+        // `status()` never reports a stale holder after a clean release.
+        // (Waiters keep their own FD to this inode and rewrite holder info
+        // after acquiring, so truncation here cannot lose their data.)
+        if let Err(e) = self.lock_file.set_len(0) {
+            debug!("Failed to clear lock holder info: {}", e);
+        }
         // fs2's unlock is safe and cross-platform
         if let Err(e) = self.lock_file.unlock() {
             // Use debug level in drop - can't use error! without triggering additional allocations
@@ -986,6 +1001,56 @@ mod tests {
 
         // Release lock
         drop(lock);
+    }
+
+    /// After a clean release, `status` must report no lock even on platforms
+    /// without a /proc liveness probe (macOS, Windows): the Drop impl clears
+    /// the advisory holder info while still holding the flock.
+    #[test]
+    fn test_lock_status_none_after_clean_release() {
+        let dir = tempdir().unwrap();
+        let ms_root = dir.path().to_path_buf();
+
+        let lock = GlobalLock::acquire(&ms_root).unwrap();
+        assert!(GlobalLock::status(&ms_root).unwrap().is_some());
+        drop(lock);
+
+        // Lock file still exists (never deleted, to avoid split-brain), but
+        // holder info is cleared and the flock is free.
+        assert!(ms_root.join("ms.lock").exists());
+        assert!(
+            GlobalLock::status(&ms_root).unwrap().is_none(),
+            "status must not report a stale holder after clean release"
+        );
+        assert!(!GlobalLock::is_locked(&ms_root).unwrap());
+    }
+
+    /// Holder info left behind without an actual OS-level flock (e.g. written
+    /// by a process that crashed after unlock, or a PID that was recycled)
+    /// must be treated as stale on every platform.
+    #[test]
+    fn test_lock_status_stale_holder_without_flock() {
+        let dir = tempdir().unwrap();
+        let ms_root = dir.path().to_path_buf();
+        std::fs::create_dir_all(&ms_root).unwrap();
+
+        // Use our own (live) PID so the Linux /proc fast path cannot short-
+        // circuit the test; the authoritative flock probe must catch it.
+        let holder = LockHolder {
+            pid: std::process::id(),
+            acquired_at: Utc::now(),
+            hostname: "stale-host".to_string(),
+        };
+        std::fs::write(
+            ms_root.join("ms.lock"),
+            serde_json::to_string(&holder).unwrap(),
+        )
+        .unwrap();
+
+        assert!(
+            GlobalLock::status(&ms_root).unwrap().is_none(),
+            "holder info without a held flock must be reported as no lock"
+        );
     }
 
     #[test]

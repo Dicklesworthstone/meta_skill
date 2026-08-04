@@ -59,6 +59,21 @@ Use pytest for all testing needs.
 - Use fixtures for setup
 "#;
 
+const SKILL_WITH_DISTINCT_PREAMBLE: &str = r#"---
+name: Preamble Recall
+description: Short catalog summary
+tags: [search, regression]
+---
+
+# Preamble Recall
+
+The distinct intro contains unique token preamblecanary.
+
+## Notes
+
+Section content remains searchable too.
+"#;
+
 #[allow(dead_code)]
 const SKILL_INVALID: &str = r#"---
 name:
@@ -122,6 +137,46 @@ fn test_index_workspace() -> Result<()> {
     assert_eq!(count, 3, "List should return 3 skills after indexing");
 
     fixture.generate_report();
+    Ok(())
+}
+
+#[test]
+fn test_index_preserves_and_searches_distinct_h1_preamble() -> Result<()> {
+    let mut fixture = E2EFixture::new("index_preamble_recall");
+
+    fixture.log_step("Initialize ms");
+    let output = fixture.init();
+    fixture.assert_success(&output, "init");
+
+    fixture.log_step("Create skill with body preamble distinct from frontmatter description");
+    fixture.create_skill("preamble-recall", SKILL_WITH_DISTINCT_PREAMBLE)?;
+
+    fixture.log_step("Index skill");
+    let output = fixture.run_ms(&["--robot", "index"]);
+    fixture.assert_success(&output, "index");
+
+    fixture.log_step("Search for preamble-only token");
+    let output = fixture.run_ms(&[
+        "--robot",
+        "search",
+        "preamblecanary",
+        "--search-type",
+        "bm25",
+    ]);
+    fixture.assert_success(&output, "search preamble-only token");
+
+    let json = output.json();
+    let results = json["results"]
+        .as_array()
+        .expect("search results array")
+        .iter()
+        .filter_map(|result| result["id"].as_str())
+        .collect::<Vec<_>>();
+    assert!(
+        results.contains(&"preamble-recall"),
+        "preamble-only token must reach the stored body and Tantivy index: {results:?}"
+    );
+
     Ok(())
 }
 
@@ -409,6 +464,65 @@ fn test_index_with_multi_layer_paths() -> Result<()> {
     // Checkpoint: post-index
     fixture.checkpoint("index:post-multi-layer");
 
+    fixture.generate_report();
+    Ok(())
+}
+
+/// Regression test for issue #133.
+///
+/// When the search index can only be opened read-only — here another process
+/// holds the Tantivy writer lock, exactly as a live `ms mcp serve` would —
+/// `ms index` must fail fast with a clear, actionable diagnostic instead of
+/// silently degrading to a read-only index and aborting mid-run with the opaque
+/// "Index opened in read-only mode" Tantivy error. It must also NOT partially
+/// write skills into the database before failing.
+#[test]
+fn test_index_readonly_index_reports_clear_error() -> Result<()> {
+    use ms::search::tantivy::Bm25Index;
+
+    let mut fixture = setup_index_fixture("index_readonly_guard")?;
+
+    // Hold the Tantivy writer lock from this test process, emulating a live
+    // `ms mcp serve`. The `ms index` subprocess below will find the index busy,
+    // fall back to a read-only handle, and must reject the write up front.
+    let index_dir = fixture.ms_root.join("index");
+    let _writer_guard = Bm25Index::open(&index_dir).expect("open index writable in test process");
+
+    let output = fixture.run_ms(&["index"]);
+
+    assert!(
+        !output.success,
+        "ms index must fail when the index is read-only; got success.\nstdout={}\nstderr={}",
+        output.stdout, output.stderr
+    );
+
+    let combined = format!("{}\n{}", output.stdout, output.stderr);
+
+    // The clear, actionable diagnostic — not the opaque Tantivy internal error.
+    assert!(
+        combined.contains("Cannot write to the search index"),
+        "expected the actionable #133 diagnostic; got:\n{combined}"
+    );
+    assert!(
+        combined.contains("writer lock") || combined.contains("read-only filesystem"),
+        "diagnostic must name the concrete cause; got:\n{combined}"
+    );
+    assert!(
+        !combined.contains("Index opened in read-only mode"),
+        "must not surface the opaque Tantivy read-only error; got:\n{combined}"
+    );
+
+    // The guard runs before any indexing work, so nothing should have been
+    // written to the database. (The write lock is still held here, so `list`
+    // opens the index read-only and reads skills straight from SQLite.)
+    let list = fixture.run_ms(&["--robot", "list"]);
+    let count = list.json()["count"].as_u64().unwrap_or(0);
+    assert_eq!(
+        count, 0,
+        "index must not partially write skills before failing; list returned {count}"
+    );
+
+    drop(_writer_guard);
     fixture.generate_report();
     Ok(())
 }

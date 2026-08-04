@@ -7,7 +7,10 @@
 //! - Relevance scorer edge cases
 
 use std::collections::HashSet;
-use std::fs::{self, File, Permissions};
+#[cfg(unix)]
+use std::fs::Permissions;
+use std::fs::{self, File};
+#[cfg(unix)]
 use std::os::unix::fs::PermissionsExt;
 use std::path::PathBuf;
 use std::time::Duration;

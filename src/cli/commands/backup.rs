@@ -507,7 +507,67 @@ fn copy_file(src: &Path, dst: &Path) -> Result<u64> {
         std::fs::create_dir_all(parent)
             .map_err(|err| MsError::Config(format!("create {}: {err}", parent.display())))?;
     }
-    std::fs::copy(src, dst).map_err(|err| MsError::Config(format!("copy {}: {err}", src.display())))
+
+    // Git object files are intentionally read-only. A restore overlays an
+    // existing archive, so opening one of those destination files for
+    // truncation fails unless the owner-write bit is enabled first. Preserve
+    // the old permissions if the copy fails; on success, mirror the source
+    // permissions so restored Git objects remain read-only.
+    let previous_permissions = make_destination_writable(dst)?;
+    let copied = match std::fs::copy(src, dst) {
+        Ok(bytes) => bytes,
+        Err(err) => {
+            if let Some(permissions) = previous_permissions {
+                let _ = std::fs::set_permissions(dst, permissions);
+            }
+            return Err(MsError::Config(format!(
+                "copy {} to {}: {err}",
+                src.display(),
+                dst.display()
+            )));
+        }
+    };
+
+    let source_permissions = std::fs::metadata(src)
+        .map_err(|err| MsError::Config(format!("stat {}: {err}", src.display())))?
+        .permissions();
+    std::fs::set_permissions(dst, source_permissions)
+        .map_err(|err| MsError::Config(format!("set permissions on {}: {err}", dst.display())))?;
+    Ok(copied)
+}
+
+fn make_destination_writable(dst: &Path) -> Result<Option<std::fs::Permissions>> {
+    let metadata = match std::fs::metadata(dst) {
+        Ok(metadata) => metadata,
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(err) => {
+            return Err(MsError::Config(format!(
+                "stat destination {}: {err}",
+                dst.display()
+            )));
+        }
+    };
+    let original = metadata.permissions();
+    if !original.readonly() {
+        return Ok(None);
+    }
+
+    let mut writable = original.clone();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        writable.set_mode(writable.mode() | 0o200);
+    }
+    #[cfg(not(unix))]
+    writable.set_readonly(false);
+
+    std::fs::set_permissions(dst, writable).map_err(|err| {
+        MsError::Config(format!(
+            "make destination writable {}: {err}",
+            dst.display()
+        ))
+    })?;
+    Ok(Some(original))
 }
 
 fn copy_dir_recursive(src: &Path, dst: &Path) -> Result<u64> {
@@ -555,6 +615,30 @@ mod tests {
 
         let latest = latest_backup_id(dir.path()).unwrap();
         assert_eq!(latest, "20240202020202");
+    }
+
+    #[test]
+    fn copy_file_overwrites_readonly_destination_and_restores_source_permissions() {
+        let dir = tempfile::tempdir().unwrap();
+        let source = dir.path().join("source");
+        let destination = dir.path().join("destination");
+        std::fs::write(&source, "restored").unwrap();
+        std::fs::write(&destination, "stale").unwrap();
+
+        let mut readonly = std::fs::metadata(&destination).unwrap().permissions();
+        readonly.set_readonly(true);
+        std::fs::set_permissions(&destination, readonly).unwrap();
+
+        copy_file(&source, &destination).unwrap();
+
+        assert_eq!(std::fs::read_to_string(&destination).unwrap(), "restored");
+        assert_eq!(
+            std::fs::metadata(&destination)
+                .unwrap()
+                .permissions()
+                .readonly(),
+            std::fs::metadata(&source).unwrap().permissions().readonly()
+        );
     }
 
     #[test]

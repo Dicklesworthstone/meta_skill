@@ -257,7 +257,7 @@ pub struct ChecklistItem {
     pub checked: bool,
 }
 
-/// Checkbox pattern: "- [ ] item" or "- [x] item"
+/// Checkbox pattern: `- [ ] item` or `- [x] item`
 static CHECKBOX_REGEX: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"^\s*[-*]?\s*\[([ xX])\]\s*(.*)$").unwrap());
 

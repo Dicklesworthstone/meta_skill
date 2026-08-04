@@ -20,7 +20,7 @@ pub mod progress;
 #[command(author, version, about, long_about = None)]
 #[command(propagate_version = true)]
 pub struct Cli {
-    /// [DEPRECATED] Enable JSON output for machine consumption.
+    /// **Deprecated:** Enable JSON output for machine consumption.
     /// Use --output-format=json or -m instead.
     /// This flag is maintained for backward compatibility with existing integrations.
     #[arg(long, global = true, hide = true)]

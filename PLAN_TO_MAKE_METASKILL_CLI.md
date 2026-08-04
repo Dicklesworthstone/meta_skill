@@ -304,7 +304,7 @@ ms can use similar reservations for skill editing to prevent conflicts.
 
 **NTM agent types:**
 ```bash
-ntm spawn myproject --cc=3 --cod=2 --gmi=1  # 3 Claude + 2 Codex + 1 Gemini
+ntm spawn myproject --cc=3 --cod=2 --agy=1  # 3 Claude + 2 Codex + 1 Antigravity (Gemini 3.1 Pro)
 ntm send myproject --cc "Implement auth"     # Send to all Claude agents
 ```
 

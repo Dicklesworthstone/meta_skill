@@ -639,6 +639,12 @@ mod tests {
 
     #[test]
     fn test_output_decision_no_color() {
+        // Neutralize ambient agent/CI/IDE env vars: `decide()` checks them before
+        // the injected `OutputEnvironment`, so without this guard the expected
+        // reason is masked by `AgentEnvironment`/`CiEnvironment` (deterministically
+        // on CI, and flakily under concurrent env-mutating tests locally).
+        let _lock = ENV_LOCK.lock().unwrap();
+        let _guard = guard_clear_env();
         let env = OutputEnvironment::new(true, false, false, true);
         let detector = OutputDetector::with_env(OutputFormat::Human, false, env);
         let decision = detector.decide();
@@ -648,6 +654,8 @@ mod tests {
 
     #[test]
     fn test_output_decision_plain_env() {
+        let _lock = ENV_LOCK.lock().unwrap();
+        let _guard = guard_clear_env();
         let env = OutputEnvironment::new(false, true, false, true);
         let detector = OutputDetector::with_env(OutputFormat::Human, false, env);
         let decision = detector.decide();
@@ -657,6 +665,8 @@ mod tests {
 
     #[test]
     fn test_output_decision_not_terminal() {
+        let _lock = ENV_LOCK.lock().unwrap();
+        let _guard = guard_clear_env();
         let env = OutputEnvironment::new(false, false, true, false);
         let detector = OutputDetector::with_env(OutputFormat::Human, false, env);
         let decision = detector.decide();
@@ -666,6 +676,8 @@ mod tests {
 
     #[test]
     fn test_output_decision_force_rich() {
+        let _lock = ENV_LOCK.lock().unwrap();
+        let _guard = guard_clear_env();
         let env = OutputEnvironment::new(false, false, true, true);
         let detector = OutputDetector::with_env(OutputFormat::Human, false, env);
         let decision = detector.decide();
@@ -675,6 +687,8 @@ mod tests {
 
     #[test]
     fn test_output_decision_human_default() {
+        let _lock = ENV_LOCK.lock().unwrap();
+        let _guard = guard_clear_env();
         let env = OutputEnvironment::new(false, false, false, true);
         let detector = OutputDetector::with_env(OutputFormat::Human, false, env);
         let decision = detector.decide();

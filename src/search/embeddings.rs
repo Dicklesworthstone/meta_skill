@@ -335,13 +335,13 @@ fn tokenize(text: &str) -> Vec<String> {
 fn accumulate_embedding(embedding: &mut [f32], token: &str, weight: f32) {
     let token_hash = fnv1a_hash(token.as_bytes());
 
-    for i in 0..embedding.len() {
+    for (i, slot) in embedding.iter_mut().enumerate() {
         let dim_hash = fnv1a_hash_with_salt(token_hash, i as u64);
         // Use 16 bits to create a continuous value in [-weight, weight]
         // This reduces the probability of exact cancellation from ~1/2^n to ~0
         let bits = (dim_hash & 0xFFFF) as f32;
         let normalized = (bits / 32767.5) - 1.0; // Maps [0, 65535] to [-1, 1]
-        embedding[i] += normalized * weight;
+        *slot += normalized * weight;
     }
 }
 

@@ -2,7 +2,7 @@
 source: tests/snapshots/cli_output.rs
 expression: sanitized
 ---
-1 results for 'rust' (hybrid search):
+1 results for 'rust' (hybrid search)
 
-1. Rust Error Handling [0.01] project 
+1. Rust Error Handling [0.01] project
    Use Result<T, E> for recoverable errors and panic! for unrecoverable ones.

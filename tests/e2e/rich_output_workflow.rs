@@ -29,7 +29,7 @@ fn setup_fixture(scenario: &str) -> Result<E2EFixture> {
         "--robot",
         "config",
         "skill_paths.project",
-        r#"[\"./skills\"]"#,
+        r#"["./skills"]"#,
     ]);
     fixture.assert_success(&output, "config skill_paths.project");
 

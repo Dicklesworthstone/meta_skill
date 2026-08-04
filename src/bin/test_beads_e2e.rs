@@ -13,14 +13,15 @@ use ms::{MsError, Result};
 fn main() -> Result<()> {
     println!("=== Beads Integration E2E Test ===");
 
-    // Step 1: Verify bd availability
+    // Step 1: Verify beads availability
     let probe = BeadsClient::new();
     if !probe.is_available() {
         return Err(MsError::BeadsUnavailable(
-            "bd binary not available".to_string(),
+            "beads binary not available".to_string(),
         ));
     }
-    println!("[1/9] bd available");
+    let beads_bin = ms::beads::resolve_beads_binary();
+    println!("[1/9] beads available ({})", beads_bin.display());
 
     // Step 2: Create isolated test environment
     let temp_dir = TempDir::new()
@@ -29,16 +30,16 @@ fn main() -> Result<()> {
     std::fs::create_dir_all(&beads_dir)?;
     let db_path = beads_dir.join("beads.db");
 
-    let init_output = Command::new("bd")
+    let init_output = Command::new(&beads_bin)
         .args(["init"])
         .current_dir(temp_dir.path())
         .env("BEADS_DB", &db_path)
         .output()
-        .map_err(|e| MsError::AssertionFailed(format!("bd init failed: {e}")))?;
+        .map_err(|e| MsError::AssertionFailed(format!("beads init failed: {e}")))?;
     if !init_output.status.success() {
         let stderr = String::from_utf8_lossy(&init_output.stderr);
         return Err(MsError::AssertionFailed(format!(
-            "bd init failed: {stderr}"
+            "beads init failed: {stderr}"
         )));
     }
     println!("[2/9] database initialized: {}", db_path.display());

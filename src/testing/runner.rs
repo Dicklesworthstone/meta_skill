@@ -448,23 +448,25 @@ impl<'a> SkillTestRunner<'a> {
 
         for condition in conditions {
             match condition {
-                SkipCondition::Platform(platform) => {
+                SkipCondition::Platform { platform } => {
                     let current = std::env::consts::OS;
                     if platform == current {
                         return true;
                     }
                 }
-                SkipCondition::CommandMissing(cmd) => {
+                SkipCondition::CommandMissing {
+                    command_missing: cmd,
+                } => {
                     if which::which(cmd).is_err() {
                         return true;
                     }
                 }
-                SkipCondition::FileMissing(path) => {
+                SkipCondition::FileMissing { file_missing: path } => {
                     if !std::path::Path::new(path).exists() {
                         return true;
                     }
                 }
-                SkipCondition::EnvMissing(var) => {
+                SkipCondition::EnvMissing { env_missing: var } => {
                     if std::env::var(var).is_err() {
                         return true;
                     }
@@ -484,22 +486,22 @@ impl<'a> SkillTestRunner<'a> {
 
         for req in requirements {
             match req {
-                Requirement::Command(cmd) => {
+                Requirement::Command { command: cmd } => {
                     if which::which(cmd).is_err() {
                         return Some(format!("command '{cmd}'"));
                     }
                 }
-                Requirement::Env(var) => {
+                Requirement::Env { env: var } => {
                     if std::env::var(var).is_err() {
                         return Some(format!("environment variable '{var}'"));
                     }
                 }
-                Requirement::File(path) => {
+                Requirement::File { file: path } => {
                     if !std::path::Path::new(path).exists() {
                         return Some(format!("file '{path}'"));
                     }
                 }
-                Requirement::Platform(platform) => {
+                Requirement::Platform { platform } => {
                     let current = std::env::consts::OS;
                     if current != platform {
                         return Some(format!("platform '{platform}' (current: {current})"));

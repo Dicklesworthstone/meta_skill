@@ -213,15 +213,39 @@ pub fn deny_symlink_escape(
         Err(_) => return Ok(()), // If root doesn't exist, can't check
     };
 
-    // Walk through path components, checking each for symlinks
-    let mut current = PathBuf::new();
-    for component in path.components() {
+    // Only inspect components below the configured root. Walking from the
+    // filesystem root incorrectly treats a symlink in an ancestor of `root`
+    // as an escape (for example, macOS exposes `/var` as a symlink to
+    // `/private/var`). The root has already been canonicalized, so resolving
+    // each descendant from there both avoids that false positive and keeps
+    // every comparison in the same canonical namespace.
+    let relative = if path.is_absolute() {
+        path.strip_prefix(root)
+            .map_err(|_| PathPolicyViolation::EscapesRoot {
+                path: path.to_path_buf(),
+                root: canonical_root.clone(),
+            })?
+    } else {
+        path
+    };
+
+    let mut current = canonical_root.clone();
+    for component in relative.components() {
         match component {
-            Component::Prefix(p) => current.push(p.as_os_str()),
-            Component::RootDir => current.push("/"),
+            Component::Prefix(_) | Component::RootDir => {
+                return Err(PathPolicyViolation::EscapesRoot {
+                    path: path.to_path_buf(),
+                    root: canonical_root,
+                });
+            }
             Component::CurDir => {} // Skip .
             Component::ParentDir => {
-                // .. is handled by checking the result
+                if current == canonical_root {
+                    return Err(PathPolicyViolation::EscapesRoot {
+                        path: path.to_path_buf(),
+                        root: canonical_root,
+                    });
+                }
                 current.pop();
             }
             Component::Normal(name) => {
@@ -233,7 +257,7 @@ pub fn deny_symlink_escape(
                         Ok(target) => {
                             // Resolve relative symlink targets
                             let resolved = if target.is_absolute() {
-                                target.clone()
+                                target
                             } else {
                                 current.parent().unwrap_or(&current).join(&target)
                             };
@@ -247,6 +271,7 @@ pub fn deny_symlink_escape(
                                         root: canonical_root,
                                     });
                                 }
+                                current = canonical_target;
                             }
                         }
                         Err(_) => {} // Can't read symlink, continue
@@ -563,13 +588,12 @@ mod tests {
         let outside = temp.path().join("outside.txt");
         fs::write(&outside, "secret").unwrap();
 
-        // Create symlink inside root pointing outside
-        let symlink = root.join("escape");
-        #[cfg(unix)]
-        std::os::unix::fs::symlink(&outside, &symlink).unwrap();
-
         #[cfg(unix)]
         {
+            // Create symlink inside root pointing outside
+            let symlink = root.join("escape");
+            std::os::unix::fs::symlink(&outside, &symlink).unwrap();
+
             // Should detect symlink escape
             let result = deny_symlink_escape(&symlink, &root);
             assert!(matches!(
@@ -579,6 +603,24 @@ mod tests {
         }
 
         // Safe path should pass
+        assert!(deny_symlink_escape(&inside, &root).is_ok());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_deny_symlink_escape_allows_symlinked_root_ancestor() {
+        let temp = TempDir::new().unwrap();
+        let real_parent = temp.path().join("real-parent");
+        fs::create_dir(&real_parent).unwrap();
+
+        let alias_parent = temp.path().join("alias-parent");
+        std::os::unix::fs::symlink(&real_parent, &alias_parent).unwrap();
+
+        let root = alias_parent.join("root");
+        fs::create_dir(&root).unwrap();
+        let inside = root.join("inside.txt");
+        fs::write(&inside, "safe").unwrap();
+
         assert!(deny_symlink_escape(&inside, &root).is_ok());
     }
 }

@@ -4,9 +4,9 @@ expression: sanitized
 ---
 ms doctor - Health Checks
 
-Checking lock status... ✓ No lock held
-Checking database... ✓ OK
-Checking Git archive... ✓ OK
-Checking transactions... ✓ OK
+Checking lock status... [ok] No lock held
+Checking database... [ok] OK
+Checking Git archive... [ok] OK
+Checking transactions... [ok] OK
 
-✓ All checks passed
+[ok] All checks passed

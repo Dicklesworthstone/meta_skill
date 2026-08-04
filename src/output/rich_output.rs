@@ -950,7 +950,9 @@ impl RichOutput {
         };
 
         let bar_width = 20;
-        let filled = (pct as usize * bar_width) / 100;
+        // Clamp to bar_width: when current > total, pct exceeds 100 and the raw
+        // `filled` would overshoot, making `bar_width - filled` underflow (panic).
+        let filled = ((pct as usize * bar_width) / 100).min(bar_width);
         let empty = bar_width - filled;
 
         let progress_chars = self.theme.progress_style.chars();

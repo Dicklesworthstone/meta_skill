@@ -12,8 +12,24 @@ use crate::security::SafetyGate;
 
 use super::types::{CreateIssueRequest, Issue, IssueStatus, UpdateIssueRequest, WorkFilter};
 use super::version::{
-    BeadsVersion, MINIMUM_SUPPORTED_VERSION, RECOMMENDED_VERSION, VersionCompatibility,
+    BeadsFlavor, BeadsVersion, MINIMUM_SUPPORTED_BR_VERSION, MINIMUM_SUPPORTED_VERSION,
+    RECOMMENDED_BR_VERSION, RECOMMENDED_VERSION, VersionCompatibility,
 };
+
+/// Resolve the beads CLI binary to invoke.
+///
+/// The fleet standardized on `br` (beads_rust); the legacy Go `bd` is kept only
+/// as a fallback. Prefers `br` on `PATH`, then `bd`, and defaults to `br` if
+/// neither resolves (so error messages reference the current tool).
+#[must_use]
+pub fn resolve_beads_binary() -> PathBuf {
+    for candidate in ["br", "bd"] {
+        if which::which(candidate).is_ok() {
+            return PathBuf::from(candidate);
+        }
+    }
+    PathBuf::from("br")
+}
 
 /// Client for interacting with the beads (bd) issue tracker.
 #[derive(Debug, Clone)]
@@ -36,7 +52,7 @@ impl BeadsClient {
     #[must_use]
     pub fn new() -> Self {
         Self {
-            bd_bin: PathBuf::from("bd"),
+            bd_bin: resolve_beads_binary(),
             work_dir: None,
             env: HashMap::new(),
             safety: None,
@@ -114,40 +130,66 @@ impl BeadsClient {
         }
     }
 
-    /// Get the parsed bd version.
-    pub fn version_semver(&self) -> Result<BeadsVersion> {
+    /// Get the parsed beads version together with the detected flavor.
+    ///
+    /// Prefers the structured `version --json` output; `br` carries Rust build
+    /// metadata (`rust_version`) that lets us distinguish it from legacy `bd`.
+    /// Falls back to the human-readable `--version` line ("br 0.2.15" / "bd ...").
+    fn version_info(&self) -> Result<(BeadsVersion, BeadsFlavor)> {
         if let Ok(output) = self.run_command(&["version", "--json"]) {
             if let Ok(info) = serde_json::from_slice::<serde_json::Value>(&output) {
                 if let Some(version_str) = info.get("version").and_then(|v| v.as_str()) {
-                    return BeadsVersion::parse(version_str);
+                    let version = BeadsVersion::parse(version_str)?;
+                    // br's structured version embeds Rust toolchain metadata; bd does not.
+                    let flavor = if info.get("rust_version").is_some() {
+                        BeadsFlavor::Br
+                    } else {
+                        BeadsFlavor::Bd
+                    };
+                    return Ok((version, flavor));
                 }
             }
         }
 
         let raw = self
             .version()
-            .ok_or_else(|| MsError::BeadsUnavailable("bd version not available".to_string()))?;
-        BeadsVersion::parse(&raw)
+            .ok_or_else(|| MsError::BeadsUnavailable("beads version not available".to_string()))?;
+        let flavor = if raw.trim_start().to_ascii_lowercase().starts_with("br") {
+            BeadsFlavor::Br
+        } else {
+            BeadsFlavor::Bd
+        };
+        Ok((BeadsVersion::parse(&raw)?, flavor))
     }
 
-    /// Check if bd version is compatible with this client.
-    pub fn check_compatibility(&self) -> Result<VersionCompatibility> {
-        let version = self.version_semver()?;
+    /// Get the parsed beads version.
+    pub fn version_semver(&self) -> Result<BeadsVersion> {
+        Ok(self.version_info()?.0)
+    }
 
-        if version < *MINIMUM_SUPPORTED_VERSION {
+    /// Check if the beads version is compatible with this client.
+    ///
+    /// `br` (beads_rust) and `bd` (Go beads) version on independent lines, so the
+    /// minimum/recommended thresholds are chosen per detected flavor.
+    pub fn check_compatibility(&self) -> Result<VersionCompatibility> {
+        let (version, flavor) = self.version_info()?;
+        let (label, minimum, recommended) = match flavor {
+            BeadsFlavor::Br => ("br", *MINIMUM_SUPPORTED_BR_VERSION, *RECOMMENDED_BR_VERSION),
+            BeadsFlavor::Bd => ("bd", *MINIMUM_SUPPORTED_VERSION, *RECOMMENDED_VERSION),
+        };
+
+        if version < minimum {
             return Ok(VersionCompatibility::Unsupported {
                 error: format!(
-                    "bd {} is older than minimum supported {}. Please upgrade.",
-                    version, *MINIMUM_SUPPORTED_VERSION
+                    "{label} {version} is older than minimum supported {minimum}. Please upgrade."
                 ),
             });
         }
 
-        if version < *RECOMMENDED_VERSION {
+        if version < recommended {
             return Ok(VersionCompatibility::Partial {
                 warning: format!(
-                    "bd {} is older than recommended {}. Some features may not work.",
-                    version, *RECOMMENDED_VERSION
+                    "{label} {version} is older than recommended {recommended}. Some features may not work."
                 ),
             });
         }
@@ -195,17 +237,13 @@ impl BeadsClient {
         }
 
         let output = self.run_command(&args)?;
-        let issues: Vec<Issue> = serde_json::from_slice(&output)
-            .map_err(|e| MsError::BeadsUnavailable(format!("failed to parse list output: {e}")))?;
-        Ok(issues)
+        parse_issue_list(&output, "list")
     }
 
     /// List issues ready to work (open and unblocked).
     pub fn ready(&self) -> Result<Vec<Issue>> {
         let output = self.run_command(&["ready", "--json"])?;
-        let issues: Vec<Issue> = serde_json::from_slice(&output)
-            .map_err(|e| MsError::BeadsUnavailable(format!("failed to parse ready output: {e}")))?;
-        Ok(issues)
+        parse_issue_list(&output, "ready")
     }
 
     /// Get a specific issue by ID.
@@ -594,6 +632,30 @@ fn command_string(cmd: &Command) -> String {
     }
 }
 
+/// Parse a beads "list of issues" JSON payload.
+///
+/// `br` (beads_rust) 0.2.x wraps list-style output in an object
+/// (`{"issues":[...],"total":N,"limit":...,"offset":...,"has_more":...}`),
+/// whereas legacy `bd` emitted a bare JSON array. Accept both so the client
+/// works across the fleet's tooling regardless of which one is installed.
+fn parse_issue_list(output: &[u8], context: &str) -> Result<Vec<Issue>> {
+    #[derive(serde::Deserialize)]
+    #[serde(untagged)]
+    enum ListPayload {
+        /// br 0.2.x: `{"issues":[...], ...}` (extra wrapper fields ignored).
+        Wrapped { issues: Vec<Issue> },
+        /// legacy bd: a bare `[...]` array.
+        Bare(Vec<Issue>),
+    }
+
+    let payload: ListPayload = serde_json::from_slice(output)
+        .map_err(|e| MsError::BeadsUnavailable(format!("failed to parse {context} output: {e}")))?;
+    Ok(match payload {
+        ListPayload::Wrapped { issues } => issues,
+        ListPayload::Bare(issues) => issues,
+    })
+}
+
 /// Classify beads errors into actionable categories.
 fn classify_beads_error(exit_code: i32, stderr: &str) -> MsError {
     let stderr_lower = stderr.to_lowercase();
@@ -631,7 +693,12 @@ mod tests {
     #[test]
     fn test_beads_client_creation() {
         let client = BeadsClient::new();
-        assert_eq!(client.bd_bin, PathBuf::from("bd"));
+        // The default binary is resolved (prefer `br`, fall back to `bd`).
+        let bin = client.bd_bin.as_path();
+        assert!(
+            bin == std::path::Path::new("br") || bin == std::path::Path::new("bd"),
+            "default beads binary should resolve to br or bd, got {bin:?}"
+        );
     }
 
     #[test]
@@ -736,14 +803,15 @@ mod integration_tests {
         fn new(test_name: &str) -> Option<Self> {
             let mut log = TestLogger::new(test_name);
 
-            // Check if bd is available first
-            if !Command::new("bd")
+            // Check if beads is available first (prefer `br`, fall back to `bd`).
+            let beads_bin = super::resolve_beads_binary();
+            if !Command::new(&beads_bin)
                 .arg("--version")
                 .output()
                 .map(|o| o.status.success())
                 .unwrap_or(false)
             {
-                log.warn("SKIP", "bd not available, skipping test", None);
+                log.warn("SKIP", "beads not available, skipping test", None);
                 return None;
             }
 
@@ -762,7 +830,7 @@ mod integration_tests {
             );
 
             // Initialize database using env var
-            let init_status = Command::new("bd")
+            let init_status = Command::new(&beads_bin)
                 .args(["init"])
                 .env("BEADS_DB", &db_path)
                 .current_dir(&project_dir)

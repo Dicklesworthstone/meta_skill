@@ -885,26 +885,35 @@ mod tests {
         let rust_errors_rec = rust_recs.iter().find(|r| r.skill_id == "rust-errors");
         let python_errors_rec = rust_recs.iter().find(|r| r.skill_id == "python-errors");
 
-        // Rust-errors should have a higher score in Rust context
+        // Rust-errors should reflect stronger LEARNING in Rust context. We assert
+        // on the deterministic `contextual_score` component, NOT the combined
+        // `score`: the combined score deliberately mixes in a Thompson-sampled
+        // exploration draw (30% weight) from a global RNG, and both arms received
+        // identical positive feedback so their Thompson posteriors overlap heavily
+        // — comparing the noisy combined scores is inherently flaky (it flips
+        // depending on the RNG draw). The contextual component is what actually
+        // encodes the learned context fit and is reproducible.
         if let (Some(rust_rec), Some(python_rec)) = (rust_errors_rec, python_errors_rec) {
             assert!(
-                rust_rec.score >= python_rec.score,
-                "Expected rust-errors ({}) to score higher than python-errors ({}) in Rust context",
-                rust_rec.score,
-                python_rec.score
+                rust_rec.components.contextual_score >= python_rec.components.contextual_score,
+                "Expected rust-errors contextual_score ({}) >= python-errors contextual_score ({}) in Rust context",
+                rust_rec.components.contextual_score,
+                python_rec.components.contextual_score
             );
         }
 
-        // Verify learning: In Python context, python-errors should rank well
+        // Verify learning: In Python context, python-errors should rank well.
+        // Again assert on the deterministic contextual component to avoid Thompson
+        // sampling flakiness.
         let python_recs = bandit.recommend(&python_features, 4);
         let python_errors_in_py = python_recs.iter().find(|r| r.skill_id == "python-errors");
 
         if let Some(rec) = python_errors_in_py {
-            // Should have a reasonable score after positive feedback
+            // Should have a reasonable learned score after positive feedback.
             assert!(
-                rec.score > 0.4,
-                "Expected python-errors to have score > 0.4 after positive feedback, got {}",
-                rec.score
+                rec.components.contextual_score > 0.4,
+                "Expected python-errors contextual_score > 0.4 after positive feedback, got {}",
+                rec.components.contextual_score
             );
         }
 

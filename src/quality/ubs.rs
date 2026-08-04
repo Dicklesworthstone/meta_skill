@@ -57,6 +57,12 @@ impl UbsClient {
             .arg("diff")
             .arg("--name-only")
             .arg("--cached")
+            // Only enumerate paths that still exist on disk after the commit:
+            // Added/Copied/Modified/Renamed. Deleted (D) paths must be excluded
+            // — handing a removed file to UBS yields a "file not found" failure
+            // (clean:false, findings:0) that blocks legitimate delete-only commits.
+            // Renames (R) report the new (existing) path, so they are safe to scan.
+            .arg("--diff-filter=ACMR")
             .current_dir(repo_root);
         if let Some(gate) = self.safety.as_ref() {
             let command_str = command_string(&git_cmd);
@@ -70,11 +76,8 @@ impl UbsClient {
             return Err(MsError::Config("git diff failed".to_string()));
         }
 
-        let files = String::from_utf8_lossy(&output.stdout)
-            .lines()
-            .filter(|line| !line.trim().is_empty())
-            .map(|line| repo_root.join(line))
-            .collect::<Vec<_>>();
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let files = staged_files_from_diff_output(&stdout, repo_root);
 
         if files.is_empty() {
             return Ok(UbsResult::empty());
@@ -82,6 +85,21 @@ impl UbsClient {
 
         self.check_files(&files)
     }
+}
+
+/// Parse the output of `git diff --name-only --cached --diff-filter=ACMR`
+/// into absolute paths rooted at `repo_root`.
+///
+/// Blank lines are skipped. Because the caller restricts git's output to
+/// Added/Copied/Modified/Renamed entries, every returned path corresponds to a
+/// file that exists on disk and can be scanned by UBS; deleted paths are never
+/// included.
+fn staged_files_from_diff_output(stdout: &str, repo_root: &Path) -> Vec<PathBuf> {
+    stdout
+        .lines()
+        .filter(|line| !line.trim().is_empty())
+        .map(|line| repo_root.join(line))
+        .collect()
 }
 
 #[derive(Debug, Clone)]
@@ -222,4 +240,33 @@ fn parse_findings(output: &str) -> Vec<UbsFinding> {
     }
 
     findings
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn staged_files_roots_paths_and_skips_blanks() {
+        let root = Path::new("/repo");
+        let out = "src/a.rs\n\n  \nsrc/b.rs\n";
+        let files = staged_files_from_diff_output(out, root);
+        assert_eq!(
+            files,
+            vec![
+                PathBuf::from("/repo/src/a.rs"),
+                PathBuf::from("/repo/src/b.rs"),
+            ]
+        );
+    }
+
+    #[test]
+    fn staged_files_empty_for_delete_only_filtered_output() {
+        // `git diff --name-only --cached --diff-filter=ACMR` emits nothing for a
+        // commit that only deletes files (deletions are filtered out by git), so
+        // the parsed list is empty and no path is ever handed to UBS.
+        let root = Path::new("/repo");
+        assert!(staged_files_from_diff_output("", root).is_empty());
+        assert!(staged_files_from_diff_output("\n\n", root).is_empty());
+    }
 }

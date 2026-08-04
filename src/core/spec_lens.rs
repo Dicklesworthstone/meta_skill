@@ -5,6 +5,8 @@ use serde_json::Value as JsonValue;
 use super::skill::{BlockType, SkillBlock, SkillMetadata, SkillSection, SkillSpec};
 use crate::error::{MsError, Result};
 
+const PREAMBLE_SECTION_ID: &str = "__preamble";
+
 /// Bidirectional mapping between `SkillSpec` and SKILL.md.
 pub struct SpecLens;
 
@@ -88,13 +90,25 @@ pub fn parse_markdown(content: &str) -> Result<SkillSpec> {
             continue;
         }
 
-        if let Some(title) = line.strip_prefix("# ") {
+        // Consult the code-fence state BEFORE heading detection. A start-of-line
+        // `# ` / `## ` that appears inside a fenced code block is code (e.g. a
+        // shell comment), not a markdown heading. Without the `!in_code_block`
+        // guard these lines hit the heading branches and `continue`, so they
+        // never reach the code accumulator below — truncating/emptying the
+        // fenced block and mis-splitting sections in the normalized SKILL.md
+        // that `ms load --full` and the MCP `load` server serve (issue #134).
+        if let Some(title) = line.strip_prefix("# ").filter(|_| !in_code_block) {
             name = title.trim().to_string();
+            // The first paragraph may be either the canonical description
+            // repeated by `compile_markdown`, or distinct body prose written
+            // below the H1. Collect it first and disambiguate after parsing so
+            // canonical output remains stable while real preamble content is
+            // retained (issue #150).
             in_description = true;
             continue;
         }
 
-        if let Some(title) = line.strip_prefix("## ") {
+        if let Some(title) = line.strip_prefix("## ").filter(|_| !in_code_block) {
             if let Some(section) = current_section.as_mut() {
                 flush_paragraph(section, &mut paragraph_lines);
             }
@@ -119,6 +133,14 @@ pub fn parse_markdown(content: &str) -> Result<SkillSpec> {
                 description_lines.push(line.trim_end().to_string());
             }
             continue;
+        }
+
+        if current_section.is_none() && !line.trim().is_empty() {
+            current_section = Some(SkillSection {
+                id: PREAMBLE_SECTION_ID.to_string(),
+                title: String::new(),
+                blocks: Vec::new(),
+            });
         }
 
         let Some(section) = current_section.as_mut() else {
@@ -174,17 +196,60 @@ pub fn parse_markdown(content: &str) -> Result<SkillSpec> {
         sections.push(section);
     }
 
+    // Derive the skill id honoring the Anthropic SKILL.md contract where `name`
+    // is the required identity field. Precedence: an explicit frontmatter `id:`,
+    // then an H1 `# ` title, then the frontmatter `name:`. A name-only SKILL.md
+    // (no `id:`, no H1, body starting with prose or `## `) must still yield a
+    // stable slugified id rather than an empty one that `ms index` rejects
+    // (issue #141).
     let id = if !metadata.id.is_empty() {
         metadata.id.clone()
-    } else if name.is_empty() {
-        String::new()
-    } else {
+    } else if !name.is_empty() {
         slugify(&name)
+    } else if !metadata.name.is_empty() {
+        slugify(&metadata.name)
+    } else {
+        String::new()
     };
 
-    // If description wasn't in frontmatter, use extracted one
+    let extracted_description = description_lines.join("\n").trim().to_string();
+
+    // Without frontmatter, the first post-H1 paragraph is the description. If
+    // frontmatter already supplied a description, an exact repeated paragraph
+    // is compiler-generated canonical text; any distinct paragraph is body
+    // content and belongs at the front of the heading-less preamble section.
     if metadata.description.is_empty() {
-        metadata.description = description_lines.join("\n").trim().to_string();
+        metadata.description = extracted_description;
+    } else if !extracted_description.is_empty()
+        && extracted_description.trim() != metadata.description.trim()
+    {
+        let preamble = if sections
+            .first()
+            .is_some_and(|section| section.id == PREAMBLE_SECTION_ID)
+        {
+            &mut sections[0]
+        } else {
+            sections.insert(
+                0,
+                SkillSection {
+                    id: PREAMBLE_SECTION_ID.to_string(),
+                    title: String::new(),
+                    blocks: Vec::new(),
+                },
+            );
+            &mut sections[0]
+        };
+        preamble.blocks.insert(
+            0,
+            SkillBlock {
+                id: String::new(),
+                block_type: BlockType::Text,
+                content: extracted_description,
+            },
+        );
+        for (index, block) in preamble.blocks.iter_mut().enumerate() {
+            block.id = format!("{PREAMBLE_SECTION_ID}-block-{}", index + 1);
+        }
     }
 
     // If name wasn't in frontmatter, use extracted one
@@ -233,7 +298,9 @@ pub fn compile_markdown(spec: &SkillSpec) -> String {
     }
 
     for section in &spec.sections {
-        output.push_str(&format!("## {}\n\n", section.title));
+        if section.id != PREAMBLE_SECTION_ID || !section.title.is_empty() {
+            output.push_str(&format!("## {}\n\n", section.title));
+        }
         for block in &section.blocks {
             if block.block_type == BlockType::Code {
                 let content = block.content.trim_end();
@@ -291,7 +358,71 @@ fn json_equivalent(left: &JsonValue, right: &JsonValue) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::{compile_markdown, parse_markdown};
+    use super::{BlockType, PREAMBLE_SECTION_ID, compile_markdown, parse_markdown};
+
+    #[test]
+    fn fenced_hash_comments_are_not_parsed_as_headings() {
+        // A `## Demo` section whose bash fence contains start-of-line `#`/`##`
+        // comment lines must round-trip with the code block INTACT: the comment
+        // lines must be preserved inside a single code block, NOT swallowed as
+        // headings that truncate the block or mis-split the document (issue #134).
+        let md = "# Real Skill\n\nA description.\n\n## Demo\n\n```bash\n# not a heading\n## also not a heading\necho hi\n```\n";
+        let parsed = parse_markdown(md).expect("parse");
+
+        // The H1-derived name must survive (not overwritten by `# not a heading`).
+        assert_eq!(parsed.metadata.name, "Real Skill");
+
+        // Exactly one section, titled from the real `## Demo` heading — the
+        // `## also not a heading` fence line must NOT open a second section.
+        assert_eq!(
+            parsed.sections.len(),
+            1,
+            "expected exactly one section, got: {:?}",
+            parsed
+                .sections
+                .iter()
+                .map(|s| s.title.clone())
+                .collect::<Vec<_>>()
+        );
+        let section = &parsed.sections[0];
+        assert_eq!(section.title, "Demo");
+
+        // The section must contain a single code block that preserves all three
+        // fenced lines (both `#` comments and the command), fences included.
+        let code_blocks: Vec<&_> = section
+            .blocks
+            .iter()
+            .filter(|b| b.block_type == BlockType::Code)
+            .collect();
+        assert_eq!(
+            code_blocks.len(),
+            1,
+            "expected exactly one code block, got {}",
+            code_blocks.len()
+        );
+        let code = &code_blocks[0].content;
+        assert!(
+            code.contains("# not a heading"),
+            "code block lost the `#` comment line: {code:?}"
+        );
+        assert!(
+            code.contains("## also not a heading"),
+            "code block lost the `##` comment line: {code:?}"
+        );
+        assert!(
+            code.contains("echo hi"),
+            "code block lost the command line: {code:?}"
+        );
+
+        // End-to-end: recompiling must still contain the comment lines (the
+        // normalized copy served by `ms load --full` is not garbled).
+        let compiled = compile_markdown(&parsed);
+        assert!(compiled.contains("# not a heading"), "compiled: {compiled}");
+        assert!(
+            compiled.contains("## also not a heading"),
+            "compiled: {compiled}"
+        );
+    }
 
     #[test]
     fn roundtrip_simple_markdown() {
@@ -309,5 +440,78 @@ mod tests {
         let parsed = parse_markdown(md).expect("parse");
         assert_eq!(parsed.metadata.name, "Tagged Skill");
         assert_eq!(parsed.metadata.tags, vec!["rust", "backend"]);
+    }
+
+    #[test]
+    fn frontmatter_description_does_not_discard_distinct_h1_preamble() {
+        let md = "---\nname: Preamble Skill\ndescription: Short catalog summary\n---\n\n# Preamble Skill\n\nThis intro carries unique token preamblecanary.\n\nA second intro paragraph must survive too.\n\n## Notes\n\nSection content.\n";
+        let parsed = parse_markdown(md).expect("parse");
+
+        assert_eq!(parsed.metadata.description, "Short catalog summary");
+        let preamble = parsed
+            .sections
+            .first()
+            .expect("heading-less preamble section");
+        assert_eq!(preamble.id, PREAMBLE_SECTION_ID);
+        assert!(preamble.title.is_empty());
+        assert_eq!(preamble.blocks.len(), 2);
+        assert!(preamble.blocks[0].content.contains("preamblecanary"));
+        assert!(
+            preamble.blocks[1]
+                .content
+                .contains("second intro paragraph")
+        );
+
+        let compiled = compile_markdown(&parsed);
+        assert!(compiled.contains("preamblecanary"));
+        assert!(compiled.contains("A second intro paragraph must survive too."));
+        assert!(!compiled.contains("## \n"));
+
+        let reparsed = parse_markdown(&compiled).expect("reparse canonical markdown");
+        assert_eq!(
+            reparsed.sections[0].blocks.len(),
+            2,
+            "the canonical metadata description must not reappear as a body block"
+        );
+        assert!(
+            reparsed.sections[0].blocks[0]
+                .content
+                .contains("preamblecanary")
+        );
+    }
+
+    #[test]
+    fn name_only_frontmatter_derives_id_from_name() {
+        // A SKILL.md that follows the Anthropic contract — a `name:` in the
+        // frontmatter but no explicit `id:` and no `# ` H1, with a body that
+        // begins with prose and a `## ` section — must derive a stable
+        // slugified id from `name` rather than yielding an empty id that
+        // `ms index` rejects (issue #141).
+        let md = "---\nname: My Cool Skill\ndescription: Does cool things\n---\n\nThis skill does cool things without an H1.\n\n## Usage\n\nRun it.\n";
+        let parsed = parse_markdown(md).expect("parse");
+        assert_eq!(
+            parsed.metadata.id, "my-cool-skill",
+            "id should be slugified from the frontmatter name"
+        );
+        assert_eq!(parsed.metadata.name, "My Cool Skill");
+        // The description from frontmatter is preserved.
+        assert_eq!(parsed.metadata.description, "Does cool things");
+        // The `## Usage` section is still parsed (body prose did not swallow it).
+        assert!(parsed.sections.iter().any(|s| s.title == "Usage"));
+        assert!(
+            parsed.sections[0].blocks[0]
+                .content
+                .contains("without an H1"),
+            "body prose before the first H2 must not be discarded"
+        );
+    }
+
+    #[test]
+    fn explicit_id_wins_over_name_derivation() {
+        // When an explicit `id:` is present it must take precedence over any
+        // name-derived slug.
+        let md = "---\nid: custom-id\nname: A Different Name\n---\n\nBody text.\n\n## Section\n\nContent.\n";
+        let parsed = parse_markdown(md).expect("parse");
+        assert_eq!(parsed.metadata.id, "custom-id");
     }
 }

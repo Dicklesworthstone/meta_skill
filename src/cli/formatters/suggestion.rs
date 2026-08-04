@@ -317,7 +317,7 @@ impl SuggestionOutput {
         out
     }
 
-    /// Format as plain TSV (bd-olwb spec: SCORE<TAB>SKILL_NAME).
+    /// Format as plain TSV (bd-olwb spec: `SCORE<TAB>SKILL_NAME`).
     ///
     /// No headers, just data rows for easy parsing.
     fn format_plain(&self) -> String {

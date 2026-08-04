@@ -220,34 +220,14 @@ impl UpdateDownloader {
     }
 
     fn find_binary_asset<'a>(&self, release: &'a ReleaseInfo) -> Result<&'a ReleaseAsset> {
-        let target = current_target();
-
-        // Try to find a matching binary
-        let candidates: Vec<_> = release
-            .assets
-            .iter()
-            .filter(|a| {
-                let name = a.name.to_lowercase();
-                name.contains("ms") && (name.contains(&target) || is_generic_binary(&name))
-            })
-            .collect();
-
-        if candidates.is_empty() {
-            return Err(MsError::ValidationFailed(format!(
+        let patterns = current_target_patterns();
+        select_binary_asset(&release.assets, &patterns).ok_or_else(|| {
+            MsError::ValidationFailed(format!(
                 "no binary found for target {} in release {}",
-                target, release.tag
-            )));
-        }
-
-        // Prefer target-specific binary
-        candidates
-            .iter()
-            .find(|a| a.name.to_lowercase().contains(&target))
-            .or(candidates.first())
-            .copied()
-            .ok_or_else(|| {
-                MsError::ValidationFailed(format!("no suitable binary found for {target}"))
-            })
+                patterns.first().map(String::as_str).unwrap_or("unknown"),
+                release.tag
+            ))
+        })
     }
 
     fn find_checksum_asset<'a>(&self, release: &'a ReleaseInfo) -> Option<&'a ReleaseAsset> {
@@ -643,6 +623,65 @@ fn current_target() -> String {
     format!("{os}-{arch}")
 }
 
+/// Asset-name substrings identifying a binary for the given platform, in
+/// priority order.
+///
+/// The release workflow names assets with the **Rust target triple**
+/// (`ms-0.1.5-aarch64-apple-darwin.tar.gz`), while older tooling used a
+/// legacy `os-arch` scheme (`macos-aarch64`). The updater must match every
+/// convention we have ever shipped (#152), so the triple comes first and the
+/// legacy names follow as fallbacks.
+fn target_patterns(os: &str, arch: &str) -> Vec<String> {
+    match os {
+        "linux" => vec![
+            format!("{arch}-unknown-linux-gnu"),
+            // musl builds are statically linked and run on glibc hosts too.
+            format!("{arch}-unknown-linux-musl"),
+            format!("linux-{arch}"),
+        ],
+        "macos" => vec![
+            format!("{arch}-apple-darwin"),
+            format!("macos-{arch}"),
+            format!("darwin-{arch}"),
+        ],
+        "windows" => vec![
+            format!("{arch}-pc-windows-msvc"),
+            format!("{arch}-pc-windows-gnu"),
+            format!("windows-{arch}"),
+        ],
+        _ => vec![format!("{os}-{arch}")],
+    }
+}
+
+/// Target patterns for the platform this binary was compiled for.
+fn current_target_patterns() -> Vec<String> {
+    let target = current_target();
+    let (os, arch) = target.split_once('-').unwrap_or(("unknown", "unknown"));
+    target_patterns(os, arch)
+}
+
+/// Pick the best-matching binary asset for the given target patterns.
+///
+/// Patterns are tried in priority order; a generic binary (bare `ms` /
+/// `ms.exe` with no platform in its name) is the last resort.
+fn select_binary_asset<'a>(
+    assets: &'a [ReleaseAsset],
+    patterns: &[String],
+) -> Option<&'a ReleaseAsset> {
+    for pattern in patterns {
+        if let Some(asset) = assets.iter().find(|a| {
+            let name = a.name.to_lowercase();
+            name.contains("ms") && name.contains(pattern.as_str())
+        }) {
+            return Some(asset);
+        }
+    }
+    assets.iter().find(|a| {
+        let name = a.name.to_lowercase();
+        name.contains("ms") && is_generic_binary(&name)
+    })
+}
+
 fn is_generic_binary(name: &str) -> bool {
     // Check if it's a generic binary without target in name
     (name.ends_with(".exe") || !name.contains('.'))
@@ -814,6 +853,146 @@ mod tests {
     #[test]
     fn is_generic_binary_with_windows_target() {
         assert!(!is_generic_binary("ms-windows-x86_64.exe"));
+    }
+
+    // =========================================================================
+    // target pattern / asset selection tests (#152)
+    // =========================================================================
+
+    fn asset(name: &str) -> ReleaseAsset {
+        ReleaseAsset {
+            id: 1,
+            name: name.to_string(),
+            download_url: format!("https://example.invalid/{name}"),
+            size: 1024,
+        }
+    }
+
+    /// The exact asset list shipped in release v0.1.5.
+    fn v015_assets() -> Vec<ReleaseAsset> {
+        vec![
+            asset("ms-0.1.5-aarch64-apple-darwin.tar.gz"),
+            asset("ms-0.1.5-aarch64-unknown-linux-gnu.tar.gz"),
+            asset("ms-0.1.5-x86_64-pc-windows-msvc.zip"),
+            asset("ms-0.1.5-x86_64-unknown-linux-gnu.tar.gz"),
+            asset("SHA256SUMS.txt"),
+        ]
+    }
+
+    /// Every shipped platform must resolve its own asset from the real
+    /// v0.1.5 asset names (regression for #152: `macos-aarch64` matched
+    /// nothing because assets are named with Rust triples).
+    #[test]
+    fn select_binary_asset_matches_all_shipped_assets() {
+        let assets = v015_assets();
+        let cases = [
+            ("macos", "aarch64", "ms-0.1.5-aarch64-apple-darwin.tar.gz"),
+            (
+                "linux",
+                "aarch64",
+                "ms-0.1.5-aarch64-unknown-linux-gnu.tar.gz",
+            ),
+            ("windows", "x86_64", "ms-0.1.5-x86_64-pc-windows-msvc.zip"),
+            (
+                "linux",
+                "x86_64",
+                "ms-0.1.5-x86_64-unknown-linux-gnu.tar.gz",
+            ),
+        ];
+        for (os, arch, expected) in cases {
+            let patterns = target_patterns(os, arch);
+            let selected = select_binary_asset(&assets, &patterns)
+                .unwrap_or_else(|| panic!("no asset selected for {os}-{arch}"));
+            assert_eq!(
+                selected.name, expected,
+                "wrong asset for {os}-{arch}: got {}",
+                selected.name
+            );
+        }
+    }
+
+    /// A platform with no shipped asset (e.g. macOS x86_64 in v0.1.5) must
+    /// yield None rather than a wrong-platform binary.
+    #[test]
+    fn select_binary_asset_missing_platform_returns_none() {
+        let assets = v015_assets();
+        let patterns = target_patterns("macos", "x86_64");
+        assert!(select_binary_asset(&assets, &patterns).is_none());
+    }
+
+    /// The checksum manifest must never be selected as a binary.
+    #[test]
+    fn select_binary_asset_never_picks_checksums() {
+        let assets = vec![asset("SHA256SUMS.txt")];
+        for (os, arch) in [
+            ("linux", "x86_64"),
+            ("linux", "aarch64"),
+            ("macos", "aarch64"),
+            ("windows", "x86_64"),
+        ] {
+            assert!(
+                select_binary_asset(&assets, &target_patterns(os, arch)).is_none(),
+                "checksum manifest selected for {os}-{arch}"
+            );
+        }
+    }
+
+    /// Legacy `os-arch` asset names must still match as a fallback.
+    #[test]
+    fn select_binary_asset_legacy_naming_fallback() {
+        let assets = vec![
+            asset("ms-macos-aarch64.tar.gz"),
+            asset("ms-linux-x86_64.tar.gz"),
+            asset("ms-windows-x86_64.zip"),
+        ];
+        let cases = [
+            ("macos", "aarch64", "ms-macos-aarch64.tar.gz"),
+            ("linux", "x86_64", "ms-linux-x86_64.tar.gz"),
+            ("windows", "x86_64", "ms-windows-x86_64.zip"),
+        ];
+        for (os, arch, expected) in cases {
+            let selected = select_binary_asset(&assets, &target_patterns(os, arch)).unwrap();
+            assert_eq!(
+                selected.name, expected,
+                "wrong legacy asset for {os}-{arch}"
+            );
+        }
+    }
+
+    /// The Rust-triple asset wins over a legacy-named or generic asset.
+    #[test]
+    fn select_binary_asset_prefers_triple_over_legacy_and_generic() {
+        let assets = vec![
+            asset("ms"),
+            asset("ms-macos-aarch64.tar.gz"),
+            asset("ms-0.1.6-aarch64-apple-darwin.tar.gz"),
+        ];
+        let selected = select_binary_asset(&assets, &target_patterns("macos", "aarch64")).unwrap();
+        assert_eq!(selected.name, "ms-0.1.6-aarch64-apple-darwin.tar.gz");
+    }
+
+    /// A generic bare binary is used as the last resort.
+    #[test]
+    fn select_binary_asset_generic_fallback() {
+        let assets = vec![asset("ms"), asset("SHA256SUMS.txt")];
+        let selected = select_binary_asset(&assets, &target_patterns("linux", "x86_64")).unwrap();
+        assert_eq!(selected.name, "ms");
+    }
+
+    /// `current_target_patterns` puts the compile-target's Rust triple first.
+    #[test]
+    fn current_target_patterns_lead_with_triple() {
+        let patterns = current_target_patterns();
+        assert!(!patterns.is_empty());
+        if cfg!(all(target_os = "linux", target_arch = "x86_64")) {
+            assert_eq!(patterns[0], "x86_64-unknown-linux-gnu");
+        } else if cfg!(all(target_os = "macos", target_arch = "aarch64")) {
+            assert_eq!(patterns[0], "aarch64-apple-darwin");
+        } else if cfg!(all(target_os = "windows", target_arch = "x86_64")) {
+            assert_eq!(patterns[0], "x86_64-pc-windows-msvc");
+        } else if cfg!(all(target_os = "linux", target_arch = "aarch64")) {
+            assert_eq!(patterns[0], "aarch64-unknown-linux-gnu");
+        }
     }
 
     // =========================================================================

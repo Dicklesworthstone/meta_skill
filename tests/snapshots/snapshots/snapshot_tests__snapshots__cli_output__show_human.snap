@@ -4,18 +4,18 @@ assertion_line: 56
 expression: sanitized
 ---
 Rust Error Handling
-═══════════════════
+===================
 
-ID: rust-error-handling
+ID:      rust-error-handling
 Version: 0.1.0
-Layer: project
-Source: /tmp/[TEMP_DIR]/.ms/archive/skills/by-id/rust-error-handling
+Layer:   project
+Source:  [TEMP_DIR]/.ms/archive/skills/by-id/rust-error-handling
 
 Use Result<T, E> for recoverable errors and panic! for unrecoverable ones.
 
 Stats
-────────────────────────────────────────
-Tokens: 87
-Quality: 0.49
-Indexed: [TIMESTAMP]
+----------------------------------------
+Tokens:   87
+Quality:  0.49
+Indexed:  [TIMESTAMP]
 Modified: [TIMESTAMP]

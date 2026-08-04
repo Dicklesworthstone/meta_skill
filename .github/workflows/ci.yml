@@ -20,7 +20,7 @@ on:
 
 # Cancel in-progress runs for the same branch
 concurrency:
-  group: ${{ github.workflow }}-${{ github.head_ref || github.run_id }}
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
 
 env:
@@ -36,8 +36,10 @@ jobs:
     name: Quick Check
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: nightly-2026-04-22
       - uses: Swatinem/rust-cache@v2
         with:
           cache-on-failure: true
@@ -49,9 +51,10 @@ jobs:
     runs-on: ubuntu-latest
     needs: check
     steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@master
         with:
+          toolchain: nightly-2026-04-22
           components: rustfmt, clippy
       - uses: Swatinem/rust-cache@v2
         with:
@@ -65,21 +68,24 @@ jobs:
         env:
           RUSTDOCFLAGS: "-Dwarnings"
 
-  # Ensure MSRV (Minimum Supported Rust Version) compatibility
-  msrv:
-    name: MSRV (1.85)
+  # This project is nightly-only because its FrankenSQLite/Asupersync stack
+  # uses feature-gated APIs. Verify the exact supported toolchain explicitly;
+  # installing a stable toolchain while rust-toolchain.toml silently overrides
+  # it is not an MSRV test.
+  toolchain_contract:
+    name: Pinned Nightly Toolchain
     runs-on: ubuntu-latest
     needs: check
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@master
         with:
-          toolchain: "1.85"
+          toolchain: nightly-2026-04-22
       - uses: Swatinem/rust-cache@v2
         with:
           cache-on-failure: true
-      - name: Check MSRV
-        run: cargo check --all-targets --all-features
+      - name: Check pinned nightly contract
+        run: cargo +nightly-2026-04-22 check --all-targets --all-features
 
   test:
     name: Test (${{ matrix.os }})
@@ -90,8 +96,10 @@ jobs:
         os: [ubuntu-latest, macos-latest, windows-latest]
     runs-on: ${{ matrix.os }}
     steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: nightly-2026-04-22
       - uses: Swatinem/rust-cache@v2
         with:
           cache-on-failure: true
@@ -105,9 +113,10 @@ jobs:
     runs-on: ubuntu-latest
     needs: test
     steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@master
         with:
+          toolchain: nightly-2026-04-22
           components: llvm-tools-preview
       - uses: Swatinem/rust-cache@v2
         with:
@@ -132,8 +141,10 @@ jobs:
     runs-on: ubuntu-latest
     # Run security checks regardless of other jobs
     steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: nightly-2026-04-22
       - uses: Swatinem/rust-cache@v2
         with:
           cache-on-failure: true
@@ -145,7 +156,10 @@ jobs:
         run: cargo deny check
       - name: Run security audit
         # RUSTSEC-2025-0140: gix-date — requires vergen-gix major version bump
-        run: cargo audit --ignore RUSTSEC-2025-0140
+        # Keep cargo-audit's clone outside CARGO_HOME. cargo-deny uses a different
+        # RustSec DB layout, while rust-cache may restore a partial advisory-db;
+        # either one makes cargo-audit fail before it scans the lockfile.
+        run: cargo audit --db "$RUNNER_TEMP/cargo-audit-db" --ignore RUSTSEC-2025-0140
       - name: Security summary
         if: always()
         run: |
@@ -157,13 +171,13 @@ jobs:
   ci-success:
     name: CI Success
     if: always()
-    needs: [lint, msrv, test, coverage, security]
+    needs: [lint, toolchain_contract, test, coverage, security]
     runs-on: ubuntu-latest
     steps:
       - name: Check all jobs passed
         run: |
           if [[ "${{ needs.lint.result }}" != "success" ]] || \
-             [[ "${{ needs.msrv.result }}" != "success" ]] || \
+             [[ "${{ needs.toolchain_contract.result }}" != "success" ]] || \
              [[ "${{ needs.test.result }}" != "success" ]] || \
              [[ "${{ needs.coverage.result }}" != "success" ]] || \
              [[ "${{ needs.security.result }}" != "success" ]]; then
