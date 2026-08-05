@@ -124,3 +124,4 @@ storage.sqlite3-wal.corrupt-*
 
 # Isolated cargo target dirs from build gates (machine-local, never tracked)
 target-gate*/
+/target-rel/
