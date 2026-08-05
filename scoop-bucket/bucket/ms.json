@@ -1,13 +1,13 @@
 {
     "$schema": "https://raw.githubusercontent.com/ScoopInstaller/Scoop/master/schema.json",
-    "version": "0.1.0",
+    "version": "0.2.0",
     "description": "Meta Skill - Local-first skill management platform for AI agents",
     "homepage": "https://github.com/Dicklesworthstone/meta_skill",
     "license": "MIT",
     "architecture": {
         "64bit": {
-            "url": "https://github.com/Dicklesworthstone/meta_skill/releases/download/v0.1.0/ms-x86_64-pc-windows-msvc.zip",
-            "hash": "PLACEHOLDER_SHA256_WINDOWS_X64"
+            "url": "https://github.com/Dicklesworthstone/meta_skill/releases/download/v0.2.0/ms-0.2.0-x86_64-pc-windows-msvc.zip",
+            "hash": "364ff88baef628fd2fcac34cc61ff5fcf027730e976f16d8d97b6238e63453bb"
         }
     },
     "bin": "ms.exe",
@@ -17,10 +17,10 @@
     "autoupdate": {
         "architecture": {
             "64bit": {
-                "url": "https://github.com/Dicklesworthstone/meta_skill/releases/download/v$version/ms-x86_64-pc-windows-msvc.zip",
+                "url": "https://github.com/Dicklesworthstone/meta_skill/releases/download/v$version/ms-$version-x86_64-pc-windows-msvc.zip",
                 "hash": {
                     "url": "https://github.com/Dicklesworthstone/meta_skill/releases/download/v$version/SHA256SUMS.txt",
-                    "regex": "([a-fA-F0-9]{64})\\s+ms-x86_64-pc-windows-msvc\\.zip"
+                    "regex": "([a-fA-F0-9]{64})\\s+ms-$version-x86_64-pc-windows-msvc\\.zip"
                 }
             }
         }

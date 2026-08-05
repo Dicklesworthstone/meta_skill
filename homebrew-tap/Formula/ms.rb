@@ -10,14 +10,14 @@
 class Ms < Formula
   desc "Meta Skill - Local-first skill management platform for AI agents"
   homepage "https://github.com/Dicklesworthstone/meta_skill"
-  version "0.1.0"
+  version "0.2.0"
   license "MIT"
 
   # Platform-specific binaries
   on_macos do
     on_arm do
-      url "https://github.com/Dicklesworthstone/meta_skill/releases/download/v#{version}/ms-aarch64-apple-darwin.tar.gz"
-      sha256 "PLACEHOLDER_SHA256_MACOS_ARM64"
+      url "https://github.com/Dicklesworthstone/meta_skill/releases/download/v#{version}/ms-#{version}-aarch64-apple-darwin.tar.gz"
+      sha256 "9effcb96d83aea9f8c6b864a4f9bf9d3cb2470a2cd8bfcd09132d6456be01941"
 
       def install
         bin.install "ms"
@@ -26,7 +26,7 @@ class Ms < Formula
     end
 
     on_intel do
-      url "https://github.com/Dicklesworthstone/meta_skill/releases/download/v#{version}/ms-x86_64-apple-darwin.tar.gz"
+      url "https://github.com/Dicklesworthstone/meta_skill/releases/download/v#{version}/ms-#{version}-x86_64-apple-darwin.tar.gz"
       sha256 "PLACEHOLDER_SHA256_MACOS_X64"
 
       def install
@@ -38,8 +38,8 @@ class Ms < Formula
 
   on_linux do
     on_arm do
-      url "https://github.com/Dicklesworthstone/meta_skill/releases/download/v#{version}/ms-aarch64-unknown-linux-gnu.tar.gz"
-      sha256 "PLACEHOLDER_SHA256_LINUX_ARM64"
+      url "https://github.com/Dicklesworthstone/meta_skill/releases/download/v#{version}/ms-#{version}-aarch64-unknown-linux-gnu.tar.gz"
+      sha256 "dc8c363b461bea1ae175187fa8af05631b25c679e5a2782cd4bc402e0d3e663f"
 
       def install
         bin.install "ms"
@@ -48,8 +48,8 @@ class Ms < Formula
     end
 
     on_intel do
-      url "https://github.com/Dicklesworthstone/meta_skill/releases/download/v#{version}/ms-x86_64-unknown-linux-gnu.tar.gz"
-      sha256 "PLACEHOLDER_SHA256_LINUX_X64"
+      url "https://github.com/Dicklesworthstone/meta_skill/releases/download/v#{version}/ms-#{version}-x86_64-unknown-linux-gnu.tar.gz"
+      sha256 "cdd09a043d787c6ecf5a7ab296b3abb7ca61f60d728550789486f2fb2a1945b2"
 
       def install
         bin.install "ms"
