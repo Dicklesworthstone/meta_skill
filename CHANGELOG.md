@@ -9,6 +9,29 @@ All notable changes to **ms** (Meta Skill CLI) are documented here.
 
 ---
 
+## [v0.2.0] -- 2026-08-05
+
+**Urgent self-update fix.** `ms update` in every released version through v0.1.5 could brick the installed binary or fail to find an update at all.
+
+### Critical: updater brick fix (#159)
+
+- `ms update` downloaded the release `.tar.gz`/`.zip` and installed the archive itself as the `ms` binary (chmod 0755, success message, exit 0), destroying the installation. The updater now extracts the `ms` executable member from `.tar.gz`/`.zip` archives (path-traversal-safe), hard-rejects any install candidate whose leading bytes are an archive magic, requires the candidate to parse as a native executable (ELF/Mach-O/PE) and run `--version` before the atomic swap, and restores the backup on any failure ([`b3a1710`](https://github.com/Dicklesworthstone/meta_skill/commit/b3a1710), hardened in [`d3ad66d`](https://github.com/Dicklesworthstone/meta_skill/commit/d3ad66d)).
+- Asset selection matches Rust target triples first with legacy `os-arch`/vendor spellings as fallbacks (#152) and skips metadata assets ([`5e6d665`](https://github.com/Dicklesworthstone/meta_skill/commit/5e6d665)).
+- Release assets for v0.2.0 additionally include plain uncompressed per-platform executables under both legacy (`ms-0.2.0-linux-x86_64`, ...) and triple names so that updaters shipped in v0.1.5 and earlier — which install the selected asset verbatim — self-update onto a real binary instead of erroring or bricking.
+
+### Doctor / prune / storage (#158)
+
+- `skill_origins` provenance recording; `ms prune` removes stale sources without orphaning skills; FK-violation fix and hardened stale-source removal ([`8963037`](https://github.com/Dicklesworthstone/meta_skill/commit/8963037), [`040bdcf`](https://github.com/Dicklesworthstone/meta_skill/commit/040bdcf)).
+- Stale flock-holder reporting when no process holds the lock ([`6e2822b`](https://github.com/Dicklesworthstone/meta_skill/commit/6e2822b)); Windows-safe lock holder sidecar and path/URL portability ([`745d66c`](https://github.com/Dicklesworthstone/meta_skill/commit/745d66c)).
+
+### Other
+
+- ANSI styling only on interactive, non-agent terminals ([`21f717f`](https://github.com/Dicklesworthstone/meta_skill/commit/21f717f)); transaction helpers and rich_output polish ([`fad36bd`](https://github.com/Dicklesworthstone/meta_skill/commit/fad36bd)); spec-lens `__preamble` retention and e2e `--dry-run` ([`ef0652a`](https://github.com/Dicklesworthstone/meta_skill/commit/ef0652a)); backup restore over read-only Git objects ([`84a398e`](https://github.com/Dicklesworthstone/meta_skill/commit/84a398e)); ACIP injection regex hardening ([`5e04da5`](https://github.com/Dicklesworthstone/meta_skill/commit/5e04da5)).
+- Deps: FrankenSQLite 0.1.10 → 0.1.18, fsqlite-types 0.1.15, `atty` dropped for `std::io::IsTerminal`, pinned nightly advanced past `cfg_select` stabilization (#148).
+- Released with locally-run gates (full test suite, `cargo fmt --check`, `cargo clippy --workspace --all-targets -D warnings`) because hosted CI was unavailable (#150 context); binaries built natively on Linux/macOS/Windows.
+
+---
+
 ## [Unreleased] -- HEAD
 
 Tracking period: 2026-01-23 through 2026-03-21 (latest: [`bab33b7`](https://github.com/Dicklesworthstone/meta_skill/commit/bab33b73a7695f1f153a42e05183fbcf07625eab)).
