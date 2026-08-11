@@ -3,4 +3,8 @@ CARGO_INCREMENTAL = "0"
 LLVM_PROFILE_FILE = "coverage/default-%p-%m.profraw"
 
 [target.x86_64-unknown-linux-gnu]
-rustflags = ["-C", "linker=cc", "-C", "link-arg=-B/usr/bin"]
+rustflags = ["-Z", "threads=4", "-C", "linker=cc", "-C", "link-arg=-B/usr/bin"]
+
+[build]
+# Parallel rustc front-end (nightly). Added by build-settings sweep.
+rustflags = ["-Z", "threads=4"]
