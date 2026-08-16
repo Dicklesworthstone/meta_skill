@@ -61,10 +61,22 @@ fn test_init_global() {
 
     assert!(output.success, "init --global failed");
 
-    // Verify config created
+    // Verify config created. ms resolves the global config via the platform
+    // config directory: on Linux that honors $XDG_CONFIG_HOME, but on macOS
+    // the native location is $HOME/Library/Application Support and the XDG
+    // variables are ignored (the fixture replaces HOME with its temp root, so
+    // the write still lands inside the fixture either way).
+    let expected_config = if cfg!(target_os = "macos") {
+        fixture
+            .temp_dir
+            .path()
+            .join("Library/Application Support/ms/config.toml")
+    } else {
+        config_home.join("ms/config.toml")
+    };
     assert!(
-        config_home.join("ms/config.toml").exists(),
-        "Global config not created"
+        expected_config.exists(),
+        "Global config not created at {expected_config:?}"
     );
 
     // Global init does not create data directories immediately (they are created on demand)

@@ -22,7 +22,7 @@ fn cass_available() -> bool {
     static CASS_READY: OnceLock<bool> = OnceLock::new();
 
     *CASS_READY.get_or_init(|| {
-        Command::new("cass")
+        let probe_ok = Command::new("cass")
             .args([
                 "search",
                 "__ms_e2e_readiness_probe__",
@@ -31,16 +31,43 @@ fn cass_available() -> bool {
                 "1",
             ])
             .output()
-            .is_ok_and(|output| output.status.success())
+            .is_ok_and(|output| output.status.success());
+        probe_ok && real_cass_data_dir().is_some()
     })
+}
+
+/// Resolve the data directory of the caller's real CASS installation.
+///
+/// `cass health --robot`, run in the unmodified environment, reports the
+/// `data_dir` cass actually resolved. We must hand that exact path to the
+/// cass processes spawned inside the fixture, because guessing it does not
+/// work everywhere: on macOS cass natively stores data under the bundle-style
+/// `~/Library/Application Support/com.coding-agent-search.coding-agent-search`
+/// directory, so exporting `XDG_DATA_HOME` (the previous approach) actively
+/// redirected cass to a different, empty `…/coding-agent-search` directory and
+/// every real-CASS scenario failed with a `missing-index` error. Passing the
+/// resolved path via `CASS_DATA_DIR` is platform-independent.
+fn real_cass_data_dir() -> Option<&'static str> {
+    static DATA_DIR: OnceLock<Option<String>> = OnceLock::new();
+
+    DATA_DIR
+        .get_or_init(|| {
+            let output = Command::new("cass")
+                .args(["health", "--robot"])
+                .output()
+                .ok()?;
+            let health: serde_json::Value = serde_json::from_slice(&output.stdout).ok()?;
+            health["data_dir"].as_str().map(str::to_owned)
+        })
+        .as_deref()
 }
 
 /// Run a real-CASS scenario with the caller's indexed CASS data while keeping
 /// all Meta Skill state inside the isolated fixture.
 fn run_ms_with_real_cass(fixture: &mut E2EFixture, args: &[&str]) -> CommandOutput {
-    let data_home = dirs::data_dir().expect("real-CASS E2E requires a platform data directory");
-    let data_home = data_home.to_string_lossy();
-    fixture.run_ms_with_env(args, &[("XDG_DATA_HOME", data_home.as_ref())])
+    let data_dir = real_cass_data_dir()
+        .expect("real-CASS E2E requires `cass health --robot` to report a data_dir");
+    fixture.run_ms_with_env(args, &[("CASS_DATA_DIR", data_dir)])
 }
 
 // ============================================================================
