@@ -181,9 +181,12 @@ fn display_list(ctx: &AppContext, skills: &[SkillRecord], args: &ListArgs) -> Re
                     .next()
                     .unwrap_or(&skill.modified_at);
 
+                // Column 1 is the canonical id — the only token guaranteed to
+                // resolve in `ms show` / the Git archive. The human-facing name
+                // (which can differ from the id) rides second (issue #172).
                 println!(
-                    "{}\t{}\t{}\t{}",
-                    skill.name, skill.source_layer, tags, updated
+                    "{}\t{}\t{}\t{}\t{}",
+                    skill.id, skill.name, skill.source_layer, tags, updated
                 );
             }
             Ok(())
@@ -478,9 +481,11 @@ mod tests {
             .next()
             .unwrap_or(&skill.modified_at);
         let line = format!(
-            "{}\t{}\t{}\t{}",
-            skill.name, skill.source_layer, tags, updated
+            "{}\t{}\t{}\t{}\t{}",
+            skill.id, skill.name, skill.source_layer, tags, updated
         );
+        // Column 1 must be the resolvable canonical id (issue #172).
+        assert!(line.starts_with("skill-my-skill\t"));
         assert!(line.contains("my-skill"));
         assert!(line.contains("project"));
         assert!(line.contains("cli,rust"));

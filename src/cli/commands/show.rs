@@ -35,18 +35,39 @@ pub struct ShowArgs {
 
 pub fn run(ctx: &AppContext, args: &ShowArgs) -> Result<()> {
     // Try to find skill by ID or name
-    let skill = ctx
-        .db
-        .get_skill(&args.skill)?
-        .or_else(|| {
-            // Try alias resolution
-            ctx.db
-                .resolve_alias(&args.skill)
-                .ok()
-                .flatten()
-                .and_then(|res| ctx.db.get_skill(&res.canonical_id).ok().flatten())
-        })
-        .ok_or_else(|| MsError::SkillNotFound(format!("skill not found: {}", args.skill)))?;
+    let skill = match ctx.db.get_skill(&args.skill)?.or_else(|| {
+        // Try alias resolution
+        ctx.db
+            .resolve_alias(&args.skill)
+            .ok()
+            .flatten()
+            .and_then(|res| ctx.db.get_skill(&res.canonical_id).ok().flatten())
+    }) {
+        Some(skill) => skill,
+        None => {
+            // Fall back to the human-facing `name` (frontmatter `name:`), which
+            // can differ from the canonical id — `ms list` prints names, so the
+            // ids users copy from a listing must resolve here (issue #172).
+            let mut by_name = ctx.db.get_skills_by_name(&args.skill)?;
+            match by_name.len() {
+                0 => {
+                    return Err(MsError::SkillNotFound(format!(
+                        "skill not found: {}",
+                        args.skill
+                    )));
+                }
+                1 => by_name.remove(0),
+                _ => {
+                    let ids: Vec<String> = by_name.iter().map(|s| s.id.clone()).collect();
+                    return Err(MsError::SkillNotFound(format!(
+                        "name '{}' is ambiguous; matching skill ids: {}",
+                        args.skill,
+                        ids.join(", ")
+                    )));
+                }
+            }
+        }
+    };
 
     display_skill(ctx, &skill, args)
 }

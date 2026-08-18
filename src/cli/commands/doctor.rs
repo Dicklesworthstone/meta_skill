@@ -109,6 +109,11 @@ pub fn run(ctx: &AppContext, args: &DoctorArgs) -> Result<()> {
         issues_found += check_git_archive(ctx, verbose)?;
     }
 
+    // Check that the database and the Git archive agree on skill ids
+    if run_only.is_none() {
+        issues_found += check_store_consistency(ctx, verbose)?;
+    }
+
     // Check that indexed skills' true sources still exist (issue #158)
     if run_only.is_none() {
         issues_found += check_skill_origins(ctx, verbose)?;
@@ -348,6 +353,59 @@ fn check_git_archive(ctx: &AppContext, verbose: bool) -> Result<usize> {
             Ok(1)
         }
     }
+}
+
+/// Check that the database and Git archive agree on which skill ids exist
+/// (issue #172). The two stores are written by the same 2PC transaction, so a
+/// key-set mismatch means interrupted transactions, manual edits, or an id
+/// derivation drift between versions — and every db-only id will fail
+/// `ms show`'s archive-backed paths while doctor otherwise reports healthy.
+fn check_store_consistency(ctx: &AppContext, verbose: bool) -> Result<usize> {
+    say_inline!(ctx, "Checking db/archive skill-id agreement... ");
+
+    let db_ids: std::collections::BTreeSet<String> = ctx
+        .db
+        .list_skills(u32::MAX as usize, 0)?
+        .into_iter()
+        .map(|s| s.id)
+        .collect();
+    let archive_ids: std::collections::BTreeSet<String> =
+        ctx.git.list_skill_ids()?.into_iter().collect();
+
+    let db_only: Vec<&String> = db_ids.difference(&archive_ids).collect();
+    let archive_only: Vec<&String> = archive_ids.difference(&db_ids).collect();
+
+    if db_only.is_empty() && archive_only.is_empty() {
+        say!(ctx, "{} OK ({} skills)", "[ok]", db_ids.len());
+        return Ok(0);
+    }
+
+    say!(
+        ctx,
+        "{} Stores disagree: {} id(s) only in database, {} only in archive",
+        "[FAIL]",
+        db_only.len(),
+        archive_only.len()
+    );
+    let preview = 10;
+    for id in db_only.iter().take(preview) {
+        say!(ctx, "  db-only: {}", id);
+    }
+    for id in archive_only.iter().take(preview) {
+        say!(ctx, "  archive-only: {}", id);
+    }
+    if !verbose && (db_only.len() > preview || archive_only.len() > preview) {
+        say!(ctx, "  ... run with -v after re-indexing to see the rest");
+    } else if verbose {
+        for id in db_only.iter().skip(preview) {
+            say!(ctx, "  db-only: {}", id);
+        }
+        for id in archive_only.iter().skip(preview) {
+            say!(ctx, "  archive-only: {}", id);
+        }
+    }
+    say!(ctx, "  Re-run 'ms index <roots>' to rebuild both stores");
+    Ok(1)
 }
 
 /// Check that each indexed skill's true source is still present (issue #158).

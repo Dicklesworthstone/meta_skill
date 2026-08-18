@@ -660,3 +660,94 @@ fn test_show_full_with_deps() -> Result<()> {
     fixture.generate_report();
     Ok(())
 }
+
+// ---------------------------------------------------------------------------
+// Regression: id vs. name divergence (issue #172)
+// ---------------------------------------------------------------------------
+
+/// A skill whose frontmatter `name` differs from the slugified H1 title, so the
+/// canonical id (`a-b-testing-platform-for-saas`, derived from the H1) and the
+/// human-facing name (`ab-testing`) diverge — the shape that made `ms show`
+/// reject 82 of 138 ids that `ms list --plain` printed (issue #172).
+const SKILL_DIVERGENT_NAME: &str = r#"---
+name: ab-testing
+description: Home-rolled A/B testing platform guidance
+tags: [testing, saas]
+version: 1.0.0
+---
+
+# A/B Testing Platform for SaaS
+
+Server-side variant assignment and Bayesian analysis.
+
+## Guidelines
+
+- Assign variants server-side
+- Use Bayesian analysis for stopping
+"#;
+
+/// End-to-end regression for issue #172: every id `ms list --plain` prints must
+/// resolve in `ms show` and `ms quality`, and the human-facing name must
+/// resolve in `ms show` too.
+#[test]
+fn test_show_resolves_listed_ids_and_names() -> Result<()> {
+    let mut fixture = E2EFixture::new("show_id_name_divergence");
+
+    fixture.log_step("Initialize ms");
+    let output = fixture.init();
+    fixture.assert_success(&output, "init");
+
+    fixture.log_step("Create a skill whose name and id diverge");
+    fixture.create_skill("ab-testing", SKILL_DIVERGENT_NAME)?;
+
+    fixture.log_step("Index skills");
+    let output = fixture.run_ms(&["--robot", "index"]);
+    fixture.assert_success(&output, "index");
+
+    // 1. `ms list --plain` column 1 must be the canonical id.
+    fixture.log_step("List skills with plain output");
+    let output = fixture.run_ms(&["list", "--plain"]);
+    fixture.assert_success(&output, "list plain");
+    let line = output
+        .stdout
+        .lines()
+        .find(|l| l.contains("ab-testing") || l.contains("a-b-testing"))
+        .expect("indexed skill should appear in plain listing")
+        .to_string();
+    let first_col = line.split('\t').next().unwrap_or("").to_string();
+    assert_eq!(
+        first_col, "a-b-testing-platform-for-saas",
+        "plain listing column 1 must be the canonical id"
+    );
+
+    // 2. The listed id must resolve in `ms show`.
+    fixture.log_step("Show by the id the listing printed");
+    let output = fixture.run_ms(&["--robot", "show", &first_col]);
+    fixture.assert_success(&output, "show by listed id");
+    let json = output.json();
+    assert_eq!(
+        json["skill"]["id"].as_str(),
+        Some("a-b-testing-platform-for-saas")
+    );
+
+    // 3. The human-facing name must also resolve in `ms show`.
+    fixture.log_step("Show by the frontmatter name");
+    let output = fixture.run_ms(&["--robot", "show", "ab-testing"]);
+    fixture.assert_success(&output, "show by name");
+    let json = output.json();
+    assert_eq!(
+        json["skill"]["id"].as_str(),
+        Some("a-b-testing-platform-for-saas"),
+        "show by name must resolve to the canonical id"
+    );
+
+    // 4. `ms quality <id>` must accept the same id `ms show` accepts, even
+    //    when the skill is served from the Git archive rather than a
+    //    configured filesystem root.
+    fixture.log_step("Quality by canonical id");
+    let output = fixture.run_ms(&["--robot", "quality", "a-b-testing-platform-for-saas"]);
+    fixture.assert_success(&output, "quality by id");
+
+    fixture.generate_report();
+    Ok(())
+}

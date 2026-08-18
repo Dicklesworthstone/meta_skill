@@ -244,6 +244,21 @@ impl Database {
         Ok(result)
     }
 
+    /// Look up skills by their human-facing `name` (the frontmatter `name:`),
+    /// which can differ from the canonical `id` (issue #172: `ms list --plain`
+    /// prints names, so `ms show <name>` must resolve). Returns every match so
+    /// callers can distinguish "unique name" from "ambiguous name".
+    pub fn get_skills_by_name(&self, name: &str) -> Result<Vec<SkillRecord>> {
+        let sql = "SELECT id, name, description, version, author, source_path, source_layer, \
+             git_remote, git_commit, content_hash, body, metadata_json, assets_json, \
+             token_count, quality_score, indexed_at, modified_at, is_deprecated, deprecation_reason \
+             FROM skills WHERE name = ? ORDER BY modified_at DESC";
+        let results = self
+            .conn
+            .query_map_collect(sql, params![name], skill_from_row)?;
+        Ok(results)
+    }
+
     pub fn list_skills(&self, limit: usize, offset: usize) -> Result<Vec<SkillRecord>> {
         let sql = "SELECT id, name, description, version, author, source_path, source_layer, \
              git_remote, git_commit, content_hash, body, metadata_json, assets_json, \

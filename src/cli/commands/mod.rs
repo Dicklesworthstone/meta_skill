@@ -187,6 +187,28 @@ pub(crate) fn resolve_skill_markdown(ctx: &AppContext, input: &str) -> Result<Pa
         }
     }
 
+    // Fall back to indexed skills: resolve the input as a canonical id (or a
+    // unique human-facing name) and serve the compiled SKILL.md from the Git
+    // archive. Without this, `ms quality <id>` rejected every id that `ms list`
+    // and `ms show` accept unless the skill also lived on a configured
+    // filesystem root (issue #172).
+    let record = ctx.db.get_skill(input).ok().flatten().or_else(|| {
+        let mut by_name = ctx.db.get_skills_by_name(input).ok()?;
+        if by_name.len() == 1 {
+            Some(by_name.remove(0))
+        } else {
+            None
+        }
+    });
+    if let Some(record) = record {
+        if let Some(dir) = ctx.git.skill_path(&record.id) {
+            let skill_md = dir.join("SKILL.md");
+            if skill_md.is_file() {
+                return Ok(skill_md);
+            }
+        }
+    }
+
     Err(crate::error::MsError::SkillNotFound(format!(
         "skill not found: {input}"
     )))
