@@ -390,6 +390,14 @@ fn index_robot(ctx: &AppContext, roots: &[SkillRoot], args: &IndexArgs) -> Resul
 
 fn discover_skill_files(roots: &[SkillRoot]) -> Vec<DiscoveredSkill> {
     let mut skill_files = Vec::new();
+    // Symlinks are followed (issue #173): a skills root whose entries are
+    // symlinks into per-repo checkouts is a common install layout and used to
+    // index as zero. Following links can make one real SKILL.md reachable
+    // through several paths (link + target under the same roots), so identity
+    // is tracked by canonical path and each skill indexes once — the first
+    // discovery (and therefore its root/layer) wins. walkdir's own loop
+    // detection reports symlink cycles as errors, which are skipped.
+    let mut seen_canonical: std::collections::HashSet<PathBuf> = std::collections::HashSet::new();
 
     for root in roots {
         if !root.path.exists() {
@@ -406,7 +414,7 @@ fn discover_skill_files(roots: &[SkillRoot]) -> Vec<DiscoveredSkill> {
         // workspace, even if its final component happens to match the
         // skip-list. We only prune *descendants* whose names match.
         let walker = WalkDir::new(&root.path)
-            .follow_links(false)
+            .follow_links(true)
             .into_iter()
             .filter_entry(|entry| {
                 if !entry.file_type().is_dir() || entry.depth() == 0 {
@@ -419,6 +427,13 @@ fn discover_skill_files(roots: &[SkillRoot]) -> Vec<DiscoveredSkill> {
 
         for entry in walker {
             if entry.file_type().is_file() && entry.file_name() == "SKILL.md" {
+                let canonical = entry
+                    .path()
+                    .canonicalize()
+                    .unwrap_or_else(|_| entry.path().to_path_buf());
+                if !seen_canonical.insert(canonical) {
+                    continue;
+                }
                 let companion_count = count_companion_files(entry.path());
                 skill_files.push(DiscoveredSkill {
                     path: entry.path().to_path_buf(),
@@ -436,7 +451,7 @@ fn discover_skill_files(roots: &[SkillRoot]) -> Vec<DiscoveredSkill> {
 /// Count files in the same directory tree as a `SKILL.md`, excluding the
 /// `SKILL.md` itself, any files inside [`SKILL_DISCOVERY_SKIP_DIRS`], and any
 /// files belonging to a nested skill package (a subdirectory that has its own
-/// `SKILL.md`). Symlinks are not followed (matches the discovery pass).
+/// `SKILL.md`). Symlinks are followed (matches the discovery pass, #173).
 ///
 /// Package boundary: a directory is part of this skill iff it does not contain
 /// its own `SKILL.md`. This prevents `parent/SKILL.md` from claiming files
@@ -452,8 +467,10 @@ fn count_companion_files(skill_md: &std::path::Path) -> usize {
         None => return 0,
     };
     let mut count: usize = 0;
+    // follow_links(true) matches the discovery pass (issue #173); walkdir's
+    // loop detection turns symlink cycles into errors, which are skipped.
     let walker = WalkDir::new(pkg_root)
-        .follow_links(false)
+        .follow_links(true)
         .into_iter()
         .filter_entry(|entry| {
             if !entry.file_type().is_dir() {
@@ -965,6 +982,98 @@ mod tests {
 
         let result = discover_skill_files(&roots);
         assert!(result.is_empty());
+    }
+
+    // ==================== Symlink Handling (issue #173) ====================
+
+    /// A skills root whose entries are symlinks into checkouts elsewhere must
+    /// index those skills (previously: `follow_links(false)` skipped them all).
+    #[cfg(unix)]
+    #[test]
+    fn test_discover_skill_files_follows_symlinked_dirs() {
+        let real = TempDir::new().unwrap();
+        let pkg = real.path().join("my-skill");
+        fs::create_dir(&pkg).unwrap();
+        fs::write(pkg.join("SKILL.md"), "# My Skill").unwrap();
+        fs::write(pkg.join("helper.py"), "print('hi')").unwrap();
+
+        let root = TempDir::new().unwrap();
+        std::os::unix::fs::symlink(&pkg, root.path().join("my-skill")).unwrap();
+
+        let result = discover_skill_files(&[SkillRoot {
+            path: root.path().to_path_buf(),
+            layer: SkillLayer::User,
+        }]);
+        assert_eq!(result.len(), 1, "symlinked skill dir must be discovered");
+        assert_eq!(result[0].layer, SkillLayer::User);
+        // The discovered path stays under the symlinked root (so origins map
+        // back to the root the user configured), and companions are counted
+        // through the link with the same follow policy.
+        assert!(result[0].path.starts_with(root.path()));
+        assert_eq!(result[0].companion_count, 1);
+    }
+
+    /// When both a symlink and its target are reachable under the configured
+    /// roots, the skill must index once, not twice.
+    #[cfg(unix)]
+    #[test]
+    fn test_discover_skill_files_dedupes_symlink_and_target() {
+        let root = TempDir::new().unwrap();
+        let pkg = root.path().join("real-skill");
+        fs::create_dir(&pkg).unwrap();
+        fs::write(pkg.join("SKILL.md"), "# Real Skill").unwrap();
+        std::os::unix::fs::symlink(&pkg, root.path().join("alias-skill")).unwrap();
+
+        let result = discover_skill_files(&[SkillRoot {
+            path: root.path().to_path_buf(),
+            layer: SkillLayer::Project,
+        }]);
+        assert_eq!(
+            result.len(),
+            1,
+            "link + target must collapse to one skill: {result:?}",
+            result = result
+                .iter()
+                .map(|s| s.path.display().to_string())
+                .collect::<Vec<_>>()
+        );
+    }
+
+    /// A symlink cycle must neither hang discovery nor produce duplicates —
+    /// walkdir reports the loop as an error entry, which is skipped.
+    #[cfg(unix)]
+    #[test]
+    fn test_discover_skill_files_symlink_cycle_terminates() {
+        let root = TempDir::new().unwrap();
+        let pkg = root.path().join("loopy-skill");
+        fs::create_dir(&pkg).unwrap();
+        fs::write(pkg.join("SKILL.md"), "# Loopy Skill").unwrap();
+        // Cycle: loopy-skill/back -> the root containing loopy-skill.
+        std::os::unix::fs::symlink(root.path(), pkg.join("back")).unwrap();
+
+        let result = discover_skill_files(&[SkillRoot {
+            path: root.path().to_path_buf(),
+            layer: SkillLayer::Project,
+        }]);
+        assert_eq!(result.len(), 1, "cycle must not duplicate or hang");
+    }
+
+    /// A dangling symlink is skipped without failing the whole discovery.
+    #[cfg(unix)]
+    #[test]
+    fn test_discover_skill_files_dangling_symlink_skipped() {
+        let root = TempDir::new().unwrap();
+        std::os::unix::fs::symlink(root.path().join("gone"), root.path().join("dangling")).unwrap();
+        let ok = root.path().join("ok-skill");
+        fs::create_dir(&ok).unwrap();
+        fs::write(ok.join("SKILL.md"), "# OK").unwrap();
+
+        let result = discover_skill_files(&[SkillRoot {
+            path: root.path().to_path_buf(),
+            layer: SkillLayer::Project,
+        }]);
+        assert_eq!(result.len(), 1);
+        assert!(result[0].path.ends_with("ok-skill/SKILL.md"));
     }
 
     #[test]
