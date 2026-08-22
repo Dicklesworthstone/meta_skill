@@ -1104,9 +1104,18 @@ fn run_auto(
     let mut skipped_sessions = Vec::new();
     let total_to_process = session_matches.len().min(search_limit);
 
+    // cass search can return several hits for the same session; without this
+    // gate one session enters the build twice, double-weighting its patterns
+    // against --min-patterns and in the extracted set (issue #171).
+    let mut seen_session_ids = std::collections::HashSet::new();
+
     for (i, session_match) in session_matches.into_iter().take(search_limit).enumerate() {
         // Update phase progress
         session.phase_progress = (i + 1) as f64 / total_to_process as f64;
+
+        if !seen_session_ids.insert(session_match.session_id.clone()) {
+            continue;
+        }
 
         match cass_client.get_session(&session_match.path) {
             Ok(cass_session) => {

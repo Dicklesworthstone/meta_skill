@@ -127,16 +127,19 @@ impl CassClient {
             "json",
             "--include-tools",
         ])?;
-        let mut messages: Vec<SessionMessage> = serde_json::from_slice(&output).map_err(|e| {
+        let records: Vec<serde_json::Value> = serde_json::from_slice(&output).map_err(|e| {
             MsError::CassUnavailable(format!("Failed to parse session export: {e}"))
         })?;
+        let mut messages = normalize_export_records(records);
         // cass export does not emit a per-message index; assign positional indices
         // so downstream consumers that key on `SessionMessage::index`
         // (e.g. mining taint tracking) get stable, distinct values.
         for (i, message) in messages.iter_mut().enumerate() {
             message.index = i;
             // Recover structured tool calls from cass's inline `[Tool: …]`
-            // markers so mining/quality see tool activity (issue #114).
+            // markers so mining/quality see tool activity (issue #114). The
+            // raw-JSONL shape already yields structured tool_use blocks, so
+            // this only fires for the legacy flat shape.
             if message.tool_calls.is_empty() {
                 message.tool_calls = parse_inline_tool_markers(&message.content, i);
             }
@@ -370,6 +373,150 @@ where
         serde_json::Value::String(s) => Some(s),
         _ => None,
     })
+}
+
+/// Normalize a `cass export --format json` payload into [`SessionMessage`]s.
+///
+/// Two payload shapes exist in the wild (issue #171):
+///
+/// - the flat array some cass 0.6.x paths emit: `{role, content, timestamp,
+///   author}` objects with tool activity rendered as inline `[Tool: …]`
+///   markers inside `content`;
+/// - the raw Claude Code JSONL records, verbatim (observed on cass
+///   0.6.24/0.6.25): `{type: "user"|"assistant", message: {role, content}}`
+///   interleaved with non-message records (`attachment`, `mode`,
+///   `last-prompt`, `permission-mode`, …), where `message.content` is either
+///   a plain string or an array of `text` / `thinking` / `tool_use` /
+///   `tool_result` blocks.
+///
+/// The old decode path deserialized the raw shape "successfully" into
+/// messages with empty `role`/`content` — every [`SessionMessage`] field is
+/// `#[serde(default)]` — so the quality scorer had literally nothing to
+/// score. That is why every session came out at exactly 0% with zero
+/// patterns, and why the 096f071 marker fix could never fire.
+///
+/// Detection is per record: anything carrying a `type` field is treated as a
+/// raw record (legacy flat objects have no `type`), so mixed payloads
+/// degrade gracefully.
+fn normalize_export_records(records: Vec<serde_json::Value>) -> Vec<SessionMessage> {
+    let mut messages = Vec::with_capacity(records.len());
+    for record in records {
+        let Some(kind) = record.get("type").and_then(serde_json::Value::as_str) else {
+            // No `type`: the legacy flat shape (null role/content tolerated).
+            if let Ok(message) = serde_json::from_value::<SessionMessage>(record) {
+                messages.push(message);
+            }
+            continue;
+        };
+
+        // Raw-JSONL metadata records carry no conversation.
+        if !matches!(kind, "user" | "assistant") {
+            continue;
+        }
+        let Some(message) = record.get("message") else {
+            continue;
+        };
+        let role = message
+            .get("role")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or(kind)
+            .to_string();
+
+        let mut content_parts: Vec<String> = Vec::new();
+        let mut tool_calls: Vec<ToolCall> = Vec::new();
+        let mut tool_results: Vec<ToolResult> = Vec::new();
+        match message.get("content") {
+            Some(serde_json::Value::String(text)) => {
+                if !text.is_empty() {
+                    content_parts.push(text.clone());
+                }
+            }
+            Some(serde_json::Value::Array(blocks)) => {
+                for block in blocks {
+                    match block.get("type").and_then(serde_json::Value::as_str) {
+                        Some("text") => {
+                            if let Some(text) =
+                                block.get("text").and_then(serde_json::Value::as_str)
+                            {
+                                if !text.is_empty() {
+                                    content_parts.push(text.to_string());
+                                }
+                            }
+                        }
+                        // Model-internal reasoning: the miner and scorer key on
+                        // user-visible content and structured tool activity, so
+                        // thinking would only dilute their signals.
+                        Some("thinking") => {}
+                        Some("tool_use") => tool_calls.push(ToolCall {
+                            id: block
+                                .get("id")
+                                .and_then(serde_json::Value::as_str)
+                                .unwrap_or_default()
+                                .to_string(),
+                            name: block
+                                .get("name")
+                                .and_then(serde_json::Value::as_str)
+                                .unwrap_or_default()
+                                .to_string(),
+                            arguments: block
+                                .get("input")
+                                .cloned()
+                                .unwrap_or(serde_json::Value::Null),
+                        }),
+                        Some("tool_result") => tool_results.push(ToolResult {
+                            tool_call_id: block
+                                .get("tool_use_id")
+                                .and_then(serde_json::Value::as_str)
+                                .unwrap_or_default()
+                                .to_string(),
+                            content: stringify_tool_result_content(block.get("content")),
+                            is_error: block
+                                .get("is_error")
+                                .and_then(serde_json::Value::as_bool)
+                                .unwrap_or(false),
+                        }),
+                        _ => {}
+                    }
+                }
+            }
+            _ => {}
+        }
+
+        // A raw record that yielded neither content nor tool activity (e.g. a
+        // thinking-only turn) contributes nothing to score or mine.
+        if content_parts.is_empty() && tool_calls.is_empty() && tool_results.is_empty() {
+            continue;
+        }
+        messages.push(SessionMessage {
+            index: 0, // positional indices are assigned by the caller
+            role,
+            content: content_parts.join("\n"),
+            tool_calls,
+            tool_results,
+        });
+    }
+    messages
+}
+
+/// Render a raw `tool_result` block's `content` — a plain string, an array of
+/// `{type: "text", text}` blocks, or occasionally something else — as the flat
+/// string [`ToolResult::content`] expects.
+fn stringify_tool_result_content(content: Option<&serde_json::Value>) -> String {
+    match content {
+        Some(serde_json::Value::String(text)) => text.clone(),
+        Some(serde_json::Value::Array(blocks)) => blocks
+            .iter()
+            .filter_map(|block| {
+                block
+                    .get("text")
+                    .and_then(serde_json::Value::as_str)
+                    .map(str::to_string)
+            })
+            .collect::<Vec<_>>()
+            .join("\n"),
+        Some(other) => other.to_string(),
+        None => String::new(),
+    }
 }
 
 /// Reconstruct structured [`ToolCall`]s from cass's inline `[Tool: …]` markers.
@@ -805,7 +952,8 @@ mod tests {
         let bytes = serde_json::to_vec(&raw).unwrap();
 
         // Parse exactly as `get_session` does (sans the subprocess call).
-        let mut messages: Vec<SessionMessage> = serde_json::from_slice(&bytes).unwrap();
+        let records: Vec<serde_json::Value> = serde_json::from_slice(&bytes).unwrap();
+        let mut messages = normalize_export_records(records);
         for (i, message) in messages.iter_mut().enumerate() {
             message.index = i;
             if message.tool_calls.is_empty() {
@@ -863,6 +1011,143 @@ mod tests {
         // Synthetic ids are unique within the message.
         let ids: std::collections::HashSet<_> = tcs.iter().map(|t| t.id.as_str()).collect();
         assert_eq!(ids.len(), 3, "tool_call ids are distinct");
+    }
+
+    /// Regression test for issue #171: on cass 0.6.24/0.6.25 the export is
+    /// the raw Claude Code JSONL — metadata records interleaved with
+    /// `{type, message: {role, content}}` records whose content is a string
+    /// or an array of text/thinking/tool_use/tool_result blocks. The shape
+    /// mirrors a real `cass export --format json --include-tools` payload
+    /// profiled on cass 0.6.24. The old decode yielded empty role/content
+    /// for every record, so every session scored exactly 0%.
+    #[test]
+    fn test_normalize_raw_claude_jsonl_export_shape() {
+        let raw = serde_json::json!([
+            {"type": "last-prompt", "leafUuid": "leaf", "sessionId": "s"},
+            {"type": "mode", "mode": "normal", "sessionId": "s"},
+            {"type": "attachment", "attachment": {}, "uuid": "u1", "parentUuid": null},
+            {"type": "user", "uuid": "u2", "timestamp": "2026-08-17T00:00:00Z",
+             "message": {"role": "user", "content": "Fix the failing tests in the auth module"}},
+            {"type": "assistant", "uuid": "u3",
+             "message": {"role": "assistant", "content": [
+                 {"type": "thinking", "thinking": "internal chain of thought"},
+                 {"type": "text", "text": "Let me look at the file and run the tests."},
+                 {"type": "tool_use", "id": "toolu_1", "name": "Bash",
+                  "input": {"command": "cargo test -p auth"}},
+                 {"type": "tool_use", "id": "toolu_2", "name": "Read",
+                  "input": {"file_path": "/src/auth/mod.rs"}}
+             ]}},
+            {"type": "user", "uuid": "u4",
+             "message": {"role": "user", "content": [
+                 {"type": "tool_result", "tool_use_id": "toolu_1", "is_error": true,
+                  "content": "error[E0432]: unresolved import"}
+             ]}},
+            {"type": "user", "uuid": "u5",
+             "message": {"role": "user", "content": [
+                 {"type": "tool_result", "tool_use_id": "toolu_2", "is_error": false,
+                  "content": [{"type": "text", "text": "mod tests;"},
+                               {"type": "text", "text": "pub fn login() {}"}]}
+             ]}},
+            {"type": "assistant", "uuid": "u6",
+             "message": {"role": "assistant", "content": [
+                 {"type": "thinking", "thinking": "thinking-only turn"}
+             ]}}
+        ]);
+        let records: Vec<serde_json::Value> = serde_json::from_value(raw).unwrap();
+        let mut messages = normalize_export_records(records);
+        for (i, message) in messages.iter_mut().enumerate() {
+            message.index = i;
+            if message.tool_calls.is_empty() {
+                message.tool_calls = parse_inline_tool_markers(&message.content, i);
+            }
+        }
+
+        // Metadata, attachment, and thinking-only records contribute nothing;
+        // the four conversation-bearing records survive with positional indices.
+        assert_eq!(messages.len(), 4, "got: {messages:#?}");
+        assert_eq!(messages[3].index, 3);
+
+        assert_eq!(messages[0].role, "user");
+        assert_eq!(
+            messages[0].content,
+            "Fix the failing tests in the auth module"
+        );
+
+        assert_eq!(messages[1].role, "assistant");
+        assert_eq!(
+            messages[1].content,
+            "Let me look at the file and run the tests."
+        );
+        assert!(
+            !messages[1].content.contains("internal chain"),
+            "thinking must not leak into content"
+        );
+        let calls = &messages[1].tool_calls;
+        assert_eq!(calls.len(), 2, "structured tool_use blocks recovered");
+        assert_eq!(calls[0].name, "Bash");
+        assert_eq!(
+            calls[0].arguments.get("command").and_then(|v| v.as_str()),
+            Some("cargo test -p auth"),
+            "mining keys command extraction on arguments.command"
+        );
+        assert_eq!(calls[1].name, "Read");
+        assert_eq!(
+            calls[1].arguments.get("file_path").and_then(|v| v.as_str()),
+            Some("/src/auth/mod.rs")
+        );
+
+        // tool_result: error flag preserved, string content passed through.
+        assert_eq!(messages[2].tool_results.len(), 1);
+        assert!(messages[2].tool_results[0].is_error);
+        assert!(messages[2].tool_results[0].content.contains("E0432"));
+
+        // tool_result with block-array content flattens to joined text.
+        assert_eq!(
+            messages[3].tool_results[0].content,
+            "mod tests;\npub fn login() {}"
+        );
+        assert!(!messages[3].tool_results[0].is_error);
+    }
+
+    /// The end-to-end symptom from issue #171: a raw-shape session must not
+    /// score 0% once normalized. Uses the same fixture shape as above with a
+    /// resolution-looking tail so the scorer has real signals to find.
+    #[test]
+    fn test_normalized_raw_export_scores_above_zero() {
+        use crate::cass::quality::QualityScorer;
+
+        let raw = serde_json::json!([
+            {"type": "mode", "mode": "normal", "sessionId": "s"},
+            {"type": "user", "message": {"role": "user", "content": "Fix the failing auth tests"}},
+            {"type": "assistant", "message": {"role": "assistant", "content": [
+                {"type": "text", "text": "Running the suite to reproduce the failure."},
+                {"type": "tool_use", "id": "t1", "name": "Bash", "input": {"command": "cargo test -p auth"}}
+            ]}},
+            {"type": "user", "message": {"role": "user", "content": [
+                {"type": "tool_result", "tool_use_id": "t1", "is_error": false, "content": "test result: ok. 12 passed"}
+            ]}},
+            {"type": "assistant", "message": {"role": "assistant", "content": "All tests passed after the fix."}},
+            {"type": "user", "message": {"role": "user", "content": "Thanks, works perfectly!"}}
+        ]);
+        let records: Vec<serde_json::Value> = serde_json::from_value(raw).unwrap();
+        let mut messages = normalize_export_records(records);
+        for (i, message) in messages.iter_mut().enumerate() {
+            message.index = i;
+        }
+        let session = Session {
+            id: "raw-shape".to_string(),
+            path: "/tmp/raw-shape.jsonl".to_string(),
+            messages,
+            metadata: SessionMetadata::default(),
+            content_hash: "hash".to_string(),
+        };
+
+        let quality = QualityScorer::new(crate::cass::quality::QualityConfig::default());
+        let score = quality.score(&session);
+        assert!(
+            score.score > 0.0,
+            "normalized raw-shape session must not score 0%, got {score:?}"
+        );
     }
 
     /// The marker parser must be robust to malformed / partial markers and to
