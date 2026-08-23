@@ -5,7 +5,52 @@ All notable changes to **ms** (Meta Skill CLI) are documented here.
 > Repository: <https://github.com/Dicklesworthstone/meta_skill>
 >
 > Conventions: entries are organized by landed capabilities, not raw diff order.
-> Only `v0.1.0` has a corresponding [GitHub Release](https://github.com/Dicklesworthstone/meta_skill/releases/tag/v0.1.0); `v0.1.1` is a plain git tag (CI build-fix only). Everything after `v0.1.1` is unreleased work on `main`.
+> `v0.2.0` and later have corresponding [GitHub Releases](https://github.com/Dicklesworthstone/meta_skill/releases); `v0.1.1` is a plain git tag (CI build-fix only).
+
+---
+
+## [v0.2.2] -- 2026-08-23
+
+### cass integration: sessions scored 0% on modern cass exports (#171)
+
+- cass ≥ 0.6.2x exports sessions as the raw Claude Code JSONL rather than the
+  legacy flattened shape, so `ms build` scored every session 0% and extracted
+  0 patterns. `get_session` now normalizes both shapes per-record (raw
+  `text`/`tool_use` records become structured tool calls/results with
+  `is_error`; metadata- and thinking-only records are dropped; the legacy flat
+  shape is unchanged, including marker reconstruction). Also fixed duplicate
+  search hits double-weighting sessions in `ms build` phase 2.
+  ([`fe7c746`](https://github.com/Dicklesworthstone/meta_skill/commit/fe7c746))
+
+### Indexing: symlinked skills roots are no longer skipped (#173)
+
+- `ms index` silently skipped symlinked skill directories. Discovery and
+  companion-file counting now follow symlinks by default with canonical-path
+  dedup, cycle safety, and a warning (not a hang or crash) on dangling links.
+  ([`b676f41`](https://github.com/Dicklesworthstone/meta_skill/commit/b676f41))
+
+### Chores
+
+- Doctor snapshot records the db/archive skill-id agreement check
+  ([`45974b5`](https://github.com/Dicklesworthstone/meta_skill/commit/45974b5)).
+- Deps: clap_complete 4.6.9, wide 1.6.1, rich_rust 0.2.3, anyhow 1.0.104;
+  bench workflow action pin refreshed
+  ([`123d3fc`](https://github.com/Dicklesworthstone/meta_skill/commit/123d3fc),
+  [`7a82b6e`](https://github.com/Dicklesworthstone/meta_skill/commit/7a82b6e)).
+  The proposed fsqlite 0.1.x → 0.3.x jump was declined for this release: the
+  0.3 Connection API is async-only, making it a deliberate storage-layer
+  migration rather than a dependency bump.
+
+---
+
+## [v0.2.1] -- 2026-08-18
+
+- `ms show` and friends resolve listed ids and names (#172)
+  ([`021a289`](https://github.com/Dicklesworthstone/meta_skill/commit/021a289)).
+- Fixed the two macOS-only harness failures behind the residual red suite
+  (#150) ([`d60fcf7`](https://github.com/Dicklesworthstone/meta_skill/commit/d60fcf7)).
+- Deps: thiserror 2.0.19, serde_json 1.0.151, open 5.4.0, fsqlite family
+  0.1.19, base64 0.23.1; parallel rustc front-end enabled for builds.
 
 ---
 
