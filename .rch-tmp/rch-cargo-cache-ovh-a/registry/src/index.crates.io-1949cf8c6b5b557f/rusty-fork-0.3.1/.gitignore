@@ -1,8 +1,0 @@
-*~
-target
-Cargo.lock
-*.core
-
-# VSCode:
-.vscode/
-persistence-test.txt

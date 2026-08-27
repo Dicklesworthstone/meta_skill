@@ -1,9 +1,0 @@
----
-source: tests/golden_test.rs
-expression: plain
----
-┏━━━━━━━┓
-┃ Only  ┃
-┡━━━━━━━┩
-│ Value │
-└───────┘

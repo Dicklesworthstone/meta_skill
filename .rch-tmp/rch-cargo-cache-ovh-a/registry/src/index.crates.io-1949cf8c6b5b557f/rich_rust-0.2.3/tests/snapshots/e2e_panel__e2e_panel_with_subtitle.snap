@@ -1,7 +1,0 @@
----
-source: tests/e2e_panel.rs
-expression: output
----
-╭──────────── Header ─────────────╮
-│ Main content here               │
-╰──────────── Footer ─────────────╯

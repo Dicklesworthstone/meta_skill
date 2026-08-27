@@ -1,7 +1,0 @@
-/target
-**/*.rs.bk
-.DS_Store
-.envrc
-.direnv
-shell.nix
-.dir-locals.el

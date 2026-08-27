@@ -1,6 +1,0 @@
-when:
-  method: GET
-  path: /static-mock/examples/simple
-then:
-  status: 200
-  json_body: '{ "response" : "hello" }'

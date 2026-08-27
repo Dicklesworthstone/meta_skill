@@ -1,7 +1,0 @@
----
-source: tests/golden_test.rs
-expression: plain
----
-+------- Legacy --------+
-| ASCII safe!           |
-+-----------------------+

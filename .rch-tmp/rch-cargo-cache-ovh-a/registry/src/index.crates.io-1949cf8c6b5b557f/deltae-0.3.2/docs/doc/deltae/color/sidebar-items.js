@@ -1,1 +1,0 @@
-initSidebarItems({"enum":[["ValueError","Value validation Error type"]],"struct":[["LabValue","CIEL*a*b*"],["LchValue","Lch: Luminance, Chroma, Hue"],["XyzValue","CIE 1931 XYZ"]]});
