@@ -191,6 +191,11 @@ unsafe_code = "deny"
 all = { level = "warn", priority = -1 }
 pedantic = { level = "warn", priority = -1 }
 nursery = { level = "warn", priority = -1 }
+# `assert!(x.is_empty())` is idiomatic and reads clearly; this lint only asks for
+# `assert_eq!(x, "")` to get a nicer failure message. It fires on hundreds of test
+# assertions here with no defect behind any of them, and the suggestion is
+# type-specific so `clippy --fix` cannot apply it. Allowed per the convention above.
+assert_is_empty = "allow"
 
 # --- Documentation / naming (cosmetic) ---
 missing_errors_doc = "allow"

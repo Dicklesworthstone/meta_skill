@@ -1599,7 +1599,7 @@ mod tests {
     #[test]
     fn test_tool_result_error() {
         let result = ToolResult::error("failed".to_string());
-        assert!(result.is_error == Some(true));
+        assert_eq!(result.is_error, Some(true));
     }
 
     #[test]

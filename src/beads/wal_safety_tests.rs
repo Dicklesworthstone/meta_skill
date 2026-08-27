@@ -284,13 +284,12 @@ fn test_operation_continuity() {
                     None,
                 );
                 panic!("Database appears corrupted: {}", e);
-            } else {
-                log.warn(
-                    "SKIP",
-                    &format!("List failed (not corruption): {}", e),
-                    None,
-                );
             }
+            log.warn(
+                "SKIP",
+                &format!("List failed (not corruption): {}", e),
+                None,
+            );
         }
     }
 }
