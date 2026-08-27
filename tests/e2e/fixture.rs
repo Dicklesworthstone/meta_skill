@@ -1821,7 +1821,7 @@ impl E2EFixture {
 "#,
                 i + 1,
                 escape_html(&step.name),
-                &step.category,
+                step.category,
                 step.duration,
                 status_class,
                 status_icon

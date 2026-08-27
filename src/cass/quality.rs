@@ -481,11 +481,7 @@ fn is_abandoned(messages: &[SessionMessage]) -> bool {
         .count();
 
     // If last 5 messages are error-heavy and no resolution, consider abandoned
-    if error_count >= 3 && !has_clear_resolution(messages) {
-        return true;
-    }
-
-    false
+    error_count >= 3 && !has_clear_resolution(messages)
 }
 
 #[cfg(test)]

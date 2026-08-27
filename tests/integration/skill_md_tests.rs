@@ -189,5 +189,5 @@ fn test_generated_skill_md_valid_structure() {
 #[test]
 fn test_skill_md_generator_default() {
     let generator = SkillMdGenerator::default();
-    assert!(!generator.version().is_empty());
+    assert_ne!(generator.version(), "");
 }

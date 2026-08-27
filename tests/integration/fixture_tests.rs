@@ -106,7 +106,7 @@ fn test_test_bundle_creation() {
     assert_eq!(bundle.name, "my-bundle");
     assert!(bundle.manifest.contains("my-bundle"));
     assert!(bundle.manifest.contains("A test bundle"));
-    assert!(bundle.skills.is_empty());
+    assert_eq!(bundle.skills, [] as [(std::string::String, std::string::String); 0]);
 }
 
 #[test]
@@ -130,13 +130,13 @@ fn test_test_bundle_with_skills() {
 fn test_sample_bundles() {
     let rust = sample_bundles::rust_patterns();
     assert_eq!(rust.name, "rust-patterns");
-    assert!(!rust.skills.is_empty());
+    assert_ne!(rust.skills, [] as [(std::string::String, std::string::String); 0]);
 
     let testing = sample_bundles::testing_patterns();
     assert_eq!(testing.name, "testing-patterns");
 
     let empty = sample_bundles::empty_bundle();
-    assert!(empty.skills.is_empty());
+    assert_eq!(empty.skills, [] as [(std::string::String, std::string::String); 0]);
 }
 
 #[test]

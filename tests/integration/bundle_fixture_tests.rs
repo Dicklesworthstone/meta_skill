@@ -339,7 +339,7 @@ fn test_install_minimal_bundle() {
 
     assert_eq!(report.bundle_id, "minimal-skill-bundle");
     assert_eq!(report.installed, vec!["minimal-skill"]);
-    assert!(report.skipped.is_empty());
+    assert_eq!(report.skipped, [] as [std::string::String; 0]);
 
     // Verify the skill was installed
     let skill_path = install_dir.path().join("minimal-skill/SKILL.md");
