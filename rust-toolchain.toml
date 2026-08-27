@@ -7,5 +7,5 @@
 # the Rust 1.95 cfg_select stabilization required by sysinfo 0.39. Bump the pin
 # deliberately, re-running clippy, rather than floating.
 [toolchain]
-channel = "nightly-2026-04-22"
+channel = "nightly-2026-08-25"
 components = ["rustfmt", "clippy"]
