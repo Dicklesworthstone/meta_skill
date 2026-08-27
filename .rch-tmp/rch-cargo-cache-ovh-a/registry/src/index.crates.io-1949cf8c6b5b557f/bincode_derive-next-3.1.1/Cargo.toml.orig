@@ -1,0 +1,51 @@
+[package]
+name = "bincode_derive-next"
+version = "3.1.1"
+# remember to update bincode
+authors = [
+    "Xinyu Yang <xinyu.yang@apich.org>",
+    "Zoey Riordan <zoey@dos.cafe>",
+    "Victor Koenders <bincode@trangar.com>",
+    "The bincode-next & bincode developers",
+]
+edition = "2024"
+rust-version = "1.90.0"
+
+repository = "https://github.com/Apich-Organization/bincode"
+documentation = "https://docs.rs/bincode_derive_next"
+readme = "./readme.md"
+categories = ["encoding", "no-std", "memory-management"]
+keywords = ["bincode", "zerocopy", "macros", "bit-packing", "serialization"]
+license = "MIT or Apache-2.0"
+description = "Procedural macros for bincode-next: high-performance derive macros for Encode, Decode, ZeroCopy, and more."
+
+exclude = [
+    "complex_world_decode/*",
+    "complex_world_encode/*",
+    "vec_u64_fixint_native_decode/*",
+    "vec_u64_large_varint_decode/*",
+    "vec_u64_small_varint_decode/*",
+    "vec_u8_bulk_decode/*",
+    "report/*",
+    "index.html",
+    "fuzz/*",
+    "CNAME",
+    "Cargo.lock",
+    'Bench Results of bincode-next.md',
+    "examples/*",
+    ".gitignore",
+    ".github/",
+]
+
+[lib]
+proc-macro = true
+
+[features]
+static-size = []
+zero-copy = []
+
+[lints.clippy]
+empty-line-after-doc-comments = "allow"
+
+[dependencies]
+virtue = { package = "virtue-next", version = "0.1.3" }

@@ -1,0 +1,7 @@
+---
+source: tests/e2e_text.rs
+expression: output
+---
+你好世界欢迎
+来到Rust编程
+语言的世界

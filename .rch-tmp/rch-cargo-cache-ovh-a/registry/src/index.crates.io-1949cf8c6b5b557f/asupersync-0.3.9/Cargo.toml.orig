@@ -1,0 +1,980 @@
+[workspace]
+members = [
+    ".",
+    "asupersync-macros",
+    "asupersync-browser-core",
+    "asupersync-tokio-compat",
+    "conformance",
+    "franken_kernel",
+    "franken_evidence",
+    "franken_decision",
+    "frankenlab", "drop_unwrap_finder",
+]
+exclude = ["fuzz", "asupersync-wasm"]
+
+[package]
+name = "asupersync"
+version = "0.3.9"
+edition = "2024"
+license = "LicenseRef-MIT-OpenAI-Anthropic-Rider"
+description = "Spec-first, cancel-correct, capability-secure async runtime for Rust."
+repository = "https://github.com/Dicklesworthstone/asupersync"
+readme = "README.md"
+documentation = "https://docs.rs/asupersync"
+keywords = ["async", "structured", "cancellation", "runtime"]
+categories = ["asynchronous", "concurrency"]
+include = [
+    "Cargo.toml",
+    "README.md",
+    "LICENSE",
+    "docs/atp_coverage_ledger.md",
+    "docs/atp_test_contract.md",
+    "assets/dashboard.html",
+    "examples/channel_mpsc_select_e2e.rs",
+    "src/**",
+    "tests/atp_quic_bounded_memory.rs",
+    "scripts/generate_rfc6330_vectors.rs",
+    "!src/observability/otel_conformance_tests.rs",
+    "!src/subsystem_mutation_testing.rs",
+    "!**/real_*_e2e_tests.rs",
+    # Keep the published tarball under crates.io's 10 MiB cap: standalone test
+    # suites (`*_tests.rs` / `*_test.rs`) and insta `snapshots/` are cfg(test)-
+    # gated and not compiled when asupersync is consumed as a library
+    # dependency. The few test files that ARE unconditionally compiled into the
+    # lib (verified via dep-info under test-internals,tls-native-roots) are
+    # re-included immediately below so the published crate still builds.
+    "!**/*_tests.rs",
+    "!**/*_test.rs",
+    "!**/snapshots/**",
+    "src/atp/adapter/integration_tests.rs",
+    "src/obligation/metamorphic_tests.rs",
+    "src/observability/otlp_dst_clock_jump_audit_test.rs",
+    "src/sync/lock_ordering_test.rs",
+    "src/transport/half_close_conformance_tests.rs",
+    "!src/bin/io_cap_budget_profile.rs",
+    "!src/bin/verify_blocked_elimination.rs",
+    "!src/bin/quic_conformance_report.rs",
+    "!src/bin/raptorq_k10000_profile.rs",
+    "!src/bin/raptorq_k1024_baseline.rs",
+    "!src/bin/raptorq_profile_manual.rs",
+    "!src/bin/raptorq_profile_test.rs",
+    "!**/*.out",
+    "!**/*.snap.new",
+    "!**/.insta.pending-snap",
+    "!**/.*.pending-snap",
+    "!**/*.bak",
+    "!**/*.bak_*",
+    "!**/*.bak-*",
+    # Browser Edition JS/TS packages and their pnpm store are not part of the
+    # Rust library and only bloat the crates.io tarball (incl. native
+    # sharp-libvips binaries) — keep them out to stay under the 10 MiB cap.
+    "!node_modules/**",
+    "!**/node_modules/**",
+    "!packages/**",
+]
+
+[features]
+default = ["proc-macros", "nightly-outcome-try"]
+# Enables the experimental `Try`/residual impls for Outcome while stable Rust
+# call sites are migrated to explicit helpers.
+nightly-outcome-try = []
+# Reserve a dedicated feature name for the native FABRIC lane. The actual
+# module wiring still lives in `src/messaging/mod.rs` and is not fully gated
+# yet.
+messaging-fabric = []
+waker-profiling = []
+# Feature-gated runtime instrumentation counters (timer-thread spawns,
+# sched_yield calls, worker spins/parks/unparks, live timer population) for the
+# scheduler/timer CPU-efficiency overhaul. Zero cost when disabled: every
+# `runtime::metrics::record_*` helper inlines to an empty body and
+# `runtime::metrics::snapshot()` returns all-zero. Bench/tests opt in.
+runtime-metrics = []
+# Explicit opt-in for experimental browser-targeted builds.
+# This does not imply full wasm parity; it only enables guarded compilation paths.
+wasm-browser-preview = []
+# Browser runtime capability slices for wasm profile composition.
+wasm-runtime = ["wasm-browser-preview"]
+browser-io = []
+browser-trace = []
+deterministic-mode = []
+native-runtime = []
+# Canonical wasm browser profiles (FP-BR-* in the wasm build plan).
+wasm-browser-dev = ["wasm-runtime", "browser-io"]
+wasm-browser-prod = ["wasm-runtime", "browser-io"]
+wasm-browser-deterministic = ["wasm-runtime", "deterministic-mode", "browser-trace"]
+wasm-browser-minimal = ["wasm-runtime"]
+# Enable internal test helpers for integration tests.
+# This exposes private APIs like Cx::new() and is NOT for production use.
+test-internals = ["dep:tracing", "dep:tracing-subscriber", "dep:visibility"]
+# Opt-in for legacy crate-root metamorphic/conformance harness modules that are
+# retained for audit history but not part of the default release compile gate.
+legacy-internal-test-harnesses = []
+# Focused proof lane for protocol serialization goldens and messaging
+# conformance rows without compiling the full legacy harness set.
+serialization-golden-harnesses = []
+# Opt-in umbrella for admitted, environment-gated real-service E2E proof lanes.
+real-service-e2e = [
+    "channel-mpsc-select-e2e",
+    "h3-websocket-e2e",
+    "obligation-cleanup-e2e",
+    "raptorq-roundtrip-e2e",
+]
+# Focused proof lane for the channel/MPSC combinator-selection E2E harness.
+channel-mpsc-select-e2e = []
+# Focused proof lane for the H3 WebSocket endpoint/result E2E harness.
+h3-websocket-e2e = []
+# Focused proof lane for the deterministic RaptorQ roundtrip E2E harness.
+raptorq-roundtrip-e2e = []
+# Focused no-mock obligation cleanup E2E harness for asupersync-9u057b.5.
+obligation-cleanup-e2e = []
+# OpenTelemetry metrics provider only. The normal dependency graph for this
+# feature stays Tokio-free; OTLP protobuf helpers remain fuzz/test-only.
+metrics = ["dep:opentelemetry", "dep:opentelemetry_sdk", "dep:regex"]
+# Enable tracing integration for structured logging and spans.
+# When disabled, tracing macros compile to no-ops for zero overhead.
+tracing-integration = ["dep:tracing"]
+# Enable proc macros for structured concurrency (scope!, spawn!, join!, race!)
+proc-macros = ["dep:asupersync-macros"]
+# Optional Tower adapter for AsupersyncService.
+tower = ["dep:tower"]
+# Enable LZ4 compression for trace files.
+trace-compression = ["dep:lz4_flex"]
+# Enable debug HTTP server for runtime inspection.
+debug-server = []
+# Enable TOML config file loading for RuntimeBuilder.
+config-file = ["dep:toml"]
+# Enable lock contention metrics for ContendedMutex (wait/hold time tracking) and
+# production lock ordering validation. Zero cost when disabled. Enables deadlock
+# prevention checks in production builds for enhanced runtime safety.
+lock-metrics = []
+# Enable real-time obligation leak detection with stack traces and region boundary checks.
+# Zero cost when disabled. Adds comprehensive tracking and attribution for debugging obligation leaks.
+obligation-leak-detection = []
+# Enable io_uring reactor for Linux/Android modern async I/O (requires kernel 5.1+).
+io-uring = ["dep:io-uring"]
+# Enable TLS support via rustls. The rustls ring provider is selected here so
+# TLS remains fully functional out of the box; certificate pin hashing itself
+# uses the existing pure-Rust sha2 dependency and does not depend on ring.
+tls = ["dep:rustls", "dep:rustls-pki-types", "rustls/ring", "dep:rustls-pemfile", "dep:x509-parser"]
+# Enable native root certificates for TLS
+tls-native-roots = ["tls", "dep:rustls-native-certs"]
+# Enable webpki root certificates for TLS
+tls-webpki-roots = ["tls", "dep:webpki-roots"]
+# Enable CLI tooling (trace inspection).
+cli = [
+    "dep:clap",
+    "dep:time",
+    "trace-compression",
+    "dep:serde_yaml",
+    "dep:chrono",
+    "dep:env_logger",
+    "config-file",
+    "tracing-integration",
+]
+# Enable the small standalone `atp` file-transfer binary.
+#
+# Keep TLS bundled with the CLI feature: `--transport quic` is a first-class ATP
+# CLI mode and the encrypted matrix tier (`atp-quic-tls13`) builds the release
+# binary with `--features atp-cli`. If this feature omits `tls`, the CLI still
+# parses `--transport quic` but exits immediately from the cfg-disabled QUIC
+# branch instead of running the TLS-1.3 data plane.
+atp-cli = ["dep:clap", "tls", "dep:rustls-native-certs"]
+# Enable SQLite async wrapper with blocking pool integration.
+sqlite = ["dep:rusqlite", "dep:sqlparser"]
+# Enable PostgreSQL async client with wire protocol.
+postgres = []
+# Enable MySQL async client with wire protocol.
+mysql = []
+# Native QUIC/HTTP3 rollout surfaces (T4.1).
+# These expose Tokio-free native paths for inventory/build/test contracts.
+quic = []
+http3 = ["quic"]
+# Enable ATP Tailscale candidate-provider integration points. This intentionally
+# carries no Tailscale crate dependency; callers feed provider output into the
+# ATP path model and ATP still runs native QUIC over the selected address.
+tailscale-path-provider = []
+# Legacy Tokio-backed compatibility wrappers live in the separate
+# `asupersync-tokio-compat` crate, not in the core feature graph.
+# Enable tokio compatibility layer for transfer actors.
+tokio-compat = []
+# Enable Kafka client integration via rdkafka.
+kafka = ["dep:rdkafka"]
+# CI umbrella for cross-platform runners that cannot build optional
+# Unix/service-bound integrations. Keep Tokio-backed benchmark adapters out of
+# this umbrella; they are explicit benchmark-only quarantine lanes.
+# Unix release gates still use --all-features, which covers kafka and io-uring
+# directly.
+ci-cross-platform = [
+    "messaging-fabric",
+    "waker-profiling",
+    "wasm-browser-preview",
+    "wasm-runtime",
+    "browser-io",
+    "browser-trace",
+    "deterministic-mode",
+    "native-runtime",
+    "wasm-browser-dev",
+    "wasm-browser-prod",
+    "wasm-browser-deterministic",
+    "wasm-browser-minimal",
+    "test-internals",
+    "legacy-internal-test-harnesses",
+    "serialization-golden-harnesses",
+    "real-service-e2e",
+    "h3-websocket-e2e",
+    "raptorq-roundtrip-e2e",
+    "obligation-cleanup-e2e",
+    "metrics",
+    "tracing-integration",
+    "proc-macros",
+    "tower",
+    "trace-compression",
+    "debug-server",
+    "config-file",
+    "lock-metrics",
+    "obligation-leak-detection",
+    "tls",
+    "tls-native-roots",
+    "tls-webpki-roots",
+    "cli",
+    "sqlite",
+    "postgres",
+    "mysql",
+    "quic",
+    "http3",
+    "tailscale-path-provider",
+    "tokio-compat",
+    "compression",
+    "simd-intrinsics",
+    "loom-tests",
+    "cancel-correctness-oracle",
+    "lab-stack-traces",
+    "criterion-benches",
+    "atpd-daemon",
+    "fuzz",
+]
+# Enable HTTP response compression (gzip, deflate, Brotli).
+compression = ["dep:flate2", "dep:brotli"]
+# Enable unsafe AVX2/NEON intrinsics for ~8x GF(256) throughput in RaptorQ.
+# When disabled, the safe portable SIMD fallback (std::simd) still provides ~2-3x
+# over scalar table lookups. Disable to keep the raptorq module free of unsafe code.
+simd-intrinsics = []
+# Enable Loom concurrency tests for scheduler verification.
+loom-tests = ["dep:loom"]
+# Enable Cancel-Correctness Property Oracle for cancellation protocol verification.
+cancel-correctness-oracle = []
+# Enable stack trace capture for lab oracle violations.
+lab-stack-traces = ["dep:backtrace", "dep:rustc-demangle"]
+# Enable benchmark adapter framework for performance testing
+benchmark-adapters = [
+    "dep:async-trait",
+    "dep:tokio",
+    "dep:tracing",
+    "tokio/macros",
+    "tokio/sync",
+    "tokio/time",
+    "dep:num_cpus",
+    "dep:whoami",
+    "dep:chrono",
+]
+# Enable Criterion-powered native benchmark targets.
+#
+# This stays outside the default feature set because Criterion 0.8 pulls in
+# `alloca` on Windows, which needs a C cross-compiler even for `cargo check`.
+# Windows production/CLI checks should not compile Unix-maintained benchmark
+# harness plumbing unless the operator explicitly opts into benchmark targets.
+criterion-benches = []
+# Gate the unpublished ATP daemon binary out of default release checks until
+# its daemon supervision/runtime contract is wired into the supported CLI.
+atpd-daemon = ["cli", "dep:tracing-subscriber"]
+# Enable fuzzing support with arbitrary derive macros and OTLP request helpers.
+# This intentionally enables opentelemetry-proto's tonic-generated messages and
+# is outside the production no-Tokio guarantee.
+fuzz = ["dep:arbitrary", "dep:opentelemetry-proto"]
+
+[lib]
+path = "src/lib.rs"
+
+[[bin]]
+name = "asupersync"
+path = "src/bin/asupersync.rs"
+required-features = ["cli"]
+
+[[bin]]
+name = "offline_tuner"
+path = "src/bin/offline_tuner.rs"
+required-features = ["cli", "simd-intrinsics"]
+
+[[bin]]
+name = "generate_rfc6330_vectors"
+path = "scripts/generate_rfc6330_vectors.rs"
+
+[[bin]]
+name = "atpd"
+path = "src/bin/atpd.rs"
+required-features = ["atpd-daemon"]
+
+[[bin]]
+name = "atp"
+path = "src/bin/atp.rs"
+required-features = ["atp-cli"]
+
+[[bin]]
+name = "channel_mpsc_select_e2e"
+path = "src/bin/channel_mpsc_select_e2e.rs"
+required-features = ["channel-mpsc-select-e2e"]
+
+[dependencies]
+# Phase 0: prefer std/core; avoid bringing in executors/runtimes.
+# Dependencies added here must preserve determinism in the lab runtime.
+thiserror = "2.0"
+crossbeam-queue = "0.3"
+parking_lot = "0.12"
+slab = "0.4"
+smallvec = "1.15"
+pin-project = "1.1"
+rmp-serde = "1.3"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+semver = { version = "1.0", features = ["serde"] }
+memchr = "2.8"
+getrandom = "0.4"
+hex = "0.4"
+unicode-normalization = "0.1.25"
+# Use maintained bincode-next (crate imported as `bincode`) with serde interop.
+bincode = { package = "bincode-next", version = "3.1.1", features = ["serde"] }
+# Optional tracing integration - only compiled when tracing-integration feature is enabled
+tracing = { version = "0.1", optional = true }
+# Optional tracing subscriber for test-internals feature
+tracing-subscriber = { version = "0.3", optional = true }
+# Optional OpenTelemetry metrics provider
+opentelemetry = { version = "0.32", default-features = false, features = ["metrics", "trace"], optional = true }
+opentelemetry_sdk = { version = "0.32", default-features = false, features = ["metrics", "trace"], optional = true }
+regex = { version = "1.12", optional = true }
+# OTLP protobuf builders used by fuzz/test-only wire-format helpers. The
+# gen-tonic-messages feature pulls tonic/tokio transitively and is intentionally
+# not part of the metrics feature.
+opentelemetry-proto = { version = "0.32", default-features = false, features = ["gen-tonic-messages", "trace", "metrics", "logs"], optional = true }
+# Optional Tower trait integration
+tower = { version = "0.5.3", optional = true }
+# Optional proc macros for structured concurrency
+asupersync-macros = { version = "0.3.9", path = "asupersync-macros", optional = true }
+# FrankenSuite evidence ledger, kernel types, and decision contracts (bd-1e2if.3, bd-1e2if.6)
+franken-decision = { version = "0.3.9", path = "franken_decision" }
+franken-evidence = { version = "0.3.9", path = "franken_evidence" }
+franken-kernel = { version = "0.3.9", path = "franken_kernel" }
+# Optional conformance tooling (CLI + reports) - removed to break cyclic dependency
+# conformance = { package = "asupersync-conformance", version = "0.3.8", path = "conformance", optional = true }
+# Optional LZ4 compression for trace files
+lz4_flex = { version = "0.13", optional = true }
+# Optional visibility macro for test-internals feature
+visibility = { version = "0.1", optional = true }
+# Optional arbitrary derive support for fuzzing
+arbitrary = { version = "1", features = ["derive"], optional = true }
+# Tempfile helper for test-internals and test logging utilities.
+tempfile = "3.25"
+# Async trait support for benchmark adapters
+async-trait = { version = "0.1", optional = true }
+# Tokio async runtime for benchmark execution
+tokio = { version = "1.0", features = ["rt", "fs", "process"], optional = true }
+# System information for benchmark environment
+num_cpus = { version = "1.0", optional = true }
+whoami = { version = "2", optional = true }
+# TLS support via rustls
+rustls = { version = "0.23.39", default-features = false, features = ["std", "tls12"], optional = true }
+rustls-pki-types = { version = "1.14.1", optional = true }
+# Optional native root certificates
+rustls-native-certs = { version = "0.8", optional = true }
+# Optional webpki root certificates
+webpki-roots = { version = "1.0", optional = true }
+# PEM file parsing for TLS certificates
+rustls-pemfile = { version = "2.2", optional = true }
+# Base64 encoding for WebSocket handshake and certificate pins
+base64 = "0.22.1"
+# NATS nkey seed parsing and nonce signing
+nkeys = "0.4.5"
+# SHA-1 hashing for WebSocket Sec-WebSocket-Accept calculation (RFC 6455)
+sha1 = "0.11"
+# signal-hook moved to [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+# X.509 certificate parsing for SPKI extraction
+x509-parser = { version = "0.18", optional = true }
+# Optional TOML config file support for RuntimeBuilder
+toml = { version = "1.0", optional = true }
+clap = { version = "4.4", features = ["derive"], optional = true }
+time = { version = ">=0.3", features = ["formatting"], optional = true }
+chrono = { version = "0.4", features = ["serde"], optional = true }
+env_logger = { version = "0.11", optional = true }
+# YAML parsing for FrankenLab scenario files (CLI feature)
+serde_yaml = { version = "0.9", optional = true }
+# SQLite async wrapper - bundled by default for portability; "hooks" enables
+# progress_handler for budget-derived statement timeouts
+# (br-asupersync-server-stack-hardening-eeexl1.1.2)
+rusqlite = { version = "0.40", features = ["bundled", "hooks"], optional = true }
+# SQL parser for secure SQL surface validation (asupersync-dn5hn8)
+sqlparser = { version = "0.62", optional = true }
+# SHA-256 for HMAC-SHA256 (Macaroon caveat chains) and PostgreSQL SCRAM
+sha2 = "0.11"
+# HMAC for Macaroon capability token verification (bd-2lqyk.2)
+hmac = "0.13"
+# Constant-time equality for authentication tags.
+subtle = "2.6"
+# Secure memory zeroization for AuthKey and other sensitive data
+zeroize = { version = "1.8", features = ["derive"] }
+# HKDF for QUIC key derivation (RFC 9001)
+hkdf = "0.13"
+# CRC32 for Kafka RecordBatch v2 format validation (KIP-98)
+crc32fast = "1.4"
+# QUIC/HTTP3 is intentionally native-only for ATP and the runtime core.
+# Do not add an external QUIC/H3 stack dependency here.
+# Kafka client integration via rdkafka (optional, requires librdkafka on the system).
+rdkafka = { version = "0.39", default-features = false, optional = true }
+# Systematic concurrency testing for scheduler (loom-tests feature)
+loom = { version = "0.7", optional = true }
+# Stack trace capture for lab oracle violations
+backtrace = { version = "0.3", optional = true }
+# Symbol demangling for readable stack traces
+rustc-demangle = { version = "0.1", optional = true }
+# Reactor backends use HashMap on multiple platforms.
+hashbrown = "0.17"
+# Lightweight async helpers used by web handler adapter shims.
+futures-lite = "2.6"
+# Optional gzip/deflate compression via pure-Rust miniz_oxide backend.
+flate2 = { version = "1.1", optional = true }
+# Optional Brotli compression for HTTP response bodies.
+brotli = { version = "8.0", optional = true }
+# System information for daemon process control
+sysinfo = "0.39"
+crossbeam-deque = "0.8.6"
+prost = "0.14"
+
+[target.'cfg(any(target_os = "linux", target_os = "android"))'.dependencies]
+io-uring = { version = "0.7", optional = true }
+
+# Win32 primitives for the signal-poller shutdown event
+# (br-asupersync-rsq3qj). CreateEventW + WaitForMultipleObjects + SetEvent
+# replace the previous park_timeout-based shutdown of
+# `asupersync-signal-poll-win` with sub-ms latency on signal delivery
+# and proper kernel-event-driven wakeup on runtime drop.
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61.2", features = [
+    "Win32_Foundation",
+    "Win32_NetworkManagement_IpHelper",
+    "Win32_Networking_WinSock",
+    "Win32_Storage_FileSystem",
+    "Win32_System_IO",
+    "Win32_System_Threading",
+] }
+
+# wasm32 browser builds require JS-backed entropy wiring for getrandom.
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+getrandom = { version = "0.4", features = ["wasm_js"] }
+js-sys = "0.3"
+wasm-bindgen = "0.2"
+wasm-bindgen-futures = "0.4"
+web-sys = { version = "0.3", features = [
+    "BroadcastChannel",
+    "DomException",
+    "Event",
+    "EventTarget",
+    "IdbDatabase",
+    "IdbFactory",
+    "IdbObjectStore",
+    "IdbOpenDbRequest",
+    "IdbRequest",
+    "IdbTransaction",
+    "IdbTransactionMode",
+    "MessageChannel",
+    "MessagePort",
+    "MessageEvent",
+    "Window",
+    "Storage",
+    "ReadableStream",
+    "ReadableStreamDefaultReader",
+    "WorkerGlobalScope",
+    "WritableStream",
+    "WritableStreamDefaultWriter",
+] }
+
+# Native-only dependencies: platform I/O, sockets, signals, and ATP crypto.
+# These are excluded from wasm32 browser builds (umelq.3.3).
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+polling = "3.11"
+socket2 = { version = "0.6", features = ["all"] }
+libc = "0.2"
+nix = { version = "0.31", features = ["fs", "net", "poll", "signal", "socket", "uio", "user"] }
+signal-hook = "0.4"
+aes-gcm = "0.10.3"
+chacha20poly1305 = "0.10.1"
+
+# xattr is unix-only (its source references std::os::unix); gate the dependency
+# so non-unix targets (e.g. x86_64-pc-windows-msvc) don't try to compile it.
+# The xattr call sites in src/net/atp/transport_common/metadata.rs are already
+# #[cfg(unix)]-gated.
+[target.'cfg(unix)'.dependencies]
+xattr = "1.6.1"
+
+[dev-dependencies]
+proptest = "1.10"
+# Compile-fail contract for the capability-gated v2 spawn surface
+# (tests/compile_fail_spawn.rs); same version as asupersync-macros.
+trybuild = "1.0"
+# Path-only (no version): the conformance crate is never published, so keep it
+# out of the published manifest. Dev-deps don't affect consumers; the path still
+# resolves locally for asupersync's own conformance test suite.
+conformance = { package = "asupersync-conformance", path = "conformance", default-features = false }
+tempfile = "3.25"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+opentelemetry_sdk = { version = "0.32", default-features = false, features = ["metrics", "testing"] }
+# Dev-only OTLP wire fixtures use tonic-generated protobuf messages; this edge
+# is scoped to tests/fuzzing and not to the default or metrics production graph.
+opentelemetry-proto = { version = "0.32", default-features = false, features = ["gen-tonic-messages", "trace", "metrics", "logs"] }
+lz4_flex = "0.13"
+toml = "1.0"
+chrono = { version = "0.4", features = ["serde"] }
+rayon = "1.12"
+serde_yaml = "0.9"
+flate2 = "1.1"
+# Golden snapshot testing for encoded blocks and artifacts
+insta = { version = "1.40", features = ["json", "yaml"] }
+# Lightweight deterministic RNG for randomized test harnesses
+fastrand = "2.3"
+# HTTP/1.1 reference implementation for conformance testing
+httparse = "1.8"
+# tokio-util for differential conformance testing of LengthDelimitedCodec
+tokio-util = { version = "0.7", features = ["codec"] }
+# sqlx MySQL reference implementation for binary-protocol differential tests.
+# The harness disables MySQL TLS at runtime, so keep this dev edge TLS-free;
+# otherwise default Windows test builds must compile ring before they reach
+# asupersync code.
+sqlx = { version = "0.9", default-features = false, features = ["mysql", "runtime-tokio", "tls-none"] }
+# redis-rs for differential conformance testing of RESP3 push dispatch
+redis = "1.2"
+# External RFC 6330 decoder for byte-level RaptorQ interoperability checks
+raptorq = "2.0"
+# Tokio for differential semaphore fairness conformance testing
+tokio = { version = "1.0", features = ["rt", "sync", "time"] }
+
+[target.'cfg(not(windows))'.dev-dependencies]
+# Criterion 0.8 depends on `alloca` on Windows, which requires a C compiler
+# even for `cargo check --tests`. Keep benchmark support unchanged on the
+# Unix lanes where these benches are maintained, while keeping Windows test
+# checks focused on asupersync code instead of benchmark harness plumbing.
+criterion = { version = "0.8", features = ["html_reports"] }
+
+[[test]]
+name = "kafka_real_broker"
+path = "tests/integration/kafka_real_broker.rs"
+
+[[test]]
+name = "lock_contention_atlas_contract"
+path = "tests/lock_contention_atlas_contract.rs"
+
+[[test]]
+name = "timer_wheel_advance_invariants"
+path = "tests/metamorphic/timer_wheel_advance_invariants.rs"
+
+[[test]]
+name = "atp_quic_bounded_memory"
+path = "tests/atp_quic_bounded_memory.rs"
+required-features = ["tls", "test-internals"]
+
+[[bench]]
+name = "phase0_baseline"
+harness = false
+required-features = ["test-internals", "criterion-benches"]
+
+[[bench]]
+name = "lab_iocap_contention"
+harness = false
+required-features = ["test-internals", "criterion-benches"]
+
+[[bench]]
+name = "timer_wheel"
+harness = false
+required-features = ["criterion-benches"]
+
+[[bench]]
+name = "reactor_benchmark"
+harness = false
+required-features = ["criterion-benches"]
+
+[[bench]]
+name = "protocol_benchmark"
+harness = false
+required-features = ["criterion-benches"]
+
+[[bench]]
+name = "udp_send_batch_bench"
+harness = false
+required-features = ["criterion-benches"]
+
+[[bench]]
+name = "tracing_overhead"
+harness = false
+required-features = ["criterion-benches"]
+
+[[bench]]
+name = "scheduler_benchmark"
+harness = false
+required-features = ["test-internals", "criterion-benches"]
+
+# Scheduler CPU/churn baseline harness (custom main, not criterion) for the
+# runtime-cpu-overhaul epic. Reads runtime::metrics counters, so it is gated on
+# the `runtime-metrics` feature.
+[[bench]]
+name = "scheduler_cpu_churn"
+harness = false
+required-features = ["runtime-metrics", "test-internals"]
+
+[[bench]]
+name = "cancel_storm"
+harness = false
+required-features = ["test-internals", "criterion-benches"]
+
+[[bench]]
+name = "cancel_trace_bench"
+harness = false
+required-features = ["test-internals", "criterion-benches"]
+
+[[bench]]
+name = "raptorq_benchmark"
+harness = false
+required-features = ["criterion-benches"]
+
+[[bench]]
+name = "gf256_multiply"
+harness = false
+required-features = ["criterion-benches"]
+
+[[bench]]
+name = "raptorq_emission_bench"
+harness = false
+required-features = ["criterion-benches"]
+
+[[bench]]
+name = "egraph_benchmark"
+harness = false
+required-features = ["criterion-benches"]
+
+[[bench]]
+name = "cancel_drain_bench"
+harness = false
+required-features = ["test-internals", "criterion-benches"]
+
+[[bench]]
+name = "geodesic_benchmark"
+harness = false
+required-features = ["test-internals", "criterion-benches"]
+
+[[bench]]
+name = "homology_benchmark"
+harness = false
+required-features = ["test-internals", "criterion-benches"]
+
+[[bench]]
+name = "golden_output"
+harness = false
+required-features = ["test-internals", "criterion-benches"]
+
+[[bench]]
+name = "spork_baseline"
+harness = false
+required-features = ["test-internals", "criterion-benches"]
+
+[[bench]]
+name = "methodology_baselines"
+harness = false
+required-features = ["test-internals", "criterion-benches"]
+
+[[bench]]
+name = "spawn_throughput"
+harness = false
+required-features = ["test-internals", "criterion-benches"]
+
+[[bench]]
+name = "load_balancer_benchmark"
+harness = false
+required-features = ["criterion-benches"]
+
+[[bench]]
+name = "semaphore_benchmark"
+harness = false
+required-features = ["criterion-benches"]
+
+[[bench]]
+name = "fabric_bench"
+harness = false
+required-features = ["messaging-fabric", "test-internals", "criterion-benches"]
+
+[[bench]]
+name = "bytes_allocation_profile"
+harness = false
+required-features = ["messaging-fabric", "test-internals", "criterion-benches"]
+
+[[bench]]
+name = "scheduler_browser_bench"
+harness = false
+required-features = ["test-internals", "criterion-benches"]
+
+[[bench]]
+name = "otlp_trace_exporter_bench"
+harness = false
+required-features = ["test-internals", "criterion-benches"]
+
+[[bench]]
+name = "atomic_ordering_bench"
+harness = false
+required-features = ["criterion-benches"]
+
+[[bench]]
+name = "gf256_benchmark"
+harness = false
+required-features = ["criterion-benches"]
+
+[[bench]]
+name = "memory_ordering_bench"
+harness = false
+required-features = ["criterion-benches"]
+
+[[bench]]
+name = "memory_ordering_optimization"
+harness = false
+required-features = ["criterion-benches"]
+
+[[bench]]
+name = "next_task_hotpath"
+harness = false
+required-features = ["test-internals", "criterion-benches"]
+
+[[bench]]
+name = "otlp_queue_contention"
+harness = false
+required-features = ["criterion-benches"]
+
+[[bench]]
+name = "raptorq_blocked_elimination_bench"
+harness = false
+required-features = ["criterion-benches"]
+
+[[bench]]
+name = "raptorq_large_k_profile"
+harness = false
+required-features = ["criterion-benches"]
+
+[[bench]]
+name = "scheduler_autotuner_bench"
+harness = false
+required-features = ["criterion-benches"]
+
+[[bench]]
+name = "trace_recorder_hotpath"
+harness = false
+required-features = ["criterion-benches"]
+
+[[bench]]
+name = "virtual_time_wheel_cancel_storm"
+harness = false
+required-features = ["criterion-benches"]
+
+[[bench]]
+name = "waker_allocation_profile"
+harness = false
+required-features = ["criterion-benches"]
+
+[[bench]]
+name = "atp_j5_workflows_bench"
+path = "benches/atp_j5_workflows_bench.rs"
+harness = false
+required-features = ["cli", "criterion-benches"]
+
+[[bench]]
+name = "atp_lab_benchmarks"
+harness = false
+required-features = ["benchmark-adapters", "criterion-benches"]
+
+[[bench]]
+name = "atp_autotune_decision"
+path = "benches/atp/autotune/decision.rs"
+harness = false
+required-features = ["criterion-benches"]
+
+[[bench]]
+name = "mysql_prepared_cache"
+harness = false
+required-features = ["mysql", "test-internals", "criterion-benches"]
+
+[[test]]
+name = "atp_autotune_safety_regression"
+path = "tests/atp/autotune_regression/safety.rs"
+
+[[test]]
+name = "atp_per_module_logging_redaction_contract"
+path = "tests/atp/per_module/logging_redaction_contract.rs"
+
+[[example]]
+name = "spork_minimal_supervised_app"
+required-features = ["test-internals"]
+
+[[example]]
+name = "channel_mpsc_select_e2e"
+required-features = ["channel-mpsc-select-e2e"]
+
+[[example]]
+name = "production_service"
+required-features = ["sqlite"]
+
+[profile.release]
+opt-level = 3
+lto = "fat"
+codegen-units = 1
+strip = "symbols"
+
+[profile.bench]
+opt-level = 3
+lto = "fat"
+codegen-units = 1
+
+[profile.release-perf]
+inherits = "release"
+opt-level = 3
+lto = "thin"
+debug = "line-tables-only"
+strip = false
+
+[lints.rust]
+# Default to deny for unsafe code - specific modules that require it can use #[allow(unsafe_code)]
+# The epoll reactor requires unsafe for the polling crate's FFI operations
+unexpected_cfgs = { level = "warn", check-cfg = ['cfg(loom)', 'cfg(fuzzing)', 'cfg(feature, values("quic", "http3", "wasm-browser-preview", "simd-intrinsics", "messaging-fabric", "obligation-cleanup-e2e"))'] }
+unsafe_code = "deny"
+# Public API documentation is tracked as release content, not as a compiler
+# noise source during warning-clean release gates.
+missing_docs = "allow"
+unused = { level = "warn", priority = -1 }
+# Proptest's prop_compose! expands doc comments on items the rust compiler can't
+# attach docs to; downgrade so test suites using proptest compile under -D warnings.
+unused_doc_comments = "allow"
+
+[lints.clippy]
+pedantic = { level = "warn", priority = -1 }
+nursery = { level = "warn", priority = -1 }
+module_name_repetitions = "allow"
+must_use_candidate = "allow"
+# Phase 0: Allow documentation and const lints for stubs
+missing_panics_doc = "allow"
+missing_errors_doc = "allow"
+missing_const_for_fn = "allow"
+# Phase 0: Allow module naming patterns
+module_inception = "allow"
+# Phase 0: Allow doc formatting patterns (math notation)
+doc_markdown = "allow"
+# Phase 0: Allow casts (arena is bounded at 2^32)
+cast_possible_truncation = "allow"
+# Many Duration::from_millis(1000) patterns are intentionally explicit about units
+duration_suboptimal_units = "allow"
+# Rust 2024 migration: postpone broad style-only rewrites from let-chain opportunities.
+collapsible_if = "allow"
+# WIP-module pedantic/nursery lints that are predominantly style issues in the
+# epoch_gc, resource_monitor, cancellation_*, and channel verification harnesses.
+# Not correctness concerns — just accumulated style debt during rapid design
+# iteration. Downgraded to allow at the workspace level so `cargo clippy
+# --all-targets -- -D warnings` passes while individual cleanup lands.
+cast_precision_loss = "allow"
+cast_sign_loss = "allow"
+cast_lossless = "allow"
+significant_drop_tightening = "allow"
+significant_drop_in_scrutinee = "allow"
+uninlined_format_args = "allow"
+match_same_arms = "allow"
+format_push_string = "allow"
+float_cmp = "allow"
+items_after_statements = "allow"
+items_after_test_module = "allow"
+needless_pass_by_value = "allow"
+option_if_let_else = "allow"
+unused_async = "allow"
+unused_self = "allow"
+redundant_clone = "allow"
+redundant_closure_for_method_calls = "allow"
+missing_fields_in_debug = "allow"
+single_match = "allow"
+single_match_else = "allow"
+struct_excessive_bools = "allow"
+default_trait_access = "allow"
+unreadable_literal = "allow"
+too_many_lines = "allow"
+too_many_arguments = "allow"
+type_complexity = "allow"
+match_like_matches_macro = "allow"
+unnecessary_wraps = "allow"
+unnecessary_sort_by = "allow"
+wrong_self_convention = "allow"
+new_without_default = "allow"
+should_implement_trait = "allow"
+or_fun_call = "allow"
+suboptimal_flops = "allow"
+no_effect_underscore_binding = "allow"
+used_underscore_binding = "allow"
+similar_names = "allow"
+result_large_err = "allow"
+useless_vec = "allow"
+format_collect = "allow"
+unit_arg = "allow"
+field_reassign_with_default = "allow"
+assertions_on_constants = "allow"
+manual_div_ceil = "allow"
+manual_is_multiple_of = "allow"
+len_zero = "allow"
+large_enum_variant = "allow"
+match_wild_err_arm = "allow"
+branches_sharing_code = "allow"
+read_zero_byte_vec = "allow"
+unused_peekable = "allow"
+collection_is_never_read = "allow"
+manual_checked_ops = "allow"
+arithmetic_side_effects = "allow"
+must_use_unit = "allow"
+needless_pass_by_ref_mut = "allow"
+trivially_copy_pass_by_ref = "allow"
+redundant_field_names = "allow"
+bool_assert_comparison = "allow"
+use_self = "allow"
+redundant_else = "allow"
+derive_partial_eq_without_eq = "allow"
+return_self_not_must_use = "allow"
+semicolon_if_nothing_returned = "allow"
+if_not_else = "allow"
+unnecessary_debug_formatting = "allow"
+inefficient_to_string = "allow"
+explicit_iter_loop = "allow"
+explicit_into_iter_loop = "allow"
+ptr_as_ptr = "allow"
+borrow_as_ptr = "allow"
+cognitive_complexity = "allow"
+missing_inline_in_public_items = "allow"
+option_option = "allow"
+large_futures = "allow"
+ignored_unit_patterns = "allow"
+redundant_pattern_matching = "allow"
+manual_let_else = "allow"
+struct_field_names = "allow"
+# Nightly clippy drift surfaced these style-only lints across existing ATP,
+# RaptorQ, runtime, and messaging code during br-asupersync-uw1cc2. Keep the
+# all-target clippy gate focused on correctness warnings while those broad
+# mechanical cleanups remain separate work.
+suspicious_operation_groupings = "allow"
+double_must_use = "allow"
+chunks_exact_to_as_chunks = "allow"
+unnecessary_lazy_evaluations = "allow"
+manual_clamp = "allow"
+map_unwrap_or = "allow"
+iter_with_drain = "allow"
+manual_slice_fill = "allow"
+useless_conversion = "allow"
+needless_range_loop = "allow"
+drain_collect = "allow"
+doc_lazy_continuation = "allow"
+assign_op_pattern = "allow"
+question_mark = "allow"
+implicit_clone = "allow"
+cloned_ref_to_slice_refs = "allow"

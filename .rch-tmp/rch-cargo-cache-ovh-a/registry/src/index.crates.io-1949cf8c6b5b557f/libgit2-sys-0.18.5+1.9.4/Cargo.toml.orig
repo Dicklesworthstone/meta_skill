@@ -1,0 +1,52 @@
+[package]
+name = "libgit2-sys"
+version = "0.18.5+1.9.4"
+authors = ["Josh Triplett <josh@joshtriplett.org>", "Alex Crichton <alex@alexcrichton.com>"]
+links = "git2"
+build = "build.rs"
+repository = "https://github.com/rust-lang/git2-rs"
+license = "MIT OR Apache-2.0"
+description = "Native bindings to the libgit2 library"
+exclude = [
+    "libgit2/ci/*",
+    "libgit2/docs/*",
+    "libgit2/examples/*",
+    "libgit2/fuzzers/*",
+    "libgit2/tests/*",
+]
+edition = "2021"
+
+[lib]
+name = "libgit2_sys"
+path = "lib.rs"
+
+[dependencies]
+libc = "0.2"
+libssh2-sys = { version = "0.3.0", optional = true }
+libz-sys = { version = "1.1.0", default-features = false, features = ["libc"] }
+
+[build-dependencies]
+pkg-config = "0.3.15"
+cc = { version = "1.0.43", features = ['parallel'] }
+
+[target.'cfg(unix)'.dependencies]
+openssl-sys = { version = "0.9.45", optional = true }
+
+[features]
+ssh = ["libssh2-sys"]
+https = ["openssl-sys"]
+vendored = []
+vendored-openssl = ["openssl-sys/vendored"]
+zlib-ng-compat = ["libz-sys/zlib-ng", "libssh2-sys?/zlib-ng-compat"]
+# Experimental SHA256 OID support,
+# reflecting upstream libgit2's GIT_EXPERIMENTAL_SHA256.
+#
+# This is an ABI-breaking change.
+# Future releases with this feature may introduce breakages without notice
+# Use at your own risk.
+#
+# Library authors:
+# DO NOT enable this feature by default in your dependencies.
+# Due to Cargo's additive features,
+# downstream users cannot deactivate it once enabled.
+unstable-sha256 = []

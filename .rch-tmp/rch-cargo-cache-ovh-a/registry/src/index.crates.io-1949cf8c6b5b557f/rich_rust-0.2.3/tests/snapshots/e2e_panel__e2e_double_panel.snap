@@ -1,0 +1,7 @@
+---
+source: tests/e2e_panel.rs
+expression: output
+---
+╔════════ Alert ════════╗
+║ Important!            ║
+╚═══════════════════════╝

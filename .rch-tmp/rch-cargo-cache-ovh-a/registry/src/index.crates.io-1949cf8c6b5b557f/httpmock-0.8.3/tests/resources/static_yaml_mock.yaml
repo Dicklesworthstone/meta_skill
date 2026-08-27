@@ -1,0 +1,54 @@
+when:
+  method: POST
+  path: /hello
+  path_matches:
+    - test
+  path_contains:
+    - el
+  query_param_exists:
+    - query
+  query_param:
+    - name: query
+      value: Metallica
+  header:
+    - name: content-type
+      value: application/json
+  header_exists:
+    - content-type
+  cookie_exists:
+    - MY_COOKIE
+  cookie:
+    - name: MY_COOKIE
+      value: a-cookie-value
+  body_contains:
+    - "example body"
+  body_matches:
+    - test
+  body: |-
+    this is a multiline
+    example body string
+    where linebreaks
+    DO NOT ADDITIONALLY
+    ADD SPACE CHACATERS
+    and INDENTATION IS
+    IGNORED as with
+    usual yaml.
+  json_body: |-
+    {
+      "key" : "value"
+    }
+  json_body_partial:
+    - '{ "key" : "value" }'
+  x_www_form_urlencoded_tuple:
+    - name: query
+      value: Peter Griffin
+  x_www_form_urlencoded_key_exists:
+    - query
+then:
+  status: 200
+  header:
+    - name: content-type
+      value: application/json
+  body: "this is an example body string"
+  json_body: '{ "key" : "value" }'
+  delay: 2000

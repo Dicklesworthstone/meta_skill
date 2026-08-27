@@ -1,0 +1,9 @@
+---
+source: tests/e2e_rendering.rs
+expression: plain
+---
+Title
+───────────
+✓ Item 1
+✗ Item 2
+! Item 3

@@ -1,0 +1,8 @@
+---
+source: crates/fsqlite-vdbe/tests/golden_bytecode_snapshots.rs
+expression: cte_reference
+---
+case: cte_reference_filter
+sql: WITH picked AS (SELECT id FROM categories WHERE name = 'docs') SELECT id, title FROM docs WHERE category_id IN (SELECT id FROM picked)
+status: codegen_error
+error: unsupported: WITH clauses require connection-level CTE lowering or an explicit fallback boundary

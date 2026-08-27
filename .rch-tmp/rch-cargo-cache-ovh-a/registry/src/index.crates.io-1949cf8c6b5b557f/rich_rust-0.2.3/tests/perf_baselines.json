@@ -1,0 +1,18 @@
+{
+  "version": "1.0.0",
+  "description": "Performance regression baselines for rich_rust E2E tests",
+  "note": "Update baselines with UPDATE_PERF_BASELINE=1 cargo test --test e2e_performance",
+  "regression_threshold_percent": 50,
+  "baselines": {
+    "large_table_100x10_ms": 200,
+    "large_table_500x20_ms": 800,
+    "color_parse_10000_ms": 200,
+    "color_parse_10000_cached_ms": 80,
+    "text_wrap_10000_chars_ms": 100,
+    "text_wrap_50000_chars_ms": 1500,
+    "markup_parse_simple_1000_ms": 120,
+    "markup_parse_nested_1000_ms": 250,
+    "segment_merge_10000_ms": 100,
+    "style_combine_10000_ms": 60
+  }
+}

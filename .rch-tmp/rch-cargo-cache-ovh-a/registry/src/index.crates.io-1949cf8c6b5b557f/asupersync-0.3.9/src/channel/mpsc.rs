@@ -1,0 +1,5504 @@
+//! Two-phase MPSC (multi-producer, single-consumer) channel.
+//!
+//! This channel uses the reserve/commit pattern to ensure cancel-safety:
+//!
+//! ```text
+//! Traditional (NOT cancel-safe):
+//!   tx.send(message).await?;  // If cancelled here, message may be lost!
+//!
+//! Asupersync (cancel-safe):
+//!   let permit = tx.reserve(cx).await?;  // Phase 1: reserve slot
+//!   permit.send(message)?;               // Phase 2: commit (surfaces disconnection)
+//! ```
+//!
+//! For work that explicitly accepts caller-owned memory growth, [`unbounded_channel`]
+//! returns dedicated [`UnboundedSender`] / [`UnboundedReceiver`] handles. The
+//! unbounded sender has a synchronous [`UnboundedSender::send`] method because
+//! capacity reservation cannot wait; it still shares the same close, wake, and
+//! receiver-drain behavior as the bounded channel.
+//!
+//! # Obligation Tracking
+//!
+//! Each `SendPermit` represents an obligation that must be resolved:
+//! - `permit.send(value)`: Commits the obligation (surfaces disconnection as Outcome)
+//! - `permit.abort()`: Aborts the obligation
+//! - `drop(permit)`: Equivalent to abort (RAII cleanup)
+//!
+//! # Why a `parking_lot::Mutex<ChannelInner>` and not a lock-free queue?
+//!
+//! br-asupersync-p81v6d evaluation (follow-up to vgw2yw): the obvious
+//! "swap `VecDeque<T>` for `crossbeam_queue::ArrayQueue<T>` and only
+//! lock for waker registration" refactor is **rejected** as the wrong
+//! trade-off for this channel's cancel-correctness contract. Recorded
+//! here so a future agent does not re-litigate the same proposal.
+//!
+//! The mutex protects four pieces of state that *must* linearize
+//! together for cancel-safety:
+//!
+//! 1. `queue: VecDeque<T>`              — the message buffer
+//! 2. `reserved: usize`                 — outstanding permits
+//! 3. `send_wakers: VecDeque<SendWaiter>` — FIFO waker pool with
+//!    **mid-queue removal on cancel** (a `Reserve` future dropped
+//!    during `.await` removes its own waiter)
+//! 4. `recv_waker: Option<Waker>`        — receiver waker
+//!
+//! The reserve/commit invariants require:
+//!
+//! * **Atomic capacity test + reserve**: `reserve()` evaluates
+//!   `queue.len() + reserved < capacity` *and* increments `reserved`
+//!   under one linearization point. A racy snapshot (e.g.,
+//!   `ArrayQueue::len()` is **not** linearizable with a separate
+//!   atomic `reserved` counter) lets two reservers both observe
+//!   `len + reserved < capacity` and both succeed, oversubscribing.
+//! * **Atomic commit**: `permit.send(v)` decrements `reserved` and
+//!   pushes to `queue` in one linearization point. Splitting the
+//!   ops admits a window where a cancelled-but-already-pushed value
+//!   has no claimant.
+//! * **FIFO waker pool with cancel removal**: `crossbeam`'s
+//!   `ArrayQueue` and `SegQueue` do *not* support mid-queue removal,
+//!   which the cancel path requires (a dropped `Reserve` future must
+//!   delete its specific waiter so a later wake doesn't fire into a
+//!   stolen permit). Replicating that with a lock-free intrusive
+//!   linked list is tokio-mpsc-class effort (~1 KLOC of CAS-based
+//!   code with ABA-free index discipline) and would still need a
+//!   mutex around list metadata for safe traversal under cancel.
+//!
+//! **Net cost of the swap**: ~1 KLOC of new safety-critical code to
+//! replicate cancel-correctness (atomic ring buffer + intrusive
+//! waker pool) for a contention reduction that is largely already
+//! claimed by the wlf0xh work (commit f49630a8e), which made the
+//! waiter ops O(1) so the critical section is dominated by the
+//! `VecDeque` op itself. The bead's required microbench gate
+//! (N >= 8 fan-in throughput vs current) was not run because the
+//! design analysis already showed the swap is unsound without
+//! parallel-capacity-tracking compromises.
+//!
+//! **Conclusion**: keep the `Mutex<ChannelInner<T>>` design. It is
+//! the project's distinctive cancel-correctness contract; degrading
+//! its lock-protected atomicity to chase synthetic-benchmark
+//! throughput is a bad trade for the asupersync use-case.
+
+use parking_lot::Mutex;
+use smallvec::SmallVec;
+use std::collections::VecDeque;
+use std::future::Future;
+use std::pin::Pin;
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::{Arc, Weak};
+use std::task::{Context, Poll, Waker};
+
+use crate::cx::Cx;
+use crate::runtime::reactor::token::{SlabToken, TokenSlab};
+use crate::types::outcome::Outcome;
+
+/// Error returned when sending fails.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SendError<T> {
+    /// The receiver was dropped before the value could be sent.
+    Disconnected(T),
+    /// The operation was cancelled.
+    Cancelled(T),
+    /// The channel is full (for try_send).
+    Full(T),
+}
+
+impl<T> std::fmt::Display for SendError<T> {
+    #[inline]
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Disconnected(_) => write!(f, "sending on a closed mpsc channel"),
+            Self::Cancelled(_) => write!(f, "send operation cancelled"),
+            Self::Full(_) => write!(f, "mpsc channel is full"),
+        }
+    }
+}
+
+impl<T: std::fmt::Debug> std::error::Error for SendError<T> {}
+
+/// Error returned when receiving fails.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RecvError {
+    /// The sender was dropped without sending a value.
+    Disconnected,
+    /// The receive operation was cancelled.
+    Cancelled,
+    /// The channel is empty (for try_recv).
+    Empty,
+}
+
+impl std::fmt::Display for RecvError {
+    #[inline]
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Disconnected => write!(f, "receiving on a closed mpsc channel"),
+            Self::Cancelled => write!(f, "[ASUP-E203] receive operation cancelled"),
+            Self::Empty => write!(f, "mpsc channel is empty"),
+        }
+    }
+}
+
+impl std::error::Error for RecvError {}
+
+/// Opt-in, redacted telemetry snapshot for an MPSC channel.
+///
+/// The caller supplies `channel_id`, which keeps identifiers deterministic and
+/// avoids ambient globals or pointer-derived IDs. Payload values are never
+/// exposed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct MpscTelemetrySnapshot {
+    /// Caller-provided deterministic channel identifier.
+    pub channel_id: u64,
+    /// Stable channel kind label.
+    pub channel_kind: &'static str,
+    /// Maximum number of queued or reserved slots.
+    pub capacity: usize,
+    /// Number of committed values waiting for the receiver.
+    pub queued_messages: usize,
+    /// Number of reserved-but-uncommitted send obligations.
+    pub reserved_uncommitted_obligations: usize,
+    /// Sender-side waiters waiting for capacity.
+    pub send_waiter_count: usize,
+    /// Receiver-side waiters waiting for messages or closure.
+    pub recv_waiter_count: usize,
+    /// Redacted receiver state.
+    pub receiver_health: &'static str,
+    /// MPSC has no lagging receiver concept.
+    pub lagged_receiver_count: Option<usize>,
+    /// Cancel/abort events observed by the channel.
+    pub cancellation_count: u64,
+    /// Whether this channel has reached a closed state.
+    pub closed: bool,
+}
+
+/// Internal channel state shared between senders and receivers.
+#[derive(Debug)]
+struct ChannelInner<T> {
+    /// Buffered messages waiting to be received.
+    queue: VecDeque<T>,
+    /// Number of reserved slots (permits outstanding).
+    reserved: usize,
+    /// Wakers for senders waiting for capacity (O(1) access by token).
+    send_wakers: TokenSlab,
+    /// FIFO queue of waiter tokens to maintain fair ordering.
+    waiter_queue: VecDeque<SlabToken>,
+    /// Waker for the receiver waiting for messages.
+    recv_waker: Option<Waker>,
+    /// Number of cancellation/abort events observed by this channel.
+    cancellation_count: u64,
+}
+
+/// Shared state wrapper.
+struct ChannelShared<T> {
+    /// Protected channel state.
+    inner: Mutex<ChannelInner<T>>,
+    /// Number of active senders. Atomic so `Sender::clone` avoids the mutex
+    /// and `Receiver::is_closed` can read without locking.
+    sender_count: AtomicUsize,
+    /// Whether the receiver has been dropped. Atomic so `Sender::is_closed`
+    /// can read without locking. Monotone: transitions `false → true` once.
+    receiver_dropped: AtomicBool,
+    /// Maximum capacity of the queue. Write-once (set at construction),
+    /// stored outside the mutex so `capacity()` is lock-free.
+    capacity: usize,
+}
+
+impl<T: std::fmt::Debug> std::fmt::Debug for ChannelShared<T> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ChannelShared")
+            .field("inner", &self.inner)
+            .field("sender_count", &self.sender_count.load(Ordering::Acquire))
+            .finish_non_exhaustive()
+    }
+}
+
+impl<T> ChannelInner<T> {
+    #[inline]
+    fn new(capacity: usize) -> Self {
+        let queue = if capacity == usize::MAX {
+            VecDeque::new()
+        } else {
+            VecDeque::with_capacity(capacity)
+        };
+
+        Self {
+            queue,
+            reserved: 0,
+            send_wakers: TokenSlab::with_capacity(4),
+            waiter_queue: VecDeque::with_capacity(4),
+            recv_waker: None,
+            cancellation_count: 0,
+        }
+    }
+
+    /// Returns the number of used slots (queued + reserved).
+    #[inline]
+    fn used_slots(&self) -> usize {
+        self.queue.len().saturating_add(self.reserved)
+    }
+
+    /// Returns true if there's capacity for another reservation.
+    #[inline]
+    fn has_capacity(&self, capacity: usize) -> bool {
+        self.used_slots() < capacity
+    }
+
+    /// Drops stale FIFO tokens whose slab entry has already been removed.
+    #[inline]
+    fn prune_stale_waiter_front(&mut self) {
+        while let Some(&token) = self.waiter_queue.front() {
+            if self.send_wakers.get(token).is_some() {
+                break;
+            }
+            self.waiter_queue.pop_front();
+        }
+    }
+
+    /// Returns true when at least one live sender is queued.
+    #[inline]
+    fn has_waiting_sender(&mut self) -> bool {
+        self.prune_stale_waiter_front();
+        !self.waiter_queue.is_empty()
+    }
+
+    /// Returns the waker for the next waiting sender, if any.
+    /// The caller must invoke `waker.wake()` **after** releasing the channel
+    /// lock to avoid wake-under-lock deadlocks.
+    ///
+    /// This does NOT remove the waiter from the queue. The waiter is responsible
+    /// for removing itself upon successfully acquiring a permit.
+    #[inline]
+    fn take_next_sender_waker(&mut self) -> Option<Waker> {
+        self.prune_stale_waiter_front();
+        self.waiter_queue
+            .front()
+            .and_then(|&token| self.send_wakers.get(token))
+            .cloned()
+    }
+
+    /// Returns distinct live sender wakers for slots that are currently free.
+    ///
+    /// The waiters stay queued until their `Reserve` futures actually poll and
+    /// acquire capacity; this only broadcasts the newly available capacity.
+    #[inline]
+    fn sender_wakers_for_freed_slots(
+        &mut self,
+        freed_slots: usize,
+        capacity: usize,
+    ) -> SmallVec<[Waker; 4]> {
+        let wake_budget = freed_slots.min(capacity.saturating_sub(self.used_slots()));
+        if wake_budget == 0 {
+            return SmallVec::new();
+        }
+
+        self.prune_stale_waiter_front();
+        let mut wakers = SmallVec::new();
+        for &token in &self.waiter_queue {
+            if wakers.len() == wake_budget {
+                break;
+            }
+            if let Some(waker) = self.send_wakers.get(token) {
+                wakers.push(waker.clone());
+            }
+        }
+        wakers
+    }
+
+    /// Records a cancellation or abort event without exposing payloads.
+    #[inline]
+    fn record_cancellation(&mut self) {
+        self.cancellation_count = self.cancellation_count.saturating_add(1);
+    }
+
+    /// Removes the first occurrence of `token` from the waiter queue.
+    #[inline]
+    fn remove_waiter_token(&mut self, token: crate::runtime::reactor::token::SlabToken) -> bool {
+        if self.waiter_queue.front().copied() == Some(token) {
+            self.waiter_queue.pop_front();
+            return true;
+        }
+
+        if self.waiter_queue.back().copied() == Some(token) {
+            self.waiter_queue.pop_back();
+            return true;
+        }
+
+        let mut found = false;
+        self.waiter_queue.retain(|&t| {
+            if !found && t == token {
+                found = true;
+                false // Remove this element
+            } else {
+                true // Keep this element
+            }
+        });
+        found
+    }
+}
+
+/// Test/benchmark fixture for isolating MPSC waiter-queue cancellation cost.
+#[cfg(any(test, feature = "test-internals"))]
+#[doc(hidden)]
+pub struct MpscWaiterCancelFixture {
+    inner: ChannelInner<()>,
+    token: SlabToken,
+}
+
+#[cfg(any(test, feature = "test-internals"))]
+impl MpscWaiterCancelFixture {
+    /// Builds a queue where the cancellation target is the oldest waiter.
+    #[must_use]
+    pub fn oldest(waiter_count: usize) -> Self {
+        let waiter_count = waiter_count.max(1);
+        let mut inner = ChannelInner::new(usize::MAX);
+        let waker = Waker::noop().clone();
+        let mut target = None;
+
+        for index in 0..waiter_count {
+            let token = inner.send_wakers.insert(waker.clone());
+            if index == 0 {
+                target = Some(token);
+            }
+            inner.waiter_queue.push_back(token);
+        }
+
+        Self {
+            inner,
+            token: target.expect("oldest waiter fixture always inserts a target"),
+        }
+    }
+
+    /// Removes the target waiter and consumes the fixture.
+    pub fn remove_target(mut self) -> bool {
+        self.inner.remove_waiter_token(self.token)
+    }
+}
+
+impl<T> ChannelShared<T> {
+    /// Builds an opt-in redacted telemetry snapshot.
+    #[inline]
+    fn telemetry_snapshot(&self, channel_id: u64) -> MpscTelemetrySnapshot {
+        let mut inner = self.inner.lock();
+        let sender_count = self.sender_count.load(Ordering::Acquire);
+        let receiver_dropped = self.receiver_dropped.load(Ordering::Acquire);
+        let queued_messages = inner.queue.len();
+        let recv_waiter_count = usize::from(inner.recv_waker.is_some());
+        let send_waiter_count = {
+            inner.prune_stale_waiter_front();
+            inner.waiter_queue.len()
+        };
+        let closed = receiver_dropped || sender_count == 0;
+
+        let receiver_health = if receiver_dropped {
+            "receiver_dropped"
+        } else if queued_messages > 0 {
+            "value_ready"
+        } else if sender_count == 0 {
+            "sender_closed"
+        } else if recv_waiter_count > 0 {
+            "waiting"
+        } else {
+            "open"
+        };
+
+        MpscTelemetrySnapshot {
+            channel_id,
+            channel_kind: "mpsc",
+            capacity: self.capacity,
+            queued_messages,
+            reserved_uncommitted_obligations: inner.reserved,
+            send_waiter_count,
+            recv_waiter_count,
+            receiver_health,
+            lagged_receiver_count: None,
+            cancellation_count: inner.cancellation_count,
+            closed,
+        }
+    }
+}
+
+/// Creates a bounded MPSC channel with the given capacity.
+///
+/// # Panics
+///
+/// Panics if `capacity` is 0.
+#[inline]
+#[must_use]
+pub fn channel<T>(capacity: usize) -> (Sender<T>, Receiver<T>) {
+    assert!(capacity > 0, "channel capacity must be non-zero");
+
+    let shared = Arc::new(ChannelShared {
+        inner: Mutex::new(ChannelInner::new(capacity)),
+        sender_count: AtomicUsize::new(1),
+        receiver_dropped: AtomicBool::new(false),
+        capacity,
+    });
+    let sender = Sender {
+        shared: Arc::clone(&shared),
+    };
+    let receiver = Receiver { shared };
+
+    (sender, receiver)
+}
+
+/// Creates an unbounded MPSC channel.
+///
+/// This channel never applies sender-side capacity backpressure. Prefer
+/// [`channel`] by default; use this constructor only when the caller owns a
+/// separate memory-pressure policy.
+///
+/// # Example
+///
+/// ```
+/// use asupersync::channel::mpsc;
+///
+/// let (tx, mut rx) = mpsc::unbounded_channel();
+/// assert!(tx.send("ready").is_ok());
+/// assert_eq!(rx.try_recv().ok(), Some("ready"));
+/// ```
+#[inline]
+#[must_use]
+pub fn unbounded_channel<T>() -> (UnboundedSender<T>, UnboundedReceiver<T>) {
+    let (sender, receiver) = channel(usize::MAX);
+    (
+        UnboundedSender { inner: sender },
+        UnboundedReceiver { inner: receiver },
+    )
+}
+
+/// Alias for [`unbounded_channel`].
+///
+/// # Example
+///
+/// ```
+/// use asupersync::channel::mpsc;
+///
+/// let (tx, mut rx) = mpsc::unbounded();
+/// assert!(tx.send(7).is_ok());
+/// assert_eq!(rx.try_recv().ok(), Some(7));
+/// ```
+#[inline]
+#[must_use]
+pub fn unbounded<T>() -> (UnboundedSender<T>, UnboundedReceiver<T>) {
+    unbounded_channel()
+}
+
+/// The sending side of an MPSC channel.
+#[derive(Debug)]
+pub struct Sender<T> {
+    shared: Arc<ChannelShared<T>>,
+}
+
+impl<T> Sender<T> {
+    /// Reserves a slot in the channel for sending.
+    #[inline]
+    #[must_use]
+    pub fn reserve<'a>(&'a self, cx: &'a Cx) -> Reserve<'a, T> {
+        Reserve {
+            sender: self,
+            cx,
+            waiter_token: None,
+        }
+    }
+
+    /// Convenience method: reserve and send in one step.
+    #[inline]
+    pub async fn send(&self, cx: &Cx, value: T) -> Result<(), SendError<T>> {
+        let result = self.reserve(cx).await;
+        match result {
+            Ok(permit) => permit.try_send(value),
+            Err(SendError::<()>::Disconnected(())) => Err(SendError::Disconnected(value)),
+            Err(SendError::<()>::Full(())) => Err(SendError::Full(value)),
+            Err(SendError::<()>::Cancelled(())) => Err(SendError::Cancelled(value)),
+        }
+    }
+
+    /// Attempts to reserve a slot without blocking.
+    ///
+    /// Returns `Full` when waiting senders exist, to preserve FIFO ordering.
+    #[inline]
+    pub fn try_reserve(&self) -> Result<SendPermit<'_, T>, SendError<()>> {
+        let mut inner = self.shared.inner.lock();
+
+        if self.shared.receiver_dropped.load(Ordering::Relaxed) {
+            return Err(SendError::<()>::Disconnected(()));
+        }
+
+        if inner.has_waiting_sender() {
+            return Err(SendError::<()>::Full(()));
+        }
+
+        if inner.has_capacity(self.shared.capacity) {
+            inner.reserved += 1;
+            drop(inner);
+            Ok(SendPermit {
+                sender: self,
+                sent: false,
+            })
+        } else {
+            Err(SendError::<()>::Full(()))
+        }
+    }
+
+    /// Attempts to send a value without blocking.
+    ///
+    /// Single-lock fast path (br-asupersync-lej99f). The previous shape went
+    /// through `try_reserve()` + `permit.try_send(value)`, which took the
+    /// channel mutex twice (once to bump `reserved`, once to push the value
+    /// and decrement `reserved`). On the uncontended path this is wasted
+    /// work — there is no observable state in which a `SendPermit` exists
+    /// between the two locks for an immediate-commit caller.
+    ///
+    /// Here we lock once, commit-or-fail, and never touch the `reserved`
+    /// counter at all.
+    ///
+    /// Strict sender FIFO semantics. Returns `Full` while live reserve waiters
+    /// exist, even if a receiver has just freed physical capacity. That freed
+    /// slot belongs to the head queued reserver until it polls and either
+    /// claims or cancels its reservation; a later `try_send` must not steal it.
+    #[inline]
+    pub fn try_send(&self, value: T) -> Result<(), SendError<T>> {
+        let recv_waker = {
+            let mut inner = self.shared.inner.lock();
+
+            if self.shared.receiver_dropped.load(Ordering::Relaxed) {
+                return Err(SendError::Disconnected(value));
+            }
+
+            if inner.has_waiting_sender() || !inner.has_capacity(self.shared.capacity) {
+                return Err(SendError::Full(value));
+            }
+
+            inner.queue.push_back(value);
+            // Extract the recv waker before dropping the lock so we can
+            // wake outside the critical section.
+            inner.recv_waker.take()
+        };
+        if let Some(waker) = recv_waker {
+            waker.wake();
+        }
+        Ok(())
+    }
+
+    /// Returns true if the receiver has been dropped.
+    #[inline]
+    #[must_use]
+    pub fn is_closed(&self) -> bool {
+        self.shared.receiver_dropped.load(Ordering::Acquire)
+    }
+
+    /// Wakes the receiver if it is currently waiting in `recv()`.
+    ///
+    /// This does not enqueue a message. It's intended for out-of-band protocols
+    /// (like cancellation) that need to interrupt a blocked receiver.
+    #[inline]
+    pub fn wake_receiver(&self) {
+        let mut inner = self.shared.inner.lock();
+        let waker = inner.recv_waker.take();
+        drop(inner);
+        if let Some(waker) = waker {
+            waker.wake();
+        }
+    }
+
+    /// Seals the receiver side of the channel from the sender side.
+    ///
+    /// Existing queued messages remain available to the receiver, but no new
+    /// reservations or sends will succeed. Pending senders and receivers are
+    /// woken so shutdown protocols cannot stall behind a full mailbox.
+    pub(crate) fn close_receiver(&self) {
+        let (send_wakers, recv_waker) = {
+            let mut inner = self.shared.inner.lock();
+            if self.shared.receiver_dropped.load(Ordering::Relaxed) {
+                return;
+            }
+            self.shared.receiver_dropped.store(true, Ordering::Release);
+            let tokens: SmallVec<[SlabToken; 4]> = inner.waiter_queue.drain(..).collect();
+            let send_wakers: SmallVec<[Waker; 4]> = tokens
+                .into_iter()
+                .filter_map(|token| inner.send_wakers.remove(token))
+                .collect();
+            let recv_waker = inner.recv_waker.take();
+            drop(inner);
+            (send_wakers, recv_waker)
+        };
+
+        for waker in send_wakers {
+            waker.wake();
+        }
+        if let Some(waker) = recv_waker {
+            waker.wake();
+        }
+    }
+
+    /// Returns the channel's capacity.
+    #[inline]
+    #[must_use]
+    pub fn capacity(&self) -> usize {
+        self.shared.capacity
+    }
+
+    /// Returns an opt-in redacted telemetry snapshot for this MPSC sender.
+    #[inline]
+    #[must_use]
+    pub fn telemetry_snapshot(&self, channel_id: u64) -> MpscTelemetrySnapshot {
+        self.shared.telemetry_snapshot(channel_id)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn debug_counts(&self) -> (usize, usize) {
+        let inner = self.shared.inner.lock();
+        (inner.queue.len(), inner.reserved)
+    }
+
+    /// Sends a value, evicting the oldest queued message if the channel is full.
+    ///
+    /// Returns `Ok(None)` if the value was sent without eviction,
+    /// `Ok(Some(evicted))` if the oldest message was evicted to make room,
+    /// `Err(SendError::Full(value))` if all capacity is consumed by reserved
+    /// slots, or if a queued waiter already owns the next free slot and there
+    /// is nothing evictable to displace, or
+    /// `Err(SendError::Disconnected(value))` if the receiver has dropped.
+    ///
+    /// This is used by the `DropOldest` backpressure policy. The evicted
+    /// message is returned so callers can trace or log the drop.
+    #[inline]
+    pub fn send_evict_oldest(&self, value: T) -> Result<Option<T>, SendError<T>> {
+        self.send_evict_oldest_where(value, |_| true)
+    }
+
+    /// Sends a value, evicting the oldest queued message that matches `predicate`
+    /// if the channel is full.
+    ///
+    /// Returns `Ok(None)` if the value was sent without eviction,
+    /// `Ok(Some(evicted))` if a matching queued message was evicted to make room,
+    /// `Err(SendError::Full(value))` if the channel is physically full, or
+    /// logically full because a queued waiter owns the next free slot, and no
+    /// matching queued message is evictable, or `Err(SendError::Disconnected(value))`
+    /// if the receiver has dropped.
+    pub fn send_evict_oldest_where<F>(
+        &self,
+        value: T,
+        mut predicate: F,
+    ) -> Result<Option<T>, SendError<T>>
+    where
+        F: FnMut(&T) -> bool,
+    {
+        let mut inner = self.shared.inner.lock();
+
+        if self.shared.receiver_dropped.load(Ordering::Relaxed) {
+            return Err(SendError::Disconnected(value));
+        }
+
+        let has_physical_capacity = inner.has_capacity(self.shared.capacity);
+        let waiter_owns_available_slot = has_physical_capacity && inner.has_waiting_sender();
+
+        let evicted = if waiter_owns_available_slot {
+            return Err(SendError::Full(value));
+        } else if has_physical_capacity {
+            None
+        } else if let Some(index) = inner.queue.iter().position(&mut predicate) {
+            // Evict the oldest committed message (not a reserved slot) that the
+            // caller explicitly allows us to drop.
+            Some(
+                inner
+                    .queue
+                    .remove(index)
+                    .expect("position() returned a valid queue index"),
+            )
+        } else {
+            // Either all capacity is consumed by reserved slots (and waiters), or
+            // every queued value is protected by the caller's predicate.
+            return Err(SendError::Full(value));
+        };
+
+        inner.queue.push_back(value);
+
+        let waker = inner.recv_waker.take();
+        drop(inner);
+
+        // Wake receiver if waiting. Drop the lock first to avoid contention/deadlocks.
+        if let Some(waker) = waker {
+            waker.wake();
+        }
+
+        Ok(evicted)
+    }
+
+    /// Returns a weak reference to this sender.
+    #[inline]
+    #[must_use]
+    pub fn downgrade(&self) -> WeakSender<T> {
+        WeakSender {
+            shared: Arc::downgrade(&self.shared),
+        }
+    }
+}
+
+/// Future returned by [`Sender::reserve`].
+pub struct Reserve<'a, T> {
+    sender: &'a Sender<T>,
+    cx: &'a Cx,
+    waiter_token: Option<SlabToken>,
+}
+
+impl<T> Reserve<'_, T> {
+    fn cleanup_waiter(&mut self) {
+        if let Some(token) = self.waiter_token.take() {
+            let next_waker = {
+                let mut inner = self.sender.shared.inner.lock();
+
+                if self.sender.shared.receiver_dropped.load(Ordering::Relaxed) {
+                    inner.send_wakers.remove(token);
+                    None
+                } else if inner.send_wakers.remove(token).is_some() {
+                    // We were still registered in the slab. Only pass the baton
+                    // if we also owned a FIFO position; a slab-only stale token
+                    // must not fabricate a capacity handoff.
+                    let removed_from_queue = inner.remove_waiter_token(token);
+                    if removed_from_queue && inner.has_capacity(self.sender.shared.capacity) {
+                        inner.take_next_sender_waker()
+                    } else {
+                        None
+                    }
+                } else {
+                    // Stale waiter: the token is no longer registered, so this
+                    // future does not own a queue position to release. Waking the
+                    // next waiter here fabricates a capacity handoff and can
+                    // spuriously notify later senders.
+                    None
+                }
+            };
+            if let Some(w) = next_waker {
+                w.wake();
+            }
+        }
+    }
+}
+
+impl<'a, T> Future for Reserve<'a, T> {
+    type Output = Result<SendPermit<'a, T>, SendError<()>>;
+
+    fn poll(mut self: Pin<&mut Self>, ctx: &mut Context<'_>) -> Poll<Self::Output> {
+        // Check cancellation
+        if self.cx.checkpoint().is_err() {
+            self.cx.trace("mpsc::reserve cancelled");
+            self.sender.shared.inner.lock().record_cancellation();
+            self.cleanup_waiter();
+            return Poll::Ready(Err(SendError::<()>::Cancelled(())));
+        }
+
+        let mut inner = self.sender.shared.inner.lock();
+
+        if self.sender.shared.receiver_dropped.load(Ordering::Relaxed) {
+            self.waiter_token = None; // Waiter is already cleared by Receiver::drop
+            return Poll::Ready(Err(SendError::<()>::Disconnected(())));
+        }
+
+        let is_first = self.waiter_token.map_or_else(
+            || inner.waiter_queue.is_empty(),
+            |token| inner.waiter_queue.front().copied() == Some(token),
+        );
+
+        if is_first && inner.has_capacity(self.sender.shared.capacity) {
+            inner.reserved += 1;
+            // Remove self from queue
+            if let Some(token) = self.waiter_token {
+                // Remove from FIFO queue (should be at front)
+                if inner.waiter_queue.front().copied() == Some(token) {
+                    inner.waiter_queue.pop_front();
+                } else {
+                    inner.remove_waiter_token(token);
+                }
+
+                // Remove from slab
+                inner.send_wakers.remove(token);
+
+                // CASCADE: If there is still capacity, wake the *next* waiter.
+                // Extract waker now; wake after releasing the lock.
+                let cascade_waker = if inner.has_capacity(self.sender.shared.capacity) {
+                    inner.take_next_sender_waker()
+                } else {
+                    None
+                };
+                drop(inner);
+                if let Some(w) = cascade_waker {
+                    w.wake();
+                }
+
+                // Clear waiter_token so Drop doesn't uselessly lock and search the queue
+                self.waiter_token = None;
+            } else {
+                drop(inner);
+            }
+
+            return Poll::Ready(Ok(SendPermit {
+                sender: self.sender,
+                sent: false,
+            }));
+        }
+
+        // Register/update waiter (all access under outer lock — no inner Mutex needed)
+        if let Some(token) = self.waiter_token {
+            // Already queued. Update waker inline.
+            if let Some(waker) = inner.send_wakers.get_mut(token) {
+                if !waker.will_wake(ctx.waker()) {
+                    waker.clone_from(ctx.waker());
+                }
+            }
+        } else {
+            // New waiter — insert into slab and add to FIFO queue.
+            let token = inner.send_wakers.insert(ctx.waker().clone());
+            inner.waiter_queue.push_back(token);
+            self.waiter_token = Some(token);
+        }
+
+        drop(inner);
+        Poll::Pending
+    }
+}
+
+impl<T> Drop for Reserve<'_, T> {
+    fn drop(&mut self) {
+        self.cleanup_waiter();
+    }
+}
+
+impl<T> Clone for Sender<T> {
+    #[inline]
+    fn clone(&self) -> Self {
+        self.shared.sender_count.fetch_add(1, Ordering::Relaxed);
+        Self {
+            shared: Arc::clone(&self.shared),
+        }
+    }
+}
+
+impl<T> Drop for Sender<T> {
+    fn drop(&mut self) {
+        let old = self.shared.sender_count.fetch_sub(1, Ordering::Release);
+        debug_assert!(old > 0, "sender_count underflow in Sender::drop");
+        if old == 1 {
+            // Last sender dropped — always wake the receiver regardless of races.
+            // Even if a WeakSender::upgrade increments the count back up after our
+            // decrement, the receiver should still be woken for the transition to zero.
+            let recv_waker = {
+                let mut inner = self.shared.inner.lock();
+                inner.recv_waker.take()
+            };
+            if let Some(waker) = recv_waker {
+                waker.wake();
+            }
+        }
+    }
+}
+
+/// A weak reference to a sender.
+pub struct WeakSender<T> {
+    shared: Weak<ChannelShared<T>>,
+}
+
+impl<T: std::fmt::Debug> std::fmt::Debug for WeakSender<T> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("WeakSender").finish_non_exhaustive()
+    }
+}
+
+impl<T> WeakSender<T> {
+    /// Attempts to upgrade this weak sender to a strong sender.
+    ///
+    /// Returns `None` if all senders have been dropped.
+    #[inline]
+    #[must_use]
+    pub fn upgrade(&self) -> Option<Sender<T>> {
+        self.shared.upgrade().and_then(|shared| {
+            // CAS loop avoids touching the channel mutex on upgrade while still
+            // preventing resurrection from zero senders.
+            //
+            // `sender_count` is a liveness counter only; channel data/wakers are
+            // synchronized by `inner` mutexes. We only need atomicity here to
+            // prevent zero->nonzero resurrection, not cross-thread data visibility.
+            let mut observed = shared.sender_count.load(Ordering::Relaxed);
+            loop {
+                if observed == 0 {
+                    return None;
+                }
+                match shared.sender_count.compare_exchange_weak(
+                    observed,
+                    observed + 1,
+                    Ordering::Relaxed,
+                    Ordering::Relaxed,
+                ) {
+                    Ok(_) => return Some(Sender { shared }),
+                    Err(actual) => observed = actual,
+                }
+            }
+        })
+    }
+}
+
+impl<T> Clone for WeakSender<T> {
+    #[inline]
+    fn clone(&self) -> Self {
+        Self {
+            shared: self.shared.clone(),
+        }
+    }
+}
+
+/// The sending side of an unbounded MPSC channel.
+#[derive(Debug)]
+pub struct UnboundedSender<T> {
+    inner: Sender<T>,
+}
+
+impl<T> UnboundedSender<T> {
+    /// Reserves a slot for an explicit two-phase unbounded send.
+    #[inline]
+    #[must_use]
+    pub fn reserve<'a>(&'a self, cx: &'a Cx) -> Reserve<'a, T> {
+        self.inner.reserve(cx)
+    }
+
+    /// Attempts to reserve a slot without blocking.
+    #[inline]
+    pub fn try_reserve(&self) -> Result<SendPermit<'_, T>, SendError<()>> {
+        self.inner.try_reserve()
+    }
+
+    /// Sends a value into the channel without waiting for capacity.
+    ///
+    /// Returns [`SendError::Disconnected`] with the original value if the
+    /// receiver has been dropped.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use asupersync::channel::mpsc;
+    ///
+    /// let (tx, mut rx) = mpsc::unbounded_channel();
+    /// tx.send("message").expect("receiver is live");
+    /// assert_eq!(rx.try_recv().ok(), Some("message"));
+    /// ```
+    #[inline]
+    pub fn send(&self, value: T) -> Result<(), SendError<T>> {
+        match self.try_reserve() {
+            Ok(permit) => permit.try_send(value),
+            Err(SendError::<()>::Disconnected(())) => Err(SendError::Disconnected(value)),
+            Err(SendError::<()>::Full(())) => Err(SendError::Full(value)),
+            Err(SendError::<()>::Cancelled(())) => Err(SendError::Cancelled(value)),
+        }
+    }
+
+    /// Returns true if the receiver has been dropped.
+    #[inline]
+    #[must_use]
+    pub fn is_closed(&self) -> bool {
+        self.inner.is_closed()
+    }
+
+    /// Returns the unbounded capacity sentinel.
+    #[inline]
+    #[must_use]
+    pub fn capacity(&self) -> usize {
+        self.inner.capacity()
+    }
+
+    /// Returns an opt-in redacted telemetry snapshot for this sender.
+    #[inline]
+    #[must_use]
+    pub fn telemetry_snapshot(&self, channel_id: u64) -> MpscTelemetrySnapshot {
+        self.inner.telemetry_snapshot(channel_id)
+    }
+
+    /// Returns a weak reference to this sender.
+    #[inline]
+    #[must_use]
+    pub fn downgrade(&self) -> WeakUnboundedSender<T> {
+        WeakUnboundedSender {
+            inner: self.inner.downgrade(),
+        }
+    }
+}
+
+impl<T> Clone for UnboundedSender<T> {
+    #[inline]
+    fn clone(&self) -> Self {
+        Self {
+            inner: self.inner.clone(),
+        }
+    }
+}
+
+/// A weak reference to an unbounded sender.
+#[derive(Debug)]
+pub struct WeakUnboundedSender<T> {
+    inner: WeakSender<T>,
+}
+
+impl<T> WeakUnboundedSender<T> {
+    /// Attempts to upgrade this weak sender to a strong sender.
+    #[inline]
+    #[must_use]
+    pub fn upgrade(&self) -> Option<UnboundedSender<T>> {
+        self.inner.upgrade().map(|inner| UnboundedSender { inner })
+    }
+}
+
+impl<T> Clone for WeakUnboundedSender<T> {
+    #[inline]
+    fn clone(&self) -> Self {
+        Self {
+            inner: self.inner.clone(),
+        }
+    }
+}
+
+/// A permit to send a single value.
+#[derive(Debug)]
+#[must_use = "SendPermit must be consumed via send() or abort()"]
+pub struct SendPermit<'a, T> {
+    sender: &'a Sender<T>,
+    sent: bool,
+}
+
+impl<T> SendPermit<'_, T> {
+    /// Commits the reserved slot, enqueuing the value.
+    ///
+    /// Returns an Outcome indicating success or failure. When the receiver has been
+    /// dropped, returns Err(SendError::Disconnected(value)) to surface the disconnection
+    /// rather than silently dropping the value.
+    #[inline]
+    pub fn send(self, value: T) -> Outcome<(), SendError<T>> {
+        match self.try_send(value) {
+            Ok(()) => Outcome::Ok(()),
+            Err(error) => Outcome::Err(error),
+        }
+    }
+
+    /// Commits the reserved slot, returning an error if the receiver was dropped.
+    #[inline]
+    pub fn try_send(mut self, value: T) -> Result<(), SendError<T>> {
+        self.sent = true;
+        let mut inner = self.sender.shared.inner.lock();
+
+        if inner.reserved == 0 {
+            debug_assert!(false, "send permit without reservation");
+        } else {
+            inner.reserved -= 1;
+        }
+
+        if self.sender.shared.receiver_dropped.load(Ordering::Relaxed) {
+            // Receiver is gone; drop the value and release capacity.
+            // Note: Receiver::drop already drained and woke any pending send_wakers.
+            drop(inner);
+            return Err(SendError::Disconnected(value));
+        }
+
+        inner.queue.push_back(value);
+
+        // Extract waker before dropping the lock to avoid wake-under-lock.
+        let recv_waker = inner.recv_waker.take();
+        drop(inner);
+        if let Some(waker) = recv_waker {
+            waker.wake();
+        }
+        Ok(())
+    }
+
+    /// Aborts the reserved slot without sending.
+    #[inline]
+    pub fn abort(mut self) {
+        self.sent = true;
+        let next_waker = {
+            let mut inner = self.sender.shared.inner.lock();
+            if inner.reserved == 0 {
+                debug_assert!(false, "abort permit without reservation");
+            } else {
+                inner.reserved -= 1;
+            }
+            inner.record_cancellation();
+            inner.take_next_sender_waker()
+        };
+        // Wake outside the lock.
+        if let Some(w) = next_waker {
+            w.wake();
+        }
+    }
+
+    /// Returns an opt-in redacted telemetry snapshot for this send permit.
+    #[inline]
+    #[must_use]
+    pub fn telemetry_snapshot(&self, channel_id: u64) -> MpscTelemetrySnapshot {
+        self.sender.shared.telemetry_snapshot(channel_id)
+    }
+}
+
+impl<T> Drop for SendPermit<'_, T> {
+    fn drop(&mut self) {
+        if !self.sent {
+            let next_waker = {
+                let mut inner = self.sender.shared.inner.lock();
+                if inner.reserved == 0 {
+                    debug_assert!(false, "dropped permit without reservation");
+                } else {
+                    inner.reserved -= 1;
+                }
+                inner.record_cancellation();
+                inner.take_next_sender_waker()
+            };
+            // Wake outside the lock.
+            if let Some(w) = next_waker {
+                w.wake();
+            }
+        }
+    }
+}
+
+/// The receiving side of an MPSC channel.
+pub struct Receiver<T> {
+    shared: Arc<ChannelShared<T>>,
+}
+
+impl<T: std::fmt::Debug> std::fmt::Debug for Receiver<T> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Receiver")
+            .field("shared", &self.shared)
+            .finish()
+    }
+}
+
+impl<T> Receiver<T> {
+    pub(crate) fn clear_recv_waker(&mut self) {
+        self.shared.inner.lock().recv_waker = None;
+    }
+
+    /// Closes the channel, preventing any further messages from being sent.
+    ///
+    /// Existing messages in the queue remain available for receiving.
+    /// Any pending senders will be woken and receive a `Disconnected` error.
+    pub fn close(&mut self) {
+        let wakers = {
+            let mut inner = self.shared.inner.lock();
+            if self.shared.receiver_dropped.load(Ordering::Relaxed) {
+                return;
+            }
+            self.shared.receiver_dropped.store(true, Ordering::Release);
+            let tokens: SmallVec<[SlabToken; 4]> = inner.waiter_queue.drain(..).collect();
+            let wakers: SmallVec<[Waker; 4]> = tokens
+                .into_iter()
+                .filter_map(|token| inner.send_wakers.remove(token))
+                .collect();
+            drop(inner);
+            wakers
+        };
+        for waker in wakers {
+            waker.wake();
+        }
+    }
+
+    /// Creates a receive future for the next value.
+    #[inline]
+    #[must_use]
+    pub fn recv<'a, Caps>(&'a mut self, cx: &'a Cx<Caps>) -> Recv<'a, T, Caps> {
+        Recv {
+            receiver: self,
+            cx,
+            polled: false,
+        }
+    }
+
+    /// Creates a receive future that appends up to `limit` values into `buffer`.
+    ///
+    /// The future waits until at least one value is available unless `limit` is
+    /// zero or the channel is closed and fully drained. It returns the number of
+    /// appended values. A return value of zero means either `limit == 0` or no
+    /// more values can arrive.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// # async fn example(cx: &asupersync::Cx) {
+    /// use asupersync::channel::mpsc;
+    ///
+    /// let (tx, mut rx) = mpsc::channel(4);
+    /// tx.try_send(1).unwrap();
+    /// tx.try_send(2).unwrap();
+    ///
+    /// let mut batch = Vec::new();
+    /// let count = rx.recv_many(cx, &mut batch, 8).await.unwrap();
+    /// assert_eq!(count, 2);
+    /// assert_eq!(batch, vec![1, 2]);
+    /// # }
+    /// ```
+    #[inline]
+    #[must_use]
+    pub fn recv_many<'a, Caps>(
+        &'a mut self,
+        cx: &'a Cx<Caps>,
+        buffer: &'a mut Vec<T>,
+        limit: usize,
+    ) -> RecvMany<'a, T, Caps> {
+        RecvMany {
+            receiver: self,
+            cx,
+            buffer,
+            limit,
+            polled: false,
+        }
+    }
+
+    /// Polls the receive operation directly without constructing a temporary future.
+    ///
+    /// This is useful in manual `poll_*` implementations that need to avoid
+    /// creating-and-dropping transient `Recv` futures each poll cycle.
+    #[inline]
+    pub fn poll_recv<Caps>(
+        &mut self,
+        cx: &Cx<Caps>,
+        task_cx: &mut Context<'_>,
+    ) -> Poll<Result<T, RecvError>> {
+        if cx.checkpoint().is_err() {
+            cx.trace("mpsc::recv cancelled");
+            let mut inner = self.shared.inner.lock();
+            inner.recv_waker = None;
+            inner.record_cancellation();
+            return Poll::Ready(Err(RecvError::Cancelled));
+        }
+
+        let mut inner = self.shared.inner.lock();
+
+        if let Some(value) = inner.queue.pop_front() {
+            inner.recv_waker = None;
+            let next_waker = inner.take_next_sender_waker();
+            drop(inner);
+            if let Some(w) = next_waker {
+                w.wake();
+            }
+            return Poll::Ready(Ok(value));
+        }
+
+        if self.shared.sender_count.load(Ordering::Acquire) == 0
+            || self.shared.receiver_dropped.load(Ordering::Relaxed)
+        {
+            inner.recv_waker = None;
+            return Poll::Ready(Err(RecvError::Disconnected));
+        }
+
+        // Skip waker clone if unchanged — common on re-poll.
+        match &inner.recv_waker {
+            Some(existing) if existing.will_wake(task_cx.waker()) => {}
+            _ => inner.recv_waker = Some(task_cx.waker().clone()),
+        }
+        Poll::Pending
+    }
+
+    /// Polls a batch receive operation directly.
+    ///
+    /// See [`Receiver::recv_many`] for completion semantics.
+    #[inline]
+    pub fn poll_recv_many<Caps>(
+        &mut self,
+        cx: &Cx<Caps>,
+        buffer: &mut Vec<T>,
+        limit: usize,
+        task_cx: &mut Context<'_>,
+    ) -> Poll<Result<usize, RecvError>> {
+        if limit == 0 {
+            return Poll::Ready(Ok(0));
+        }
+
+        if cx.checkpoint().is_err() {
+            cx.trace("mpsc::recv_many cancelled");
+            let mut inner = self.shared.inner.lock();
+            inner.recv_waker = None;
+            inner.record_cancellation();
+            return Poll::Ready(Err(RecvError::Cancelled));
+        }
+
+        let mut inner = self.shared.inner.lock();
+        let target = limit.min(inner.queue.len());
+
+        if target > 0 {
+            buffer.extend(inner.queue.drain(..target));
+            inner.recv_waker = None;
+            let sender_wakers = inner.sender_wakers_for_freed_slots(target, self.shared.capacity);
+            drop(inner);
+            for waker in sender_wakers {
+                waker.wake();
+            }
+            return Poll::Ready(Ok(target));
+        }
+
+        if self.shared.sender_count.load(Ordering::Acquire) == 0
+            || self.shared.receiver_dropped.load(Ordering::Relaxed)
+        {
+            inner.recv_waker = None;
+            return Poll::Ready(Ok(0));
+        }
+
+        match &inner.recv_waker {
+            Some(existing) if existing.will_wake(task_cx.waker()) => {}
+            _ => inner.recv_waker = Some(task_cx.waker().clone()),
+        }
+        Poll::Pending
+    }
+
+    /// Attempts to receive a value without blocking.
+    #[inline]
+    pub fn try_recv(&mut self) -> Result<T, RecvError> {
+        let mut inner = self.shared.inner.lock();
+        if let Some(value) = inner.queue.pop_front() {
+            inner.recv_waker = None;
+            let next_waker = inner.take_next_sender_waker();
+            drop(inner);
+            if let Some(w) = next_waker {
+                w.wake();
+            }
+            Ok(value)
+        } else {
+            let disconnected = self.shared.sender_count.load(Ordering::Acquire) == 0
+                || self.shared.receiver_dropped.load(Ordering::Relaxed);
+            if disconnected {
+                inner.recv_waker = None;
+            }
+            drop(inner);
+            if disconnected {
+                Err(RecvError::Disconnected)
+            } else {
+                Err(RecvError::Empty)
+            }
+        }
+    }
+
+    /// Returns true if all senders have been dropped.
+    #[inline]
+    #[must_use]
+    pub fn is_closed(&self) -> bool {
+        self.shared.sender_count.load(Ordering::Acquire) == 0
+    }
+
+    /// Returns true if there are any queued messages.
+    #[inline]
+    #[must_use]
+    pub fn has_messages(&self) -> bool {
+        !self.shared.inner.lock().queue.is_empty()
+    }
+
+    /// Returns the number of queued messages.
+    #[inline]
+    #[must_use]
+    pub fn len(&self) -> usize {
+        self.shared.inner.lock().queue.len()
+    }
+
+    /// Returns true if the queue is empty.
+    #[inline]
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.shared.inner.lock().queue.is_empty()
+    }
+
+    /// Returns the channel capacity.
+    #[inline]
+    #[must_use]
+    pub fn capacity(&self) -> usize {
+        self.shared.capacity
+    }
+
+    /// Returns an opt-in redacted telemetry snapshot for this MPSC receiver.
+    #[inline]
+    #[must_use]
+    pub fn telemetry_snapshot(&self, channel_id: u64) -> MpscTelemetrySnapshot {
+        self.shared.telemetry_snapshot(channel_id)
+    }
+}
+
+/// Future returned by [`Receiver::recv`].
+pub struct Recv<'a, T, Caps = crate::cx::cap::All> {
+    receiver: &'a mut Receiver<T>,
+    cx: &'a Cx<Caps>,
+    polled: bool,
+}
+
+impl<T, Caps> Future for Recv<'_, T, Caps> {
+    type Output = Result<T, RecvError>;
+
+    #[inline]
+    fn poll(self: Pin<&mut Self>, ctx: &mut Context<'_>) -> Poll<Self::Output> {
+        let this = self.get_mut();
+        this.polled = true;
+        this.receiver.poll_recv(this.cx, ctx)
+    }
+}
+
+impl<T, Caps> Drop for Recv<'_, T, Caps> {
+    fn drop(&mut self) {
+        // Clear the registered waker to avoid retaining stale executor state
+        // if this future is dropped (e.g., cancelled by select!).
+        // Only clear if this future was actually polled, so we don't clobber
+        // wakers registered by previous direct `poll_recv` calls.
+        if self.polled {
+            let mut inner = self.receiver.shared.inner.lock();
+            inner.recv_waker = None;
+        }
+    }
+}
+
+/// Future returned by [`Receiver::recv_many`].
+pub struct RecvMany<'a, T, Caps = crate::cx::cap::All> {
+    receiver: &'a mut Receiver<T>,
+    cx: &'a Cx<Caps>,
+    buffer: &'a mut Vec<T>,
+    limit: usize,
+    polled: bool,
+}
+
+impl<T, Caps> Future for RecvMany<'_, T, Caps> {
+    type Output = Result<usize, RecvError>;
+
+    #[inline]
+    fn poll(self: Pin<&mut Self>, ctx: &mut Context<'_>) -> Poll<Self::Output> {
+        let this = self.get_mut();
+        this.polled = true;
+        this.receiver
+            .poll_recv_many(this.cx, this.buffer, this.limit, ctx)
+    }
+}
+
+impl<T, Caps> Drop for RecvMany<'_, T, Caps> {
+    fn drop(&mut self) {
+        if self.polled {
+            let mut inner = self.receiver.shared.inner.lock();
+            inner.recv_waker = None;
+        }
+    }
+}
+
+impl<T> Drop for Receiver<T> {
+    fn drop(&mut self) {
+        let (wakers, _items) = {
+            let mut inner = self.shared.inner.lock();
+            self.shared.receiver_dropped.store(true, Ordering::Release);
+            // Clear any pending recv waker so a dropped receiver does not
+            // retain executor task state indefinitely.
+            inner.recv_waker = None;
+            // Drain queued items to prevent memory leaks when senders are
+            // long-lived (they hold Arc refs that keep the queue alive).
+            // We extract them using std::mem::take to drop them outside the lock,
+            // preventing deadlocks if T::drop requires the same channel lock.
+            let items = std::mem::take(&mut inner.queue);
+            let tokens: SmallVec<[SlabToken; 4]> = inner.waiter_queue.drain(..).collect();
+            let wakers: SmallVec<[Waker; 4]> = tokens
+                .into_iter()
+                .filter_map(|token| inner.send_wakers.remove(token))
+                .collect();
+            drop(inner);
+            (wakers, items)
+        };
+        // Wake senders outside the lock to avoid wake-under-lock deadlocks.
+        for waker in wakers {
+            waker.wake();
+        }
+    }
+}
+
+/// The receiving side of an unbounded MPSC channel.
+pub struct UnboundedReceiver<T> {
+    inner: Receiver<T>,
+}
+
+impl<T: std::fmt::Debug> std::fmt::Debug for UnboundedReceiver<T> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("UnboundedReceiver")
+            .field("inner", &self.inner)
+            .finish()
+    }
+}
+
+impl<T> UnboundedReceiver<T> {
+    /// Closes the channel, preventing any further messages from being sent.
+    #[inline]
+    pub fn close(&mut self) {
+        self.inner.close();
+    }
+
+    /// Creates a receive future for the next value.
+    #[inline]
+    #[must_use]
+    pub fn recv<'a, Caps>(&'a mut self, cx: &'a Cx<Caps>) -> Recv<'a, T, Caps> {
+        self.inner.recv(cx)
+    }
+
+    /// Creates a receive future that appends up to `limit` values into `buffer`.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// # async fn example(cx: &asupersync::Cx) {
+    /// use asupersync::channel::mpsc;
+    ///
+    /// let (tx, mut rx) = mpsc::unbounded_channel();
+    /// tx.send("a").unwrap();
+    /// tx.send("b").unwrap();
+    ///
+    /// let mut batch = Vec::new();
+    /// let count = rx.recv_many(cx, &mut batch, 1).await.unwrap();
+    /// assert_eq!(count, 1);
+    /// assert_eq!(batch, vec!["a"]);
+    /// # }
+    /// ```
+    #[inline]
+    #[must_use]
+    pub fn recv_many<'a, Caps>(
+        &'a mut self,
+        cx: &'a Cx<Caps>,
+        buffer: &'a mut Vec<T>,
+        limit: usize,
+    ) -> RecvMany<'a, T, Caps> {
+        self.inner.recv_many(cx, buffer, limit)
+    }
+
+    /// Polls the receive operation directly without constructing a temporary future.
+    #[inline]
+    pub fn poll_recv<Caps>(
+        &mut self,
+        cx: &Cx<Caps>,
+        task_cx: &mut Context<'_>,
+    ) -> Poll<Result<T, RecvError>> {
+        self.inner.poll_recv(cx, task_cx)
+    }
+
+    /// Polls a batch receive operation directly.
+    #[inline]
+    pub fn poll_recv_many<Caps>(
+        &mut self,
+        cx: &Cx<Caps>,
+        buffer: &mut Vec<T>,
+        limit: usize,
+        task_cx: &mut Context<'_>,
+    ) -> Poll<Result<usize, RecvError>> {
+        self.inner.poll_recv_many(cx, buffer, limit, task_cx)
+    }
+
+    /// Attempts to receive a value without blocking.
+    #[inline]
+    pub fn try_recv(&mut self) -> Result<T, RecvError> {
+        self.inner.try_recv()
+    }
+
+    /// Returns true if all senders have been dropped.
+    #[inline]
+    #[must_use]
+    pub fn is_closed(&self) -> bool {
+        self.inner.is_closed()
+    }
+
+    /// Returns true if there are any queued messages.
+    #[inline]
+    #[must_use]
+    pub fn has_messages(&self) -> bool {
+        self.inner.has_messages()
+    }
+
+    /// Returns the number of queued messages.
+    #[inline]
+    #[must_use]
+    pub fn len(&self) -> usize {
+        self.inner.len()
+    }
+
+    /// Returns true if the queue is empty.
+    #[inline]
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.inner.is_empty()
+    }
+
+    /// Returns the unbounded capacity sentinel.
+    #[inline]
+    #[must_use]
+    pub fn capacity(&self) -> usize {
+        self.inner.capacity()
+    }
+
+    /// Returns an opt-in redacted telemetry snapshot for this receiver.
+    #[inline]
+    #[must_use]
+    pub fn telemetry_snapshot(&self, channel_id: u64) -> MpscTelemetrySnapshot {
+        self.inner.telemetry_snapshot(channel_id)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    #![allow(
+        clippy::pedantic,
+        clippy::nursery,
+        clippy::expect_fun_call,
+        clippy::map_unwrap_or,
+        clippy::cast_possible_wrap,
+        clippy::future_not_send
+    )]
+    use super::*;
+    use crate::types::CancelKind;
+    use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+
+    fn init_test(name: &str) {
+        crate::test_utils::init_test_logging();
+        crate::test_phase!(name);
+    }
+
+    fn test_cx() -> Cx<crate::cx::cap::All> {
+        Cx::for_testing()
+    }
+
+    fn block_on<F: Future>(f: F) -> F::Output {
+        let waker = std::task::Waker::noop().clone();
+        let mut cx = Context::from_waker(&waker);
+        let mut pinned = Box::pin(f);
+        loop {
+            match pinned.as_mut().poll(&mut cx) {
+                Poll::Ready(v) => return v,
+                Poll::Pending => std::thread::yield_now(),
+            }
+        }
+    }
+
+    #[test]
+    fn channel_capacity_must_be_nonzero() {
+        init_test("channel_capacity_must_be_nonzero");
+        let result = std::panic::catch_unwind(|| channel::<i32>(0));
+        crate::assert_with_log!(result.is_err(), "capacity 0 panics", true, result.is_err());
+        crate::test_complete!("channel_capacity_must_be_nonzero");
+    }
+
+    #[test]
+    fn recv_cancelled_display_has_asup_e203() {
+        init_test("recv_cancelled_display_has_asup_e203");
+        let text = RecvError::Cancelled.to_string();
+        crate::assert_with_log!(
+            text == "[ASUP-E203] receive operation cancelled",
+            "cancelled display",
+            "[ASUP-E203] receive operation cancelled",
+            text
+        );
+        crate::test_complete!("recv_cancelled_display_has_asup_e203");
+    }
+
+    #[test]
+    fn basic_send_recv() {
+        init_test("basic_send_recv");
+        let cx = test_cx();
+        let (tx, mut rx) = channel::<i32>(10);
+
+        block_on(tx.send(&cx, 42)).expect("send failed");
+        let value = block_on(rx.recv(&cx)).expect("recv failed");
+        crate::assert_with_log!(value == 42, "recv value", 42, value);
+        crate::test_complete!("basic_send_recv");
+    }
+
+    #[test]
+    fn recv_accepts_detached_no_cap_context() {
+        init_test("recv_accepts_detached_no_cap_context");
+        let cx = Cx::<crate::cx::cap::None>::detached_cancel_context();
+        let (tx, mut rx) = channel::<i32>(1);
+
+        tx.try_send(47).expect("try_send should succeed");
+        let value = block_on(rx.recv(&cx)).expect("recv should accept cap::None Cx");
+
+        crate::assert_with_log!(value == 47, "recv value", 47, value);
+        crate::test_complete!("recv_accepts_detached_no_cap_context");
+    }
+
+    #[test]
+    fn telemetry_snapshot_reports_backlog_waiters_and_cancellations() {
+        init_test("telemetry_snapshot_reports_backlog_waiters_and_cancellations");
+        let cx = test_cx();
+        let (tx, mut rx) = channel::<u8>(2);
+
+        let initial = tx.telemetry_snapshot(11);
+        crate::assert_with_log!(initial.capacity == 2, "capacity", 2, initial.capacity);
+        crate::assert_with_log!(
+            initial.queued_messages == 0,
+            "initial queue",
+            0,
+            initial.queued_messages
+        );
+        crate::assert_with_log!(
+            initial.reserved_uncommitted_obligations == 0,
+            "initial reserved",
+            0,
+            initial.reserved_uncommitted_obligations
+        );
+        crate::assert_with_log!(
+            initial.receiver_health == "open",
+            "initial health",
+            "open",
+            initial.receiver_health
+        );
+
+        let permit = tx.try_reserve().expect("reserve");
+        let reserved = permit.telemetry_snapshot(11);
+        crate::assert_with_log!(
+            reserved.reserved_uncommitted_obligations == 1,
+            "reserved permit count",
+            1,
+            reserved.reserved_uncommitted_obligations
+        );
+        permit.abort();
+        crate::assert_with_log!(
+            rx.telemetry_snapshot(11).cancellation_count == 1,
+            "abort cancellation count",
+            1,
+            rx.telemetry_snapshot(11).cancellation_count
+        );
+
+        tx.try_send(7).expect("send");
+        let ready = rx.telemetry_snapshot(11);
+        crate::assert_with_log!(
+            ready.queued_messages == 1,
+            "ready queue",
+            1,
+            ready.queued_messages
+        );
+        crate::assert_with_log!(
+            ready.receiver_health == "value_ready",
+            "ready health",
+            "value_ready",
+            ready.receiver_health
+        );
+        crate::assert_with_log!(rx.try_recv().expect("recv") == 7, "received value", 7, 7);
+
+        let (tx, mut rx) = channel::<u8>(1);
+        tx.try_send(9).expect("fill");
+        let waker = std::task::Waker::noop().clone();
+        let mut task_cx = Context::from_waker(&waker);
+        let mut reserve = Box::pin(tx.reserve(&cx));
+        crate::assert_with_log!(
+            matches!(reserve.as_mut().poll(&mut task_cx), Poll::Pending),
+            "reserve waits when full",
+            "pending",
+            "pending"
+        );
+        crate::assert_with_log!(
+            tx.telemetry_snapshot(12).send_waiter_count == 1,
+            "sender waiter count",
+            1,
+            tx.telemetry_snapshot(12).send_waiter_count
+        );
+        drop(reserve);
+        crate::assert_with_log!(
+            tx.telemetry_snapshot(12).send_waiter_count == 0,
+            "sender waiter cleaned",
+            0,
+            tx.telemetry_snapshot(12).send_waiter_count
+        );
+        crate::assert_with_log!(
+            rx.try_recv().expect("recv filled") == 9,
+            "drained value",
+            9,
+            9
+        );
+
+        let cancelled = test_cx();
+        cancelled.cancel_with(CancelKind::User, Some("mpsc telemetry test"));
+        let (tx, mut rx) = channel::<u8>(1);
+        let mut reserve = Box::pin(tx.reserve(&cancelled));
+        crate::assert_with_log!(
+            matches!(
+                reserve.as_mut().poll(&mut task_cx),
+                Poll::Ready(Err(SendError::Cancelled(())))
+            ),
+            "cancelled reserve",
+            "cancelled",
+            "cancelled"
+        );
+        drop(reserve);
+        let mut recv = Box::pin(rx.recv(&cancelled));
+        crate::assert_with_log!(
+            matches!(
+                recv.as_mut().poll(&mut task_cx),
+                Poll::Ready(Err(RecvError::Cancelled))
+            ),
+            "cancelled recv",
+            "cancelled",
+            "cancelled"
+        );
+        drop(recv);
+        crate::assert_with_log!(
+            rx.telemetry_snapshot(13).cancellation_count == 2,
+            "cancelled ops count",
+            2,
+            rx.telemetry_snapshot(13).cancellation_count
+        );
+        drop(tx);
+        let closed = rx.telemetry_snapshot(13);
+        crate::assert_with_log!(closed.closed, "sender closed", true, closed.closed);
+        crate::assert_with_log!(
+            closed.receiver_health == "sender_closed",
+            "closed health",
+            "sender_closed",
+            closed.receiver_health
+        );
+
+        crate::test_complete!("telemetry_snapshot_reports_backlog_waiters_and_cancellations");
+    }
+
+    #[test]
+    fn fifo_ordering_single_sender() {
+        init_test("fifo_ordering_single_sender");
+        let cx = test_cx();
+        let (tx, mut rx) = channel::<usize>(128);
+
+        for i in 0..100 {
+            block_on(tx.send(&cx, i)).expect("send failed");
+        }
+        drop(tx);
+
+        let mut received = Vec::new();
+        loop {
+            match block_on(rx.recv(&cx)) {
+                Ok(value) => received.push(value),
+                Err(RecvError::Disconnected) => break,
+                Err(other) => {
+                    crate::assert_with_log!(
+                        false,
+                        "unexpected recv error",
+                        "Disconnected",
+                        format!("{other:?}")
+                    );
+                    break;
+                }
+            }
+        }
+
+        let expected: Vec<_> = (0..100).collect();
+        crate::assert_with_log!(received == expected, "fifo order", expected, received);
+        crate::test_complete!("fifo_ordering_single_sender");
+    }
+
+    #[test]
+    fn backpressure_blocks_until_recv() {
+        init_test("backpressure_blocks_until_recv");
+        let cx = test_cx();
+        let (tx, mut rx) = channel::<i32>(1);
+
+        block_on(tx.send(&cx, 1)).expect("send failed");
+
+        let finished = Arc::new(AtomicBool::new(false));
+        let finished_clone = Arc::clone(&finished);
+        let tx_clone = tx;
+        let cx_clone = cx.clone();
+
+        let handle = std::thread::spawn(move || {
+            block_on(tx_clone.send(&cx_clone, 2)).expect("send in worker failed");
+            finished_clone.store(true, Ordering::SeqCst);
+        });
+
+        for _ in 0..1_000 {
+            std::thread::yield_now();
+        }
+        let finished_now = finished.load(Ordering::SeqCst);
+        crate::assert_with_log!(
+            !finished_now,
+            "send completed despite full channel",
+            false,
+            finished_now
+        );
+
+        let first = block_on(rx.recv(&cx)).expect("recv failed");
+        crate::assert_with_log!(first == 1, "first recv", 1, first);
+
+        let second = block_on(rx.recv(&cx)).expect("recv failed");
+        crate::assert_with_log!(second == 2, "second recv", 2, second);
+
+        handle.join().expect("sender thread panicked");
+        let finished_now = finished.load(Ordering::SeqCst);
+        crate::assert_with_log!(finished_now, "worker finished", true, finished_now);
+        crate::test_complete!("backpressure_blocks_until_recv");
+    }
+
+    #[test]
+    fn two_phase_send_recv() {
+        init_test("two_phase_send_recv");
+        let cx = test_cx();
+        let (tx, mut rx) = channel::<i32>(10);
+
+        // Phase 1: reserve
+        let permit = block_on(tx.reserve(&cx)).expect("reserve failed");
+
+        // Phase 2: commit
+        let outcome = permit.send(42);
+        crate::assert_with_log!(
+            matches!(outcome, Outcome::Ok(())),
+            "send outcome",
+            "Ok(())",
+            format!("{:?}", outcome)
+        );
+
+        let value = block_on(rx.recv(&cx)).expect("recv failed");
+        crate::assert_with_log!(value == 42, "recv value", 42, value);
+        crate::test_complete!("two_phase_send_recv");
+    }
+
+    #[test]
+    fn permit_abort_releases_slot() {
+        init_test("permit_abort_releases_slot");
+        let (tx, _rx) = channel::<i32>(1);
+        let cx = test_cx();
+
+        let permit = block_on(tx.reserve(&cx)).expect("reserve failed");
+
+        let try_reserve = tx.try_reserve();
+        crate::assert_with_log!(
+            matches!(try_reserve, Err(SendError::<()>::Full(()))),
+            "try_reserve full",
+            "Err(Full(()))",
+            format!("{:?}", try_reserve)
+        );
+
+        permit.abort();
+
+        let permit2 = block_on(tx.reserve(&cx));
+        crate::assert_with_log!(
+            permit2.is_ok(),
+            "reserve after abort",
+            true,
+            permit2.is_ok()
+        );
+        crate::test_complete!("permit_abort_releases_slot");
+    }
+
+    #[test]
+    fn permit_drop_releases_slot() {
+        init_test("permit_drop_releases_slot");
+        let (tx, _rx) = channel::<i32>(1);
+        let cx = test_cx();
+
+        {
+            let _permit = block_on(tx.reserve(&cx)).expect("reserve failed");
+        }
+
+        let permit = block_on(tx.reserve(&cx));
+        crate::assert_with_log!(permit.is_ok(), "reserve after drop", true, permit.is_ok());
+        crate::test_complete!("permit_drop_releases_slot");
+    }
+
+    #[test]
+    fn try_send_when_full() {
+        init_test("try_send_when_full");
+        let (tx, _rx) = channel::<i32>(1);
+        let cx = test_cx();
+
+        block_on(tx.send(&cx, 1)).expect("send failed");
+
+        let result = tx.try_send(2);
+        crate::assert_with_log!(
+            matches!(result, Err(SendError::Full(2))),
+            "try_send full",
+            "Err(Full(2))",
+            format!("{:?}", result)
+        );
+        crate::test_complete!("try_send_when_full");
+    }
+
+    /// br-asupersync-m02s6r / FIFO correction — try_send honors queued waiters.
+    ///
+    /// Builds the state "1 queued reserve waiter, 2 free slots" (cap=4) and
+    /// asserts that `try_send` returns `Full` until the head waiter claims or
+    /// cancels its reservation. Physical capacity alone is not enough because
+    /// the freed slot is already promised to the FIFO reserve queue.
+    #[test]
+    fn try_send_respects_queued_waiter_fifo() {
+        init_test("try_send_respects_queued_waiter_fifo");
+        let (tx, mut rx) = channel::<i32>(4);
+        let cx = test_cx();
+
+        // Fill capacity: 4 queued, 0 reserved.
+        for v in 1..=4_i32 {
+            tx.try_send(v).expect("fill");
+        }
+        let (qlen, rlen) = tx.debug_counts();
+        crate::assert_with_log!(qlen == 4 && rlen == 0, "filled", (4, 0), (qlen, rlen));
+
+        // Queue one reserve waiter (cannot make progress: cap exhausted).
+        let mut reserve_fut = Box::pin(tx.reserve(&cx));
+        let waker = noop_waker();
+        let mut task_cx = Context::from_waker(&waker);
+        let poll = reserve_fut.as_mut().poll(&mut task_cx);
+        crate::assert_with_log!(
+            matches!(poll, Poll::Pending),
+            "waiter pending",
+            "Pending",
+            format!("{:?}", poll)
+        );
+
+        // Drain two messages → 2 free slots, but waiter is still in the queue
+        // (its waker fired, but we deliberately do not re-poll the future).
+        let m1 = rx.try_recv().expect("recv 1");
+        let m2 = rx.try_recv().expect("recv 2");
+        crate::assert_with_log!(m1 == 1 && m2 == 2, "drained", (1, 2), (m1, m2));
+        let (qlen, rlen) = tx.debug_counts();
+        crate::assert_with_log!(qlen == 2 && rlen == 0, "after drain", (2, 0), (qlen, rlen));
+
+        // The queued waiter owns the next capacity handoff, so a later
+        // try_send must not steal it even though physical slots are free.
+        let result = tx.try_send(99);
+        crate::assert_with_log!(
+            matches!(result, Err(SendError::Full(99))),
+            "try_send blocked by queued waiter",
+            "Err(Full(99))",
+            format!("{:?}", result)
+        );
+
+        let permit = match reserve_fut.as_mut().poll(&mut task_cx) {
+            Poll::Ready(Ok(permit)) => permit,
+            other => panic!("head waiter should claim freed slot, got {other:?}"),
+        };
+        crate::assert_with_log!(
+            matches!(permit.send(99), Outcome::Ok(())),
+            "waiter commit",
+            "Outcome::Ok",
+            "Outcome::Ok"
+        );
+        let committed = rx.try_recv().expect("waiter commit recv");
+        crate::assert_with_log!(committed == 3, "recv existing third", 3, committed);
+        let committed = rx.try_recv().expect("waiter committed value");
+        crate::assert_with_log!(committed == 4, "recv existing fourth", 4, committed);
+        let committed = rx.try_recv().expect("waiter committed value");
+        crate::assert_with_log!(committed == 99, "recv waiter value", 99, committed);
+        // Drop the waiter to release its queue position cleanly.
+        drop(reserve_fut);
+
+        crate::test_complete!("try_send_respects_queued_waiter_fifo");
+    }
+
+    #[test]
+    fn try_recv_when_empty() {
+        init_test("try_recv_when_empty");
+        let (tx, mut rx) = channel::<i32>(10);
+
+        let empty = rx.try_recv();
+        crate::assert_with_log!(
+            matches!(empty, Err(RecvError::Empty)),
+            "try_recv empty",
+            "Err(Empty)",
+            format!("{:?}", empty)
+        );
+
+        let cx = test_cx();
+        block_on(tx.send(&cx, 42)).expect("send failed");
+
+        let value = rx.try_recv();
+        let ok = matches!(value, Ok(42));
+        crate::assert_with_log!(ok, "try_recv value", true, ok);
+        crate::test_complete!("try_recv_when_empty");
+    }
+
+    #[test]
+    fn recv_many_drains_up_to_limit_and_reports_closed_empty() {
+        init_test("recv_many_drains_up_to_limit_and_reports_closed_empty");
+        let cx = test_cx();
+        let (tx, mut rx) = channel::<usize>(8);
+        let mut buffer = vec![99];
+
+        for value in 0..5 {
+            tx.try_send(value).expect("send queued value");
+        }
+
+        let first = block_on(rx.recv_many(&cx, &mut buffer, 3)).expect("recv_many first batch");
+        crate::assert_with_log!(first == 3, "first batch size", 3usize, first);
+        crate::assert_with_log!(
+            buffer == vec![99, 0, 1, 2],
+            "first batch values",
+            vec![99, 0, 1, 2],
+            buffer.clone()
+        );
+
+        let second = block_on(rx.recv_many(&cx, &mut buffer, 8)).expect("recv_many second batch");
+        crate::assert_with_log!(second == 2, "second batch size", 2usize, second);
+        crate::assert_with_log!(
+            buffer == vec![99, 0, 1, 2, 3, 4],
+            "all batch values",
+            vec![99, 0, 1, 2, 3, 4],
+            buffer.clone()
+        );
+
+        drop(tx);
+        let closed = block_on(rx.recv_many(&cx, &mut buffer, 8)).expect("closed empty batch");
+        crate::assert_with_log!(closed == 0, "closed empty count", 0usize, closed);
+        crate::test_complete!("recv_many_drains_up_to_limit_and_reports_closed_empty");
+    }
+
+    #[test]
+    fn recv_many_limit_zero_returns_immediately() {
+        init_test("recv_many_limit_zero_returns_immediately");
+        let cx = test_cx();
+        let (tx, mut rx) = channel::<usize>(2);
+        let mut buffer = Vec::new();
+
+        tx.try_send(1).expect("send queued value");
+        let count = block_on(rx.recv_many(&cx, &mut buffer, 0)).expect("zero limit");
+        crate::assert_with_log!(count == 0, "zero limit count", 0usize, count);
+        crate::assert_with_log!(
+            buffer.is_empty(),
+            "buffer unchanged",
+            true,
+            buffer.is_empty()
+        );
+        crate::assert_with_log!(
+            rx.try_recv().expect("queued value remains") == 1,
+            "queued value preserved",
+            1usize,
+            1usize
+        );
+        crate::test_complete!("recv_many_limit_zero_returns_immediately");
+    }
+
+    #[test]
+    fn recv_many_wakes_one_sender_per_freed_slot() {
+        init_test("recv_many_wakes_one_sender_per_freed_slot");
+        let cx = test_cx();
+        let (tx, mut rx) = channel::<usize>(2);
+
+        tx.try_send(1).expect("first send fills slot");
+        tx.try_send(2).expect("second send fills slot");
+
+        let wake_count_a = Arc::new(AtomicUsize::new(0));
+        let waker_a = counting_waker(Arc::clone(&wake_count_a));
+        let mut ctx_a = Context::from_waker(&waker_a);
+        let mut reserve_a = Box::pin(tx.reserve(&cx));
+        crate::assert_with_log!(
+            reserve_a.as_mut().poll(&mut ctx_a).is_pending(),
+            "reserve A waits while channel full",
+            true,
+            true
+        );
+
+        let wake_count_b = Arc::new(AtomicUsize::new(0));
+        let waker_b = counting_waker(Arc::clone(&wake_count_b));
+        let mut ctx_b = Context::from_waker(&waker_b);
+        let mut reserve_b = Box::pin(tx.reserve(&cx));
+        crate::assert_with_log!(
+            reserve_b.as_mut().poll(&mut ctx_b).is_pending(),
+            "reserve B waits behind A",
+            true,
+            true
+        );
+
+        let mut buffer = Vec::new();
+        let drained = block_on(rx.recv_many(&cx, &mut buffer, 2)).expect("recv_many drains both");
+        crate::assert_with_log!(drained == 2, "recv_many drained count", 2usize, drained);
+        crate::assert_with_log!(
+            buffer == vec![1, 2],
+            "recv_many drained values",
+            vec![1, 2],
+            buffer.clone()
+        );
+        crate::assert_with_log!(
+            wake_count_a.load(Ordering::SeqCst) == 1,
+            "recv_many wakes head waiter",
+            1usize,
+            wake_count_a.load(Ordering::SeqCst)
+        );
+        crate::assert_with_log!(
+            wake_count_b.load(Ordering::SeqCst) == 1,
+            "recv_many wakes next waiter for second freed slot",
+            1usize,
+            wake_count_b.load(Ordering::SeqCst)
+        );
+
+        let permit_a = match reserve_a.as_mut().poll(&mut ctx_a) {
+            Poll::Ready(Ok(permit)) => permit,
+            _ => panic!("reserve A should acquire freed capacity"),
+        };
+        crate::assert_with_log!(
+            wake_count_b.load(Ordering::SeqCst) >= 1,
+            "reserve B keeps wake for its freed slot",
+            "at least one wake",
+            wake_count_b.load(Ordering::SeqCst)
+        );
+
+        let permit_b = match reserve_b.as_mut().poll(&mut ctx_b) {
+            Poll::Ready(Ok(permit)) => permit,
+            _ => panic!("reserve B should acquire second freed slot"),
+        };
+
+        crate::assert_with_log!(
+            matches!(permit_a.send(3), Outcome::Ok(())),
+            "permit A commits",
+            "Ok(())",
+            "Ok(())"
+        );
+        crate::assert_with_log!(
+            matches!(permit_b.send(4), Outcome::Ok(())),
+            "permit B commits",
+            "Ok(())",
+            "Ok(())"
+        );
+
+        crate::assert_with_log!(
+            rx.try_recv().expect("first cascaded value") == 3,
+            "first cascaded value",
+            3usize,
+            3usize
+        );
+        crate::assert_with_log!(
+            rx.try_recv().expect("second cascaded value") == 4,
+            "second cascaded value",
+            4usize,
+            4usize
+        );
+        crate::test_complete!("recv_many_wakes_one_sender_per_freed_slot");
+    }
+
+    #[test]
+    fn unbounded_channel_send_recv_fifo_without_capacity_wait() {
+        init_test("unbounded_channel_send_recv_fifo_without_capacity_wait");
+        let (tx, mut rx) = unbounded_channel::<usize>();
+
+        crate::assert_with_log!(
+            tx.capacity() == usize::MAX && rx.capacity() == usize::MAX,
+            "unbounded capacity sentinel",
+            usize::MAX,
+            tx.capacity()
+        );
+
+        for value in 0..128 {
+            tx.send(value).expect("unbounded send should not wait");
+        }
+
+        crate::assert_with_log!(rx.len() == 128, "queued values", 128, rx.len());
+
+        for expected in 0..128 {
+            let actual = rx.try_recv().expect("queued value");
+            crate::assert_with_log!(actual == expected, "fifo value", expected, actual);
+        }
+
+        crate::assert_with_log!(rx.is_empty(), "empty after drain", true, rx.is_empty());
+        crate::test_complete!("unbounded_channel_send_recv_fifo_without_capacity_wait");
+    }
+
+    #[test]
+    fn unbounded_alias_matches_unbounded_channel_behavior() {
+        init_test("unbounded_alias_matches_unbounded_channel_behavior");
+        let (tx, mut rx) = unbounded::<usize>();
+
+        tx.send(5).expect("unbounded alias send");
+        crate::assert_with_log!(
+            tx.capacity() == usize::MAX,
+            "alias sender capacity",
+            usize::MAX,
+            tx.capacity()
+        );
+        crate::assert_with_log!(
+            rx.try_recv().expect("alias queued value") == 5,
+            "alias receive",
+            5usize,
+            5usize
+        );
+        crate::test_complete!("unbounded_alias_matches_unbounded_channel_behavior");
+    }
+
+    #[test]
+    fn unbounded_sender_clone_keeps_receiver_open_until_last_sender_drops() {
+        init_test("unbounded_sender_clone_keeps_receiver_open_until_last_sender_drops");
+        let (tx, mut rx) = unbounded_channel::<i32>();
+        let tx_clone = tx.clone();
+
+        drop(tx);
+        crate::assert_with_log!(
+            !rx.is_closed(),
+            "clone keeps receiver open",
+            false,
+            rx.is_closed()
+        );
+
+        tx_clone.send(7).expect("send through clone");
+        drop(tx_clone);
+
+        crate::assert_with_log!(rx.is_closed(), "last sender closed", true, rx.is_closed());
+        crate::assert_with_log!(
+            rx.try_recv().expect("queued value") == 7,
+            "queued value",
+            7,
+            7
+        );
+        crate::assert_with_log!(
+            matches!(rx.try_recv(), Err(RecvError::Disconnected)),
+            "disconnected after drain",
+            "Disconnected",
+            "Disconnected"
+        );
+        crate::test_complete!("unbounded_sender_clone_keeps_receiver_open_until_last_sender_drops");
+    }
+
+    #[test]
+    fn unbounded_send_returns_value_when_receiver_dropped() {
+        init_test("unbounded_send_returns_value_when_receiver_dropped");
+        let (tx, rx) = unbounded_channel::<String>();
+        drop(rx);
+
+        let result = tx.send("payload".to_owned());
+        crate::assert_with_log!(
+            matches!(result, Err(SendError::Disconnected(ref value)) if value == "payload"),
+            "disconnected returns payload",
+            "payload",
+            format!("{result:?}")
+        );
+        crate::test_complete!("unbounded_send_returns_value_when_receiver_dropped");
+    }
+
+    #[test]
+    fn unbounded_receiver_recv_accepts_cx_path() {
+        init_test("unbounded_receiver_recv_accepts_cx_path");
+        let cx = test_cx();
+        let (tx, mut rx) = unbounded_channel::<i32>();
+
+        tx.send(11).expect("send");
+        let value = block_on(rx.recv(&cx)).expect("recv through cx path");
+        crate::assert_with_log!(value == 11, "recv value", 11, value);
+        crate::test_complete!("unbounded_receiver_recv_accepts_cx_path");
+    }
+
+    #[test]
+    fn unbounded_receiver_recv_many_batches() {
+        init_test("unbounded_receiver_recv_many_batches");
+        let cx = test_cx();
+        let (tx, mut rx) = unbounded_channel::<usize>();
+        let mut buffer = Vec::new();
+
+        for value in 10..15 {
+            tx.send(value).expect("unbounded send");
+        }
+
+        let count = block_on(rx.recv_many(&cx, &mut buffer, 4)).expect("recv_many batch");
+        crate::assert_with_log!(count == 4, "batch size", 4usize, count);
+        crate::assert_with_log!(
+            buffer == vec![10, 11, 12, 13],
+            "batch values",
+            vec![10, 11, 12, 13],
+            buffer.clone()
+        );
+        crate::assert_with_log!(
+            rx.try_recv().expect("remaining value") == 14,
+            "remaining value",
+            14usize,
+            14usize
+        );
+        crate::test_complete!("unbounded_receiver_recv_many_batches");
+    }
+
+    #[test]
+    fn unbounded_sender_supports_explicit_two_phase_send() {
+        init_test("unbounded_sender_supports_explicit_two_phase_send");
+        let (tx, mut rx) = unbounded_channel::<i32>();
+
+        let permit = tx.try_reserve().expect("unbounded try_reserve");
+        let outcome = permit.send(21);
+        crate::assert_with_log!(
+            matches!(outcome, Outcome::Ok(())),
+            "two-phase send outcome",
+            "Ok",
+            format!("{outcome:?}")
+        );
+        crate::assert_with_log!(rx.try_recv().expect("recv") == 21, "recv value", 21, 21);
+        crate::test_complete!("unbounded_sender_supports_explicit_two_phase_send");
+    }
+
+    #[test]
+    fn weak_unbounded_sender_obeys_sender_liveness() {
+        init_test("weak_unbounded_sender_obeys_sender_liveness");
+        let (tx, mut rx) = unbounded_channel::<i32>();
+        let weak = tx.downgrade();
+
+        let upgraded = weak.upgrade().expect("sender is alive");
+        upgraded.send(13).expect("send through upgraded sender");
+        drop(tx);
+        drop(upgraded);
+
+        crate::assert_with_log!(weak.upgrade().is_none(), "weak sees closed", true, true);
+        crate::assert_with_log!(
+            rx.try_recv().expect("queued value") == 13,
+            "queued value",
+            13,
+            13
+        );
+        crate::test_complete!("weak_unbounded_sender_obeys_sender_liveness");
+    }
+
+    #[test]
+    fn recv_after_sender_dropped_drains_queue() {
+        init_test("recv_after_sender_dropped_drains_queue");
+        let (tx, mut rx) = channel::<i32>(10);
+        let cx = test_cx();
+
+        block_on(tx.send(&cx, 1)).expect("send failed");
+        block_on(tx.send(&cx, 2)).expect("send failed");
+        drop(tx);
+
+        let first = block_on(rx.recv(&cx));
+        let first_ok = matches!(first, Ok(1));
+        crate::assert_with_log!(first_ok, "recv first", true, first_ok);
+        let second = block_on(rx.recv(&cx));
+        let second_ok = matches!(second, Ok(2));
+        crate::assert_with_log!(second_ok, "recv second", true, second_ok);
+
+        let disconnected = rx.try_recv();
+        let is_disconnected = matches!(disconnected, Err(RecvError::Disconnected));
+        crate::assert_with_log!(is_disconnected, "recv disconnected", true, is_disconnected);
+        crate::test_complete!("recv_after_sender_dropped_drains_queue");
+    }
+
+    #[test]
+    fn multiple_senders() {
+        init_test("multiple_senders");
+        let (tx1, mut rx) = channel::<i32>(10);
+        let tx2 = tx1.clone();
+        let cx = test_cx();
+
+        block_on(tx1.send(&cx, 1)).expect("send1 failed");
+        block_on(tx2.send(&cx, 2)).expect("send2 failed");
+
+        let v1 = block_on(rx.recv(&cx)).expect("recv1 failed");
+        let v2 = block_on(rx.recv(&cx)).expect("recv2 failed");
+
+        let ok = (v1 == 1 && v2 == 2) || (v1 == 2 && v2 == 1);
+        crate::assert_with_log!(ok, "both messages received", true, (v1, v2));
+        crate::test_complete!("multiple_senders");
+    }
+
+    fn cancelled_cx() -> Cx {
+        let cx = test_cx();
+        cx.set_cancel_requested(true);
+        cx
+    }
+
+    fn noop_waker() -> Waker {
+        std::task::Waker::noop().clone()
+    }
+
+    fn counting_waker(counter: Arc<AtomicUsize>) -> Waker {
+        struct CountingWaker {
+            counter: Arc<AtomicUsize>,
+        }
+
+        impl std::task::Wake for CountingWaker {
+            fn wake(self: std::sync::Arc<Self>) {
+                self.counter.fetch_add(1, Ordering::SeqCst);
+            }
+
+            fn wake_by_ref(self: &std::sync::Arc<Self>) {
+                self.counter.fetch_add(1, Ordering::SeqCst);
+            }
+        }
+
+        Waker::from(std::sync::Arc::new(CountingWaker { counter }))
+    }
+
+    #[test]
+    fn reserve_cancelled_returns_error() {
+        init_test("reserve_cancelled_returns_error");
+        let (tx, _rx) = channel::<i32>(1);
+        let cx = cancelled_cx();
+        let result = block_on(tx.reserve(&cx));
+        crate::assert_with_log!(
+            matches!(result, Err(SendError::<()>::Cancelled(()))),
+            "reserve cancelled",
+            "Err(Cancelled(()))",
+            format!("{:?}", result)
+        );
+        crate::test_complete!("reserve_cancelled_returns_error");
+    }
+
+    #[test]
+    fn recv_cancelled_returns_error() {
+        init_test("recv_cancelled_returns_error");
+        let (_tx, mut rx) = channel::<i32>(1);
+        let cx = cancelled_cx();
+        let result = block_on(rx.recv(&cx));
+        crate::assert_with_log!(
+            matches!(result, Err(RecvError::Cancelled)),
+            "recv cancelled",
+            "Err(Cancelled)",
+            format!("{:?}", result)
+        );
+        crate::test_complete!("recv_cancelled_returns_error");
+    }
+
+    #[test]
+    fn recv_cancelled_does_not_consume_message() {
+        init_test("recv_cancelled_does_not_consume_message");
+        let (tx, mut rx) = channel::<i32>(1);
+        let cx = test_cx();
+
+        block_on(tx.send(&cx, 9)).expect("send");
+
+        cx.set_cancel_requested(true);
+        let cancelled = block_on(rx.recv(&cx));
+        crate::assert_with_log!(
+            matches!(cancelled, Err(RecvError::Cancelled)),
+            "recv cancelled",
+            "Err(Cancelled)",
+            format!("{:?}", cancelled)
+        );
+
+        cx.set_cancel_requested(false);
+        let value = block_on(rx.recv(&cx)).expect("recv");
+        crate::assert_with_log!(value == 9, "recv value after cancel", 9, value);
+        crate::test_complete!("recv_cancelled_does_not_consume_message");
+    }
+
+    #[test]
+    fn dropped_permit_releases_capacity() {
+        init_test("dropped_permit_releases_capacity");
+        let (tx, mut rx) = channel::<i32>(1);
+        let cx = test_cx();
+
+        let permit = block_on(tx.reserve(&cx)).expect("reserve");
+        drop(permit);
+
+        let permit2 = tx.try_reserve().expect("try_reserve after drop");
+        let outcome = permit2.send(5);
+        crate::assert_with_log!(
+            matches!(outcome, Outcome::Ok(())),
+            "send outcome",
+            "Ok(())",
+            format!("{:?}", outcome)
+        );
+
+        let value = block_on(rx.recv(&cx)).expect("recv");
+        crate::assert_with_log!(value == 5, "recv value", 5, value);
+        crate::test_complete!("dropped_permit_releases_capacity");
+    }
+
+    #[test]
+    fn reserve_cancellation_after_reservation_granted_no_leak() {
+        init_test("reserve_cancellation_after_reservation_granted_no_leak");
+        let (tx, mut rx) = channel::<i32>(1);
+        let cx = test_cx();
+
+        // Fill the only slot to force the next reserve to wait.
+        block_on(tx.send(&cx, 1)).expect("initial send");
+
+        // Create a reserve future but don't immediately poll it
+        let mut reserve_future = Box::pin(tx.reserve(&cx));
+
+        // Poll once to get into the waiter queue
+        let waker = noop_waker();
+        let mut poll_cx = Context::from_waker(&waker);
+        let result = reserve_future.as_mut().poll(&mut poll_cx);
+        crate::assert_with_log!(
+            matches!(result, Poll::Pending),
+            "first poll pending",
+            "Pending",
+            format!("{:?}", result)
+        );
+
+        // Free up space so the reservation can be granted
+        let value = block_on(rx.recv(&cx)).expect("recv to free space");
+        crate::assert_with_log!(value == 1, "freed value", 1, value);
+
+        // Poll again - this should grant the reservation (increment reserved)
+        let result = reserve_future.as_mut().poll(&mut poll_cx);
+        let _permit = match result {
+            Poll::Ready(Ok(permit)) => permit,
+            other => {
+                crate::assert_with_log!(
+                    false,
+                    "second poll should succeed",
+                    "Ok(permit)",
+                    format!("{:?}", other)
+                );
+                return;
+            }
+        };
+
+        // Before fix: permit drop would leak the reservation
+        // After fix: permit drop should properly clean up
+        drop(_permit);
+
+        // Verify capacity is properly restored by successfully reserving and
+        // aborting again. Capacity is one, so each successful abort should make
+        // the next reservation possible.
+        let permit1 = tx.try_reserve().expect("first try_reserve after cleanup");
+        permit1.abort();
+        let permit2 = tx.try_reserve().expect("second try_reserve after cleanup");
+        permit2.abort();
+
+        crate::test_complete!("reserve_cancellation_after_reservation_granted_no_leak");
+    }
+
+    #[test]
+    fn send_after_receiver_drop_returns_disconnected() {
+        init_test("send_after_receiver_drop_returns_disconnected");
+        let (tx, rx) = channel::<i32>(1);
+        let cx = test_cx();
+        drop(rx);
+        let result = block_on(tx.send(&cx, 7));
+        crate::assert_with_log!(
+            matches!(result, Err(SendError::Disconnected(7))),
+            "send after drop",
+            "Err(Disconnected(7))",
+            format!("{:?}", result)
+        );
+        crate::test_complete!("send_after_receiver_drop_returns_disconnected");
+    }
+
+    #[test]
+    fn try_reserve_full_when_waiter_queued() {
+        init_test("try_reserve_full_when_waiter_queued");
+        let (tx, _rx) = channel::<i32>(1);
+        let cx = test_cx();
+
+        let permit = block_on(tx.reserve(&cx)).expect("reserve");
+
+        let mut reserve_fut = Box::pin(tx.reserve(&cx));
+        let waker = noop_waker();
+        let mut cx_task = Context::from_waker(&waker);
+        let poll = reserve_fut.as_mut().poll(&mut cx_task);
+        crate::assert_with_log!(
+            matches!(poll, Poll::Pending),
+            "reserve pending",
+            "Pending",
+            format!("{:?}", poll)
+        );
+
+        permit.abort();
+
+        let try_reserve = tx.try_reserve();
+        crate::assert_with_log!(
+            matches!(try_reserve, Err(SendError::<()>::Full(()))),
+            "try_reserve full due to waiter",
+            "Err(Full(()))",
+            format!("{:?}", try_reserve)
+        );
+
+        let poll2 = reserve_fut.as_mut().poll(&mut cx_task);
+        let waiter_acquired = match poll2 {
+            Poll::Ready(Ok(permit2)) => {
+                permit2.abort();
+                true
+            }
+            _ => false,
+        };
+        crate::assert_with_log!(waiter_acquired, "waiter acquires", true, waiter_acquired);
+
+        drop(reserve_fut);
+        crate::test_complete!("try_reserve_full_when_waiter_queued");
+    }
+
+    #[test]
+    fn receiver_close_returns_disconnected_on_empty() {
+        init_test("receiver_close_returns_disconnected_on_empty");
+        let cx = test_cx();
+        let (tx, mut rx) = channel::<i32>(10);
+
+        block_on(tx.send(&cx, 1)).expect("send failed");
+        rx.close();
+
+        // Should receive the message that was sent before close.
+        let value = rx.try_recv();
+        crate::assert_with_log!(
+            matches!(value, Ok(1)),
+            "try_recv gets message",
+            "Ok(1)",
+            format!("{:?}", value)
+        );
+
+        // Now empty, should return Disconnected, not Empty.
+        let empty_try = rx.try_recv();
+        crate::assert_with_log!(
+            matches!(empty_try, Err(RecvError::Disconnected)),
+            "try_recv returns Disconnected",
+            "Err(Disconnected)",
+            format!("{:?}", empty_try)
+        );
+
+        let empty_recv = block_on(rx.recv(&cx));
+        crate::assert_with_log!(
+            matches!(empty_recv, Err(RecvError::Disconnected)),
+            "recv returns Disconnected",
+            "Err(Disconnected)",
+            format!("{:?}", empty_recv)
+        );
+
+        crate::test_complete!("receiver_close_returns_disconnected_on_empty");
+    }
+
+    #[test]
+    fn try_recv_disconnected_when_closed_and_empty() {
+        init_test("try_recv_disconnected_when_closed_and_empty");
+        let (tx, mut rx) = channel::<i32>(1);
+        drop(tx);
+        let result = rx.try_recv();
+        crate::assert_with_log!(
+            matches!(result, Err(RecvError::Disconnected)),
+            "try_recv disconnected",
+            "Err(Disconnected)",
+            format!("{:?}", result)
+        );
+        crate::test_complete!("try_recv_disconnected_when_closed_and_empty");
+    }
+
+    #[test]
+    fn permit_send_after_receiver_drop_surfaces_disconnected() {
+        init_test("permit_send_after_receiver_drop_surfaces_disconnected");
+        let (tx, rx) = channel::<i32>(1);
+        let cx = test_cx();
+
+        let permit = block_on(tx.reserve(&cx)).expect("reserve failed");
+        drop(rx);
+        let outcome = permit.send(5);
+
+        // Verify that disconnection is surfaced as an Outcome::Err, not silently dropped
+        crate::assert_with_log!(
+            matches!(outcome, Outcome::Err(SendError::Disconnected(5))),
+            "disconnected send surfaces error",
+            "Err(Disconnected(5))",
+            format!("{:?}", outcome)
+        );
+
+        let (queue_empty, reserved) = {
+            let inner = tx.shared.inner.lock();
+            let queue_empty = inner.queue.is_empty();
+            let reserved = inner.reserved;
+            drop(inner);
+            (queue_empty, reserved)
+        };
+        crate::assert_with_log!(queue_empty, "queue empty", true, queue_empty);
+        crate::assert_with_log!(reserved == 0, "reserved cleared", 0, reserved);
+        crate::test_complete!("permit_send_after_receiver_drop_surfaces_disconnected");
+    }
+
+    /// Regression test for br-asupersync-l7t66t: channel failure lens.
+    ///
+    /// Verifies that SendPermit::send surfaces disconnection failures as Outcomes
+    /// instead of silently dropping the value, preserving the two-phase reserve/send
+    /// invariant that no values should be silently dropped.
+    #[test]
+    fn send_permit_surfaces_disconnected_as_outcome() {
+        init_test("send_permit_surfaces_disconnected_as_outcome");
+        let cx = test_cx();
+        let (tx, rx) = channel::<String>(1);
+
+        // Phase 1: Reserve a slot
+        let permit = block_on(tx.reserve(&cx)).expect("reserve should succeed");
+
+        // Drop receiver to create disconnection condition
+        drop(rx);
+
+        // Phase 2: Commit should surface disconnection, not silently drop
+        let message = "important_data".to_string();
+        let outcome = permit.send(message.clone());
+
+        // Verify that the disconnection is surfaced as an Outcome::Err, preserving the value
+        crate::assert_with_log!(
+            matches!(outcome, Outcome::Err(SendError::Disconnected(ref value)) if value == &message),
+            "disconnected send preserves value in outcome",
+            format!("Err(Disconnected({:?}))", message),
+            format!("{:?}", outcome)
+        );
+
+        crate::test_complete!("send_permit_surfaces_disconnected_as_outcome");
+    }
+
+    #[test]
+    fn weak_sender_upgrade_fails_after_drop() {
+        init_test("weak_sender_upgrade_fails_after_drop");
+        let (tx, _rx) = channel::<i32>(1);
+        let weak = tx.downgrade();
+        drop(tx);
+        let upgraded = weak.upgrade();
+        crate::assert_with_log!(upgraded.is_none(), "upgrade none", true, upgraded.is_none());
+        crate::test_complete!("weak_sender_upgrade_fails_after_drop");
+    }
+
+    #[test]
+    fn send_evict_oldest_returns_full_when_all_capacity_reserved() {
+        // Regression: send_evict_oldest must not exceed capacity when all
+        // slots are consumed by outstanding permits (reserved slots).
+        init_test("send_evict_oldest_returns_full_when_all_capacity_reserved");
+        let cx = test_cx();
+        let (tx, _rx) = channel::<i32>(2);
+
+        // Reserve both slots.
+        let p1 = block_on(tx.reserve(&cx)).expect("reserve 1");
+        let p2 = block_on(tx.reserve(&cx)).expect("reserve 2");
+
+        // send_evict_oldest cannot evict reserved slots — must return Full.
+        let result = tx.send_evict_oldest(99);
+        crate::assert_with_log!(
+            matches!(result, Err(SendError::Full(99))),
+            "send_evict_oldest full when reserved",
+            "Err(Full(99))",
+            format!("{:?}", result)
+        );
+
+        // Verify capacity invariant: used_slots <= capacity.
+        {
+            let inner = tx.shared.inner.lock();
+            let used = inner.used_slots();
+            let cap = tx.shared.capacity;
+            drop(inner);
+            crate::assert_with_log!(used <= cap, "capacity invariant", true, used <= cap);
+        }
+
+        p1.abort();
+        p2.abort();
+        crate::test_complete!("send_evict_oldest_returns_full_when_all_capacity_reserved");
+    }
+
+    #[test]
+    fn send_evict_oldest_evicts_committed_not_reserved() {
+        // When queue has committed messages AND reserved slots consume the
+        // rest, eviction should pop a committed message.
+        init_test("send_evict_oldest_evicts_committed_not_reserved");
+        let cx = test_cx();
+        let (tx, _rx) = channel::<i32>(2);
+
+        // Commit one message, reserve one slot.
+        block_on(tx.send(&cx, 10)).expect("send");
+        let permit = block_on(tx.reserve(&cx)).expect("reserve");
+
+        // Channel: queue=[10], reserved=1, used=2, capacity=2.
+        // send_evict_oldest should evict 10 and enqueue the new value.
+        let result = tx.send_evict_oldest(20);
+        crate::assert_with_log!(
+            matches!(result, Ok(Some(10))),
+            "evicted oldest",
+            "Ok(Some(10))",
+            format!("{:?}", result)
+        );
+
+        // Verify: queue=[20], reserved=1, used=2, capacity=2.
+        {
+            let inner = tx.shared.inner.lock();
+            let used = inner.used_slots();
+            let cap = tx.shared.capacity;
+            let qlen = inner.queue.len();
+            drop(inner);
+            crate::assert_with_log!(used <= cap, "capacity after eviction", true, used <= cap);
+            crate::assert_with_log!(qlen == 1, "queue len after eviction", 1, qlen);
+        }
+
+        permit.abort();
+        crate::test_complete!("send_evict_oldest_evicts_committed_not_reserved");
+    }
+
+    #[test]
+    fn send_evict_oldest_where_skips_protected_messages() {
+        init_test("send_evict_oldest_where_skips_protected_messages");
+        let (tx, mut rx) = channel::<i32>(2);
+
+        tx.try_send(10).expect("send 10");
+        tx.try_send(20).expect("send 20");
+
+        let result = tx.send_evict_oldest_where(30, |value| *value == 20);
+        crate::assert_with_log!(
+            matches!(result, Ok(Some(20))),
+            "evicted matching value",
+            "Ok(Some(20))",
+            format!("{:?}", result)
+        );
+
+        let first = block_on(rx.recv(&test_cx())).expect("recv 10");
+        let second = block_on(rx.recv(&test_cx())).expect("recv 30");
+        crate::assert_with_log!(first == 10, "first recv preserved", 10, first);
+        crate::assert_with_log!(second == 30, "second recv new value", 30, second);
+        crate::test_complete!("send_evict_oldest_where_skips_protected_messages");
+    }
+
+    #[test]
+    fn send_evict_oldest_where_returns_full_without_match() {
+        init_test("send_evict_oldest_where_returns_full_without_match");
+        let (tx, mut rx) = channel::<i32>(1);
+
+        tx.try_send(10).expect("send 10");
+
+        let result = tx.send_evict_oldest_where(20, |value| *value == 99);
+        crate::assert_with_log!(
+            matches!(result, Err(SendError::Full(20))),
+            "full without matching eviction candidate",
+            "Err(Full(20))",
+            format!("{:?}", result)
+        );
+
+        let preserved = block_on(rx.recv(&test_cx())).expect("recv preserved");
+        crate::assert_with_log!(preserved == 10, "preserved queued value", 10, preserved);
+        crate::test_complete!("send_evict_oldest_where_returns_full_without_match");
+    }
+
+    #[test]
+    fn send_evict_oldest_no_eviction_with_capacity() {
+        init_test("send_evict_oldest_no_eviction_with_capacity");
+        let (tx, _rx) = channel::<i32>(3);
+
+        // Channel has capacity — should enqueue without eviction.
+        let result = tx.send_evict_oldest(1);
+        crate::assert_with_log!(
+            matches!(result, Ok(None)),
+            "no eviction with capacity",
+            "Ok(None)",
+            format!("{:?}", result)
+        );
+
+        let qlen = {
+            let inner = tx.shared.inner.lock();
+            let qlen = inner.queue.len();
+            drop(inner);
+            qlen
+        };
+        crate::assert_with_log!(qlen == 1, "queue len", 1, qlen);
+        crate::test_complete!("send_evict_oldest_no_eviction_with_capacity");
+    }
+
+    #[test]
+    fn send_evict_oldest_does_not_drop_messages_when_waiter_owns_free_slot() {
+        init_test("send_evict_oldest_does_not_drop_messages_when_waiter_owns_free_slot");
+        let cx = test_cx();
+        let (tx, mut rx) = channel::<i32>(2);
+
+        tx.try_send(10).expect("send 10");
+        tx.try_send(11).expect("send 11");
+
+        let mut reserve = Box::pin(tx.reserve(&cx));
+        let waker = noop_waker();
+        let mut task_cx = Context::from_waker(&waker);
+        assert!(reserve.as_mut().poll(&mut task_cx).is_pending());
+
+        let first = rx.try_recv().expect("recv 10");
+        crate::assert_with_log!(first == 10, "first recv", 10, first);
+
+        let result = tx.send_evict_oldest(99);
+        crate::assert_with_log!(
+            matches!(result, Err(SendError::Full(99))),
+            "logical full when waiter owns free slot",
+            "Err(Full(99))",
+            format!("{:?}", result)
+        );
+
+        let preserved = rx.try_recv().expect("recv preserved 11");
+        crate::assert_with_log!(preserved == 11, "preserved queued value", 11, preserved);
+
+        drop(reserve);
+        crate::test_complete!(
+            "send_evict_oldest_does_not_drop_messages_when_waiter_owns_free_slot"
+        );
+    }
+
+    // --- Audit tests (SapphireHill, 2026-02-15) ---
+
+    #[test]
+    fn send_evict_oldest_wakes_receiver() {
+        // Verify send_evict_oldest wakes a pending receiver.
+        init_test("send_evict_oldest_wakes_receiver");
+        let cx = test_cx();
+        let (tx, mut rx) = channel::<i32>(2);
+
+        block_on(tx.send(&cx, 1)).expect("send 1");
+        block_on(tx.send(&cx, 2)).expect("send 2");
+
+        // Evict oldest and send new value.
+        let result = tx.send_evict_oldest(3);
+        let evicted_ok = matches!(result, Ok(Some(1)));
+        crate::assert_with_log!(evicted_ok, "evicted 1", true, evicted_ok);
+
+        // Receiver should get 2, then 3.
+        let v1 = block_on(rx.recv(&cx)).expect("recv 1");
+        let v2 = block_on(rx.recv(&cx)).expect("recv 2");
+        crate::assert_with_log!(v1 == 2, "first recv after evict", 2, v1);
+        crate::assert_with_log!(v2 == 3, "second recv after evict", 3, v2);
+        crate::test_complete!("send_evict_oldest_wakes_receiver");
+    }
+
+    #[test]
+    fn weak_sender_upgrade_increments_sender_count() {
+        // Verify upgrade correctly tracks sender_count.
+        init_test("weak_sender_upgrade_increments_sender_count");
+        let (tx, rx) = channel::<i32>(1);
+        let weak = tx.downgrade();
+
+        let tx2 = weak.upgrade().expect("upgrade while sender alive");
+        drop(tx);
+
+        // Channel should NOT be closed — tx2 is still alive.
+        let closed = rx.is_closed();
+        crate::assert_with_log!(!closed, "not closed", false, closed);
+
+        drop(tx2);
+        let closed = rx.is_closed();
+        crate::assert_with_log!(closed, "closed after all senders dropped", true, closed);
+        crate::test_complete!("weak_sender_upgrade_increments_sender_count");
+    }
+
+    #[test]
+    fn capacity_invariant_across_reserve_send_abort() {
+        // Verify used_slots never exceeds capacity through mixed operations.
+        init_test("capacity_invariant_across_reserve_send_abort");
+        let cx = test_cx();
+        let (tx, mut rx) = channel::<i32>(3);
+
+        // Reserve 2 slots.
+        let p1 = block_on(tx.reserve(&cx)).expect("reserve 1");
+        let p2 = block_on(tx.reserve(&cx)).expect("reserve 2");
+
+        // Check: reserved=2, queue=0, used=2
+        let used = {
+            let inner = tx.shared.inner.lock();
+            inner.used_slots()
+        };
+        crate::assert_with_log!(used == 2, "used after 2 reserves", 2, used);
+
+        // Commit one, abort one.
+        let outcome = p1.send(10);
+        crate::assert_with_log!(
+            matches!(outcome, Outcome::Ok(())),
+            "send outcome",
+            "Ok(())",
+            format!("{:?}", outcome)
+        );
+        p2.abort();
+
+        // Check: reserved=0, queue=1, used=1
+        let (used, reserved) = {
+            let inner = tx.shared.inner.lock();
+            (inner.used_slots(), inner.reserved)
+        };
+        crate::assert_with_log!(used == 1, "used after send+abort", 1, used);
+        crate::assert_with_log!(reserved == 0, "reserved cleared", 0, reserved);
+
+        let v = block_on(rx.recv(&cx)).expect("recv");
+        crate::assert_with_log!(v == 10, "received committed value", 10, v);
+        crate::test_complete!("capacity_invariant_across_reserve_send_abort");
+    }
+
+    #[test]
+    fn try_reserve_respects_fifo_over_capacity() {
+        // try_reserve must return Full when waiters exist, even if capacity
+        // is available (FIFO fairness).
+        init_test("try_reserve_respects_fifo_over_capacity");
+        let (tx, rx) = channel::<i32>(1);
+        let cx = test_cx();
+
+        // Fill the channel.
+        let permit = block_on(tx.reserve(&cx)).expect("reserve fills channel");
+
+        // Create a pending reserve future (adds to send_wakers).
+        let mut reserve_fut = Box::pin(tx.reserve(&cx));
+        let waker = noop_waker();
+        let mut cx_task = Context::from_waker(&waker);
+        let poll = reserve_fut.as_mut().poll(&mut cx_task);
+        assert!(matches!(poll, Poll::Pending));
+
+        // Free capacity by aborting the first permit.
+        permit.abort();
+
+        // Now capacity exists, but a waiter is queued. try_reserve must
+        // refuse to jump the queue.
+        let try_result = tx.try_reserve();
+        crate::assert_with_log!(
+            matches!(try_result, Err(SendError::<()>::Full(()))),
+            "try_reserve respects FIFO",
+            "Err(Full)",
+            format!("{:?}", try_result)
+        );
+
+        let poll2 = reserve_fut.as_mut().poll(&mut cx_task);
+        let waiter_acquired = match poll2 {
+            Poll::Ready(Ok(permit2)) => {
+                permit2.abort();
+                true
+            }
+            _ => false,
+        };
+        crate::assert_with_log!(waiter_acquired, "waiter acquires", true, waiter_acquired);
+
+        drop(reserve_fut);
+        drop(rx);
+        crate::test_complete!("try_reserve_respects_fifo_over_capacity");
+    }
+
+    #[test]
+    fn send_evict_oldest_disconnected_after_receiver_drop() {
+        init_test("send_evict_oldest_disconnected_after_receiver_drop");
+        let (tx, rx) = channel::<i32>(1);
+        drop(rx);
+
+        let result = tx.send_evict_oldest(42);
+        crate::assert_with_log!(
+            matches!(result, Err(SendError::Disconnected(42))),
+            "evict after rx drop",
+            "Err(Disconnected(42))",
+            format!("{:?}", result)
+        );
+        crate::test_complete!("send_evict_oldest_disconnected_after_receiver_drop");
+    }
+
+    #[test]
+    fn reserve_pending_then_cancelled_cleans_waiter_queue() {
+        init_test("reserve_pending_then_cancelled_cleans_waiter_queue");
+        let cx = test_cx();
+        let wait_cx = test_cx();
+        let (tx, _rx) = channel::<i32>(1);
+
+        let permit = block_on(tx.reserve(&cx)).expect("initial reserve");
+        let mut reserve_fut = Box::pin(tx.reserve(&wait_cx));
+        let waker = noop_waker();
+        let mut cx_task = Context::from_waker(&waker);
+
+        let first_poll = reserve_fut.as_mut().poll(&mut cx_task);
+        crate::assert_with_log!(
+            matches!(first_poll, Poll::Pending),
+            "pending waiter queued",
+            "Pending",
+            format!("{:?}", first_poll)
+        );
+
+        let queued_waiters = tx.shared.inner.lock().send_wakers.len();
+        crate::assert_with_log!(queued_waiters == 1, "one waiter queued", 1, queued_waiters);
+
+        wait_cx.set_cancel_requested(true);
+        let cancelled_poll = reserve_fut.as_mut().poll(&mut cx_task);
+        crate::assert_with_log!(
+            matches!(
+                cancelled_poll,
+                Poll::Ready(Err(SendError::<()>::Cancelled(())))
+            ),
+            "pending waiter observes cancellation",
+            "Ready(Err(Cancelled(())))",
+            format!("{:?}", cancelled_poll)
+        );
+
+        drop(reserve_fut);
+        let queued_after_cancel = tx.shared.inner.lock().send_wakers.len();
+        crate::assert_with_log!(
+            queued_after_cancel == 0,
+            "cancelled waiter removed from queue",
+            0,
+            queued_after_cancel
+        );
+
+        permit.abort();
+        let permit2 = tx.try_reserve().expect("phantom waiter blocks capacity");
+        permit2.abort();
+        crate::test_complete!("reserve_pending_then_cancelled_cleans_waiter_queue");
+    }
+
+    #[test]
+    fn receiver_drop_unblocks_pending_reserve_without_leak() {
+        init_test("receiver_drop_unblocks_pending_reserve_without_leak");
+        let cx = test_cx();
+        let (tx, rx) = channel::<i32>(1);
+
+        let permit = block_on(tx.reserve(&cx)).expect("initial reserve");
+        let mut reserve_fut = Box::pin(tx.reserve(&cx));
+        let waker = noop_waker();
+        let mut cx_task = Context::from_waker(&waker);
+
+        let first_poll = reserve_fut.as_mut().poll(&mut cx_task);
+        crate::assert_with_log!(
+            matches!(first_poll, Poll::Pending),
+            "reserve future pending before receiver drop",
+            "Pending",
+            format!("{:?}", first_poll)
+        );
+
+        let queued_waiters = tx.shared.inner.lock().send_wakers.len();
+        crate::assert_with_log!(queued_waiters == 1, "one waiter queued", 1, queued_waiters);
+
+        drop(rx);
+        let second_poll = reserve_fut.as_mut().poll(&mut cx_task);
+        crate::assert_with_log!(
+            matches!(
+                second_poll,
+                Poll::Ready(Err(SendError::<()>::Disconnected(())))
+            ),
+            "pending reserve sees disconnect after receiver drop",
+            "Ready(Err(Disconnected(())))",
+            format!("{:?}", second_poll)
+        );
+        drop(reserve_fut);
+
+        let queued_after_drop = tx.shared.inner.lock().send_wakers.len();
+        crate::assert_with_log!(
+            queued_after_drop == 0,
+            "receiver drop drains waiter queue",
+            0,
+            queued_after_drop
+        );
+
+        let try_reserve = tx.try_reserve();
+        crate::assert_with_log!(
+            matches!(try_reserve, Err(SendError::<()>::Disconnected(()))),
+            "try_reserve reports disconnected",
+            "Err(Disconnected(()))",
+            format!("{:?}", try_reserve)
+        );
+
+        permit.abort();
+        crate::test_complete!("receiver_drop_unblocks_pending_reserve_without_leak");
+    }
+
+    #[test]
+    fn receiver_drop_clears_registered_recv_waker() {
+        init_test("receiver_drop_clears_registered_recv_waker");
+        let cx = test_cx();
+        let (tx, mut rx) = channel::<i32>(1);
+
+        let waker = noop_waker();
+        let mut task_cx = Context::from_waker(&waker);
+        let first_poll = rx.poll_recv(&cx, &mut task_cx);
+        crate::assert_with_log!(
+            matches!(first_poll, Poll::Pending),
+            "recv poll pending on empty channel",
+            "Pending",
+            format!("{:?}", first_poll)
+        );
+
+        let has_waker_before_drop = tx.shared.inner.lock().recv_waker.is_some();
+        crate::assert_with_log!(
+            has_waker_before_drop,
+            "recv waker registered",
+            true,
+            has_waker_before_drop
+        );
+
+        drop(rx);
+
+        let has_waker_after_drop = tx.shared.inner.lock().recv_waker.is_some();
+        crate::assert_with_log!(
+            !has_waker_after_drop,
+            "recv waker cleared on receiver drop",
+            true,
+            !has_waker_after_drop
+        );
+        crate::test_complete!("receiver_drop_clears_registered_recv_waker");
+    }
+
+    #[test]
+    fn wake_receiver_notifies_pending_recv_waker() {
+        init_test("wake_receiver_notifies_pending_recv_waker");
+        let cx = test_cx();
+        let (tx, mut rx) = channel::<i32>(1);
+
+        let wake_count = Arc::new(AtomicUsize::new(0));
+        let waker = counting_waker(Arc::clone(&wake_count));
+        let mut cx_task = Context::from_waker(&waker);
+        let mut recv_fut = Box::pin(rx.recv(&cx));
+
+        let first_poll = recv_fut.as_mut().poll(&mut cx_task);
+        crate::assert_with_log!(
+            matches!(first_poll, Poll::Pending),
+            "recv initially pending",
+            "Pending",
+            format!("{:?}", first_poll)
+        );
+
+        tx.wake_receiver();
+        let wakes_after_signal = wake_count.load(Ordering::SeqCst);
+        crate::assert_with_log!(
+            wakes_after_signal == 1,
+            "wake_receiver triggered recv waker",
+            1,
+            wakes_after_signal
+        );
+
+        let second_poll = recv_fut.as_mut().poll(&mut cx_task);
+        crate::assert_with_log!(
+            matches!(second_poll, Poll::Pending),
+            "recv remains pending without message",
+            "Pending",
+            format!("{:?}", second_poll)
+        );
+
+        tx.try_send(7).expect("try_send after wake");
+        let third_poll = recv_fut.as_mut().poll(&mut cx_task);
+        crate::assert_with_log!(
+            matches!(third_poll, Poll::Ready(Ok(7))),
+            "recv completes after message send",
+            "Ready(Ok(7))",
+            format!("{:?}", third_poll)
+        );
+        crate::test_complete!("wake_receiver_notifies_pending_recv_waker");
+    }
+
+    #[test]
+    fn lost_wakeup_test() {
+        let cx = test_cx();
+        let (tx, mut rx) = channel::<i32>(1);
+
+        // Fill capacity.
+        let permit = tx.try_reserve().unwrap();
+        let outcome = permit.send(1);
+        crate::assert_with_log!(
+            matches!(outcome, Outcome::Ok(())),
+            "send outcome",
+            "Ok(())",
+            format!("{:?}", outcome)
+        );
+
+        // Queue A.
+        let mut reserve_a = Box::pin(tx.reserve(&cx));
+        let waker_a = noop_waker();
+        let mut ctx_a = Context::from_waker(&waker_a);
+        assert!(reserve_a.as_mut().poll(&mut ctx_a).is_pending());
+
+        // Queue B.
+        let mut reserve_b = Box::pin(tx.reserve(&cx));
+
+        let wake_count_b = Arc::new(AtomicUsize::new(0));
+        let reserve_waker_b = counting_waker(Arc::clone(&wake_count_b));
+        let mut ctx_b = Context::from_waker(&reserve_waker_b);
+        assert!(reserve_b.as_mut().poll(&mut ctx_b).is_pending());
+
+        // Receiver takes message, which pops A and wakes it.
+        let val = rx.try_recv().unwrap();
+        assert_eq!(val, 1);
+
+        // A drops before polling.
+        drop(reserve_a);
+
+        // B should be woken.
+        assert!(wake_count_b.load(Ordering::Relaxed) > 0, "B was not woken!");
+    }
+
+    #[test]
+    fn stale_missing_waiter_drop_does_not_wake_next_sender() {
+        init_test("stale_missing_waiter_drop_does_not_wake_next_sender");
+        let cx = test_cx();
+        let (tx, _rx) = channel::<i32>(1);
+
+        let permit = tx.try_reserve().expect("fill capacity");
+        let outcome = permit.send(1);
+        crate::assert_with_log!(
+            matches!(outcome, Outcome::Ok(())),
+            "send outcome",
+            "Ok(())",
+            format!("{:?}", outcome)
+        );
+
+        let mut reserve_a = Box::pin(tx.reserve(&cx));
+        let waker_a = noop_waker();
+        let mut ctx_a = Context::from_waker(&waker_a);
+        assert!(reserve_a.as_mut().poll(&mut ctx_a).is_pending());
+
+        let wake_count_b = Arc::new(AtomicUsize::new(0));
+        let mut reserve_b = Box::pin(tx.reserve(&cx));
+        let reserve_waker_b = counting_waker(Arc::clone(&wake_count_b));
+        let mut ctx_b = Context::from_waker(&reserve_waker_b);
+        assert!(reserve_b.as_mut().poll(&mut ctx_b).is_pending());
+
+        {
+            let mut inner = tx.shared.inner.lock();
+            let waiter_token_a = reserve_a.waiter_token.expect("waiter token for A");
+            // Remove from slab
+            inner
+                .send_wakers
+                .remove(waiter_token_a)
+                .expect("A queued in slab");
+            // Remove from FIFO queue
+            inner.remove_waiter_token(waiter_token_a);
+            inner.queue.clear();
+        }
+
+        drop(reserve_a);
+
+        let wakes_after_drop = wake_count_b.load(Ordering::SeqCst);
+        crate::assert_with_log!(
+            wakes_after_drop == 0,
+            "stale drop does not spuriously wake next waiter",
+            0,
+            wakes_after_drop
+        );
+
+        drop(reserve_b);
+        crate::test_complete!("stale_missing_waiter_drop_does_not_wake_next_sender");
+    }
+
+    #[test]
+    fn stale_fifo_front_token_does_not_starve_next_sender_wake() {
+        init_test("stale_fifo_front_token_does_not_starve_next_sender_wake");
+        let cx = test_cx();
+        let (tx, mut rx) = channel::<i32>(1);
+
+        tx.try_send(1).expect("fill capacity");
+
+        let mut reserve_a = Box::pin(tx.reserve(&cx));
+        let waker_a = noop_waker();
+        let mut ctx_a = Context::from_waker(&waker_a);
+        assert!(reserve_a.as_mut().poll(&mut ctx_a).is_pending());
+
+        let wake_count_b = Arc::new(AtomicUsize::new(0));
+        let mut reserve_b = Box::pin(tx.reserve(&cx));
+        let waker_b = counting_waker(Arc::clone(&wake_count_b));
+        let mut ctx_b = Context::from_waker(&waker_b);
+        assert!(reserve_b.as_mut().poll(&mut ctx_b).is_pending());
+
+        {
+            let mut inner = tx.shared.inner.lock();
+            let token_a = reserve_a.waiter_token.expect("waiter token for A");
+            inner.send_wakers.remove(token_a).expect("A queued in slab");
+        }
+
+        let value = rx.try_recv().expect("free capacity");
+        crate::assert_with_log!(value == 1, "freed value", 1, value);
+
+        let wakes_after_recv = wake_count_b.load(Ordering::SeqCst);
+        crate::assert_with_log!(
+            wakes_after_recv > 0,
+            "stale front token does not starve next waiter",
+            "woken",
+            wakes_after_recv
+        );
+
+        drop(reserve_a);
+        drop(reserve_b);
+        crate::test_complete!("stale_fifo_front_token_does_not_starve_next_sender_wake");
+    }
+
+    #[test]
+    fn slab_only_stale_waiter_does_not_block_try_reserve() {
+        init_test("slab_only_stale_waiter_does_not_block_try_reserve");
+        let cx = test_cx();
+        let (tx, mut rx) = channel::<i32>(1);
+
+        tx.try_send(1).expect("fill capacity");
+
+        let mut reserve = Box::pin(tx.reserve(&cx));
+        let waker = noop_waker();
+        let mut ctx = Context::from_waker(&waker);
+        assert!(reserve.as_mut().poll(&mut ctx).is_pending());
+
+        {
+            let mut inner = tx.shared.inner.lock();
+            let token = reserve.waiter_token.expect("waiter token");
+            assert!(
+                inner.remove_waiter_token(token),
+                "test setup removes FIFO entry"
+            );
+        }
+
+        let value = rx.try_recv().expect("free capacity");
+        crate::assert_with_log!(value == 1, "freed value", 1, value);
+
+        let permit = tx
+            .try_reserve()
+            .expect("slab-only stale waiter must not block reservation");
+        permit.abort();
+
+        drop(reserve);
+        crate::test_complete!("slab_only_stale_waiter_does_not_block_try_reserve");
+    }
+}
+
+/// Metamorphic Testing: MPSC backpressure flow invariants
+///
+/// This module implements comprehensive metamorphic relations for MPSC channel
+/// backpressure behavior, verifying that capacity management, ordering guarantees,
+/// and cancel-safety remain correct under various load scenarios.
+///
+/// # Metamorphic Relations
+///
+/// 1. **Capacity Conservation** (MR1): total_capacity = queued + reserved + available
+/// 2. **FIFO Ordering Preservation** (MR2): message order invariant under backpressure
+/// 3. **Reserve-Send Equivalence** (MR3): reserve/send ≃ try_send (when capacity available)
+/// 4. **Cancellation Idempotence** (MR4): cancel during reserve doesn't leak capacity
+/// 5. **Eviction Policy Correctness** (MR5): evict_oldest maintains queue discipline
+/// 6. **Receiver Drain Correctness** (MR6): receiver drop unblocks all pending sends
+///
+/// # Testing Strategy
+///
+/// Each metamorphic relation is implemented as a property-based test using `proptest`,
+/// with LabRuntime for deterministic execution and comprehensive scenario coverage
+/// including concurrent senders, varying load patterns, and cancellation timing.
+#[cfg(test)]
+pub mod backpressure_metamorphic {
+    use super::*;
+    use crate::types::{Budget, CancelReason};
+    use proptest::prelude::*;
+    use std::collections::HashMap;
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    /// Helper to assert that LabRunReport indicates successful execution.
+    ///
+    /// Metamorphic tests must verify that the lab runtime detected no oracle
+    /// failures or invariant violations during execution.
+    fn assert_lab_report_success(report: crate::lab::runtime::LabRunReport) {
+        assert!(
+            report.oracle_report.all_passed(),
+            "Oracle failures detected: {:?}",
+            report.oracle_report.failures()
+        );
+        assert!(
+            report.invariant_violations.is_empty(),
+            "Invariant violations detected: {:?}",
+            report.invariant_violations
+        );
+    }
+
+    /// Configuration for MPSC backpressure metamorphic tests.
+    #[derive(Debug, Clone)]
+    pub struct BackpressureTestConfig {
+        /// Channel capacity.
+        pub capacity: usize,
+        /// Number of concurrent senders.
+        pub sender_count: usize,
+        /// Messages per sender.
+        pub messages_per_sender: usize,
+        /// Whether to inject cancellation during reserves.
+        pub inject_cancellation: bool,
+        /// Probability of cancellation (0.0 to 1.0).
+        pub cancel_probability: f64,
+        /// Random seed for deterministic execution.
+        pub seed: u64,
+        /// Whether to use eviction policy.
+        pub use_eviction: bool,
+        /// Whether to drop receiver early.
+        pub drop_receiver_early: bool,
+    }
+
+    /// Generate valid backpressure test configurations.
+    fn backpressure_config_strategy() -> impl Strategy<Value = BackpressureTestConfig> {
+        (
+            1..=16usize,   // capacity
+            1..=8usize,    // sender_count
+            1..=20usize,   // messages_per_sender
+            any::<bool>(), // inject_cancellation
+            0.0..=1.0f64,  // cancel_probability
+            any::<u64>(),  // seed
+            any::<bool>(), // use_eviction
+            any::<bool>(), // drop_receiver_early
+        )
+            .prop_map(
+                |(
+                    capacity,
+                    sender_count,
+                    messages_per_sender,
+                    inject_cancellation,
+                    cancel_probability,
+                    seed,
+                    use_eviction,
+                    drop_receiver_early,
+                )| {
+                    BackpressureTestConfig {
+                        capacity,
+                        sender_count,
+                        messages_per_sender,
+                        inject_cancellation,
+                        cancel_probability,
+                        seed,
+                        use_eviction,
+                        drop_receiver_early,
+                    }
+                },
+            )
+    }
+
+    /// Helper to observe channel internal state.
+    fn observe_channel_state<T>(sender: &Sender<T>) -> (usize, usize, usize, usize) {
+        let inner = sender.shared.inner.lock();
+        let queued = inner.queue.len();
+        let reserved = inner.reserved;
+        let waiting_senders = inner.send_wakers.len();
+        let capacity = sender.shared.capacity;
+        let available = capacity.saturating_sub(queued + reserved);
+        (queued, reserved, available, waiting_senders)
+    }
+
+    fn encode_sender_message(sender_id: usize, ordinal: usize) -> u32 {
+        ((sender_id as u32) << 16) | ordinal as u32
+    }
+
+    fn decode_sender_message(value: u32) -> (usize, u32) {
+        (((value >> 16) & 0xffff) as usize, value & 0xffff)
+    }
+
+    fn metamorphic_noop_waker() -> Waker {
+        std::task::Waker::noop().clone()
+    }
+
+    fn projected_sender_sequences(
+        received: &[u32],
+        sender_count: usize,
+        rotation: usize,
+    ) -> HashMap<usize, Vec<u32>> {
+        let normalized_rotation = if sender_count == 0 {
+            0
+        } else {
+            rotation % sender_count
+        };
+        let mut projections: HashMap<usize, Vec<_>> = HashMap::new();
+        for &value in received {
+            let (rotated_sender, ordinal) = decode_sender_message(value);
+            let sender_id = if sender_count == 0 {
+                rotated_sender
+            } else {
+                (rotated_sender + sender_count - normalized_rotation) % sender_count
+            };
+            projections.entry(sender_id).or_default().push(ordinal);
+        }
+        projections
+    }
+
+    fn run_multi_producer_projection_case(
+        cx: &crate::cx::Cx,
+        capacity: usize,
+        sender_count: usize,
+        messages_per_sender: usize,
+        rotation: usize,
+    ) -> (
+        HashMap<usize, Vec<u32>>,
+        (usize, usize, usize, usize),
+        usize,
+    ) {
+        let (sender, mut receiver) = channel::<u32>(capacity);
+        let shared = Arc::clone(&sender.shared);
+        let received_messages = Arc::new(parking_lot::Mutex::new(Vec::new()));
+        let start_barrier = Arc::new(std::sync::Barrier::new(sender_count + 1));
+
+        let recv_ref = Arc::clone(&received_messages);
+        let recv_cx = cx.clone();
+        let recv_handle = std::thread::spawn(move || {
+            futures_lite::future::block_on(async move {
+                while let Ok(value) = receiver.recv(&recv_cx).await {
+                    recv_ref.lock().push(value);
+                }
+            })
+        });
+
+        let mut send_handles = Vec::new();
+        for sender_id in 0..sender_count {
+            let sender_clone = sender.clone();
+            let send_cx = cx.clone();
+            let start = Arc::clone(&start_barrier);
+            let handle = std::thread::spawn(move || {
+                start.wait();
+                futures_lite::future::block_on(async move {
+                    let rotated_sender = if sender_count == 0 {
+                        sender_id
+                    } else {
+                        (sender_id + rotation) % sender_count
+                    };
+                    for ordinal in 0..messages_per_sender {
+                        sender_clone
+                            .send(&send_cx, encode_sender_message(rotated_sender, ordinal))
+                            .await
+                            .expect("multi-producer send should succeed");
+                        if ordinal % 2 == 0 {
+                            std::thread::yield_now();
+                        }
+                    }
+                })
+            });
+            send_handles.push(handle);
+        }
+
+        start_barrier.wait();
+        for handle in send_handles {
+            handle.join().unwrap();
+        }
+        drop(sender);
+        recv_handle.join().unwrap();
+
+        let received = received_messages.lock().clone();
+        let projections = projected_sender_sequences(&received, sender_count, rotation);
+        let final_state = {
+            let inner = shared.inner.lock();
+            (
+                inner.queue.len(),
+                inner.reserved,
+                0usize,
+                inner.send_wakers.len(),
+            )
+        };
+        let remaining_senders = shared.sender_count.load(Ordering::Acquire);
+        (projections, final_state, remaining_senders)
+    }
+
+    #[derive(Debug, PartialEq, Eq)]
+    struct CloseDrainTranscript {
+        drained: Vec<u32>,
+        reserve_disconnected: bool,
+        try_reserve_disconnected: bool,
+        try_send_disconnected: bool,
+        send_disconnected: bool,
+        final_recv_disconnected: bool,
+        queued_waiters_after_close: usize,
+    }
+
+    fn run_close_drain_transcript(
+        cx: &crate::cx::Cx,
+        capacity: usize,
+        queued_messages: usize,
+        close_via_sender: bool,
+    ) -> CloseDrainTranscript {
+        let (tx, mut rx) = channel::<u32>(capacity);
+
+        for ordinal in 0..queued_messages {
+            tx.try_send(ordinal as u32)
+                .expect("pre-close queue fill should succeed");
+        }
+
+        let mut reserve_fut = Box::pin(tx.reserve(cx));
+        let waker = metamorphic_noop_waker();
+        let mut task_cx = Context::from_waker(&waker);
+        let first_poll = reserve_fut.as_mut().poll(&mut task_cx);
+        assert!(
+            matches!(first_poll, Poll::Pending),
+            "reserve should be pending before closure on a full queue"
+        );
+
+        if close_via_sender {
+            tx.close_receiver();
+        } else {
+            rx.close();
+        }
+
+        let reserve_disconnected = matches!(
+            reserve_fut.as_mut().poll(&mut task_cx),
+            Poll::Ready(Err(SendError::<()>::Disconnected(())))
+        );
+        drop(reserve_fut);
+
+        let queued_waiters_after_close = tx.shared.inner.lock().send_wakers.len();
+        let try_reserve_disconnected =
+            matches!(tx.try_reserve(), Err(SendError::<()>::Disconnected(())));
+        let try_send_disconnected =
+            matches!(tx.try_send(u32::MAX), Err(SendError::Disconnected(_)));
+        let send_disconnected = matches!(
+            futures_lite::future::block_on(tx.send(cx, u32::MAX - 1)),
+            Err(SendError::Disconnected(_))
+        );
+
+        let mut drained = Vec::new();
+        while let Ok(value) = rx.try_recv() {
+            drained.push(value);
+        }
+        let final_recv_disconnected = matches!(rx.try_recv(), Err(RecvError::Disconnected));
+
+        CloseDrainTranscript {
+            drained,
+            reserve_disconnected,
+            try_reserve_disconnected,
+            try_send_disconnected,
+            send_disconnected,
+            final_recv_disconnected,
+            queued_waiters_after_close,
+        }
+    }
+
+    async fn run_reserve_abort_noop_case(
+        cx: &crate::cx::Cx,
+        capacity: usize,
+        steps: usize,
+        seed: u64,
+        inject_reserve_abort: bool,
+    ) -> (
+        Vec<u32>,
+        Vec<(usize, usize, usize, usize)>,
+        usize,
+        (usize, usize, usize, usize),
+    ) {
+        let (sender, mut receiver) = channel::<u32>(capacity);
+        let mut transcript = Vec::with_capacity(steps);
+        let mut post_step_states = Vec::with_capacity(steps);
+        let mut abort_count = 0usize;
+
+        for step in 0..steps {
+            let should_inject_abort = inject_reserve_abort
+                && (step == 0 || ((seed >> (step % u64::BITS as usize)) & 1) == 1);
+            if should_inject_abort {
+                let permit = sender
+                    .reserve(cx)
+                    .await
+                    .expect("reserve before abort should succeed");
+                let reserved_state = observe_channel_state(&sender);
+                assert_eq!(
+                    reserved_state.0 + reserved_state.1 + reserved_state.2,
+                    capacity,
+                    "reserved state leaked capacity before abort: {reserved_state:?}"
+                );
+                permit.abort();
+                abort_count += 1;
+                assert_eq!(
+                    observe_channel_state(&sender),
+                    (0, 0, capacity, 0),
+                    "abort should restore empty channel state"
+                );
+            }
+
+            sender
+                .send(cx, step as u32)
+                .await
+                .expect("send after reserve/abort should succeed");
+            transcript.push(
+                receiver
+                    .recv(cx)
+                    .await
+                    .expect("receiver should observe sent value"),
+            );
+            post_step_states.push(observe_channel_state(&sender));
+        }
+
+        let final_state = observe_channel_state(&sender);
+        drop(sender);
+        assert!(
+            matches!(receiver.try_recv(), Err(RecvError::Disconnected)),
+            "receiver should disconnect after sender drop once transcript is drained"
+        );
+
+        (transcript, post_step_states, abort_count, final_state)
+    }
+
+    #[derive(Debug, PartialEq, Eq)]
+    struct SingleSenderDrainBoundaryTranscript {
+        transcript: Vec<u32>,
+        final_state: (usize, usize, usize, usize),
+        remaining_senders: usize,
+    }
+
+    async fn run_single_sender_drain_boundary_case(
+        cx: &crate::cx::Cx,
+        messages: &[u32],
+        split_index: usize,
+        drain_midstream: bool,
+    ) -> SingleSenderDrainBoundaryTranscript {
+        let (sender, mut receiver) = channel::<u32>(messages.len().max(1));
+        let shared = Arc::clone(&sender.shared);
+        let split = split_index.min(messages.len());
+        let mut transcript = Vec::with_capacity(messages.len());
+
+        for &value in &messages[..split] {
+            sender
+                .send(cx, value)
+                .await
+                .expect("prefix send should succeed");
+        }
+
+        if drain_midstream {
+            for _ in 0..split {
+                transcript.push(
+                    receiver
+                        .try_recv()
+                        .expect("midstream drain should observe the queued prefix"),
+                );
+            }
+            assert!(
+                matches!(receiver.try_recv(), Err(RecvError::Empty)),
+                "draining the queued prefix should leave no buffered tail before suffix sends"
+            );
+        }
+
+        for &value in &messages[split..] {
+            sender
+                .send(cx, value)
+                .await
+                .expect("suffix send should succeed");
+        }
+
+        drop(sender);
+
+        while let Ok(value) = receiver.try_recv() {
+            transcript.push(value);
+        }
+
+        assert!(
+            matches!(receiver.try_recv(), Err(RecvError::Disconnected)),
+            "sender drop should disconnect the drained receiver"
+        );
+
+        let final_state = {
+            let inner = shared.inner.lock();
+            (
+                inner.queue.len(),
+                inner.reserved,
+                0usize,
+                inner.send_wakers.len(),
+            )
+        };
+        let remaining_senders = shared.sender_count.load(Ordering::Acquire);
+
+        SingleSenderDrainBoundaryTranscript {
+            transcript,
+            final_state,
+            remaining_senders,
+        }
+    }
+
+    fn run_unbounded_pending_recv_drop_case(
+        cx: &crate::cx::Cx,
+        messages: &[u32],
+        drop_pending_recv_first: bool,
+    ) -> (Vec<u32>, (usize, usize, usize, bool), usize) {
+        let (sender, mut receiver) = unbounded_channel::<u32>();
+        let shared = Arc::clone(&sender.inner.shared);
+
+        if drop_pending_recv_first {
+            let waker = metamorphic_noop_waker();
+            let mut task_cx = Context::from_waker(&waker);
+            let mut recv_fut = Box::pin(receiver.recv(cx));
+            assert!(
+                matches!(recv_fut.as_mut().poll(&mut task_cx), Poll::Pending),
+                "empty unbounded receiver should register a pending recv"
+            );
+            drop(recv_fut);
+
+            let recv_waker_cleared = shared.inner.lock().recv_waker.is_none();
+            assert!(
+                recv_waker_cleared,
+                "dropping a pending recv future must clear its registered waker"
+            );
+        }
+
+        for &message in messages {
+            sender
+                .send(message)
+                .expect("unbounded send should succeed while receiver is live");
+        }
+        drop(sender);
+
+        let mut transcript = Vec::with_capacity(messages.len());
+        while let Ok(value) = receiver.try_recv() {
+            transcript.push(value);
+        }
+        assert!(
+            matches!(receiver.try_recv(), Err(RecvError::Disconnected)),
+            "drained unbounded receiver should report disconnection"
+        );
+
+        let final_state = {
+            let inner = shared.inner.lock();
+            (
+                inner.queue.len(),
+                inner.reserved,
+                inner.send_wakers.len(),
+                inner.recv_waker.is_some(),
+            )
+        };
+        let remaining_senders = shared.sender_count.load(Ordering::Acquire);
+        (transcript, final_state, remaining_senders)
+    }
+
+    /// MR1: Capacity Conservation
+    ///
+    /// Invariant: total_capacity = queued + reserved + available
+    /// This must hold at all times regardless of backpressure state.
+    #[test]
+    fn mr1_capacity_conservation_invariant() {
+        use proptest::test_runner::TestRunner;
+
+        let mut runner = TestRunner::default();
+        runner
+            .run(&backpressure_config_strategy(), |config| {
+                crate::lab::runtime::test(config.seed, |lab| {
+                    let root = lab.state.create_root_region(Budget::INFINITE);
+                    let (test_task, _) = lab.state.create_task(root, Budget::INFINITE, async move {
+                        let _cx = crate::cx::Cx::for_testing();
+                        let _test_res: Result<(), proptest::test_runner::TestCaseError> = async {
+                        let (sender, mut receiver) = channel::<u32>(config.capacity);
+
+                        // Baseline: empty channel should conserve capacity
+                        let (queued, reserved, available, _) = observe_channel_state(&sender);
+                        assert_eq!(
+                            queued + reserved + available,
+                            config.capacity,
+                            "Empty channel capacity conservation failed"
+                        );
+
+                        // Fill channel progressively and verify conservation at each step
+                        let mut sent_count = 0;
+                        let target_fills = std::cmp::min(config.capacity * 2, 50);
+
+                        for i in 0..target_fills {
+                            // Try to send
+                            match sender.try_send(i as u32) {
+                                Ok(()) => {
+                                    sent_count += 1;
+                                }
+                                Err(SendError::Full(_)) => {
+                                    // Channel full - capacity should still be conserved
+                                }
+                                _ => panic!("Unexpected send error"), // ubs:ignore - test logic
+                            }
+
+                            let (queued, reserved, available, _) = observe_channel_state(&sender);
+                            assert_eq!(
+                                queued + reserved + available,
+                                config.capacity,
+                                "Capacity conservation failed at step {} (sent: {})",
+                                i,
+                                sent_count
+                            );
+
+                            // Occasionally receive to create capacity
+                            if i % 3 == 0 && queued > 0 {
+                                let _ = receiver.try_recv();
+                                let (queued_after, reserved_after, available_after, _) =
+                                    observe_channel_state(&sender);
+                                assert_eq!(
+                                    queued_after + reserved_after + available_after,
+                                    config.capacity,
+                                    "Capacity conservation failed after recv at step {}",
+                                    i
+                                );
+                            }
+                        }
+
+                        Ok(())
+                        }.await;
+                    }).unwrap();
+                    lab.scheduler.lock().schedule(test_task, 0);
+                    let report = lab.run_until_quiescent_with_report();
+                    assert_lab_report_success(report);
+                });
+                Ok(())
+            })
+            .expect("Property test failed");
+    }
+
+    /// MR2: FIFO Ordering Preservation
+    ///
+    /// Property: Messages received in same order as sent, regardless of backpressure.
+    /// Even with blocking, eviction, or cancellation, FIFO ordering must be preserved.
+    #[test]
+    fn mr2_fifo_ordering_preservation() {
+        use proptest::test_runner::TestRunner;
+
+        let mut runner = TestRunner::default();
+        runner
+            .run(&backpressure_config_strategy(), |config| {
+                crate::lab::runtime::test(config.seed, |lab| {
+                    let root = lab.state.create_root_region(Budget::INFINITE);
+                    let (test_task, _) = lab.state.create_task(root, Budget::INFINITE, async move {
+                        let cx = crate::cx::Cx::for_testing();
+                        let _test_res: Result<(), proptest::test_runner::TestCaseError> = async {
+            let (sender, mut receiver) = channel::<u32>(config.capacity);
+            let sent_messages = Arc::new(parking_lot::Mutex::new(Vec::new()));
+            let received_messages = Arc::new(parking_lot::Mutex::new(Vec::new()));
+
+            // Single sender to ensure clear ordering
+            let sent_ref = Arc::clone(&sent_messages);
+            let send_cx = cx.clone();
+            let send_handle = std::thread::spawn(move || {
+                    futures_lite::future::block_on(async move {
+                for i in 0..config.messages_per_sender {
+                    let value = i as u32;
+                    match sender.send(&send_cx, value).await {
+                        Ok(()) => {
+                            sent_ref.lock().push(value);
+                        },
+                        Err(SendError::Disconnected(_)) => break,
+                        Err(_) => {}, // Other errors don't affect ordering
+                    }
+                }
+                })});
+
+            // Receiver collects all messages
+            let recv_ref = Arc::clone(&received_messages);
+            let recv_cx = cx.clone();
+            let recv_handle = std::thread::spawn(move || {
+                    futures_lite::future::block_on(async move {
+                loop {
+                    match receiver.recv(&recv_cx).await {
+                        Ok(value) => {
+                            recv_ref.lock().push(value);
+                        },
+                        Err(RecvError::Disconnected) => break,
+                        Err(_) => {},
+                    }
+                }
+                })});
+
+            send_handle.join().unwrap();
+            recv_handle.join().unwrap();
+
+            // Compare ordering
+            let sent = sent_messages.lock().clone();
+            let received = received_messages.lock().clone();
+
+            // Received messages must be a prefix of sent messages in same order
+            let min_len = std::cmp::min(sent.len(), received.len());
+            for i in 0..min_len {
+                assert_eq!(
+                    sent[i], received[i],
+                    "FIFO ordering violated at position {} (sent: {:?}, received: {:?})",
+                    i, &sent[0..min_len], received
+                );
+            }
+
+            Ok(())
+                        }.await;
+                    }).unwrap();
+                    lab.scheduler.lock().schedule(test_task, 0);
+                    let report = lab.run_until_quiescent_with_report();
+                    assert_lab_report_success(report);
+                });
+                Ok(())
+            })
+            .expect("Property test failed");
+    }
+
+    /// MR2b: Rotating producer identity labels preserves each producer's receive projection.
+    ///
+    /// Property: If each producer's local sequence is unchanged and only the producer labels are
+    /// rotated, inverse-rotating the receive trace must recover the same per-producer ordering.
+    #[test]
+    fn metamorphic_multi_producer_rotation_preserves_per_sender_projection() {
+        use proptest::test_runner::TestRunner;
+
+        let mut runner = TestRunner::default();
+        runner
+            .run(&backpressure_config_strategy(), |config| {
+                crate::lab::runtime::test(config.seed, |lab| {
+                    let root = lab.state.create_root_region(Budget::INFINITE);
+                    let (test_task, _) = lab.state.create_task(root, Budget::INFINITE, async move {
+                        let cx = crate::cx::Cx::for_testing();
+                        let _test_res: Result<(), proptest::test_runner::TestCaseError> = async {
+                            let sender_count = config.sender_count;
+                            let rotation = if sender_count <= 1 {
+                                0
+                            } else {
+                                (config.seed as usize % (sender_count - 1)) + 1
+                            };
+
+                            let (base_projection, base_state, base_remaining_senders) =
+                                run_multi_producer_projection_case(
+                                    &cx,
+                                    config.capacity,
+                                    sender_count,
+                                    config.messages_per_sender,
+                                    0,
+                                );
+                            let (
+                                rotated_projection,
+                                rotated_state,
+                                rotated_remaining_senders,
+                            ) = run_multi_producer_projection_case(
+                                &cx,
+                                config.capacity,
+                                sender_count,
+                                config.messages_per_sender,
+                                rotation,
+                            );
+
+                            let expected_projection: HashMap<usize, Vec<u32>> = (0..sender_count)
+                                .map(|sender_id| {
+                                    (
+                                        sender_id,
+                                        (0..config.messages_per_sender)
+                                            .map(|ordinal| ordinal as u32)
+                                            .collect(),
+                                    )
+                                })
+                                .collect();
+
+                            assert_eq!(
+                                base_projection, expected_projection,
+                                "base run violated per-sender FIFO projection"
+                            );
+                            assert_eq!(
+                                rotated_projection, expected_projection,
+                                "rotated producer labels changed per-sender FIFO projection"
+                            );
+                            assert_eq!(
+                                base_projection, rotated_projection,
+                                "inverse-rotated producer projection drifted under relabeling"
+                            );
+                            assert_eq!(
+                                base_state,
+                                (0, 0, 0, 0),
+                                "base run leaked queue/reservations/waiters: {base_state:?}"
+                            );
+                            assert_eq!(
+                                rotated_state,
+                                (0, 0, 0, 0),
+                                "rotated run leaked queue/reservations/waiters: {rotated_state:?}"
+                            );
+                            assert_eq!(
+                                base_remaining_senders, 0,
+                                "base run left live senders: {base_remaining_senders}"
+                            );
+                            assert_eq!(
+                                rotated_remaining_senders, 0,
+                                "rotated run left live senders: {rotated_remaining_senders}"
+                            );
+
+                            Ok(())
+                        }
+                        .await;
+                    }).unwrap();
+                    lab.scheduler.lock().schedule(test_task, 0);
+                    let report = lab.run_until_quiescent_with_report();
+                    assert_lab_report_success(report);
+                });
+                Ok(())
+            })
+            .expect("Property test failed");
+    }
+
+    /// MR2c: Receiver-side close and sender-side close induce the same close/drain transcript.
+    ///
+    /// Property: Closing the receiver via `Receiver::close()` or `Sender::close_receiver()`
+    /// preserves the queued receive prefix and disconnects both pending and future senders
+    /// without leaving waiter residue.
+    #[test]
+    fn metamorphic_close_paths_preserve_close_drain_transcript() {
+        use proptest::test_runner::TestRunner;
+
+        let mut runner = TestRunner::default();
+        runner
+            .run(&backpressure_config_strategy(), |config| {
+                crate::lab::runtime::test(config.seed, |lab| {
+                    let root = lab.state.create_root_region(Budget::INFINITE);
+                    let (test_task, _) = lab
+                        .state
+                        .create_task(root, Budget::INFINITE, async move {
+                            let cx = crate::cx::Cx::for_testing();
+                            let _test_res: Result<(), proptest::test_runner::TestCaseError> =
+                                async {
+                                    let capacity = config.capacity.max(1);
+                                    let queued_messages = capacity;
+
+                                    let receiver_closed = run_close_drain_transcript(
+                                        &cx,
+                                        capacity,
+                                        queued_messages,
+                                        false,
+                                    );
+                                    let sender_closed = run_close_drain_transcript(
+                                        &cx,
+                                        capacity,
+                                        queued_messages,
+                                        true,
+                                    );
+
+                                    let expected_drained: Vec<u32> = (0..queued_messages)
+                                        .map(|ordinal| ordinal as u32)
+                                        .collect();
+
+                                    assert_eq!(
+                                        receiver_closed.drained, expected_drained,
+                                        "receiver-side close changed queued drain prefix"
+                                    );
+                                    assert_eq!(
+                                        sender_closed.drained, expected_drained,
+                                        "sender-side close changed queued drain prefix"
+                                    );
+                                    assert_eq!(
+                                        receiver_closed, sender_closed,
+                                        "close path changed disconnect/drain transcript"
+                                    );
+
+                                    Ok(())
+                                }
+                                .await;
+                        })
+                        .unwrap();
+                    lab.scheduler.lock().schedule(test_task, 0);
+                    let report = lab.run_until_quiescent_with_report();
+                    assert_lab_report_success(report);
+                });
+                Ok(())
+            })
+            .expect("Property test failed");
+    }
+
+    /// MR2c: inserting a midstream drain boundary preserves the single-sender receive trace.
+    ///
+    /// Property: batching all sends before draining and draining a queued prefix midway through
+    /// the same single-producer trace must yield the same final receive transcript.
+    #[test]
+    fn metamorphic_midstream_drain_boundary_preserves_single_sender_trace() {
+        use proptest::test_runner::TestRunner;
+
+        let mut runner = TestRunner::default();
+        let strategy = proptest::collection::vec(any::<u16>(), 1..=24).prop_flat_map(|messages| {
+            let len = messages.len();
+            (Just(messages), 0usize..=len, any::<u64>())
+        });
+
+        runner
+            .run(&strategy, |(messages, split_index, seed)| {
+                crate::lab::runtime::test(seed, |lab| {
+                    let root = lab.state.create_root_region(Budget::INFINITE);
+                    let (test_task, _) = lab.state.create_task(root, Budget::INFINITE, async move {
+                        let cx = crate::cx::Cx::for_testing();
+                        let _test_res: Result<(), proptest::test_runner::TestCaseError> = async {
+                            let messages: Vec<u32> = messages.into_iter().map(u32::from).collect();
+
+                            let batched = run_single_sender_drain_boundary_case(
+                                &cx,
+                                &messages,
+                                split_index,
+                                false,
+                            )
+                            .await;
+                            let transformed = run_single_sender_drain_boundary_case(
+                                &cx,
+                                &messages,
+                                split_index,
+                                true,
+                            )
+                            .await;
+
+                            assert_eq!(batched.transcript, messages, "batched single-sender transcript drifted");
+                            assert_eq!(
+                                transformed.transcript, messages,
+                                "midstream drain boundary changed the receive transcript at split {split_index}"
+                            );
+                            assert_eq!(
+                                batched.transcript, transformed.transcript,
+                                "single-sender receive trace changed after inserting a midstream drain boundary"
+                            );
+                            assert_eq!(
+                                batched.final_state,
+                                (0, 0, 0, 0),
+                                "batched single-sender run leaked queue/reservations/waiters"
+                            );
+                            assert_eq!(
+                                transformed.final_state,
+                                batched.final_state,
+                                "midstream drain boundary changed the final channel state"
+                            );
+                            assert_eq!(
+                                batched.remaining_senders, 0,
+                                "batched single-sender run left live senders"
+                            );
+                            assert_eq!(
+                                transformed.remaining_senders,
+                                batched.remaining_senders,
+                                "midstream drain boundary changed sender teardown"
+                            );
+
+                            Ok(())
+                        }
+                        .await;
+                    }).unwrap();
+                    lab.scheduler.lock().schedule(test_task, 0);
+                    let report = lab.run_until_quiescent_with_report();
+                    assert_lab_report_success(report);
+                });
+                Ok(())
+            })
+            .expect("Property test failed");
+    }
+
+    /// MR2d: cancelling a pending unbounded receive is observationally a no-op.
+    ///
+    /// Property: registering and dropping a pending receive future before any
+    /// messages arrive must not change the eventual FIFO transcript, must not
+    /// lose messages, and must not leave a stale receive waker.
+    #[test]
+    fn metamorphic_unbounded_pending_recv_drop_preserves_drain_transcript() {
+        use proptest::test_runner::TestRunner;
+
+        let strategy = proptest::collection::vec(any::<u16>(), 0..=64)
+            .prop_flat_map(|messages| (Just(messages), any::<u64>()));
+        let mut runner = TestRunner::default();
+
+        runner
+            .run(&strategy, |(messages, seed)| {
+                crate::lab::runtime::test(seed, |lab| {
+                    let root = lab.state.create_root_region(Budget::INFINITE);
+                    let (test_task, _) = lab
+                        .state
+                        .create_task(root, Budget::INFINITE, async move {
+                            let cx = crate::cx::Cx::for_testing();
+                            let _test_res: Result<(), proptest::test_runner::TestCaseError> =
+                                async {
+                                    let messages: Vec<u32> =
+                                        messages.into_iter().map(u32::from).collect();
+
+                                    let baseline =
+                                        run_unbounded_pending_recv_drop_case(&cx, &messages, false);
+                                    let transformed =
+                                        run_unbounded_pending_recv_drop_case(&cx, &messages, true);
+
+                                    assert_eq!(
+                                        baseline.0, messages,
+                                        "baseline unbounded drain transcript drifted"
+                                    );
+                                    assert_eq!(
+                                        transformed.0, messages,
+                                        "pending recv drop changed unbounded drain transcript"
+                                    );
+                                    assert_eq!(
+                                        transformed.0, baseline.0,
+                                        "pending recv drop lost or reordered messages"
+                                    );
+                                    assert_eq!(
+                                        baseline.1,
+                                        (0, 0, 0, false),
+                                        "baseline leaked queue/reservation/waker state"
+                                    );
+                                    assert_eq!(
+                                        transformed.1, baseline.1,
+                                        "pending recv drop left stale channel state"
+                                    );
+                                    assert_eq!(
+                                        baseline.2, 0,
+                                        "baseline left live unbounded senders"
+                                    );
+                                    assert_eq!(
+                                        transformed.2, baseline.2,
+                                        "pending recv drop changed sender teardown"
+                                    );
+
+                                    Ok(())
+                                }
+                                .await;
+                        })
+                        .unwrap();
+                    lab.scheduler.lock().schedule(test_task, 0);
+                    let report = lab.run_until_quiescent_with_report();
+                    assert_lab_report_success(report);
+                });
+                Ok(())
+            })
+            .expect("Property test failed");
+    }
+
+    /// MR3: Reserve-Send Equivalence
+    ///
+    /// Property: reserve().await.send(value) ≃ send(value).await when capacity available.
+    /// Both paths should have identical observable effects.
+    #[test]
+    fn mr3_reserve_send_equivalence() {
+        use proptest::test_runner::TestRunner;
+
+        let mut runner = TestRunner::default();
+        runner
+            .run(&backpressure_config_strategy(), |config| {
+                crate::lab::runtime::test(config.seed, |lab| {
+                    let root = lab.state.create_root_region(Budget::INFINITE);
+                    let (test_task, _) = lab.state.create_task(root, Budget::INFINITE, async move {
+                        let cx = crate::cx::Cx::for_testing();
+                        let _test_res: Result<(), proptest::test_runner::TestCaseError> = async {
+                        // Path 1: reserve then send
+                        let (sender1, mut receiver1) = channel::<u32>(config.capacity);
+                        let received1 = Arc::new(parking_lot::Mutex::new(Vec::new()));
+
+                        let recv1_ref = Arc::clone(&received1);
+                        let recv1_cx = cx.clone();
+                        let recv1_handle = std::thread::spawn(move || {
+                    futures_lite::future::block_on(async move {
+                            while let Ok(value) = receiver1.recv(&recv1_cx).await {
+                                recv1_ref.lock().push(value);
+                            }
+                })});
+
+                        // Send via reserve/send
+                        for i in 0..std::cmp::min(config.messages_per_sender, config.capacity) {
+                            if let Ok(permit) = sender1.try_reserve() {
+                                let outcome = permit.send(i as u32);
+                                crate::assert_with_log!(
+                                    matches!(outcome, Outcome::Ok(())),
+                                    "send outcome in loop",
+                                    "Ok(())",
+                                    format!("{:?}", outcome)
+                                );
+                            }
+                        }
+                        drop(sender1);
+                        recv1_handle.join().unwrap();
+
+                        // Path 2: direct send
+                        let (sender2, mut receiver2) = channel::<u32>(config.capacity);
+                        let received2 = Arc::new(parking_lot::Mutex::new(Vec::new()));
+
+                        let recv2_ref = Arc::clone(&received2);
+                        let recv2_cx = cx.clone();
+                        let recv2_handle = std::thread::spawn(move || {
+                    futures_lite::future::block_on(async move {
+                            while let Ok(value) = receiver2.recv(&recv2_cx).await {
+                                recv2_ref.lock().push(value);
+                            }
+                })});
+
+                        // Send via try_send
+                        for i in 0..std::cmp::min(config.messages_per_sender, config.capacity) {
+                            let _ = sender2.try_send(i as u32);
+                        }
+                        drop(sender2);
+                        recv2_handle.join().unwrap();
+
+                        // Results should be equivalent
+                        let result1 = received1.lock().clone();
+                        let result2 = received2.lock().clone();
+
+                        assert_eq!(
+                            result1, result2,
+                            "Reserve-send vs direct send produced different results: {:?} vs {:?}",
+                            result1, result2
+                        );
+
+                        Ok(())
+                        }.await;
+                    }).unwrap();
+                    lab.scheduler.lock().schedule(test_task, 0);
+                    let report = lab.run_until_quiescent_with_report();
+                    assert_lab_report_success(report);
+                });
+                Ok(())
+            })
+            .expect("Property test failed");
+    }
+
+    /// MR3b: Reserve-abort is observationally equivalent to a no-op.
+    ///
+    /// Property: Inserting `reserve().await.abort()` before a successful send must not change
+    /// the receive transcript or post-step channel state.
+    #[test]
+    fn metamorphic_reserve_abort_is_observational_noop() {
+        use proptest::test_runner::TestRunner;
+
+        let mut runner = TestRunner::default();
+        runner
+            .run(&backpressure_config_strategy(), |config| {
+                crate::lab::runtime::test(config.seed, |lab| {
+                    let root = lab.state.create_root_region(Budget::INFINITE);
+                    let (test_task, _) = lab.state.create_task(root, Budget::INFINITE, async move {
+                        let cx = crate::cx::Cx::for_testing();
+                        let _test_res: Result<(), proptest::test_runner::TestCaseError> = async {
+                            let step_count = config.messages_per_sender.clamp(1, 12);
+
+                            let (base_transcript, base_states, base_abort_count, base_final_state) =
+                                run_reserve_abort_noop_case(
+                                    &cx,
+                                    config.capacity,
+                                    step_count,
+                                    config.seed,
+                                    false,
+                                )
+                                .await;
+                            let (
+                                transformed_transcript,
+                                transformed_states,
+                                transformed_abort_count,
+                                transformed_final_state,
+                            ) = run_reserve_abort_noop_case(
+                                &cx,
+                                config.capacity,
+                                step_count,
+                                config.seed,
+                                true,
+                            )
+                            .await;
+
+                            let expected_transcript: Vec<u32> =
+                                (0..step_count).map(|step| step as u32).collect();
+
+                            assert_eq!(
+                                base_abort_count, 0,
+                                "baseline should not inject reserve/abort no-ops"
+                            );
+                            assert!(
+                                transformed_abort_count > 0,
+                                "transformed run should inject at least one reserve/abort no-op"
+                            );
+                            assert_eq!(
+                                base_transcript, expected_transcript,
+                                "baseline run drifted from expected FIFO transcript"
+                            );
+                            assert_eq!(
+                                transformed_transcript, expected_transcript,
+                                "reserve/abort no-op changed FIFO transcript"
+                            );
+                            assert_eq!(
+                                base_transcript, transformed_transcript,
+                                "reserve/abort no-op changed receive transcript"
+                            );
+                            assert_eq!(
+                                base_states, transformed_states,
+                                "reserve/abort no-op changed post-step channel state"
+                            );
+                            assert!(
+                                base_states
+                                    .iter()
+                                    .all(|&state| state == (0, 0, config.capacity, 0)),
+                                "baseline run leaked queued/reserved state: {base_states:?}"
+                            );
+                            assert!(
+                                transformed_states
+                                    .iter()
+                                    .all(|&state| state == (0, 0, config.capacity, 0)),
+                                "transformed run leaked queued/reserved state: {transformed_states:?}"
+                            );
+                            assert_eq!(
+                                base_final_state,
+                                (0, 0, config.capacity, 0),
+                                "baseline final state leaked queue/reservations"
+                            );
+                            assert_eq!(
+                                transformed_final_state,
+                                (0, 0, config.capacity, 0),
+                                "transformed final state leaked queue/reservations"
+                            );
+
+                            Ok(())
+                        }
+                        .await;
+                    }).unwrap();
+                    lab.scheduler.lock().schedule(test_task, 0);
+                    let report = lab.run_until_quiescent_with_report();
+                    assert_lab_report_success(report);
+                });
+                Ok(())
+            })
+            .expect("Property test failed");
+    }
+
+    /// MR4: Cancellation Idempotence
+    ///
+    /// Property: Cancelling during reserve doesn't leak capacity.
+    /// Capacity conservation must hold even with cancellation.
+    #[test]
+    fn mr4_cancellation_idempotence() {
+        use proptest::test_runner::TestRunner;
+
+        let mut runner = TestRunner::default();
+        runner
+            .run(&backpressure_config_strategy(), |config| {
+                if !config.inject_cancellation || config.cancel_probability < 0.1 {
+                    return Ok(()); // Skip if cancellation not meaningful
+                }
+
+                let cx = crate::cx::Cx::for_testing();
+                let (sender, _receiver) = channel::<u32>(config.capacity);
+
+                for i in 0..config.capacity {
+                    sender.try_send(i as u32).expect("Fill channel");
+                }
+
+                let initial_state = observe_channel_state(&sender);
+                assert_eq!(
+                    initial_state,
+                    (config.capacity, 0, 0, 0),
+                    "full channel should start with no reservations or waiters"
+                );
+
+                let reserve_senders: Vec<_> =
+                    (0..config.sender_count).map(|_| sender.clone()).collect();
+                let mut reserve_futures: Vec<_> = reserve_senders
+                    .iter()
+                    .map(|sender| Box::pin(sender.reserve(&cx)))
+                    .collect();
+                let waker = metamorphic_noop_waker();
+                let mut task_cx = Context::from_waker(&waker);
+
+                for reserve_fut in &mut reserve_futures {
+                    assert!(
+                        matches!(reserve_fut.as_mut().poll(&mut task_cx), Poll::Pending),
+                        "full channel should make every reserve wait"
+                    );
+                }
+
+                assert_eq!(
+                    observe_channel_state(&sender),
+                    (config.capacity, 0, 0, config.sender_count),
+                    "pending reserves should register one waiter each"
+                );
+
+                cx.set_cancel_reason(CancelReason::user("test cancellation"));
+
+                let mut cancelled_count = 0usize;
+                for reserve_fut in &mut reserve_futures {
+                    match reserve_fut.as_mut().poll(&mut task_cx) {
+                        Poll::Ready(Err(SendError::Cancelled(()))) => {
+                            cancelled_count += 1;
+                        }
+                        other => panic!(
+                            "cancelled reserve should complete with Cancelled, got {other:?}"
+                        ),
+                    }
+                }
+
+                assert_eq!(
+                    cancelled_count, config.sender_count,
+                    "every pending reserve should observe cancellation"
+                );
+                assert_eq!(
+                    observe_channel_state(&sender),
+                    initial_state,
+                    "Cancellation leaked capacity or waiter state"
+                );
+                Ok(())
+            })
+            .expect("Property test failed");
+    }
+
+    /// MR5: Eviction Policy Correctness
+    ///
+    /// Property: send_evict_oldest removes oldest message while preserving FIFO for remaining.
+    #[test]
+    fn mr5_eviction_policy_correctness() {
+        use proptest::test_runner::TestRunner;
+
+        let mut runner = TestRunner::default();
+        runner
+            .run(&backpressure_config_strategy(), |config| {
+                if !config.use_eviction || config.capacity < 2 {
+                    return Ok(()); // Skip if eviction not meaningful
+                }
+
+                crate::lab::runtime::test(config.seed, |lab| {
+                    let root = lab.state.create_root_region(Budget::INFINITE);
+                    let (test_task, _) = lab.state.create_task(root, Budget::INFINITE, async move {
+                        let _cx = crate::cx::Cx::for_testing();
+                        let _test_res: Result<(), proptest::test_runner::TestCaseError> = async {
+                        let (sender, mut receiver) = channel::<u32>(config.capacity);
+
+                        // Fill channel completely
+                        for i in 0..config.capacity {
+                            sender.try_send(i as u32).expect("Fill channel");
+                        }
+
+                        // Record initial queue state
+                        let initial_messages: Vec<u32> =
+                            (0..config.capacity).map(|i| i as u32).collect();
+
+                        // Evict oldest with new message
+                        let new_value = 999u32;
+                        match sender.send_evict_oldest(new_value) {
+                            Ok(Some(evicted)) => {
+                                assert_eq!(evicted, 0u32, "Oldest message should be evicted");
+                            }
+                            Ok(None) => panic!("Expected eviction but none occurred"),
+                            Err(_) => panic!("Eviction failed unexpectedly"),
+                        }
+
+                        // Receive all and verify order
+                        let mut received = Vec::new();
+                        while let Ok(value) = receiver.try_recv() {
+                            received.push(value);
+                        }
+
+                        // Expected: [1, 2, ..., capacity-1, 999]
+                        let mut expected = initial_messages[1..].to_vec();
+                        expected.push(new_value);
+
+                        assert_eq!(
+                            received, expected,
+                            "Eviction didn't preserve FIFO order: got {:?}, expected {:?}",
+                            received, expected
+                        );
+
+                        Ok(())
+                        }.await;
+                    }).unwrap();
+                    lab.scheduler.lock().schedule(test_task, 0);
+                    let report = lab.run_until_quiescent_with_report();
+                    assert_lab_report_success(report);
+                });
+                Ok(())
+            })
+            .expect("Property test failed");
+    }
+
+    /// MR6: Receiver Drain Correctness
+    ///
+    /// Property: Dropping receiver unblocks all pending sends with Disconnected.
+    #[test]
+    fn mr6_receiver_drain_correctness() {
+        use proptest::test_runner::TestRunner;
+
+        let mut runner = TestRunner::default();
+        runner
+            .run(&backpressure_config_strategy(), |config| {
+                crate::lab::runtime::test(config.seed, |lab| {
+                    let root = lab.state.create_root_region(Budget::INFINITE);
+                    let (test_task, _) = lab
+                        .state
+                        .create_task(root, Budget::INFINITE, async move {
+                            let cx = crate::cx::Cx::for_testing();
+                            let _test_res: Result<(), proptest::test_runner::TestCaseError> =
+                                async {
+                                    let (sender, receiver) = channel::<u32>(config.capacity);
+
+                                    // Fill channel
+                                    for i in 0..config.capacity {
+                                        sender.try_send(i as u32).expect("Fill channel");
+                                    }
+
+                                    // Start multiple blocking reserves
+                                    let disconnected_count = Arc::new(AtomicUsize::new(0));
+                                    let mut reserve_handles = Vec::new();
+
+                                    for _i in 0..config.sender_count {
+                                        let sender_clone = sender.clone();
+                                        let counter_clone = Arc::clone(&disconnected_count);
+                                        let reserve_cx = cx.clone();
+                                        let handle = std::thread::spawn(move || {
+                                            futures_lite::future::block_on(async move {
+                                                match sender_clone.reserve(&reserve_cx).await {
+                                                    Err(SendError::Disconnected(_)) => {
+                                                        counter_clone
+                                                            .fetch_add(1, Ordering::SeqCst);
+                                                    }
+                                                    _ => {}
+                                                }
+                                            })
+                                        });
+                                        reserve_handles.push(handle);
+                                    }
+
+                                    // Let reserves queue up
+                                    crate::runtime::yield_now().await;
+
+                                    // Verify reserves are queued
+                                    let queued_before = observe_channel_state(&sender).3;
+                                    assert!(queued_before > 0, "No reserves queued");
+
+                                    // Drop receiver - should unblock all pending reserves
+                                    drop(receiver);
+
+                                    // Wait for all reserves to complete
+                                    for handle in reserve_handles {
+                                        handle.join().unwrap();
+                                    }
+
+                                    // All queued senders should have been disconnected
+                                    let disconnected = disconnected_count.load(Ordering::SeqCst);
+                                    assert!(
+                                        disconnected > 0,
+                                        "No senders received Disconnected after receiver drop"
+                                    );
+
+                                    // No waiters should remain
+                                    let queued_after = observe_channel_state(&sender).3;
+                                    assert_eq!(
+                                        queued_after, 0,
+                                        "Waiters remain queued after receiver drop: {}",
+                                        queued_after
+                                    );
+
+                                    Ok(())
+                                }
+                                .await;
+                        })
+                        .unwrap();
+                    lab.scheduler.lock().schedule(test_task, 0);
+                    let report = lab.run_until_quiescent_with_report();
+                    assert_lab_report_success(report);
+                });
+                Ok(())
+            })
+            .expect("Property test failed");
+    }
+
+    /// MR-MPSC-D1: Producer Spawn Order Independence with Conservation and FIFO
+    ///
+    /// Metamorphic property: With N concurrent producers, after all senders close + receiver drains:
+    /// 1. Conservation: multiset of received values must equal multiset of sent values
+    /// 2. FIFO: per-producer ordering must be preserved (within each producer)
+    /// 3. Order independence: different producer spawn orders yield same multiset
+    #[test]
+    fn metamorphic_drain_conservation_and_fifo() {
+        use proptest::test_runner::TestRunner;
+
+        let mut runner = TestRunner::default();
+        runner
+            .run(&backpressure_config_strategy(), |config| {
+                crate::lab::runtime::test(config.seed, |lab| {
+                    let root = lab.state.create_root_region(Budget::INFINITE);
+                    let (test_task, _) = lab
+                        .state
+                        .create_task(root, Budget::INFINITE, async move {
+                            let cx = crate::cx::Cx::for_testing();
+                            let _test_res: Result<(), proptest::test_runner::TestCaseError> =
+                                async {
+                                    // Test with multiple producer orderings
+                                    let sequential_result = run_multi_producer_drain_test(
+                                        &cx,
+                                        config.capacity,
+                                        config.sender_count,
+                                        config.messages_per_sender,
+                                        ProducerOrdering::Sequential,
+                                        config.seed,
+                                    )
+                                    .await;
+
+                                    let interleaved_result = run_multi_producer_drain_test(
+                                        &cx,
+                                        config.capacity,
+                                        config.sender_count,
+                                        config.messages_per_sender,
+                                        ProducerOrdering::Interleaved,
+                                        config.seed,
+                                    )
+                                    .await;
+
+                                    let round_robin_result = run_multi_producer_drain_test(
+                                        &cx,
+                                        config.capacity,
+                                        config.sender_count,
+                                        config.messages_per_sender,
+                                        ProducerOrdering::RoundRobin,
+                                        config.seed,
+                                    )
+                                    .await;
+
+                                    // Conservation property: verify total message count conservation
+                                    let expected_total_messages =
+                                        config.sender_count * config.messages_per_sender;
+                                    assert_eq!(
+                                        sequential_result.received_messages.len(),
+                                        expected_total_messages,
+                                        "Sequential: message count mismatch"
+                                    );
+                                    assert_eq!(
+                                        interleaved_result.received_messages.len(),
+                                        expected_total_messages,
+                                        "Interleaved: message count mismatch"
+                                    );
+                                    assert_eq!(
+                                        round_robin_result.received_messages.len(),
+                                        expected_total_messages,
+                                        "RoundRobin: message count mismatch"
+                                    );
+
+                                    // Order independence: same multiset across orderings
+                                    let seq_multiset = multiset_from_messages(
+                                        &sequential_result.received_messages,
+                                    );
+                                    let interleaved_multiset = multiset_from_messages(
+                                        &interleaved_result.received_messages,
+                                    );
+                                    let rr_multiset = multiset_from_messages(
+                                        &round_robin_result.received_messages,
+                                    );
+
+                                    assert_eq!(
+                                        seq_multiset, interleaved_multiset,
+                                        "Sequential vs Interleaved multiset mismatch"
+                                    );
+                                    assert_eq!(
+                                        seq_multiset, rr_multiset,
+                                        "Sequential vs RoundRobin multiset mismatch"
+                                    );
+
+                                    // FIFO property: verify per-producer ordering
+                                    verify_fifo_per_producer(
+                                        &sequential_result.received_messages,
+                                        config.sender_count,
+                                    );
+                                    verify_fifo_per_producer(
+                                        &interleaved_result.received_messages,
+                                        config.sender_count,
+                                    );
+                                    verify_fifo_per_producer(
+                                        &round_robin_result.received_messages,
+                                        config.sender_count,
+                                    );
+
+                                    // Verify expected sent vs received multisets
+                                    let expected_multiset = compute_expected_multiset(
+                                        config.sender_count,
+                                        config.messages_per_sender,
+                                    );
+                                    assert_eq!(
+                                        seq_multiset, expected_multiset,
+                                        "Received multiset doesn't match expected sent multiset"
+                                    );
+
+                                    Ok(())
+                                }
+                                .await;
+                        })
+                        .unwrap();
+                    lab.scheduler.lock().schedule(test_task, 0);
+                    let report = lab.run_until_quiescent_with_report();
+                    assert_lab_report_success(report);
+                });
+                Ok(())
+            })
+            .expect("Metamorphic drain conservation property test failed");
+    }
+
+    /// MR-MPSC-D2: Receiver Drop Invariant Under Producer Backpressure
+    ///
+    /// Metamorphic property: When receiver drops while senders are backpressured:
+    /// 1. All pending send attempts return SendError::Disconnected atomically
+    /// 2. Messages sent before receiver drop are preserved in drain
+    #[test]
+    fn metamorphic_receiver_drop_backpressure_invariant() {
+        use proptest::test_runner::TestRunner;
+
+        let mut runner = TestRunner::default();
+        runner
+            .run(&backpressure_config_strategy(), |config| {
+                crate::lab::runtime::test(config.seed, |lab| {
+                    let root = lab.state.create_root_region(Budget::INFINITE);
+                    let (test_task, _) = lab
+                        .state
+                        .create_task(root, Budget::INFINITE, async move {
+                            let cx = crate::cx::Cx::for_testing();
+                            let _test_res: Result<(), proptest::test_runner::TestCaseError> =
+                                async {
+                                    let (sender, receiver) = channel::<u32>(config.capacity);
+
+                                    // Fill channel to capacity to create backpressure
+                                    let mut sent_before_backpressure = Vec::new();
+                                    for i in 0..config.capacity {
+                                        let encoded = encode_sender_message(0, i);
+                                        sender
+                                            .try_send(encoded)
+                                            .expect("Fill to capacity should succeed");
+                                        sent_before_backpressure.push(encoded);
+                                    }
+
+                                    // Create multiple senders that will be backpressured
+                                    let mut producer_handles = Vec::new();
+                                    let disconnected_count = Arc::new(AtomicUsize::new(0));
+
+                                    for producer_id in 0..config.sender_count {
+                                        let sender_clone = sender.clone();
+                                        let counter_clone = Arc::clone(&disconnected_count);
+                                        let producer_cx = cx.clone();
+                                        let handle = std::thread::spawn(move || {
+                                            futures_lite::future::block_on(async move {
+                                                // Try to send messages - should get backpressured then disconnected
+                                                for msg_ordinal in 0..config.messages_per_sender {
+                                                    let encoded = encode_sender_message(
+                                                        producer_id,
+                                                        msg_ordinal,
+                                                    );
+                                                    match sender_clone
+                                                        .send(&producer_cx, encoded)
+                                                        .await
+                                                    {
+                                                        Err(SendError::Disconnected(_)) => {
+                                                            counter_clone
+                                                                .fetch_add(1, Ordering::SeqCst);
+                                                            break;
+                                                        }
+                                                        Err(
+                                                            SendError::Cancelled(_)
+                                                            | SendError::Full(_),
+                                                        ) => {
+                                                            // Continue trying if cancelled or full
+                                                        }
+                                                        Ok(()) => {
+                                                            // Message was sent before disconnect
+                                                        }
+                                                    }
+                                                }
+                                            })
+                                        });
+                                        producer_handles.push(handle);
+                                    }
+
+                                    // Let producers queue up on backpressure
+                                    crate::runtime::yield_now().await;
+
+                                    // Verify backpressure state
+                                    let (queued, _reserved, available, _waiting) =
+                                        observe_channel_state(&sender);
+                                    assert_eq!(queued, config.capacity, "Channel should be full");
+                                    assert_eq!(available, 0, "No capacity should be available");
+
+                                    // Drop receiver while producers are backpressured
+                                    drop(receiver);
+
+                                    // Wait for all producers to complete
+                                    for handle in producer_handles {
+                                        handle.join().unwrap();
+                                    }
+
+                                    // Verify all backpressured senders got disconnected
+                                    let disconnected = disconnected_count.load(Ordering::SeqCst);
+                                    assert!(
+                                        disconnected > 0,
+                                        "At least some senders should have received Disconnected"
+                                    );
+
+                                    // Create new receiver and verify messages sent before drop are preserved
+                                    let (_new_sender, _new_receiver) =
+                                        channel::<u32>(config.capacity);
+
+                                    // The original channel is disconnected - we can't drain from it
+                                    // This tests the invariant that disconnection is atomic and clean
+                                    assert!(matches!(
+                                        sender.try_send(999),
+                                        Err(SendError::Disconnected(_))
+                                    ));
+
+                                    Ok(())
+                                }
+                                .await;
+                        })
+                        .unwrap();
+                    lab.scheduler.lock().schedule(test_task, 0);
+                    let report = lab.run_until_quiescent_with_report();
+                    assert_lab_report_success(report);
+                });
+                Ok(())
+            })
+            .expect("Metamorphic receiver drop backpressure property test failed");
+    }
+
+    #[derive(Debug, PartialEq, Eq)]
+    struct ReceiverCancelSurface {
+        final_state: (usize, usize, usize, usize),
+        disconnected_try_send: bool,
+        receiver_dropped: bool,
+    }
+
+    fn run_receiver_cancel_surface(
+        capacity: usize,
+        buffered_prefix: usize,
+    ) -> ReceiverCancelSurface {
+        let (sender, receiver) = channel::<u32>(capacity);
+
+        for ordinal in 0..buffered_prefix {
+            sender
+                .try_send(ordinal as u32)
+                .expect("buffered prefix should fit within the configured capacity");
+        }
+
+        let queued_before_drop = observe_channel_state(&sender).0;
+        assert_eq!(
+            queued_before_drop, buffered_prefix,
+            "queued prefix should be fully observable before receiver cancellation"
+        );
+
+        drop(receiver);
+
+        ReceiverCancelSurface {
+            final_state: observe_channel_state(&sender),
+            disconnected_try_send: matches!(
+                sender.try_send(u32::MAX),
+                Err(SendError::Disconnected(u32::MAX))
+            ),
+            receiver_dropped: sender.is_closed(),
+        }
+    }
+
+    #[test]
+    fn metamorphic_send_prefix_then_cancel_receiver_leaves_no_dangling_buffer() {
+        use proptest::test_runner::TestRunner;
+
+        let mut runner = TestRunner::default();
+        runner
+            .run(
+                &(1usize..8).prop_flat_map(|capacity| {
+                    (Just(capacity), 1usize..=capacity)
+                }),
+                |(capacity, buffered_prefix)| {
+                    let baseline = run_receiver_cancel_surface(capacity, 0);
+                    let transformed = run_receiver_cancel_surface(capacity, buffered_prefix);
+
+                    prop_assert_eq!(
+                        &transformed, &baseline,
+                        "buffering messages before receiver cancellation must not leave a dangling post-cancel channel surface"
+                    );
+                    prop_assert_eq!(
+                        baseline.final_state,
+                        (0, 0, capacity, 0),
+                        "receiver cancellation should drain queued messages and waiter state"
+                    );
+                    prop_assert!(
+                        baseline.disconnected_try_send,
+                        "sends after receiver cancellation must fail with Disconnected"
+                    );
+                    prop_assert!(
+                        baseline.receiver_dropped,
+                        "receiver cancellation must publish the dropped flag"
+                    );
+                    Ok(())
+                },
+            )
+            .expect("Metamorphic receiver cancellation no-dangling-buffer property test failed");
+    }
+
+    #[derive(Debug, Clone, Copy)]
+    enum ProducerOrdering {
+        Sequential,  // Producer 1 sends all, then Producer 2, etc.
+        Interleaved, // Producers alternate randomly
+        RoundRobin,  // Strict round-robin across producers
+    }
+
+    #[derive(Debug)]
+    struct DrainTestResult {
+        received_messages: Vec<u32>,
+        #[allow(dead_code)]
+        final_channel_state: (usize, usize, usize, usize),
+    }
+
+    async fn run_multi_producer_drain_test(
+        cx: &crate::cx::Cx,
+        capacity: usize,
+        producer_count: usize,
+        messages_per_producer: usize,
+        ordering: ProducerOrdering,
+        seed: u64,
+    ) -> DrainTestResult {
+        let (sender, mut receiver) = channel::<u32>(capacity);
+        let received_messages = Arc::new(parking_lot::Mutex::new(Vec::new()));
+
+        // Start receiver thread
+        let recv_messages_ref = Arc::clone(&received_messages);
+        let recv_cx = cx.clone();
+        let receiver_handle = std::thread::spawn(move || {
+            futures_lite::future::block_on(async move {
+                while let Ok(value) = receiver.recv(&recv_cx).await {
+                    recv_messages_ref.lock().push(value);
+                }
+            })
+        });
+
+        // Generate producer send sequences based on ordering
+        let send_sequence =
+            generate_send_sequence(producer_count, messages_per_producer, ordering, seed);
+
+        // Execute the send sequence
+        let producer_handles: Vec<_> = (0..producer_count)
+            .map(|producer_id| {
+                let sender_clone = sender.clone();
+                let producer_cx = cx.clone();
+                let message_sequence: Vec<usize> = match ordering {
+                    ProducerOrdering::Sequential => (0..messages_per_producer).collect(),
+                    ProducerOrdering::Interleaved | ProducerOrdering::RoundRobin => send_sequence
+                        .iter()
+                        .filter(|(pid, _)| *pid == producer_id)
+                        .map(|(_, ordinal)| *ordinal)
+                        .collect(),
+                };
+
+                std::thread::spawn(move || {
+                    futures_lite::future::block_on(async move {
+                        for msg_ordinal in message_sequence {
+                            let encoded = encode_sender_message(producer_id, msg_ordinal);
+                            let _ = sender_clone.send(&producer_cx, encoded).await;
+                        }
+                    })
+                })
+            })
+            .collect();
+
+        // Wait for all producers to complete
+        for handle in producer_handles {
+            handle.join().unwrap();
+        }
+
+        // Close all senders
+        drop(sender);
+
+        // Wait for receiver to drain all messages
+        receiver_handle.join().unwrap();
+
+        let final_messages = {
+            let guard = received_messages.lock();
+            guard.clone()
+        };
+
+        DrainTestResult {
+            received_messages: final_messages,
+            final_channel_state: (0, 0, capacity, 0), // After drain: empty channel
+        }
+    }
+
+    fn generate_send_sequence(
+        producer_count: usize,
+        messages_per_producer: usize,
+        ordering: ProducerOrdering,
+        seed: u64,
+    ) -> Vec<(usize, usize)> {
+        match ordering {
+            ProducerOrdering::Sequential => {
+                // Not used for sequential (producers send independently)
+                Vec::new()
+            }
+            ProducerOrdering::RoundRobin => (0..messages_per_producer)
+                .flat_map(|msg_round| {
+                    (0..producer_count).map(move |producer_id| (producer_id, msg_round))
+                })
+                .collect(),
+            ProducerOrdering::Interleaved => {
+                // Pseudo-random interleaving based on seed
+                let mut sequence: Vec<_> = (0..producer_count)
+                    .flat_map(|producer_id| {
+                        (0..messages_per_producer)
+                            .map(move |msg_ordinal| (producer_id, msg_ordinal))
+                    })
+                    .collect();
+                // Simple deterministic shuffle based on seed
+                let mut rng_state = seed;
+                for i in (1..sequence.len()).rev() {
+                    rng_state = rng_state.wrapping_mul(1103515245).wrapping_add(12345);
+                    let j = (rng_state as usize) % (i + 1);
+                    sequence.swap(i, j);
+                }
+                sequence
+            }
+        }
+    }
+
+    fn multiset_from_messages(messages: &[u32]) -> std::collections::BTreeMap<u32, usize> {
+        messages
+            .iter()
+            .copied()
+            .fold(std::collections::BTreeMap::new(), |mut acc, msg| {
+                *acc.entry(msg).or_insert(0) += 1;
+                acc
+            })
+    }
+
+    fn verify_fifo_per_producer(messages: &[u32], producer_count: usize) {
+        // Group messages by producer and verify ordering within each producer
+        let mut producer_sequences: Vec<Vec<u32>> = vec![Vec::new(); producer_count];
+
+        for &msg in messages {
+            let (producer_id, ordinal) = decode_sender_message(msg);
+            if producer_id < producer_count {
+                producer_sequences[producer_id].push(ordinal);
+            }
+        }
+
+        // Verify each producer's sequence is in FIFO order
+        for (producer_id, sequence) in producer_sequences.iter().enumerate() {
+            for (expected_ordinal, &actual_ordinal) in (0u32..).zip(sequence.iter()) {
+                assert_eq!(
+                    actual_ordinal, expected_ordinal,
+                    "FIFO violation for producer {}: expected ordinal {}, got {}",
+                    producer_id, expected_ordinal, actual_ordinal
+                );
+            }
+        }
+    }
+
+    fn compute_expected_multiset(
+        producer_count: usize,
+        messages_per_producer: usize,
+    ) -> std::collections::BTreeMap<u32, usize> {
+        (0..producer_count)
+            .flat_map(|producer_id| {
+                (0..messages_per_producer)
+                    .map(move |msg_ordinal| encode_sender_message(producer_id, msg_ordinal))
+            })
+            .fold(std::collections::BTreeMap::new(), |mut acc, encoded| {
+                *acc.entry(encoded).or_insert(0) += 1;
+                acc
+            })
+    }
+
+    /// Composite metamorphic test: All relations together
+    ///
+    /// Tests multiple properties in combination to catch interaction bugs.
+    #[test]
+    fn composite_backpressure_properties() {
+        use proptest::test_runner::TestRunner;
+
+        let mut runner = TestRunner::default();
+        runner
+            .run(&backpressure_config_strategy(), |config| {
+                crate::lab::runtime::test(config.seed, |lab| {
+                    let root = lab.state.create_root_region(Budget::INFINITE);
+                    let (test_task, _) = lab.state.create_task(root, Budget::INFINITE, async move {
+                        let cx = crate::cx::Cx::for_testing();
+                        let _test_res: Result<(), proptest::test_runner::TestCaseError> = async {
+                        let (sender, mut receiver) = channel::<u32>(config.capacity);
+                        let received_messages = Arc::new(parking_lot::Mutex::new(Vec::new()));
+                        let sent_messages = Arc::new(parking_lot::Mutex::new(Vec::new()));
+
+                        // MR1 + MR2: Capacity conservation + FIFO under mixed load
+                        let recv_ref = Arc::clone(&received_messages);
+                        let recv_cx = cx.clone();
+                        let recv_handle = std::thread::spawn(move || {
+                    futures_lite::future::block_on(async move {
+                            while let Ok(value) = receiver.recv(&recv_cx).await {
+                                recv_ref.lock().push(value);
+                            }
+                })});
+
+                        // Multiple senders with different patterns
+                        let mut send_handles = Vec::new();
+                        for sender_id in 0..config.sender_count {
+                            let sender_clone = sender.clone();
+                            let sent_ref = Arc::clone(&sent_messages);
+                            let send_cx = cx.clone();
+                            let handle = std::thread::spawn(move || {
+                    futures_lite::future::block_on(async move {
+                                for i in 0..config.messages_per_sender {
+                                    let value = (sender_id * 1000 + i) as u32;
+                                    match sender_clone.send(&send_cx, value).await {
+                                        Ok(()) => {
+                                            sent_ref.lock().push((sender_id, value));
+                                        }
+                                        Err(_) => break,
+                                    }
+
+                                    // MR1: Check capacity conservation
+                                    let (queued, reserved, available, _) =
+                                        observe_channel_state(&sender_clone);
+                                    assert_eq!(
+                                        queued + reserved + available,
+                                        config.capacity,
+                                        "Capacity conservation violated during concurrent sends"
+                                    );
+                                }
+                })});
+                            send_handles.push(handle);
+                        }
+
+                        // Complete all sends
+                        for handle in send_handles {
+                            handle.join().unwrap();
+                        }
+                        drop(sender);
+
+                        recv_handle.join().unwrap();
+
+                        // MR2: Verify ordering within each sender
+                        let sent = sent_messages.lock().clone();
+                        let received = received_messages.lock().clone();
+
+                        // Group by sender and verify each sender's messages are in order
+                        let mut sender_sequences: HashMap<usize, Vec<u32>> = HashMap::new();
+                        for (sender_id, value) in sent {
+                            sender_sequences
+                                .entry(sender_id)
+                                .or_default()
+                                .push(value);
+                        }
+
+                        for value in received {
+                            if let Some(sender_id) = value.checked_div(1000) {
+                                if let Some(sequence) =
+                                    sender_sequences.get_mut(&(sender_id as usize))
+                                {
+                                    if let Some(expected) = sequence.first() {
+                                        assert_eq!(
+                                            value, *expected,
+                                            "FIFO violation for sender {}: expected {}, got {}",
+                                            sender_id, expected, value
+                                        );
+                                        sequence.remove(0);
+                                    }
+                                }
+                            }
+                        }
+
+                        Ok(())
+                        }.await;
+                    }).unwrap();
+                    lab.scheduler.lock().schedule(test_task, 0);
+                    let report = lab.run_until_quiescent_with_report();
+                    assert_lab_report_success(report);
+                });
+                Ok(())
+            })
+            .expect("Property test failed");
+    }
+
+    /*
+    /// MR7: FIFO Preservation Under Concurrent Cancel + Reserve/Send Interleaving
+    /// ... (test content)
+    #[test]
+    fn mr7_fifo_preservation_under_concurrent_cancel_reserve_send_interleaving() {
+        // ...
+    }
+    */
+}

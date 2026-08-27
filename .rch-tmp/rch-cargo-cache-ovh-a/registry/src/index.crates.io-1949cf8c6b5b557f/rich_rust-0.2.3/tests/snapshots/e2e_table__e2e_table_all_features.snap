@@ -1,0 +1,17 @@
+---
+source: tests/e2e_table.rs
+expression: output
+---
+     Complete Table      
+┏━━━━━━━━━┳━━━━━┳━━━━━━━┓
+┃ Product ┃ Qty ┃ Price ┃
+┡━━━━━━━━━╇━━━━━╇━━━━━━━┩
+│ Widget  │  3  │   $75 │
+├─────────┼─────┼───────┤
+│ Gadget  │  5  │  $125 │
+├─────────┼─────┼───────┤
+│ Gizmo   │  2  │   $50 │
+├─────────┼─────┼───────┤
+│ Total   │ 10  │  $250 │
+└─────────┴─────┴───────┘
+  All features enabled

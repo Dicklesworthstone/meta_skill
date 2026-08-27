@@ -1,0 +1,852 @@
+// bd-2tu6: §10.1 SQL Token Types
+//
+// Every SQL token carries a discriminant and a byte-offset Span.
+// Keywords are their own variants for O(1) matching in the parser.
+
+use fsqlite_ast::Span;
+use std::sync::Arc;
+
+/// A single token produced by the lexer.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Token {
+    /// The token discriminant.
+    pub kind: TokenKind,
+    /// Byte-offset span into the original source.
+    pub span: Span,
+    /// Line number (1-based) at the start of the token.
+    pub line: u32,
+    /// Column number (1-based) at the start of the token.
+    pub col: u32,
+}
+
+/// Token discriminant.
+///
+/// Organized by category: literals, identifiers, keywords (~120), operators,
+/// punctuation, and special tokens.
+#[derive(Debug, Clone, PartialEq)]
+pub enum TokenKind {
+    // === Literals ===
+    /// Integer literal: `42`, `-7`, `0xFF`.
+    Integer(i64),
+    /// Integer literal that exceeded `i64::MAX` but has no decimal/exponent.
+    OversizedInt(String),
+    /// Float literal: `3.14`, `1e10`, `.5`.
+    Float(f64),
+    /// String literal (single-quoted): `'hello'`.
+    String(String),
+    /// Blob literal: `X'CAFE'`.
+    Blob(Vec<u8>),
+
+    // === Identifiers ===
+    /// Unquoted identifier.
+    Id(Arc<str>),
+    /// Quoted identifier (`"name"`, `[name]`, `` `name` ``).
+    /// The bool is the EP_DblQuoted flag (true if double-quoted).
+    QuotedId(Arc<str>, bool),
+
+    // === Variables / bind parameters ===
+    /// `?` anonymous positional.
+    Question,
+    /// `?NNN` numbered positional.
+    QuestionNum(u32),
+    /// `:name` colon-prefixed named.
+    ColonParam(String),
+    /// `@name` at-prefixed named.
+    AtParam(String),
+    /// `$name` dollar-prefixed named.
+    DollarParam(String),
+
+    // === Operators ===
+    Plus,
+    Minus,
+    Star,
+    Slash,
+    Percent,
+    Ampersand,
+    Pipe,
+    Tilde,
+    ShiftLeft,
+    ShiftRight,
+    Eq,   // `=`
+    EqEq, // `==`
+    Ne,   // `!=`
+    LtGt, // `<>`
+    Lt,
+    Le,
+    Gt,
+    Ge,
+    Concat,      // `||`
+    Arrow,       // `->`
+    DoubleArrow, // `->>`
+
+    // === Punctuation ===
+    Dot,
+    Comma,
+    Semicolon,
+    LeftParen,
+    RightParen,
+
+    // === Keywords ===
+    KwAbort,
+    KwAction,
+    KwAdd,
+    KwAfter,
+    KwAll,
+    KwAlter,
+    KwAlways,
+    KwAnalyze,
+    KwAnd,
+    KwAs,
+    KwAsc,
+    KwAttach,
+    KwAutoincrement,
+    KwBefore,
+    KwBegin,
+    KwBetween,
+    KwBy,
+    KwCascade,
+    KwCase,
+    KwCast,
+    KwCheck,
+    KwCollate,
+    KwColumn,
+    KwCommit,
+    KwCommitseq,
+    KwConcurrent,
+    KwConflict,
+    KwConstraint,
+    KwCreate,
+    KwCross,
+    KwCurrentDate,
+    KwCurrentTime,
+    KwCurrentTimestamp,
+    KwDatabase,
+    KwDefault,
+    KwDeferrable,
+    KwDeferred,
+    KwDelete,
+    KwDesc,
+    KwDetach,
+    KwDistinct,
+    KwDo,
+    KwDrop,
+    KwEach,
+    KwElse,
+    KwEnd,
+    KwEscape,
+    KwExcept,
+    KwExclude,
+    KwExclusive,
+    KwExists,
+    KwExplain,
+    KwFail,
+    KwFilter,
+    KwFirst,
+    KwFollowing,
+    KwFor,
+    KwForeign,
+    KwFrom,
+    KwFull,
+    KwGenerated,
+    KwGlob,
+    KwGroup,
+    KwGroups,
+    KwHaving,
+    KwIf,
+    KwIgnore,
+    KwImmediate,
+    KwIn,
+    KwIndex,
+    KwIndexed,
+    KwInitially,
+    KwInner,
+    KwInsert,
+    KwInstead,
+    KwIntersect,
+    KwInto,
+    KwIs,
+    KwIsnull,
+    KwJoin,
+    KwKey,
+    KwLast,
+    KwLeft,
+    KwLike,
+    KwLimit,
+    KwMatch,
+    KwMaterialized,
+    KwNatural,
+    KwNo,
+    KwNot,
+    KwNothing,
+    KwNotnull,
+    KwNull,
+    KwNulls,
+    KwOf,
+    KwOffset,
+    KwOn,
+    KwOr,
+    KwOrder,
+    KwOthers,
+    KwOuter,
+    KwOver,
+    KwPartition,
+    KwPlan,
+    KwPragma,
+    KwPreceding,
+    KwPrimary,
+    KwQuery,
+    KwRaise,
+    KwRange,
+    KwRecursive,
+    KwReferences,
+    KwRegexp,
+    KwReindex,
+    KwRelease,
+    KwRename,
+    KwReplace,
+    KwRestrict,
+    KwReturning,
+    KwRight,
+    KwRollback,
+    KwRow,
+    KwRows,
+    KwSavepoint,
+    KwSelect,
+    KwSet,
+    KwStored,
+    KwStrict,
+    KwTable,
+    KwTemp,
+    KwTemporary,
+    KwThen,
+    KwTies,
+    KwTo,
+    KwTransaction,
+    KwTrigger,
+    KwTrue,
+    KwFalse,
+    KwUnbounded,
+    KwUnion,
+    KwUnique,
+    KwUpdate,
+    KwUsing,
+    KwVacuum,
+    KwValues,
+    KwView,
+    KwVirtual,
+    KwWhen,
+    KwWhere,
+    KwWindow,
+    KwWith,
+    KwWithout,
+
+    // === Special ===
+    /// End of input.
+    Eof,
+    /// Lexer error (invalid input).
+    Error(String),
+}
+
+impl TokenKind {
+    const MAX_KEYWORD_LEN: usize = "CURRENT_TIMESTAMP".len();
+
+    /// Fast-path lookup for common SQL keywords directly on ASCII bytes.
+    ///
+    /// This avoids allocating an owned identifier string and an uppercased
+    /// temporary for the keywords that dominate hot query parsing paths.
+    #[must_use]
+    pub(crate) fn lookup_common_keyword_bytes(s: &[u8]) -> Option<Self> {
+        match s.len() {
+            2 => {
+                if s.eq_ignore_ascii_case(b"AS") {
+                    Some(Self::KwAs)
+                } else if s.eq_ignore_ascii_case(b"BY") {
+                    Some(Self::KwBy)
+                } else if s.eq_ignore_ascii_case(b"DO") {
+                    Some(Self::KwDo)
+                } else if s.eq_ignore_ascii_case(b"IF") {
+                    Some(Self::KwIf)
+                } else if s.eq_ignore_ascii_case(b"IN") {
+                    Some(Self::KwIn)
+                } else if s.eq_ignore_ascii_case(b"IS") {
+                    Some(Self::KwIs)
+                } else if s.eq_ignore_ascii_case(b"NO") {
+                    Some(Self::KwNo)
+                } else if s.eq_ignore_ascii_case(b"OF") {
+                    Some(Self::KwOf)
+                } else if s.eq_ignore_ascii_case(b"ON") {
+                    Some(Self::KwOn)
+                } else if s.eq_ignore_ascii_case(b"OR") {
+                    Some(Self::KwOr)
+                } else if s.eq_ignore_ascii_case(b"TO") {
+                    Some(Self::KwTo)
+                } else {
+                    None
+                }
+            }
+            3 => {
+                if s.eq_ignore_ascii_case(b"AND") {
+                    Some(Self::KwAnd)
+                } else if s.eq_ignore_ascii_case(b"ASC") {
+                    Some(Self::KwAsc)
+                } else if s.eq_ignore_ascii_case(b"END") {
+                    Some(Self::KwEnd)
+                } else if s.eq_ignore_ascii_case(b"FOR") {
+                    Some(Self::KwFor)
+                } else if s.eq_ignore_ascii_case(b"KEY") {
+                    Some(Self::KwKey)
+                } else if s.eq_ignore_ascii_case(b"NOT") {
+                    Some(Self::KwNot)
+                } else if s.eq_ignore_ascii_case(b"SET") {
+                    Some(Self::KwSet)
+                } else {
+                    None
+                }
+            }
+            4 => {
+                if s.eq_ignore_ascii_case(b"FROM") {
+                    Some(Self::KwFrom)
+                } else if s.eq_ignore_ascii_case(b"INTO") {
+                    Some(Self::KwInto)
+                } else if s.eq_ignore_ascii_case(b"JOIN") {
+                    Some(Self::KwJoin)
+                } else if s.eq_ignore_ascii_case(b"LEFT") {
+                    Some(Self::KwLeft)
+                } else if s.eq_ignore_ascii_case(b"LIKE") {
+                    Some(Self::KwLike)
+                } else if s.eq_ignore_ascii_case(b"NULL") {
+                    Some(Self::KwNull)
+                } else if s.eq_ignore_ascii_case(b"THEN") {
+                    Some(Self::KwThen)
+                } else if s.eq_ignore_ascii_case(b"WHEN") {
+                    Some(Self::KwWhen)
+                } else {
+                    None
+                }
+            }
+            5 => {
+                if s.eq_ignore_ascii_case(b"BEGIN") {
+                    Some(Self::KwBegin)
+                } else if s.eq_ignore_ascii_case(b"CROSS") {
+                    Some(Self::KwCross)
+                } else if s.eq_ignore_ascii_case(b"GROUP") {
+                    Some(Self::KwGroup)
+                } else if s.eq_ignore_ascii_case(b"INNER") {
+                    Some(Self::KwInner)
+                } else if s.eq_ignore_ascii_case(b"LIMIT") {
+                    Some(Self::KwLimit)
+                } else if s.eq_ignore_ascii_case(b"ORDER") {
+                    Some(Self::KwOrder)
+                } else if s.eq_ignore_ascii_case(b"TABLE") {
+                    Some(Self::KwTable)
+                } else if s.eq_ignore_ascii_case(b"WHERE") {
+                    Some(Self::KwWhere)
+                } else {
+                    None
+                }
+            }
+            6 => {
+                if s.eq_ignore_ascii_case(b"COMMIT") {
+                    Some(Self::KwCommit)
+                } else if s.eq_ignore_ascii_case(b"CREATE") {
+                    Some(Self::KwCreate)
+                } else if s.eq_ignore_ascii_case(b"DELETE") {
+                    Some(Self::KwDelete)
+                } else if s.eq_ignore_ascii_case(b"EXISTS") {
+                    Some(Self::KwExists)
+                } else if s.eq_ignore_ascii_case(b"INSERT") {
+                    Some(Self::KwInsert)
+                } else if s.eq_ignore_ascii_case(b"OFFSET") {
+                    Some(Self::KwOffset)
+                } else if s.eq_ignore_ascii_case(b"SELECT") {
+                    Some(Self::KwSelect)
+                } else if s.eq_ignore_ascii_case(b"UPDATE") {
+                    Some(Self::KwUpdate)
+                } else if s.eq_ignore_ascii_case(b"VALUES") {
+                    Some(Self::KwValues)
+                } else {
+                    None
+                }
+            }
+            7 => {
+                if s.eq_ignore_ascii_case(b"BETWEEN") {
+                    Some(Self::KwBetween)
+                } else if s.eq_ignore_ascii_case(b"DEFAULT") {
+                    Some(Self::KwDefault)
+                } else if s.eq_ignore_ascii_case(b"HAVING") {
+                    Some(Self::KwHaving)
+                } else if s.eq_ignore_ascii_case(b"INDEXED") {
+                    Some(Self::KwIndexed)
+                } else if s.eq_ignore_ascii_case(b"PRIMARY") {
+                    Some(Self::KwPrimary)
+                } else {
+                    None
+                }
+            }
+            8 => {
+                if s.eq_ignore_ascii_case(b"DISTINCT") {
+                    Some(Self::KwDistinct)
+                } else {
+                    None
+                }
+            }
+            9 => {
+                if s.eq_ignore_ascii_case(b"RETURNING") {
+                    Some(Self::KwReturning)
+                } else {
+                    None
+                }
+            }
+            10 => {
+                if s.eq_ignore_ascii_case(b"CONCURRENT") {
+                    Some(Self::KwConcurrent)
+                } else {
+                    None
+                }
+            }
+            11 => {
+                if s.eq_ignore_ascii_case(b"TRANSACTION") {
+                    Some(Self::KwTransaction)
+                } else {
+                    None
+                }
+            }
+            _ => None,
+        }
+    }
+
+    /// Look up an identifier byte slice to see if it's a keyword.
+    /// Returns the keyword variant if so, else `None`.
+    #[must_use]
+    #[allow(clippy::too_many_lines)]
+    pub(crate) fn lookup_keyword_bytes(s: &[u8]) -> Option<Self> {
+        if let Some(keyword) = Self::lookup_common_keyword_bytes(s) {
+            return Some(keyword);
+        }
+        if s.is_empty() || s.len() > Self::MAX_KEYWORD_LEN || !s.is_ascii() {
+            return None;
+        }
+
+        let mut upper = [0_u8; Self::MAX_KEYWORD_LEN];
+        for (dst, src) in upper.iter_mut().zip(s.iter().copied()) {
+            *dst = src.to_ascii_uppercase();
+        }
+
+        match &upper[..s.len()] {
+            b"ABORT" => Some(Self::KwAbort),
+            b"ACTION" => Some(Self::KwAction),
+            b"ADD" => Some(Self::KwAdd),
+            b"AFTER" => Some(Self::KwAfter),
+            b"ALL" => Some(Self::KwAll),
+            b"ALTER" => Some(Self::KwAlter),
+            b"ALWAYS" => Some(Self::KwAlways),
+            b"ANALYZE" => Some(Self::KwAnalyze),
+            b"AND" => Some(Self::KwAnd),
+            b"AS" => Some(Self::KwAs),
+            b"ASC" => Some(Self::KwAsc),
+            b"ATTACH" => Some(Self::KwAttach),
+            b"AUTOINCREMENT" => Some(Self::KwAutoincrement),
+            b"BEFORE" => Some(Self::KwBefore),
+            b"BEGIN" => Some(Self::KwBegin),
+            b"BETWEEN" => Some(Self::KwBetween),
+            b"BY" => Some(Self::KwBy),
+            b"CASCADE" => Some(Self::KwCascade),
+            b"CASE" => Some(Self::KwCase),
+            b"CAST" => Some(Self::KwCast),
+            b"CHECK" => Some(Self::KwCheck),
+            b"COLLATE" => Some(Self::KwCollate),
+            b"COLUMN" => Some(Self::KwColumn),
+            b"COMMIT" => Some(Self::KwCommit),
+            b"COMMITSEQ" => Some(Self::KwCommitseq),
+            b"CONCURRENT" => Some(Self::KwConcurrent),
+            b"CONFLICT" => Some(Self::KwConflict),
+            b"CONSTRAINT" => Some(Self::KwConstraint),
+            b"CREATE" => Some(Self::KwCreate),
+            b"CROSS" => Some(Self::KwCross),
+            b"CURRENT_DATE" => Some(Self::KwCurrentDate),
+            b"CURRENT_TIME" => Some(Self::KwCurrentTime),
+            b"CURRENT_TIMESTAMP" => Some(Self::KwCurrentTimestamp),
+            b"DATABASE" => Some(Self::KwDatabase),
+            b"DEFAULT" => Some(Self::KwDefault),
+            b"DEFERRABLE" => Some(Self::KwDeferrable),
+            b"DEFERRED" => Some(Self::KwDeferred),
+            b"DELETE" => Some(Self::KwDelete),
+            b"DESC" => Some(Self::KwDesc),
+            b"DETACH" => Some(Self::KwDetach),
+            b"DISTINCT" => Some(Self::KwDistinct),
+            b"DO" => Some(Self::KwDo),
+            b"DROP" => Some(Self::KwDrop),
+            b"EACH" => Some(Self::KwEach),
+            b"ELSE" => Some(Self::KwElse),
+            b"END" => Some(Self::KwEnd),
+            b"ESCAPE" => Some(Self::KwEscape),
+            b"EXCEPT" => Some(Self::KwExcept),
+            b"EXCLUDE" => Some(Self::KwExclude),
+            b"EXCLUSIVE" => Some(Self::KwExclusive),
+            b"EXISTS" => Some(Self::KwExists),
+            b"EXPLAIN" => Some(Self::KwExplain),
+            b"FAIL" => Some(Self::KwFail),
+            b"FILTER" => Some(Self::KwFilter),
+            b"FIRST" => Some(Self::KwFirst),
+            b"FOLLOWING" => Some(Self::KwFollowing),
+            b"FOR" => Some(Self::KwFor),
+            b"FOREIGN" => Some(Self::KwForeign),
+            b"FROM" => Some(Self::KwFrom),
+            b"FULL" => Some(Self::KwFull),
+            b"GENERATED" => Some(Self::KwGenerated),
+            b"GLOB" => Some(Self::KwGlob),
+            b"GROUP" => Some(Self::KwGroup),
+            b"GROUPS" => Some(Self::KwGroups),
+            b"HAVING" => Some(Self::KwHaving),
+            b"IF" => Some(Self::KwIf),
+            b"IGNORE" => Some(Self::KwIgnore),
+            b"IMMEDIATE" => Some(Self::KwImmediate),
+            b"IN" => Some(Self::KwIn),
+            b"INDEX" => Some(Self::KwIndex),
+            b"INDEXED" => Some(Self::KwIndexed),
+            b"INITIALLY" => Some(Self::KwInitially),
+            b"INNER" => Some(Self::KwInner),
+            b"INSERT" => Some(Self::KwInsert),
+            b"INSTEAD" => Some(Self::KwInstead),
+            b"INTERSECT" => Some(Self::KwIntersect),
+            b"INTO" => Some(Self::KwInto),
+            b"IS" => Some(Self::KwIs),
+            b"ISNULL" => Some(Self::KwIsnull),
+            b"JOIN" => Some(Self::KwJoin),
+            b"KEY" => Some(Self::KwKey),
+            b"LAST" => Some(Self::KwLast),
+            b"LEFT" => Some(Self::KwLeft),
+            b"LIKE" => Some(Self::KwLike),
+            b"LIMIT" => Some(Self::KwLimit),
+            b"MATCH" => Some(Self::KwMatch),
+            b"MATERIALIZED" => Some(Self::KwMaterialized),
+            b"NATURAL" => Some(Self::KwNatural),
+            b"NO" => Some(Self::KwNo),
+            b"NOT" => Some(Self::KwNot),
+            b"NOTHING" => Some(Self::KwNothing),
+            b"NOTNULL" => Some(Self::KwNotnull),
+            b"NULL" => Some(Self::KwNull),
+            b"NULLS" => Some(Self::KwNulls),
+            b"OF" => Some(Self::KwOf),
+            b"OFFSET" => Some(Self::KwOffset),
+            b"ON" => Some(Self::KwOn),
+            b"OR" => Some(Self::KwOr),
+            b"ORDER" => Some(Self::KwOrder),
+            b"OTHERS" => Some(Self::KwOthers),
+            b"OUTER" => Some(Self::KwOuter),
+            b"OVER" => Some(Self::KwOver),
+            b"PARTITION" => Some(Self::KwPartition),
+            b"PLAN" => Some(Self::KwPlan),
+            b"PRAGMA" => Some(Self::KwPragma),
+            b"PRECEDING" => Some(Self::KwPreceding),
+            b"PRIMARY" => Some(Self::KwPrimary),
+            b"QUERY" => Some(Self::KwQuery),
+            b"RAISE" => Some(Self::KwRaise),
+            b"RANGE" => Some(Self::KwRange),
+            b"RECURSIVE" => Some(Self::KwRecursive),
+            b"REFERENCES" => Some(Self::KwReferences),
+            b"REGEXP" => Some(Self::KwRegexp),
+            b"REINDEX" => Some(Self::KwReindex),
+            b"RELEASE" => Some(Self::KwRelease),
+            b"RENAME" => Some(Self::KwRename),
+            b"REPLACE" => Some(Self::KwReplace),
+            b"RESTRICT" => Some(Self::KwRestrict),
+            b"RETURNING" => Some(Self::KwReturning),
+            b"RIGHT" => Some(Self::KwRight),
+            b"ROLLBACK" => Some(Self::KwRollback),
+            b"ROW" => Some(Self::KwRow),
+            b"ROWS" => Some(Self::KwRows),
+            b"SAVEPOINT" => Some(Self::KwSavepoint),
+            b"SELECT" => Some(Self::KwSelect),
+            b"SET" => Some(Self::KwSet),
+            b"STORED" => Some(Self::KwStored),
+            b"STRICT" => Some(Self::KwStrict),
+            b"TABLE" => Some(Self::KwTable),
+            b"TEMP" => Some(Self::KwTemp),
+            b"TEMPORARY" => Some(Self::KwTemporary),
+            b"THEN" => Some(Self::KwThen),
+            b"TIES" => Some(Self::KwTies),
+            b"TO" => Some(Self::KwTo),
+            b"TRANSACTION" => Some(Self::KwTransaction),
+            b"TRIGGER" => Some(Self::KwTrigger),
+            b"TRUE" => Some(Self::KwTrue),
+            b"FALSE" => Some(Self::KwFalse),
+            b"UNBOUNDED" => Some(Self::KwUnbounded),
+            b"UNION" => Some(Self::KwUnion),
+            b"UNIQUE" => Some(Self::KwUnique),
+            b"UPDATE" => Some(Self::KwUpdate),
+            b"USING" => Some(Self::KwUsing),
+            b"VACUUM" => Some(Self::KwVacuum),
+            b"VALUES" => Some(Self::KwValues),
+            b"VIEW" => Some(Self::KwView),
+            b"VIRTUAL" => Some(Self::KwVirtual),
+            b"WHEN" => Some(Self::KwWhen),
+            b"WHERE" => Some(Self::KwWhere),
+            b"WINDOW" => Some(Self::KwWindow),
+            b"WITH" => Some(Self::KwWith),
+            b"WITHOUT" => Some(Self::KwWithout),
+            _ => None,
+        }
+    }
+
+    /// Look up an identifier string to see if it's a keyword.
+    /// Returns the keyword variant if so, else `None`.
+    #[must_use]
+    pub fn lookup_keyword(s: &str) -> Option<Self> {
+        Self::lookup_keyword_bytes(s.as_bytes())
+    }
+
+    /// Returns true if this is a keyword that can start a statement.
+    /// Used by the parser for error recovery sync points.
+    #[must_use]
+    pub fn is_statement_start(&self) -> bool {
+        matches!(
+            self,
+            Self::KwSelect
+                | Self::KwValues
+                | Self::KwInsert
+                | Self::KwUpdate
+                | Self::KwDelete
+                | Self::KwCreate
+                | Self::KwDrop
+                | Self::KwAlter
+                | Self::KwBegin
+                | Self::KwCommit
+                | Self::KwEnd
+                | Self::KwRollback
+                | Self::KwSavepoint
+                | Self::KwRelease
+                | Self::KwAttach
+                | Self::KwDetach
+                | Self::KwPragma
+                | Self::KwVacuum
+                | Self::KwReindex
+                | Self::KwAnalyze
+                | Self::KwExplain
+                | Self::KwWith
+                | Self::KwReplace
+        )
+    }
+
+    /// Reconstruct a SQL text fragment from this token kind.
+    ///
+    /// Used for opaque argument collection (e.g. virtual table args) where
+    /// the parser needs to produce readable SQL strings from tokenised input.
+    #[must_use]
+    #[allow(clippy::too_many_lines)]
+    pub fn to_sql(&self) -> String {
+        match self {
+            Self::Integer(i) => i.to_string(),
+            Self::OversizedInt(s) | Self::Error(s) => s.clone(),
+            Self::Id(s) => s.to_string(),
+            Self::Float(f) => format!("{f}"),
+            Self::String(s) => format!("'{}'", s.replace('\'', "''")),
+            Self::Blob(b) => {
+                use std::fmt::Write;
+                let mut hex = std::string::String::with_capacity(3 + b.len() * 2);
+                hex.push_str("X'");
+                for byte in b {
+                    let _ = write!(hex, "{byte:02X}");
+                }
+                hex.push('\'');
+                hex
+            }
+            Self::QuotedId(s, _) => format!("\"{}\"", s.replace('"', "\"\"")),
+            Self::Question => "?".to_owned(),
+            Self::QuestionNum(n) => format!("?{n}"),
+            Self::ColonParam(s) => format!(":{s}"),
+            Self::AtParam(s) => format!("@{s}"),
+            Self::DollarParam(s) => format!("${s}"),
+            Self::Plus => "+".to_owned(),
+            Self::Minus => "-".to_owned(),
+            Self::Star => "*".to_owned(),
+            Self::Slash => "/".to_owned(),
+            Self::Percent => "%".to_owned(),
+            Self::Ampersand => "&".to_owned(),
+            Self::Pipe => "|".to_owned(),
+            Self::Tilde => "~".to_owned(),
+            Self::ShiftLeft => "<<".to_owned(),
+            Self::ShiftRight => ">>".to_owned(),
+            Self::Eq => "=".to_owned(),
+            Self::EqEq => "==".to_owned(),
+            Self::Ne => "!=".to_owned(),
+            Self::LtGt => "<>".to_owned(),
+            Self::Lt => "<".to_owned(),
+            Self::Le => "<=".to_owned(),
+            Self::Gt => ">".to_owned(),
+            Self::Ge => ">=".to_owned(),
+            Self::Concat => "||".to_owned(),
+            Self::Arrow => "->".to_owned(),
+            Self::DoubleArrow => "->>".to_owned(),
+            Self::Dot => ".".to_owned(),
+            Self::Comma => ",".to_owned(),
+            Self::Semicolon => ";".to_owned(),
+            Self::LeftParen => "(".to_owned(),
+            Self::RightParen => ")".to_owned(),
+            Self::Eof => String::new(),
+            // Keywords: return the uppercase SQL keyword text.
+            kw => kw.keyword_str().unwrap_or_default().to_owned(),
+        }
+    }
+
+    /// Return the SQL keyword text for keyword variants.
+    #[must_use]
+    #[allow(clippy::too_many_lines)]
+    pub const fn keyword_str(&self) -> Option<&'static str> {
+        match self {
+            Self::KwAbort => Some("ABORT"),
+            Self::KwAction => Some("ACTION"),
+            Self::KwAdd => Some("ADD"),
+            Self::KwAfter => Some("AFTER"),
+            Self::KwAll => Some("ALL"),
+            Self::KwAlter => Some("ALTER"),
+            Self::KwAlways => Some("ALWAYS"),
+            Self::KwAnalyze => Some("ANALYZE"),
+            Self::KwAnd => Some("AND"),
+            Self::KwAs => Some("AS"),
+            Self::KwAsc => Some("ASC"),
+            Self::KwAttach => Some("ATTACH"),
+            Self::KwAutoincrement => Some("AUTOINCREMENT"),
+            Self::KwBefore => Some("BEFORE"),
+            Self::KwBegin => Some("BEGIN"),
+            Self::KwBetween => Some("BETWEEN"),
+            Self::KwBy => Some("BY"),
+            Self::KwCascade => Some("CASCADE"),
+            Self::KwCase => Some("CASE"),
+            Self::KwCast => Some("CAST"),
+            Self::KwCheck => Some("CHECK"),
+            Self::KwCollate => Some("COLLATE"),
+            Self::KwColumn => Some("COLUMN"),
+            Self::KwCommit => Some("COMMIT"),
+            Self::KwCommitseq => Some("COMMITSEQ"),
+            Self::KwConcurrent => Some("CONCURRENT"),
+            Self::KwConflict => Some("CONFLICT"),
+            Self::KwConstraint => Some("CONSTRAINT"),
+            Self::KwCreate => Some("CREATE"),
+            Self::KwCross => Some("CROSS"),
+            Self::KwCurrentDate => Some("CURRENT_DATE"),
+            Self::KwCurrentTime => Some("CURRENT_TIME"),
+            Self::KwCurrentTimestamp => Some("CURRENT_TIMESTAMP"),
+            Self::KwDatabase => Some("DATABASE"),
+            Self::KwDefault => Some("DEFAULT"),
+            Self::KwDeferrable => Some("DEFERRABLE"),
+            Self::KwDeferred => Some("DEFERRED"),
+            Self::KwDelete => Some("DELETE"),
+            Self::KwDesc => Some("DESC"),
+            Self::KwDetach => Some("DETACH"),
+            Self::KwDistinct => Some("DISTINCT"),
+            Self::KwDo => Some("DO"),
+            Self::KwDrop => Some("DROP"),
+            Self::KwEach => Some("EACH"),
+            Self::KwElse => Some("ELSE"),
+            Self::KwEnd => Some("END"),
+            Self::KwEscape => Some("ESCAPE"),
+            Self::KwExcept => Some("EXCEPT"),
+            Self::KwExclude => Some("EXCLUDE"),
+            Self::KwExclusive => Some("EXCLUSIVE"),
+            Self::KwExists => Some("EXISTS"),
+            Self::KwExplain => Some("EXPLAIN"),
+            Self::KwFail => Some("FAIL"),
+            Self::KwFilter => Some("FILTER"),
+            Self::KwFirst => Some("FIRST"),
+            Self::KwFollowing => Some("FOLLOWING"),
+            Self::KwFor => Some("FOR"),
+            Self::KwForeign => Some("FOREIGN"),
+            Self::KwFrom => Some("FROM"),
+            Self::KwFull => Some("FULL"),
+            Self::KwGenerated => Some("GENERATED"),
+            Self::KwGlob => Some("GLOB"),
+            Self::KwGroup => Some("GROUP"),
+            Self::KwGroups => Some("GROUPS"),
+            Self::KwHaving => Some("HAVING"),
+            Self::KwIf => Some("IF"),
+            Self::KwIgnore => Some("IGNORE"),
+            Self::KwImmediate => Some("IMMEDIATE"),
+            Self::KwIn => Some("IN"),
+            Self::KwIndex => Some("INDEX"),
+            Self::KwIndexed => Some("INDEXED"),
+            Self::KwInitially => Some("INITIALLY"),
+            Self::KwInner => Some("INNER"),
+            Self::KwInsert => Some("INSERT"),
+            Self::KwInstead => Some("INSTEAD"),
+            Self::KwIntersect => Some("INTERSECT"),
+            Self::KwInto => Some("INTO"),
+            Self::KwIs => Some("IS"),
+            Self::KwIsnull => Some("ISNULL"),
+            Self::KwJoin => Some("JOIN"),
+            Self::KwKey => Some("KEY"),
+            Self::KwLast => Some("LAST"),
+            Self::KwLeft => Some("LEFT"),
+            Self::KwLike => Some("LIKE"),
+            Self::KwLimit => Some("LIMIT"),
+            Self::KwMatch => Some("MATCH"),
+            Self::KwMaterialized => Some("MATERIALIZED"),
+            Self::KwNatural => Some("NATURAL"),
+            Self::KwNo => Some("NO"),
+            Self::KwNot => Some("NOT"),
+            Self::KwNothing => Some("NOTHING"),
+            Self::KwNotnull => Some("NOTNULL"),
+            Self::KwNull => Some("NULL"),
+            Self::KwNulls => Some("NULLS"),
+            Self::KwOf => Some("OF"),
+            Self::KwOffset => Some("OFFSET"),
+            Self::KwOn => Some("ON"),
+            Self::KwOr => Some("OR"),
+            Self::KwOrder => Some("ORDER"),
+            Self::KwOthers => Some("OTHERS"),
+            Self::KwOuter => Some("OUTER"),
+            Self::KwOver => Some("OVER"),
+            Self::KwPartition => Some("PARTITION"),
+            Self::KwPlan => Some("PLAN"),
+            Self::KwPragma => Some("PRAGMA"),
+            Self::KwPreceding => Some("PRECEDING"),
+            Self::KwPrimary => Some("PRIMARY"),
+            Self::KwQuery => Some("QUERY"),
+            Self::KwRaise => Some("RAISE"),
+            Self::KwRange => Some("RANGE"),
+            Self::KwRecursive => Some("RECURSIVE"),
+            Self::KwReferences => Some("REFERENCES"),
+            Self::KwRegexp => Some("REGEXP"),
+            Self::KwReindex => Some("REINDEX"),
+            Self::KwRelease => Some("RELEASE"),
+            Self::KwRename => Some("RENAME"),
+            Self::KwReplace => Some("REPLACE"),
+            Self::KwRestrict => Some("RESTRICT"),
+            Self::KwReturning => Some("RETURNING"),
+            Self::KwRight => Some("RIGHT"),
+            Self::KwRollback => Some("ROLLBACK"),
+            Self::KwRow => Some("ROW"),
+            Self::KwRows => Some("ROWS"),
+            Self::KwSavepoint => Some("SAVEPOINT"),
+            Self::KwSelect => Some("SELECT"),
+            Self::KwSet => Some("SET"),
+            Self::KwStored => Some("STORED"),
+            Self::KwStrict => Some("STRICT"),
+            Self::KwTable => Some("TABLE"),
+            Self::KwTemp => Some("TEMP"),
+            Self::KwTemporary => Some("TEMPORARY"),
+            Self::KwThen => Some("THEN"),
+            Self::KwTies => Some("TIES"),
+            Self::KwTo => Some("TO"),
+            Self::KwTransaction => Some("TRANSACTION"),
+            Self::KwTrigger => Some("TRIGGER"),
+            Self::KwTrue => Some("TRUE"),
+            Self::KwFalse => Some("FALSE"),
+            Self::KwUnbounded => Some("UNBOUNDED"),
+            Self::KwUnion => Some("UNION"),
+            Self::KwUnique => Some("UNIQUE"),
+            Self::KwUpdate => Some("UPDATE"),
+            Self::KwUsing => Some("USING"),
+            Self::KwVacuum => Some("VACUUM"),
+            Self::KwValues => Some("VALUES"),
+            Self::KwView => Some("VIEW"),
+            Self::KwVirtual => Some("VIRTUAL"),
+            Self::KwWhen => Some("WHEN"),
+            Self::KwWhere => Some("WHERE"),
+            Self::KwWindow => Some("WINDOW"),
+            Self::KwWith => Some("WITH"),
+            Self::KwWithout => Some("WITHOUT"),
+            _ => None,
+        }
+    }
+}

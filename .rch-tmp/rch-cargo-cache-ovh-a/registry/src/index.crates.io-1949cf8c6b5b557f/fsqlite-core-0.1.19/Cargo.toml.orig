@@ -1,0 +1,107 @@
+[package]
+name = "fsqlite-core"
+version = "0.1.19"
+description = "Core engine: connection, prepare, schema, DDL/DML codegen"
+edition.workspace = true
+license-file.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+[features]
+default = ["native", "linux-asupersync-uring"]
+native = [
+    "fsqlite-types/native",
+    "fsqlite-vfs/native",
+    "fsqlite-pager/native",
+    "fsqlite-wal/native",
+    "fsqlite-mvcc/native",
+    "fsqlite-btree/native",
+    "fsqlite-planner/native",
+    "fsqlite-vdbe/native",
+    "diagnostic-pragmas",
+    "extensions",
+]
+wasm = [
+    "fsqlite-types/wasm",
+    "fsqlite-vfs/wasm",
+    "fsqlite-pager/wasm",
+    "fsqlite-wal/wasm",
+    "fsqlite-mvcc/wasm",
+    "fsqlite-btree/wasm",
+    "fsqlite-planner/wasm",
+    "fsqlite-vdbe/wasm",
+    "wasm-tracing-max-level-error",
+]
+linux-asupersync-uring = ["native", "fsqlite-vfs/linux-asupersync-uring"]
+diagnostic-pragmas = ["dep:serde_json"]
+wasm-tracing-max-level-error = ["tracing/release_max_level_error"]
+wasm-tracing-max-level-warn = ["tracing/release_max_level_warn"]
+extensions = ["ext-json", "ext-fts5", "ext-icu", "ext-misc", "ext-rtree"]
+ext-json = ["dep:fsqlite-ext-json", "fsqlite-func/ext-json"]
+ext-fts5 = ["dep:fsqlite-ext-fts5", "fsqlite-func/ext-fts5"]
+ext-icu = ["dep:fsqlite-ext-icu", "fsqlite-func/ext-icu"]
+ext-misc = ["dep:fsqlite-ext-misc"]
+ext-rtree = [
+    "dep:fsqlite-ext-rtree",
+    "fsqlite-func/ext-geopoly",
+    "fsqlite-func/ext-rtree",
+]
+
+[dependencies]
+fsqlite-types = { path = "../fsqlite-types", version = "0.1.19", default-features = false }
+fsqlite-error = { workspace = true }
+fsqlite-vfs = { version = "0.1.19", path = "../fsqlite-vfs", default-features = false }
+fsqlite-pager = { version = "0.1.19", path = "../fsqlite-pager", default-features = false }
+fsqlite-wal = { version = "0.1.19", path = "../fsqlite-wal", default-features = false }
+fsqlite-mvcc = { version = "0.1.19", path = "../fsqlite-mvcc", default-features = false }
+fsqlite-observability = { workspace = true }
+fsqlite-btree = { version = "0.1.19", path = "../fsqlite-btree", default-features = false }
+fsqlite-ast = { workspace = true }
+fsqlite-parser = { workspace = true }
+fsqlite-planner = { version = "0.1.19", path = "../fsqlite-planner", default-features = false }
+fsqlite-vdbe = { version = "0.1.19", path = "../fsqlite-vdbe", default-features = false }
+fsqlite-func = { workspace = true }
+fsqlite-ext-json = { workspace = true, optional = true }
+fsqlite-ext-fts5 = { workspace = true, optional = true }
+fsqlite-ext-icu = { workspace = true, optional = true }
+fsqlite-ext-misc = { workspace = true, optional = true }
+fsqlite-ext-rtree = { workspace = true, optional = true }
+tracing = { workspace = true }
+xxhash-rust = { workspace = true }
+blake3 = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true, optional = true }
+itoa = { workspace = true }
+hashbrown = { workspace = true }
+lru = { workspace = true }
+smallvec = { workspace = true }
+lazy_static = "1.5"
+foldhash = "0.2.0"
+
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+asupersync = { workspace = true }
+
+[dev-dependencies]
+asupersync = { workspace = true, features = ["test-internals"] }
+criterion = { workspace = true }
+rusqlite = { workspace = true }
+tracing = { workspace = true }
+tempfile = { workspace = true }
+proptest = { workspace = true }
+tracing-subscriber = { workspace = true }
+serde_json = { workspace = true }
+
+[lints]
+workspace = true
+
+[[bench]]
+name = "symbol_ops"
+harness = false
+
+[[bench]]
+name = "prepared_cache_hot_paths"
+harness = false
+
+[[bench]]
+name = "rowid_eq_aggregate_bench"
+harness = false

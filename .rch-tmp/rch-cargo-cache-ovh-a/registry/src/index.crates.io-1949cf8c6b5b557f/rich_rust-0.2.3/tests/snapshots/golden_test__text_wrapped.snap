@@ -1,0 +1,8 @@
+---
+source: tests/golden_test.rs
+assertion_line: 364
+expression: plain
+---
+╭─────────────────────────────────╮
+│ This is a very long piece of te │
+╰─────────────────────────────────╯

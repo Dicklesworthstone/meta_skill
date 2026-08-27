@@ -1,0 +1,15 @@
+name: Rust Publish
+on: [release]
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: stable
+
+      - name: Cargo publish
+        run: cargo publish --token ${{ secrets.CARGO_PUBLISH_TOKEN }}

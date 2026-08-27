@@ -1,0 +1,87 @@
+---
+source: tests/demo_showcase_snapshots.rs
+expression: normalized
+---
+Markdown: Documentation Rendering
+
+Markdown renderable converts CommonMark + GFM to styled terminal output.
+
+Release Notes
+
+Nebula API v2.4.1
+
+What's New
+
+This release brings performance improvements and stability fixes for production deployments.
+
+Features
+  • Rolling deployments: Zero-downtime updates with configurable surge
+  • Health check improvements: Faster failure detection with exponential backoff
+  • Metrics endpoint: New  /metrics  endpoint for Prometheus integration
+
+
+Breaking Changes
+│ Note: The  --legacy-mode  flag has been removed. See migration guide.
+
+Bug Fixes
+  1. Fixed memory leak in connection pool under high load
+  2. Resolved race condition in deployment rollback
+  3. Corrected timezone handling in audit logs
+
+
+Upgrade Instructions
+
+Update your deployment config:
+  [deployment]
+  version = "2.4.1"
+  strategy = "rolling"
+
+
+
+For more details, see the migration guide (https://docs.nebula.io/migrate).
+
+
+Deployment Runbook (Excerpt)
+
+Pre-Deployment Checklist
+
+Before deploying to production, verify:
+  • ☐ All tests pass in CI
+  • ☐ Staging environment validated
+  • ☐ Database migrations reviewed
+  • ☐ Rollback plan documented
+
+
+Deployment Steps
+
+1. Notify the Team
+
+Post in  #deployments :
+│ Starting production deployment of nebula-api v2.4.1
+
+2. Execute Deployment
+
+Run the deployment command:
+  kubectl apply -f k8s/production/
+  kubectl rollout status deployment/nebula-api
+
+
+
+3. Verify Health
+
+Check the health endpoint:
+  curl -s https://api.nebula.io/health | jq .
+
+
+
+Expected response:
+  {"status": "healthy", "version": "2.4.1"}
+
+
+────────────────────────────────────────────────────────────────────────────
+
+
+Last updated: January 2026
+
+
+Markdown supports headings, lists, code blocks, blockquotes, and inline formatting.

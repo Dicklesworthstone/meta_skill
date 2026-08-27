@@ -1,0 +1,20 @@
+[package]
+name = "alloca"
+version = "0.4.0"
+authors = ["Adel Prokurov <adel.prokurov@gmail.com>", "StackOverflowExcept1on"]
+edition = "2021"
+description = "Mostly safe wrapper for alloca"
+repository = "https://github.com/playXE/alloca-rs"
+readme = "README.md"
+keywords = ["alloca", "wrapper", "stack", "stack-allocation"]
+categories = ["api-bindings", "no-std"]
+license = "MIT"
+
+[build-dependencies]
+cc = "1.0"
+
+[features]
+stack-clash-protection = []
+
+[profile.release]
+lto = "fat"

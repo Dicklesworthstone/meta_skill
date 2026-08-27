@@ -1,0 +1,204 @@
+[workspace]
+members = ["derive", "compatibility"]
+
+[package]
+name = "bincode-next"
+version = "3.1.1"
+# Remember to update html_root_url and bincode_derive
+authors = [
+    "Xinyu Yang <xinyu.yang@apich.org>",
+    "Ty Overby <ty@pre-alpha.com>",
+    "Zoey Riordan <zoey@dos.cafe>",
+    "Victor Koenders <bincode@trangar.com>",
+    "The bincode-next & bincode developers",
+]
+exclude = [
+    "complex_world_decode/*",
+    "complex_world_encode/*",
+    "vec_u64_fixint_native_decode/*",
+    "vec_u64_large_varint_decode/*",
+    "vec_u64_small_varint_decode/*",
+    "vec_u8_bulk_decode/*",
+    "report/*",
+    "index.html",
+    "fuzz/*",
+    "CNAME",
+    "Cargo.lock",
+    'Bench Results of bincode-next.md',
+    "examples/*",
+    ".gitignore",
+    ".github/",
+]
+rust-version = "1.90.0"
+
+publish = true
+
+repository = "https://github.com/Apich-Organization/bincode"
+documentation = "https://docs.rs/bincode_next"
+readme = "./README.md"
+categories = ["encoding", "data-structures", "no-std"]
+keywords = ["binary", "serialization", "serde", "encoding", "performance"]
+
+license = "MIT or Apache-2.0"
+description = "A compact, ultra-fast binary serialization format for Rust, optimized for networking and storage!"
+
+edition = "2024"
+
+[features]
+default = ["std", "derive", "simd"]
+std = ["alloc", "serde?/std"]
+alloc = ["serde?/alloc"]
+derive = ["dep:bincode_derive-next"]
+serde = ["dep:serde"]
+zero-copy = ["bincode_derive-next?/zero-copy"]
+static-size = ["bincode_derive-next?/static-size"]
+async-fiber = ["dep:futures-io", "dep:libc", "std"]
+tokio = ["dep:tokio", "async-fiber"]
+simd = []
+hw-acceleration = ["simd"]
+# Remember to run 'MIRIFLAGS="-Zmiri-disable-isolation" cargo +nightly miri test --all-features --no-fail-fast'
+# And remeber 'sudo chrt -f 99 cargo +nightly bench --bench complex' also.
+# And for loom: 'RUSTFLAGS="--cfg loom" cargo test --test async_fiber_loom --features "async-fiber, tokio/full" --release'
+fuzzing = ["dep:arbitrary", "zero-copy"]
+full = [
+    "default",
+    "std",
+    "alloc",
+    "derive",
+    "serde",
+    "simd",
+    "zero-copy",
+    "static-size",
+    "async-fiber",
+    "tokio",
+]
+
+[dependencies]
+bincode_derive-next = { path = "derive", version = "3.1.1", optional = true }
+serde = { version = "1.0", default-features = false, optional = true }
+unty = { version = "0.1.2", package = "unty-next" }
+rapidhash = { version = "4.4", default-features = false }
+pastey = "0.2"
+futures-io = { version = "0.3", optional = true }
+libc = { version = "0.2", optional = true }
+tokio = { version = "1.50", default-features = false, optional = true }
+arbitrary = { version = "1.3", optional = true }
+
+# Used for tests
+[dev-dependencies]
+ouroboros = "0.18"
+serde_derive = "1.0"
+serde_json = { version = "1.0", default-features = false }
+tempfile = "3.2"
+criterion = { version = "0.8", features = ["async_tokio"] }
+tokio = { version = "1.50", features = [
+    "rt",
+    "macros",
+    "rt-multi-thread",
+    "io-util",
+    "fs",
+] }
+rand = "0.10"
+uuid = { version = "1.1", features = ["serde"] }
+chrono = { version = "0.4", features = ["serde"] }
+glam = { version = "0.33", features = ["serde"] }
+bincode_1 = { version = "1.3", package = "bincode" }
+bincode_v2 = { version = "2.0.0-rc.3", package = "bincode", features = [
+    "serde",
+] }
+serde = { version = "1.0", features = ["derive"] }
+bumpalo = { version = "3.16", features = ["collections"] }
+proptest = "1.10"
+loom = "0.7"
+async-bincode = "0.8"
+futures = "0.3"
+postcard = { version = "1.1", features = ["alloc", "use-std"] }
+cbor4ii = { version = "1.2", features = ["serde1"] }
+minicbor = { version = "2.2", features = ["derive", "alloc"] }
+dtact = "0.2"
+
+[[bench]]
+name = "varint"
+harness = false
+
+[[bench]]
+name = "concurrency"
+harness = false
+
+[[bench]]
+name = "inline"
+harness = false
+
+[[bench]]
+name = "string"
+harness = false
+
+[[bench]]
+name = "extreme_perf"
+harness = false
+
+[[bench]]
+name = "complex"
+harness = false
+
+[[bench]]
+name = "relative_ptr_bench"
+harness = false
+required-features = ["zero-copy"]
+
+[[bench]]
+name = "async_fiber"
+harness = false
+required-features = ["async-fiber"]
+
+[[bench]]
+name = "cbor_comparison"
+harness = false
+
+[[bench]]
+name = "postcard_comparison"
+harness = false
+
+[[bench]]
+name = "codec_concurrency"
+harness = false
+required-features = ["async-fiber"]
+
+[profile.bench]
+codegen-units = 1
+debug = 1
+lto = true
+opt-level = 3
+strip = true
+debug-assertions = false
+overflow-checks = false
+incremental = true
+
+[profile.release]
+lto = true
+codegen-units = 1
+panic = "abort"
+opt-level = 3
+strip = true
+debug = false
+debug-assertions = false
+overflow-checks = false
+incremental = true
+
+[profile.dev]
+lto = false
+opt-level = 0
+debug = true
+
+[lints.clippy]
+empty-line-after-doc-comments = "allow"
+
+[lib]
+crate-type = ["rlib"]
+
+[package.metadata.docs.rs]
+all-features = true
+rustdoc-args = ["--cfg", "docsrs"]
+
+[lints.rust]
+unexpected_cfgs = { level = "warn", check-cfg = ['cfg(loom)'] }

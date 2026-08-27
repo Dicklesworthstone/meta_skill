@@ -1,0 +1,18 @@
+---
+source: crates/fsqlite-planner/tests/golden_differential_plan_snapshots.rs
+expression: grouped_join
+---
+case: differential_grouped_aggregate_join
+sql: SELECT u.id AS user_id, COUNT(*) AS n_orders, SUM(o.total) AS gross_total FROM users AS u INNER JOIN orders AS o ON u.id = o.user_id AND u.tenant_id = o.tenant_id WHERE o.status = 'paid' GROUP BY u.id
+status: ok
+
+DIFFERENTIAL grouped_aggregate
+SOURCE users AS u
+SOURCE orders AS o
+JOIN u.id = o.user_id
+JOIN u.tenant_id = o.tenant_id
+FILTER o.status = 'paid'
+GROUP BY u.id
+EMIT u.id AS user_id
+EMIT COUNT(*) AS n_orders
+EMIT SUM(o.total) AS gross_total

@@ -1,0 +1,39 @@
+---
+source: tests/demo_showcase_snapshots.rs
+expression: normalized
+---
+Validating environment…
+                   ╭───────────────────────────────────────╮
+                   │                                       │
+                   │    ✦  N E B U L A   D E P L O Y  ✦    │
+                   │                                       │
+                   ╰───────────────────────────────────────╯
+
+                       Beautiful terminal output for Rust
+                              powered by rich_rust
+
+╭──── Environment Detection ─────╮
+│ Terminal size: 80 × 24 cells   │
+│ Color system:  None (no color) │
+│ Is terminal:   no (piped)      │
+│ Interactive:   no              │
+│ Emoji:         enabled ✨      │
+╰────────────────────────────────╯
+
+          Color Palette
+┏━━━━━━━━━━┳━━━━━━━━━━━━━━━━━━━━━┓
+┃ Category ┃ Preview             ┃
+┡━━━━━━━━━━╇━━━━━━━━━━━━━━━━━━━━━┩
+│ Brand    │ ████ ████ ████      │
+│ Status   │ ████ ████ ████ ████ │
+│ Badges   │  OK   WARN   ERR    │
+│ Muted    │ ████ ████           │
+└──────────┴─────────────────────┘
+
+Get Started
+
+  📖 Documentation: docs.rs/rich_rust
+  📦 Repository:    github.com/Dicklesworthstone/rich_rust
+  🦀 Crates.io:     crates.io/crates/rich_rust
+
+Press any key to continue, or run with --scene <name> to jump to a specific demo.

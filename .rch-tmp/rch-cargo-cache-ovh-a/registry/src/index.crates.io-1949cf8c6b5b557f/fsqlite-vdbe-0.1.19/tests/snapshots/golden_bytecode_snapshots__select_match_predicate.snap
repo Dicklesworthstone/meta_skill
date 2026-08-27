@@ -1,0 +1,28 @@
+---
+source: crates/fsqlite-vdbe/tests/golden_bytecode_snapshots.rs
+expression: "render_bytecode_case(\"match_predicate\",\n\"SELECT id, title FROM docs WHERE title MATCH ?1\")"
+---
+case: match_predicate
+sql: SELECT id, title FROM docs WHERE title MATCH ?1
+status: ok
+registers: 5
+bind_parameters: 1
+requires_attached_memdb: false
+requires_version_store: false
+
+addr  opcode           p1    p2    p3    p4                 p5
+----  ---------------  ----  ----  ----  -----------------  --
+0     Init             0     14    0                        0 
+1     Transaction      0     0     0                        0 
+2     OpenRead         0     2     0     (tbl)docs          0 
+3     Rewind           0     12    0                        0 
+4     Variable         1     4     0                        0 
+5     Column           0     2     5                        0 
+6     PureFunc         0     4     3     (func)MATCH        2 
+7     IfNot            3     11    1                        0 
+8     Rowid            0     1     0                        0 
+9     Column           0     2     2                        0 
+10    ResultRow        1     2     0                        0 
+11    Next             0     4     0                        0 
+12    Close            0     0     0                        0 
+13    Halt             0     0     0                        0

@@ -1,0 +1,30 @@
+# Line Style
+newline_style = "Unix"
+
+# --- Visual Structure ---
+max_width = 100
+blank_lines_upper_bound = 2
+blank_lines_lower_bound = 0
+force_multiline_blocks = true
+
+# --- Vertical Preferences ---
+fn_params_layout = "Vertical"
+imports_layout = "Vertical"
+imports_granularity = "Item"
+match_arm_leading_pipes = "Always"
+match_block_trailing_comma = true
+
+# --- Heuristics ---
+use_small_heuristics = "Default"
+array_width = 60
+chain_width = 60
+fn_call_width = 60
+single_line_if_else_max_width = 40
+struct_lit_single_line = true
+struct_lit_width = 20
+
+# --- Quality of Life ---
+format_code_in_doc_comments = true
+reorder_impl_items = true
+reorder_imports = true
+normalize_comments = true

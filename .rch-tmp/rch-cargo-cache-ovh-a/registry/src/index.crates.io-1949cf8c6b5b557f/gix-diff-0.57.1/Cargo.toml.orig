@@ -1,0 +1,68 @@
+lints.workspace = true
+
+[package]
+name = "gix-diff"
+version = "0.57.1"
+repository = "https://github.com/GitoxideLabs/gitoxide"
+license = "MIT OR Apache-2.0"
+description = "Calculate differences between various git objects"
+authors = ["Sebastian Thiel <sebastian.thiel@icloud.com>"]
+edition = "2021"
+include = ["src/**/*", "LICENSE-*"]
+rust-version = "1.82"
+autotests = false
+
+[features]
+default = ["blob", "index"]
+## Enable diffing of blobs using imara-diff.
+blob = [
+    "dep:imara-diff",
+    "dep:gix-filter",
+    "dep:gix-worktree",
+    "dep:gix-path",
+    "dep:gix-fs",
+    "dep:gix-command",
+    "dep:gix-tempfile",
+    "dep:gix-trace",
+    "dep:gix-traverse"
+]
+## An experimental use of the v0.2 branch of `imara-diff` to allow trying it out, and for writing tests against it more easily.
+## We will decide later how it should actually be exposed.
+blob-experimental = ["dep:imara-diff-v2"]
+## Enable diffing of two indices, which also allows for a generic rewrite tracking implementation.
+index = ["dep:gix-index", "dep:gix-pathspec", "dep:gix-attributes"]
+## Data structures implement `serde::Serialize` and `serde::Deserialize`.
+serde = ["dep:serde", "gix-hash/serde", "gix-object/serde", "gix-index?/serde"]
+## Make it possible to compile to the `wasm32-unknown-unknown` target.
+wasm = ["dep:getrandom"]
+
+[lib]
+doctest = false
+
+[dependencies]
+gix-index = { version = "^0.45.1", path = "../gix-index", optional = true }
+gix-pathspec = { version = "^0.14.0", path = "../gix-pathspec", optional = true }
+gix-attributes = { version = "^0.29.0", path = "../gix-attributes", optional = true }
+gix-hash = { version = "^0.21.2", path = "../gix-hash" }
+gix-object = { version = "^0.54.1", path = "../gix-object" }
+gix-filter = { version = "^0.24.1", path = "../gix-filter", optional = true }
+gix-worktree = { version = "^0.46.0", path = "../gix-worktree", default-features = false, features = ["attributes"], optional = true }
+gix-command = { version = "^0.6.5", path = "../gix-command", optional = true }
+gix-path = { version = "^0.10.22", path = "../gix-path", optional = true }
+gix-fs = { version = "^0.18.2", path = "../gix-fs", optional = true }
+gix-tempfile = { version = "^20.0.0", path = "../gix-tempfile", optional = true }
+gix-trace = { version = "^0.1.17", path = "../gix-trace", optional = true }
+gix-traverse = { version = "^0.51.1", path = "../gix-traverse", optional = true }
+
+thiserror = "2.0.17"
+imara-diff = { version = "0.1.8", optional = true }
+imara-diff-v2 = { version = "0.2.0", optional = true, package = "imara-diff" }
+serde = { version = "1.0.114", optional = true, default-features = false, features = ["derive"] }
+getrandom = { version = "0.2.8", optional = true, default-features = false, features = ["js"] }
+bstr = { version = "1.12.0", default-features = false }
+
+document-features = { version = "0.2.0", optional = true }
+
+[package.metadata.docs.rs]
+all-features = true
+features = ["document-features"]

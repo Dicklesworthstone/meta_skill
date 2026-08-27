@@ -1,0 +1,23 @@
+lints.workspace = true
+
+[package]
+name = "gix-hashtable"
+version = "0.8.1"
+repository = "https://github.com/GitoxideLabs/gitoxide"
+license = "MIT OR Apache-2.0"
+description = "A crate that provides hashtable based data structures optimized to utilize ObjectId keys"
+authors = ["Pascal Kuthe <pascal.kuthe@semimod.de>"]
+edition = "2021"
+include = ["src/**/*", "LICENSE-*"]
+rust-version = "1.70"
+
+[lib]
+doctest = false
+
+[dependencies]
+parking_lot = "0.12.1"
+hashbrown = { version = "0.14.0", default-features = false, features = [
+    "inline-more",
+    "raw"
+] }
+gix-hash = { version = "^0.18.0", path = "../gix-hash" }

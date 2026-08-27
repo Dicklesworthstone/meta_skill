@@ -1,0 +1,31 @@
+---
+source: tests/demo_showcase_snapshots.rs
+expression: normalized
+---
+                                Available Scenes
+┏━━━━━━━━━━━━┳━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓
+┃ Scene      ┃ Description                                                     ┃
+┡━━━━━━━━━━━━╇━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┩
+│ hero       │ Introduce Nebula Deploy and the visual brand.                   │
+│ dashboard  │ Live split-screen dashboard (services + pipeline + logs).       │
+│ markdown   │ Markdown deep-dive: release notes, headings, lists, and code    │
+│            │ blocks.                                                         │
+│ syntax     │ Syntax deep-dive: code highlighting, line numbers, and themes.  │
+│ json       │ JSON deep-dive: pretty-printing, theming, and API payloads.     │
+│ table      │ Table showcase: styles, alignment, badges, and ASCII fallback.  │
+│ panels     │ Panel showcase: box styles, titles, padding, and nesting.       │
+│ tree       │ Tree showcase: guides, icons, collapsed nodes, dependency       │
+│            │ graphs.                                                         │
+│ layout     │ Layout tools: Columns, Align, and Padding for polished UI       │
+│            │ composition.                                                    │
+│ emoji_link │ Emoji shortcodes and terminal hyperlinks for polished output.   │
+│ s          │                                                                 │
+│ debug_tool │ Pretty/Inspect + Traceback + RichLogger (+ tracing).            │
+│ s          │                                                                 │
+│ tracing    │ Tracing integration: spans, events, and structured logging.     │
+│ traceback  │ Controlled error with Traceback + exception panel.              │
+│ export     │ Export HTML/SVG bundle with viewing instructions.               │
+│ outro      │ Summary + next steps.                                           │
+└────────────┴─────────────────────────────────────────────────────────────────┘
+
+Run with --scene <name> to run a single scene.

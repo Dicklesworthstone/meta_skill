@@ -1,0 +1,1764 @@
+//! Pipeline combinator for staged processing.
+//!
+//! The pipeline combinator chains a sequence of transformations where each
+//! stage's output feeds the next stage's input. This module implements
+//! sequential pipeline execution for Phase 0 (single-threaded).
+//!
+//! # Design Philosophy
+//!
+//! Two modes of pipeline operation:
+//! 1. **Sequential pipeline** (Phase 0): Stage N+1 starts only after stage N completes
+//! 2. **Streaming pipeline** (Phase 1+): Stages run concurrently via channels
+//!
+//! This module implements sequential pipeline for the deterministic lab runtime.
+//!
+//! # Behavior
+//!
+//! ```text
+//! pipeline(input, [stage1, stage2, stage3]):
+//!   r1 <- stage1(input)
+//!   if r1 is Err/Cancelled/Panicked: return r1
+//!   r2 <- stage2(r1.value)
+//!   if r2 is Err/Cancelled/Panicked: return r2
+//!   r3 <- stage3(r2.value)
+//!   return r3
+//! ```
+//!
+//! # Cancellation Handling
+//!
+//! - Check cancellation between stages
+//! - If cancelled before stage N: return Cancelled, stages N..end never execute
+//! - Stage cleanup runs if stage was started
+//!
+//! # Invariants
+//!
+//! - **Sequential ordering**: Output of stage N is input to stage N+1
+//! - **Error short-circuit**: First error stops pipeline
+//! - **No partial results**: Either all stages complete or none
+//! - **Cancel-correctness**: Respects cancellation at stage boundaries
+
+use crate::types::Outcome;
+use crate::types::cancel::CancelReason;
+use crate::types::outcome::PanicPayload;
+use core::fmt;
+use std::marker::PhantomData;
+
+/// Configuration for a pipeline operation.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PipelineConfig {
+    /// Whether to check cancellation between stages.
+    pub check_cancellation: bool,
+    /// Whether to continue after recoverable errors (vs short-circuit).
+    /// Default is false (short-circuit on first error).
+    pub continue_on_error: bool,
+}
+
+impl Default for PipelineConfig {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl PipelineConfig {
+    /// Creates a new pipeline configuration with default settings.
+    #[must_use]
+    pub const fn new() -> Self {
+        Self {
+            check_cancellation: true,
+            continue_on_error: false,
+        }
+    }
+
+    /// Creates a configuration that checks cancellation between stages.
+    #[must_use]
+    pub const fn with_cancellation_check() -> Self {
+        Self {
+            check_cancellation: true,
+            continue_on_error: false,
+        }
+    }
+
+    /// Creates a configuration that skips cancellation checks (for tight loops).
+    #[must_use]
+    pub const fn without_cancellation_check() -> Self {
+        Self {
+            check_cancellation: false,
+            continue_on_error: false,
+        }
+    }
+}
+
+/// A pipeline combinator marker type.
+///
+/// This is a builder/marker type; actual execution happens via the runtime.
+#[derive(Debug)]
+pub struct Pipeline<T> {
+    /// Pipeline configuration.
+    pub config: PipelineConfig,
+    _t: PhantomData<T>,
+}
+
+impl<T> Pipeline<T> {
+    /// Creates a new pipeline with default configuration.
+    #[must_use]
+    pub const fn new() -> Self {
+        Self {
+            config: PipelineConfig::new(),
+            _t: PhantomData,
+        }
+    }
+
+    /// Creates a pipeline with the given configuration.
+    #[must_use]
+    pub const fn with_config(config: PipelineConfig) -> Self {
+        Self {
+            config,
+            _t: PhantomData,
+        }
+    }
+}
+
+impl<T> Clone for Pipeline<T> {
+    fn clone(&self) -> Self {
+        *self
+    }
+}
+
+impl<T> Copy for Pipeline<T> {}
+
+impl<T> Default for Pipeline<T> {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+/// Which stage failed in a pipeline.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct FailedStage {
+    /// Zero-based index of the failed stage.
+    pub index: usize,
+    /// Total number of stages in the pipeline.
+    pub total_stages: usize,
+}
+
+impl FailedStage {
+    /// Creates a new failed stage indicator.
+    #[must_use]
+    pub const fn new(index: usize, total_stages: usize) -> Self {
+        Self {
+            index,
+            total_stages,
+        }
+    }
+
+    /// Returns true if this is the first stage (index 0).
+    #[must_use]
+    pub const fn is_first(&self) -> bool {
+        self.index == 0
+    }
+
+    /// Returns true if this is the last stage.
+    #[must_use]
+    pub const fn is_last(&self) -> bool {
+        self.index + 1 == self.total_stages
+    }
+
+    /// Returns the stage number (1-based for display).
+    #[must_use]
+    pub const fn stage_number(&self) -> usize {
+        self.index + 1
+    }
+}
+
+impl fmt::Display for FailedStage {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "stage {}/{}", self.stage_number(), self.total_stages)
+    }
+}
+
+/// The result of a pipeline operation.
+#[derive(Debug, Clone)]
+pub enum PipelineResult<T, E> {
+    /// Pipeline completed successfully.
+    Completed {
+        /// The final output value.
+        value: T,
+        /// Number of stages executed.
+        stages_completed: usize,
+    },
+    /// Pipeline failed at a specific stage with an error.
+    Failed {
+        /// The error from the failed stage.
+        error: E,
+        /// Which stage failed.
+        failed_at: FailedStage,
+    },
+    /// Pipeline was cancelled at a stage boundary.
+    Cancelled {
+        /// The cancellation reason.
+        reason: CancelReason,
+        /// Which stage was about to run (or was running).
+        cancelled_at: FailedStage,
+    },
+    /// A stage panicked.
+    Panicked {
+        /// The panic payload.
+        payload: PanicPayload,
+        /// Which stage panicked.
+        panicked_at: FailedStage,
+    },
+}
+
+impl<T, E> PipelineResult<T, E> {
+    /// Creates a completed result.
+    #[must_use]
+    pub const fn completed(value: T, stages_completed: usize) -> Self {
+        Self::Completed {
+            value,
+            stages_completed,
+        }
+    }
+
+    /// Creates a failed result.
+    #[must_use]
+    pub const fn failed(error: E, failed_at: FailedStage) -> Self {
+        Self::Failed { error, failed_at }
+    }
+
+    /// Creates a cancelled result.
+    #[must_use]
+    pub const fn cancelled(reason: CancelReason, cancelled_at: FailedStage) -> Self {
+        Self::Cancelled {
+            reason,
+            cancelled_at,
+        }
+    }
+
+    /// Creates a panicked result.
+    #[must_use]
+    pub const fn panicked(payload: PanicPayload, panicked_at: FailedStage) -> Self {
+        Self::Panicked {
+            payload,
+            panicked_at,
+        }
+    }
+
+    /// Returns true if the pipeline completed successfully.
+    #[must_use]
+    pub const fn is_completed(&self) -> bool {
+        matches!(self, Self::Completed { .. })
+    }
+
+    /// Returns true if the pipeline failed with an error.
+    #[must_use]
+    pub const fn is_failed(&self) -> bool {
+        matches!(self, Self::Failed { .. })
+    }
+
+    /// Returns true if the pipeline was cancelled.
+    #[must_use]
+    pub const fn is_cancelled(&self) -> bool {
+        matches!(self, Self::Cancelled { .. })
+    }
+
+    /// Returns true if a stage panicked.
+    #[must_use]
+    pub const fn is_panicked(&self) -> bool {
+        matches!(self, Self::Panicked { .. })
+    }
+
+    /// Converts to an Outcome.
+    pub fn into_outcome(self) -> Outcome<T, E> {
+        match self {
+            Self::Completed { value, .. } => Outcome::Ok(value),
+            Self::Failed { error, .. } => Outcome::Err(error),
+            Self::Cancelled { reason, .. } => Outcome::Cancelled(reason),
+            Self::Panicked { payload, .. } => Outcome::Panicked(payload),
+        }
+    }
+
+    /// Returns the number of stages that were executed (successfully or not).
+    #[must_use]
+    pub const fn stages_executed(&self) -> usize {
+        match self {
+            Self::Completed {
+                stages_completed, ..
+            } => *stages_completed,
+            Self::Failed { failed_at, .. } => failed_at.index + 1,
+            Self::Cancelled { cancelled_at, .. } => cancelled_at.index,
+            Self::Panicked { panicked_at, .. } => panicked_at.index + 1,
+        }
+    }
+}
+
+/// Error type for pipeline operations.
+#[derive(Debug, Clone)]
+pub enum PipelineError<E> {
+    /// A stage failed with an error.
+    StageError {
+        /// The error from the stage.
+        error: E,
+        /// Which stage failed.
+        stage: FailedStage,
+    },
+    /// The pipeline was cancelled.
+    Cancelled {
+        /// The cancellation reason.
+        reason: CancelReason,
+        /// Which stage was cancelled at.
+        stage: FailedStage,
+    },
+    /// A stage panicked.
+    Panicked {
+        /// The panic payload.
+        payload: PanicPayload,
+        /// Which stage panicked.
+        stage: FailedStage,
+    },
+}
+
+impl<E: fmt::Display> fmt::Display for PipelineError<E> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::StageError { error, stage } => {
+                write!(f, "pipeline failed at {stage}: {error}")
+            }
+            Self::Cancelled { reason, stage } => {
+                write!(f, "pipeline cancelled at {stage}: {reason}")
+            }
+            Self::Panicked { payload, stage } => {
+                write!(f, "pipeline panicked at {stage}: {payload}")
+            }
+        }
+    }
+}
+
+impl<E: fmt::Debug + fmt::Display> std::error::Error for PipelineError<E> {}
+
+/// Constructs a pipeline result from the outcome of a specific stage.
+///
+/// # Arguments
+/// * `outcome` - The outcome from the stage
+/// * `stage_index` - Zero-based index of the current stage
+/// * `total_stages` - Total number of stages in the pipeline
+///
+/// # Example
+/// ```
+/// use asupersync::combinator::pipeline::stage_outcome_to_result;
+/// use asupersync::types::Outcome;
+///
+/// // Stage 0 succeeded in a 3-stage pipeline
+/// let result = stage_outcome_to_result::<i32, &str>(
+///     Outcome::Ok(42),
+///     0,
+///     3,
+/// );
+/// // This returns None because the stage succeeded - continue to next stage
+/// assert!(result.is_none());
+///
+/// // Stage 1 failed in a 3-stage pipeline
+/// let result = stage_outcome_to_result::<i32, &str>(
+///     Outcome::Err("failed"),
+///     1,
+///     3,
+/// );
+/// // This returns Some because the stage failed - pipeline should stop
+/// assert!(result.is_some());
+/// assert!(result.unwrap().is_failed());
+/// ```
+#[must_use]
+pub fn stage_outcome_to_result<T, E>(
+    outcome: Outcome<T, E>,
+    stage_index: usize,
+    total_stages: usize,
+) -> Option<PipelineResult<T, E>> {
+    let stage = FailedStage::new(stage_index, total_stages);
+
+    match outcome {
+        Outcome::Ok(_) => None, // Success - continue to next stage
+        Outcome::Err(e) => Some(PipelineResult::failed(e, stage)),
+        Outcome::Cancelled(r) => Some(PipelineResult::cancelled(r, stage)),
+        Outcome::Panicked(p) => Some(PipelineResult::panicked(p, stage)),
+    }
+}
+
+/// Creates a pipeline result for a 2-stage pipeline.
+///
+/// # Arguments
+/// * `o1` - Outcome from stage 1
+/// * `o2` - Outcome from stage 2 (only evaluated if o1 succeeded)
+///
+/// # Example
+/// ```
+/// use asupersync::combinator::pipeline::pipeline2_outcomes;
+/// use asupersync::types::Outcome;
+///
+/// // Both stages succeed
+/// let result = pipeline2_outcomes::<i32, &str>(
+///     Outcome::Ok(1),
+///     Some(Outcome::Ok(2)),
+/// );
+/// assert!(result.is_completed());
+///
+/// // First stage fails (second not evaluated)
+/// let result = pipeline2_outcomes::<i32, &str>(
+///     Outcome::Err("stage1 failed"),
+///     None,
+/// );
+/// assert!(result.is_failed());
+/// ```
+#[must_use]
+pub fn pipeline2_outcomes<T, E>(
+    o1: Outcome<T, E>,
+    o2: Option<Outcome<T, E>>,
+) -> PipelineResult<T, E> {
+    const TOTAL_STAGES: usize = 2;
+
+    // Check first stage
+    if let Some(result) = stage_outcome_to_result(o1, 0, TOTAL_STAGES) {
+        return result;
+    }
+
+    // First stage succeeded, check second
+    match o2 {
+        Some(Outcome::Ok(v)) => PipelineResult::completed(v, TOTAL_STAGES),
+        Some(outcome) => {
+            // Second stage failed - convert to result
+            stage_outcome_to_result(outcome, 1, TOTAL_STAGES)
+                .expect("non-Ok should return Some result")
+        }
+        None => PipelineResult::panicked(
+            PanicPayload::new("o2 must be provided when o1 succeeds"),
+            FailedStage::new(1, TOTAL_STAGES),
+        ),
+    }
+}
+
+/// Creates a pipeline result for a 3-stage pipeline.
+///
+/// # Arguments
+/// * `o1` - Outcome from stage 1
+/// * `o2` - Outcome from stage 2 (only evaluated if o1 succeeded)
+/// * `o3` - Outcome from stage 3 (only evaluated if o1 and o2 succeeded)
+///
+/// # Example
+/// ```
+/// use asupersync::combinator::pipeline::pipeline3_outcomes;
+/// use asupersync::types::Outcome;
+///
+/// // All stages succeed
+/// let result = pipeline3_outcomes::<i32, &str>(
+///     Outcome::Ok(1),
+///     Some(Outcome::Ok(2)),
+///     Some(Outcome::Ok(3)),
+/// );
+/// assert!(result.is_completed());
+///
+/// // Second stage fails
+/// let result = pipeline3_outcomes::<i32, &str>(
+///     Outcome::Ok(1),
+///     Some(Outcome::Err("stage2 failed")),
+///     None,
+/// );
+/// assert!(result.is_failed());
+/// ```
+#[must_use]
+pub fn pipeline3_outcomes<T, E>(
+    o1: Outcome<T, E>,
+    o2: Option<Outcome<T, E>>,
+    o3: Option<Outcome<T, E>>,
+) -> PipelineResult<T, E> {
+    const TOTAL_STAGES: usize = 3;
+
+    // Check first stage
+    if let Some(result) = stage_outcome_to_result(o1, 0, TOTAL_STAGES) {
+        return result;
+    }
+
+    // Check second stage
+    match o2 {
+        Some(outcome) => {
+            if let Some(result) = stage_outcome_to_result(outcome, 1, TOTAL_STAGES) {
+                return result;
+            }
+        }
+        None => {
+            return PipelineResult::panicked(
+                PanicPayload::new("o2 must be provided when o1 succeeds"),
+                FailedStage::new(1, TOTAL_STAGES),
+            );
+        }
+    }
+
+    // Check third stage
+    match o3 {
+        Some(Outcome::Ok(v)) => PipelineResult::completed(v, TOTAL_STAGES),
+        Some(outcome) => {
+            // Third stage failed - convert to result
+            stage_outcome_to_result(outcome, 2, TOTAL_STAGES)
+                .expect("non-Ok should return Some result")
+        }
+        None => PipelineResult::panicked(
+            PanicPayload::new("o3 must be provided when o1 and o2 succeed"),
+            FailedStage::new(2, TOTAL_STAGES),
+        ),
+    }
+}
+
+/// Creates a pipeline result from a vector of outcomes.
+///
+/// # Arguments
+/// * `outcomes` - Vector of outcomes from each stage (only includes stages that were executed)
+///
+/// # Example
+/// ```
+/// use asupersync::combinator::pipeline::pipeline_n_outcomes;
+/// use asupersync::types::Outcome;
+///
+/// // All 4 stages succeed
+/// let outcomes: Vec<Outcome<i32, &str>> = vec![
+///     Outcome::Ok(1),
+///     Outcome::Ok(2),
+///     Outcome::Ok(3),
+///     Outcome::Ok(4),
+/// ];
+/// let result = pipeline_n_outcomes(outcomes, 4);
+/// assert!(result.is_completed());
+///
+/// // Third stage fails
+/// let outcomes: Vec<Outcome<i32, &str>> = vec![
+///     Outcome::Ok(1),
+///     Outcome::Ok(2),
+///     Outcome::Err("stage3 failed"),
+/// ];
+/// let result = pipeline_n_outcomes(outcomes, 5);
+/// assert!(result.is_failed());
+/// ```
+#[must_use]
+pub fn pipeline_n_outcomes<T, E>(
+    outcomes: Vec<Outcome<T, E>>,
+    total_stages: usize,
+) -> PipelineResult<T, E> {
+    assert!(!outcomes.is_empty(), "outcomes must not be empty");
+    assert!(outcomes.len() <= total_stages, "more outcomes than stages");
+
+    let num_provided = outcomes.len();
+    let mut last_ok_value: Option<T> = None;
+
+    for (index, outcome) in outcomes.into_iter().enumerate() {
+        match outcome {
+            Outcome::Ok(v) => {
+                // Track the last Ok value
+                last_ok_value = Some(v);
+            }
+            Outcome::Err(e) => {
+                return PipelineResult::failed(e, FailedStage::new(index, total_stages));
+            }
+            Outcome::Cancelled(r) => {
+                return PipelineResult::cancelled(r, FailedStage::new(index, total_stages));
+            }
+            Outcome::Panicked(p) => {
+                return PipelineResult::panicked(p, FailedStage::new(index, total_stages));
+            }
+        }
+    }
+
+    // All provided outcomes were Ok
+    // Check if we've covered all stages
+    if num_provided == total_stages {
+        // All stages complete - return with final value
+        PipelineResult::completed(
+            last_ok_value.expect("at least one outcome was provided"),
+            total_stages,
+        )
+    } else {
+        // Partial pipeline - all provided stages succeeded but more remain
+        // This is a valid state: caller may be building incrementally
+        // Return completed with stages_executed showing partial completion
+        PipelineResult::completed(
+            last_ok_value.expect("at least one outcome was provided"),
+            num_provided,
+        )
+    }
+}
+
+/// Creates a pipeline result from a vector of outcomes, with the final value provided separately.
+///
+/// This is the preferred function when the final value needs to be preserved.
+///
+/// # Arguments
+/// * `intermediate_outcomes` - Outcomes from stages 0..N-1 (should all be Ok, or first failure)
+/// * `final_outcome` - Outcome from the final stage (only checked if all intermediates succeeded)
+/// * `total_stages` - Total number of stages
+///
+/// # Example
+/// ```
+/// use asupersync::combinator::pipeline::pipeline_with_final;
+/// use asupersync::types::Outcome;
+///
+/// // All stages succeed
+/// let intermediates: Vec<Outcome<i32, &str>> = vec![
+///     Outcome::Ok(1),
+///     Outcome::Ok(2),
+/// ];
+/// let result = pipeline_with_final(intermediates, Outcome::Ok(42), 3);
+/// assert!(result.is_completed());
+/// ```
+#[must_use]
+pub fn pipeline_with_final<T, E>(
+    intermediate_outcomes: Vec<Outcome<T, E>>,
+    final_outcome: Outcome<T, E>,
+    total_stages: usize,
+) -> PipelineResult<T, E> {
+    assert!(total_stages > 0, "total_stages must be positive");
+    assert!(
+        intermediate_outcomes.len() + 1 == total_stages,
+        "intermediate_outcomes.len() ({}) + 1 must equal total_stages ({})",
+        intermediate_outcomes.len(),
+        total_stages
+    );
+
+    // Check intermediate stages
+    for (index, outcome) in intermediate_outcomes.into_iter().enumerate() {
+        if let Some(result) = stage_outcome_to_result(outcome, index, total_stages) {
+            return result;
+        }
+    }
+
+    // Check final stage
+    let final_index = total_stages - 1;
+    match final_outcome {
+        Outcome::Ok(v) => PipelineResult::completed(v, total_stages),
+        Outcome::Err(e) => PipelineResult::failed(e, FailedStage::new(final_index, total_stages)),
+        Outcome::Cancelled(r) => {
+            PipelineResult::cancelled(r, FailedStage::new(final_index, total_stages))
+        }
+        Outcome::Panicked(p) => {
+            PipelineResult::panicked(p, FailedStage::new(final_index, total_stages))
+        }
+    }
+}
+
+/// Converts a pipeline result to a standard Result for fail-fast handling.
+///
+/// If the pipeline completed, returns `Ok` with the final value.
+/// If the pipeline failed, returns `Err` with the appropriate error.
+///
+/// # Example
+/// ```
+/// use asupersync::combinator::pipeline::{pipeline_to_result, PipelineResult, FailedStage};
+/// use asupersync::types::Outcome;
+///
+/// // Completed pipeline
+/// let result: PipelineResult<i32, &str> = PipelineResult::completed(42, 3);
+/// assert_eq!(pipeline_to_result(result).unwrap(), 42);
+///
+/// // Failed pipeline
+/// let result: PipelineResult<i32, &str> = PipelineResult::failed(
+///     "error",
+///     FailedStage::new(1, 3),
+/// );
+/// assert!(pipeline_to_result(result).is_err());
+/// ```
+pub fn pipeline_to_result<T, E>(result: PipelineResult<T, E>) -> Result<T, PipelineError<E>> {
+    match result {
+        PipelineResult::Completed { value, .. } => Ok(value),
+        PipelineResult::Failed { error, failed_at } => Err(PipelineError::StageError {
+            error,
+            stage: failed_at,
+        }),
+        PipelineResult::Cancelled {
+            reason,
+            cancelled_at,
+        } => Err(PipelineError::Cancelled {
+            reason,
+            stage: cancelled_at,
+        }),
+        PipelineResult::Panicked {
+            payload,
+            panicked_at,
+        } => Err(PipelineError::Panicked {
+            payload,
+            stage: panicked_at,
+        }),
+    }
+}
+
+/// Macro for creating a sequential async pipeline.
+///
+/// Each stage is invoked as `stage(cx, value)` and must return a future whose
+/// output becomes the next stage input.
+///
+/// # Example (API shape)
+/// ```ignore
+/// let result = pipeline!(cx, input,
+///     |cx, x| stage1(cx, x),
+///     |cx, x| stage2(cx, x),
+///     |cx, x| stage3(cx, x),
+/// );
+/// ```
+#[macro_export]
+macro_rules! pipeline {
+    ($cx:expr, $input:expr, $($stage:expr),+ $(,)?) => {
+        {
+            let __pipeline_cx = &$cx;
+            async move {
+                let mut __pipeline_value = $input;
+                $(
+                    __pipeline_value = ($stage)(__pipeline_cx, __pipeline_value).await;
+                )+
+                __pipeline_value
+            }
+        }
+    };
+}
+
+#[cfg(test)]
+mod tests {
+    #![allow(
+        clippy::pedantic,
+        clippy::nursery,
+        clippy::expect_fun_call,
+        clippy::map_unwrap_or,
+        clippy::cast_possible_wrap,
+        clippy::future_not_send
+    )]
+    use super::*;
+
+    // =========================================================================
+    // PipelineConfig Tests
+    // =========================================================================
+
+    #[test]
+    fn pipeline_config_default() {
+        let config = PipelineConfig::default();
+        assert!(config.check_cancellation);
+        assert!(!config.continue_on_error);
+    }
+
+    #[test]
+    fn pipeline_config_with_cancellation_check() {
+        let config = PipelineConfig::with_cancellation_check();
+        assert!(config.check_cancellation);
+    }
+
+    #[test]
+    fn pipeline_config_without_cancellation_check() {
+        let config = PipelineConfig::without_cancellation_check();
+        assert!(!config.check_cancellation);
+    }
+
+    // =========================================================================
+    // Pipeline Type Tests
+    // =========================================================================
+
+    #[test]
+    fn pipeline_creation() {
+        let pipeline = Pipeline::<()>::new();
+        assert!(pipeline.config.check_cancellation);
+    }
+
+    #[test]
+    fn pipeline_with_config() {
+        let config = PipelineConfig::without_cancellation_check();
+        let pipeline = Pipeline::<()>::with_config(config);
+        assert!(!pipeline.config.check_cancellation);
+    }
+
+    #[test]
+    fn pipeline_clone_and_copy() {
+        let p1 = Pipeline::<()>::new();
+        let p2 = p1; // Copy
+        let p3 = p1; // Also copy
+
+        assert_eq!(p1.config.check_cancellation, p2.config.check_cancellation);
+        assert_eq!(p1.config.check_cancellation, p3.config.check_cancellation);
+    }
+
+    #[test]
+    fn pipeline_macro_chains_stages_sequentially() {
+        let cx = crate::cx::Cx::for_testing();
+        let fut = crate::pipeline!(cx, 2usize, |_, x| async move { x + 3 }, |_, x| async move {
+            x * 4
+        });
+        let out = futures_lite::future::block_on(fut);
+        assert_eq!(out, 20);
+    }
+
+    // =========================================================================
+    // FailedStage Tests
+    // =========================================================================
+
+    #[test]
+    fn failed_stage_first() {
+        let stage = FailedStage::new(0, 3);
+        assert!(stage.is_first());
+        assert!(!stage.is_last());
+        assert_eq!(stage.stage_number(), 1);
+    }
+
+    #[test]
+    fn failed_stage_middle() {
+        let stage = FailedStage::new(1, 3);
+        assert!(!stage.is_first());
+        assert!(!stage.is_last());
+        assert_eq!(stage.stage_number(), 2);
+    }
+
+    #[test]
+    fn failed_stage_last() {
+        let stage = FailedStage::new(2, 3);
+        assert!(!stage.is_first());
+        assert!(stage.is_last());
+        assert_eq!(stage.stage_number(), 3);
+    }
+
+    #[test]
+    fn failed_stage_display() {
+        let stage = FailedStage::new(1, 5);
+        assert_eq!(stage.to_string(), "stage 2/5");
+    }
+
+    // =========================================================================
+    // PipelineResult Tests
+    // =========================================================================
+
+    #[test]
+    fn pipeline_result_completed() {
+        let result: PipelineResult<i32, &str> = PipelineResult::completed(42, 3);
+
+        assert!(result.is_completed());
+        assert!(!result.is_failed());
+        assert!(!result.is_cancelled());
+        assert!(!result.is_panicked());
+        assert_eq!(result.stages_executed(), 3);
+    }
+
+    #[test]
+    fn pipeline_result_failed() {
+        let result: PipelineResult<i32, &str> =
+            PipelineResult::failed("error", FailedStage::new(1, 3));
+
+        assert!(!result.is_completed());
+        assert!(result.is_failed());
+        assert_eq!(result.stages_executed(), 2); // Stages 0 and 1 were executed
+    }
+
+    #[test]
+    fn pipeline_result_cancelled() {
+        let result: PipelineResult<i32, &str> =
+            PipelineResult::cancelled(CancelReason::shutdown(), FailedStage::new(1, 3));
+
+        assert!(!result.is_completed());
+        assert!(result.is_cancelled());
+        assert_eq!(result.stages_executed(), 1); // Only stage 0 completed before cancel
+    }
+
+    #[test]
+    fn pipeline_result_panicked() {
+        let result: PipelineResult<i32, &str> =
+            PipelineResult::panicked(PanicPayload::new("boom"), FailedStage::new(2, 3));
+
+        assert!(!result.is_completed());
+        assert!(result.is_panicked());
+        assert_eq!(result.stages_executed(), 3); // All stages were attempted
+    }
+
+    #[test]
+    fn pipeline_result_into_outcome() {
+        let completed: PipelineResult<i32, &str> = PipelineResult::completed(42, 3);
+        assert!(matches!(completed.into_outcome(), Outcome::Ok(42)));
+
+        let failed: PipelineResult<i32, &str> =
+            PipelineResult::failed("error", FailedStage::new(0, 1));
+        assert!(matches!(failed.into_outcome(), Outcome::Err("error")));
+
+        let cancelled: PipelineResult<i32, &str> =
+            PipelineResult::cancelled(CancelReason::shutdown(), FailedStage::new(0, 1));
+        assert!(cancelled.into_outcome().is_cancelled());
+
+        let panicked: PipelineResult<i32, &str> =
+            PipelineResult::panicked(PanicPayload::new("oops"), FailedStage::new(0, 1));
+        assert!(panicked.into_outcome().is_panicked());
+    }
+
+    // =========================================================================
+    // stage_outcome_to_result Tests
+    // =========================================================================
+
+    #[test]
+    fn stage_outcome_ok_returns_none() {
+        let result = stage_outcome_to_result::<i32, &str>(Outcome::Ok(42), 0, 3);
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn stage_outcome_err_returns_failed() {
+        let result = stage_outcome_to_result::<i32, &str>(Outcome::Err("error"), 1, 3);
+        assert!(result.is_some());
+        assert!(result.unwrap().is_failed());
+    }
+
+    #[test]
+    fn stage_outcome_cancelled_returns_cancelled() {
+        let result = stage_outcome_to_result::<i32, &str>(
+            Outcome::Cancelled(CancelReason::shutdown()),
+            2,
+            3,
+        );
+        assert!(result.is_some());
+        assert!(result.unwrap().is_cancelled());
+    }
+
+    #[test]
+    fn stage_outcome_panicked_returns_panicked() {
+        let result = stage_outcome_to_result::<i32, &str>(
+            Outcome::Panicked(PanicPayload::new("boom")),
+            0,
+            3,
+        );
+        assert!(result.is_some());
+        assert!(result.unwrap().is_panicked());
+    }
+
+    // =========================================================================
+    // pipeline2_outcomes Tests
+    // =========================================================================
+
+    #[test]
+    fn pipeline2_both_ok() {
+        let result = pipeline2_outcomes::<i32, &str>(Outcome::Ok(1), Some(Outcome::Ok(2)));
+
+        assert!(result.is_completed());
+        if let PipelineResult::Completed {
+            value,
+            stages_completed,
+        } = result
+        {
+            assert_eq!(value, 2);
+            assert_eq!(stages_completed, 2);
+        } else {
+            unreachable!("Expected Completed");
+        }
+    }
+
+    #[test]
+    fn pipeline2_first_fails() {
+        let result = pipeline2_outcomes::<i32, &str>(Outcome::Err("stage1 error"), None);
+
+        assert!(result.is_failed());
+        if let PipelineResult::Failed { error, failed_at } = result {
+            assert_eq!(error, "stage1 error");
+            assert!(failed_at.is_first());
+        } else {
+            unreachable!("Expected Failed");
+        }
+    }
+
+    #[test]
+    fn pipeline2_second_fails() {
+        let result = pipeline2_outcomes(Outcome::Ok(1), Some(Outcome::Err("stage2 error")));
+
+        assert!(result.is_failed());
+        if let PipelineResult::Failed { error, failed_at } = result {
+            assert_eq!(error, "stage2 error");
+            assert!(failed_at.is_last());
+            assert_eq!(failed_at.index, 1);
+        } else {
+            unreachable!("Expected Failed");
+        }
+    }
+
+    #[test]
+    fn pipeline2_first_cancelled() {
+        let result =
+            pipeline2_outcomes::<i32, &str>(Outcome::Cancelled(CancelReason::shutdown()), None);
+
+        assert!(result.is_cancelled());
+    }
+
+    #[test]
+    fn pipeline2_panicked_when_o2_missing() {
+        let result = pipeline2_outcomes::<i32, &str>(Outcome::Ok(1), None);
+        assert!(result.is_panicked());
+        if let PipelineResult::Panicked {
+            payload,
+            panicked_at,
+        } = result
+        {
+            assert_eq!(payload.message(), "o2 must be provided when o1 succeeds");
+            assert_eq!(panicked_at.index, 1);
+        } else {
+            panic!("Expected Panicked");
+        }
+    }
+
+    // =========================================================================
+    // pipeline3_outcomes Tests
+    // =========================================================================
+
+    #[test]
+    fn pipeline3_all_ok() {
+        let result = pipeline3_outcomes::<i32, &str>(
+            Outcome::<i32, &str>::Ok(1),
+            Some(Outcome::Ok(2)),
+            Some(Outcome::Ok(3)),
+        );
+
+        assert!(result.is_completed());
+        if let PipelineResult::Completed {
+            value,
+            stages_completed,
+        } = result
+        {
+            assert_eq!(value, 3);
+            assert_eq!(stages_completed, 3);
+        } else {
+            unreachable!("Expected Completed");
+        }
+    }
+
+    #[test]
+    fn pipeline3_first_fails() {
+        let result = pipeline3_outcomes::<i32, &str>(Outcome::Err("s1"), None, None);
+
+        assert!(result.is_failed());
+        if let PipelineResult::Failed { failed_at, .. } = result {
+            assert_eq!(failed_at.index, 0);
+        }
+    }
+
+    #[test]
+    fn pipeline3_second_fails() {
+        let result =
+            pipeline3_outcomes::<i32, &str>(Outcome::Ok(1), Some(Outcome::Err("s2")), None);
+
+        assert!(result.is_failed());
+        if let PipelineResult::Failed { failed_at, .. } = result {
+            assert_eq!(failed_at.index, 1);
+        }
+    }
+
+    #[test]
+    fn pipeline3_third_fails() {
+        let result = pipeline3_outcomes(
+            Outcome::Ok(1),
+            Some(Outcome::Ok(2)),
+            Some(Outcome::Err("s3")),
+        );
+
+        assert!(result.is_failed());
+        if let PipelineResult::Failed { failed_at, .. } = result {
+            assert_eq!(failed_at.index, 2);
+            assert!(failed_at.is_last());
+        }
+    }
+
+    #[test]
+    fn pipeline3_panicked_when_o2_missing() {
+        let result = pipeline3_outcomes::<i32, &str>(Outcome::Ok(1), None, None);
+        assert!(result.is_panicked());
+        if let PipelineResult::Panicked {
+            payload,
+            panicked_at,
+        } = result
+        {
+            assert_eq!(payload.message(), "o2 must be provided when o1 succeeds");
+            assert_eq!(panicked_at.index, 1);
+        } else {
+            panic!("Expected Panicked");
+        }
+    }
+
+    #[test]
+    fn pipeline3_panicked_when_o3_missing() {
+        let result = pipeline3_outcomes::<i32, &str>(Outcome::Ok(1), Some(Outcome::Ok(2)), None);
+        assert!(result.is_panicked());
+        if let PipelineResult::Panicked {
+            payload,
+            panicked_at,
+        } = result
+        {
+            assert_eq!(
+                payload.message(),
+                "o3 must be provided when o1 and o2 succeed"
+            );
+            assert_eq!(panicked_at.index, 2);
+        } else {
+            panic!("Expected Panicked");
+        }
+    }
+
+    // =========================================================================
+    // pipeline_with_final Tests
+    // =========================================================================
+
+    #[test]
+    fn pipeline_with_final_all_ok() {
+        let intermediates: Vec<Outcome<i32, &str>> = vec![Outcome::Ok(1), Outcome::Ok(2)];
+        let result = pipeline_with_final(intermediates, Outcome::Ok(42), 3);
+
+        assert!(result.is_completed());
+        if let PipelineResult::Completed { value, .. } = result {
+            assert_eq!(value, 42);
+        }
+    }
+
+    #[test]
+    fn pipeline_with_final_intermediate_fails() {
+        let intermediates: Vec<Outcome<i32, &str>> = vec![Outcome::Ok(1), Outcome::Err("mid fail")];
+        let result = pipeline_with_final(intermediates, Outcome::Ok(42), 3);
+
+        assert!(result.is_failed());
+        if let PipelineResult::Failed { failed_at, .. } = result {
+            assert_eq!(failed_at.index, 1);
+        }
+    }
+
+    #[test]
+    fn pipeline_with_final_final_fails() {
+        let intermediates: Vec<Outcome<i32, &str>> = vec![Outcome::Ok(1), Outcome::Ok(2)];
+        let result = pipeline_with_final(intermediates, Outcome::Err("final fail"), 3);
+
+        assert!(result.is_failed());
+        if let PipelineResult::Failed { failed_at, .. } = result {
+            assert_eq!(failed_at.index, 2);
+            assert!(failed_at.is_last());
+        }
+    }
+
+    // =========================================================================
+    // pipeline_to_result Tests
+    // =========================================================================
+
+    #[test]
+    fn pipeline_to_result_completed() {
+        let result: PipelineResult<i32, &str> = PipelineResult::completed(42, 3);
+        assert_eq!(pipeline_to_result(result).unwrap(), 42);
+    }
+
+    #[test]
+    fn pipeline_to_result_failed() {
+        let result: PipelineResult<i32, &str> =
+            PipelineResult::failed("error", FailedStage::new(1, 3));
+        let err = pipeline_to_result(result).unwrap_err();
+        assert!(matches!(err, PipelineError::StageError { .. }));
+    }
+
+    #[test]
+    fn pipeline_to_result_cancelled() {
+        let result: PipelineResult<i32, &str> =
+            PipelineResult::cancelled(CancelReason::shutdown(), FailedStage::new(0, 3));
+        let err = pipeline_to_result(result).unwrap_err();
+        assert!(matches!(err, PipelineError::Cancelled { .. }));
+    }
+
+    #[test]
+    fn pipeline_to_result_panicked() {
+        let result: PipelineResult<i32, &str> =
+            PipelineResult::panicked(PanicPayload::new("boom"), FailedStage::new(2, 3));
+        let err = pipeline_to_result(result).unwrap_err();
+        assert!(matches!(err, PipelineError::Panicked { .. }));
+    }
+
+    // =========================================================================
+    // PipelineError Tests
+    // =========================================================================
+
+    #[test]
+    fn pipeline_error_display_stage_error() {
+        let err: PipelineError<&str> = PipelineError::StageError {
+            error: "test error",
+            stage: FailedStage::new(1, 3),
+        };
+        let display = err.to_string();
+        assert!(display.contains("stage 2/3"));
+        assert!(display.contains("test error"));
+    }
+
+    #[test]
+    fn pipeline_error_display_cancelled() {
+        let err: PipelineError<&str> = PipelineError::Cancelled {
+            reason: CancelReason::shutdown(),
+            stage: FailedStage::new(0, 2),
+        };
+        let display = err.to_string();
+        assert!(display.contains("cancelled"));
+        assert!(display.contains("stage 1/2"));
+    }
+
+    #[test]
+    fn pipeline_error_display_panicked() {
+        let err: PipelineError<&str> = PipelineError::Panicked {
+            payload: PanicPayload::new("boom"),
+            stage: FailedStage::new(2, 3),
+        };
+        let display = err.to_string();
+        assert!(display.contains("panicked"));
+        assert!(display.contains("boom"));
+    }
+
+    // =========================================================================
+    // pipeline_n_outcomes Tests
+    // =========================================================================
+
+    #[test]
+    fn pipeline_n_all_ok() {
+        let outcomes: Vec<Outcome<i32, &str>> =
+            vec![Outcome::Ok(1), Outcome::Ok(2), Outcome::Ok(3)];
+        let result = pipeline_n_outcomes(outcomes, 3);
+
+        assert!(result.is_completed());
+        if let PipelineResult::Completed {
+            value,
+            stages_completed,
+        } = result
+        {
+            assert_eq!(value, 3);
+            assert_eq!(stages_completed, 3);
+        } else {
+            unreachable!("Expected Completed");
+        }
+    }
+
+    #[test]
+    fn pipeline_n_first_error() {
+        let outcomes: Vec<Outcome<i32, &str>> = vec![Outcome::Err("fail"), Outcome::Ok(2)];
+        let result = pipeline_n_outcomes(outcomes, 3);
+
+        assert!(result.is_failed());
+        if let PipelineResult::Failed { error, failed_at } = result {
+            assert_eq!(error, "fail");
+            assert_eq!(failed_at.index, 0);
+            assert_eq!(failed_at.total_stages, 3);
+        } else {
+            unreachable!("Expected Failed");
+        }
+    }
+
+    #[test]
+    fn pipeline_n_middle_cancel() {
+        let outcomes: Vec<Outcome<i32, &str>> =
+            vec![Outcome::Ok(1), Outcome::Cancelled(CancelReason::shutdown())];
+        let result = pipeline_n_outcomes(outcomes, 4);
+
+        assert!(result.is_cancelled());
+        if let PipelineResult::Cancelled { cancelled_at, .. } = result {
+            assert_eq!(cancelled_at.index, 1);
+            assert_eq!(cancelled_at.total_stages, 4);
+        } else {
+            panic!("Expected Cancelled");
+        }
+    }
+
+    #[test]
+    fn pipeline_n_partial_completion() {
+        // Provide fewer outcomes than total_stages, all Ok
+        let outcomes: Vec<Outcome<i32, &str>> = vec![Outcome::Ok(10), Outcome::Ok(20)];
+        let result = pipeline_n_outcomes(outcomes, 5);
+
+        // Should return Completed with stages_completed = num_provided
+        assert!(result.is_completed());
+        if let PipelineResult::Completed {
+            value,
+            stages_completed,
+        } = result
+        {
+            assert_eq!(value, 20);
+            assert_eq!(stages_completed, 2); // Only 2 of 5 stages provided
+        } else {
+            unreachable!("Expected Completed");
+        }
+    }
+
+    #[test]
+    fn pipeline_n_single_ok() {
+        let outcomes: Vec<Outcome<i32, &str>> = vec![Outcome::Ok(42)];
+        let result = pipeline_n_outcomes(outcomes, 1);
+
+        assert!(result.is_completed());
+        if let PipelineResult::Completed {
+            value,
+            stages_completed,
+        } = result
+        {
+            assert_eq!(value, 42);
+            assert_eq!(stages_completed, 1);
+        } else {
+            unreachable!("Expected Completed");
+        }
+    }
+
+    #[test]
+    fn pipeline_n_single_error() {
+        let outcomes: Vec<Outcome<i32, &str>> = vec![Outcome::Err("only stage fails")];
+        let result = pipeline_n_outcomes(outcomes, 1);
+
+        assert!(result.is_failed());
+        if let PipelineResult::Failed { failed_at, .. } = result {
+            assert_eq!(failed_at.index, 0);
+            assert!(failed_at.is_first());
+            assert!(failed_at.is_last());
+        } else {
+            unreachable!("Expected Failed");
+        }
+    }
+
+    #[test]
+    fn pipeline_n_panic_mid_pipeline() {
+        let outcomes: Vec<Outcome<i32, &str>> = vec![
+            Outcome::Ok(1),
+            Outcome::Ok(2),
+            Outcome::Panicked(PanicPayload::new("stage 3 panicked")),
+        ];
+        let result = pipeline_n_outcomes(outcomes, 4);
+
+        assert!(result.is_panicked());
+        if let PipelineResult::Panicked { panicked_at, .. } = result {
+            assert_eq!(panicked_at.index, 2);
+            assert_eq!(panicked_at.total_stages, 4);
+        } else {
+            panic!("Expected Panicked");
+        }
+    }
+
+    #[test]
+    #[should_panic(expected = "outcomes must not be empty")]
+    fn pipeline_n_empty_outcomes_panics() {
+        let outcomes: Vec<Outcome<i32, &str>> = vec![];
+        let _ = pipeline_n_outcomes(outcomes, 3);
+    }
+
+    #[test]
+    #[should_panic(expected = "more outcomes than stages")]
+    fn pipeline_n_too_many_outcomes_panics() {
+        let outcomes: Vec<Outcome<i32, &str>> =
+            vec![Outcome::Ok(1), Outcome::Ok(2), Outcome::Ok(3)];
+        let _ = pipeline_n_outcomes(outcomes, 2);
+    }
+
+    // =========================================================================
+    // pipeline_with_final Validation Tests
+    // =========================================================================
+
+    #[test]
+    #[should_panic(expected = "total_stages must be positive")]
+    fn pipeline_with_final_zero_stages_panics() {
+        let intermediates: Vec<Outcome<i32, &str>> = vec![];
+        let _ = pipeline_with_final(intermediates, Outcome::Ok(42), 0);
+    }
+
+    #[test]
+    #[should_panic(expected = "must equal total_stages")]
+    fn pipeline_with_final_mismatched_stages_panics() {
+        let intermediates: Vec<Outcome<i32, &str>> = vec![Outcome::Ok(1)];
+        // 1 intermediate + 1 final = 2, but total_stages = 5
+        let _ = pipeline_with_final(intermediates, Outcome::Ok(42), 5);
+    }
+
+    #[test]
+    fn pipeline_with_final_cancelled_final() {
+        let intermediates: Vec<Outcome<i32, &str>> = vec![Outcome::Ok(1), Outcome::Ok(2)];
+        let result = pipeline_with_final(
+            intermediates,
+            Outcome::Cancelled(CancelReason::shutdown()),
+            3,
+        );
+
+        assert!(result.is_cancelled());
+        if let PipelineResult::Cancelled { cancelled_at, .. } = result {
+            assert_eq!(cancelled_at.index, 2);
+            assert!(cancelled_at.is_last());
+        } else {
+            panic!("Expected Cancelled");
+        }
+    }
+
+    #[test]
+    fn pipeline_with_final_panicked_final() {
+        let intermediates: Vec<Outcome<i32, &str>> = vec![Outcome::Ok(1)];
+        let result = pipeline_with_final(
+            intermediates,
+            Outcome::Panicked(PanicPayload::new("final boom")),
+            2,
+        );
+
+        assert!(result.is_panicked());
+        if let PipelineResult::Panicked { panicked_at, .. } = result {
+            assert_eq!(panicked_at.index, 1);
+            assert!(panicked_at.is_last());
+        } else {
+            panic!("Expected Panicked");
+        }
+    }
+
+    #[test]
+    fn pipeline_with_final_single_stage() {
+        // 0 intermediates + 1 final = 1 total stage
+        let intermediates: Vec<Outcome<i32, &str>> = vec![];
+        let result = pipeline_with_final(intermediates, Outcome::Ok(99), 1);
+
+        assert!(result.is_completed());
+        if let PipelineResult::Completed { value, .. } = result {
+            assert_eq!(value, 99);
+        } else {
+            unreachable!("Expected Completed");
+        }
+    }
+
+    // =========================================================================
+    // Invariant Tests
+    // =========================================================================
+
+    #[test]
+    fn error_short_circuits_at_first_failure() {
+        // Simulate a 5-stage pipeline where stage 2 (index 2) fails.
+        // pipeline_with_final requires intermediates.len() + 1 == total_stages,
+        // so provide all 4 intermediates even though short-circuit stops at stage 2.
+        let intermediates: Vec<Outcome<i32, &str>> = vec![
+            Outcome::Ok(1),
+            Outcome::Ok(2),
+            Outcome::Err("stage 3 failed"),
+            Outcome::Ok(4), // Never reached due to short-circuit
+        ];
+        let result = pipeline_with_final(intermediates, Outcome::Ok(999), 5);
+
+        assert!(result.is_failed());
+        assert_eq!(result.stages_executed(), 3); // Executed stages 0, 1, 2
+        if let PipelineResult::Failed { failed_at, .. } = result {
+            assert_eq!(failed_at.index, 2);
+            assert_eq!(failed_at.total_stages, 5);
+        }
+    }
+
+    #[test]
+    fn cancelled_stops_at_boundary() {
+        let intermediates: Vec<Outcome<i32, &str>> =
+            vec![Outcome::Ok(1), Outcome::Cancelled(CancelReason::shutdown())];
+        let result = pipeline_with_final(intermediates, Outcome::Ok(42), 3);
+
+        assert!(result.is_cancelled());
+        // Stage 0 succeeded, stage 1 cancelled
+        if let PipelineResult::Cancelled { cancelled_at, .. } = result {
+            assert_eq!(cancelled_at.index, 1);
+        }
+    }
+
+    #[test]
+    fn stages_executed_reflects_actual_execution() {
+        // All stages complete
+        let completed: PipelineResult<i32, &str> = PipelineResult::completed(42, 5);
+        assert_eq!(completed.stages_executed(), 5);
+
+        // Failed at stage 2 (index 1)
+        let failed: PipelineResult<i32, &str> =
+            PipelineResult::failed("err", FailedStage::new(1, 5));
+        assert_eq!(failed.stages_executed(), 2); // Stages 0 and 1 were executed
+
+        // Cancelled before stage 3 (index 2)
+        let cancelled: PipelineResult<i32, &str> =
+            PipelineResult::cancelled(CancelReason::shutdown(), FailedStage::new(2, 5));
+        assert_eq!(cancelled.stages_executed(), 2); // Stages 0 and 1 completed
+    }
+
+    // =========================================================================
+    // Wave 54 – pure data-type trait coverage
+    // =========================================================================
+
+    #[test]
+    fn pipeline_config_debug_clone_copy_eq_default() {
+        let cfg = PipelineConfig::default();
+        let dbg = format!("{cfg:?}");
+        assert!(dbg.contains("PipelineConfig"), "{dbg}");
+        let copied = cfg;
+        let cloned = cfg;
+        assert_eq!(copied, cloned);
+    }
+
+    #[test]
+    fn failed_stage_debug_clone_copy_eq() {
+        let fs = FailedStage::new(2, 5);
+        let dbg = format!("{fs:?}");
+        assert!(dbg.contains("FailedStage"), "{dbg}");
+        let copied = fs;
+        let cloned = fs;
+        assert_eq!(copied, cloned);
+        assert_ne!(fs, FailedStage::new(3, 5));
+    }
+
+    // =========================================================================
+    // Composition laws (conformance suite).
+    //
+    // The four public pipeline constructors —
+    //     pipeline2_outcomes, pipeline3_outcomes,
+    //     pipeline_n_outcomes, pipeline_with_final
+    // — must agree on every input they can all represent. These laws encode
+    // that contract so an accidental short-circuit or failed_at mismatch in
+    // one constructor does not escape review.
+    // =========================================================================
+
+    mod composition_laws {
+        use super::super::*;
+        use crate::types::Outcome;
+        use crate::types::cancel::CancelReason;
+
+        /// Compare two PipelineResults ignoring Panicked payload identity
+        /// (PanicPayload does not implement PartialEq on the inner Any).
+        #[track_caller]
+        fn assert_same_shape<T: std::fmt::Debug + PartialEq, E: std::fmt::Debug + PartialEq>(
+            lhs: &PipelineResult<T, E>,
+            rhs: &PipelineResult<T, E>,
+        ) {
+            match (lhs, rhs) {
+                (
+                    PipelineResult::Completed {
+                        value: v1,
+                        stages_completed: s1,
+                    },
+                    PipelineResult::Completed {
+                        value: v2,
+                        stages_completed: s2,
+                    },
+                ) => {
+                    assert_eq!(v1, v2, "completed values diverge");
+                    assert_eq!(s1, s2, "stages_completed diverges");
+                }
+                (
+                    PipelineResult::Failed {
+                        error: e1,
+                        failed_at: f1,
+                    },
+                    PipelineResult::Failed {
+                        error: e2,
+                        failed_at: f2,
+                    },
+                ) => {
+                    assert_eq!(e1, e2, "failed errors diverge");
+                    assert_eq!(f1, f2, "failed_at diverges");
+                }
+                (
+                    PipelineResult::Cancelled {
+                        reason: r1,
+                        cancelled_at: f1,
+                    },
+                    PipelineResult::Cancelled {
+                        reason: r2,
+                        cancelled_at: f2,
+                    },
+                ) => {
+                    assert_eq!(r1, r2, "cancel reasons diverge");
+                    assert_eq!(f1, f2, "cancelled_at diverges");
+                }
+                (
+                    PipelineResult::Panicked {
+                        panicked_at: f1, ..
+                    },
+                    PipelineResult::Panicked {
+                        panicked_at: f2, ..
+                    },
+                ) => {
+                    assert_eq!(f1, f2, "panicked_at diverges");
+                }
+                (lhs, rhs) => panic!("variant mismatch:\n  lhs={lhs:?}\n  rhs={rhs:?}"),
+            }
+        }
+
+        /// LAW-1: `pipeline2_outcomes` and `pipeline_n_outcomes` agree on the
+        /// full 2-stage input matrix. Every Outcome shape is checked for both
+        /// stages.
+        #[test]
+        fn law_pipeline2_equiv_pipeline_n_across_outcome_matrix() {
+            fn outcomes() -> Vec<Outcome<i32, &'static str>> {
+                vec![
+                    Outcome::Ok(1),
+                    Outcome::Err("boom"),
+                    Outcome::Cancelled(CancelReason::user("test")),
+                ]
+            }
+            for o1 in outcomes() {
+                for o2 in outcomes() {
+                    let lhs = pipeline2_outcomes::<i32, &'static str>(o1.clone(), Some(o2.clone()));
+                    let rhs =
+                        pipeline_n_outcomes::<i32, &'static str>(vec![o1.clone(), o2.clone()], 2);
+                    assert_same_shape(&lhs, &rhs);
+                }
+            }
+        }
+
+        /// LAW-2: `pipeline3_outcomes` and `pipeline_n_outcomes` agree on the
+        /// 3-stage matrix. Short-circuit means pipeline3 is only called with
+        /// None for stages after a non-Ok, so we only compare the complete
+        /// [Ok, Ok, X] and [Ok, X] branches.
+        #[test]
+        fn law_pipeline3_equiv_pipeline_n() {
+            let terminal_shapes: Vec<Outcome<i32, &'static str>> = vec![
+                Outcome::Ok(3),
+                Outcome::Err("boom"),
+                Outcome::Cancelled(CancelReason::user("test")),
+            ];
+            // All-three-stages-executed branch: [Ok, Ok, X]
+            for term in terminal_shapes.iter() {
+                let lhs = pipeline3_outcomes::<i32, &'static str>(
+                    Outcome::Ok(1),
+                    Some(Outcome::Ok(2)),
+                    Some(term.clone()),
+                );
+                let rhs = pipeline_n_outcomes::<i32, &'static str>(
+                    vec![Outcome::Ok(1), Outcome::Ok(2), term.clone()],
+                    3,
+                );
+                assert_same_shape(&lhs, &rhs);
+            }
+            // Short-circuit at stage 2: [Ok, X, None]. pipeline_n sees the
+            // 2-element vec since the third stage never ran.
+            for term in terminal_shapes
+                .iter()
+                .filter(|o| !matches!(o, Outcome::Ok(_)))
+            {
+                let lhs = pipeline3_outcomes::<i32, &'static str>(
+                    Outcome::Ok(1),
+                    Some(term.clone()),
+                    None,
+                );
+                let rhs =
+                    pipeline_n_outcomes::<i32, &'static str>(vec![Outcome::Ok(1), term.clone()], 3);
+                assert_same_shape(&lhs, &rhs);
+            }
+        }
+
+        /// LAW-3: `pipeline_with_final` agrees with `pipeline_n_outcomes` when
+        /// the caller supplies a full run (intermediates.len() + 1 == total).
+        #[test]
+        fn law_pipeline_with_final_equiv_pipeline_n_for_complete_runs() {
+            let sample: Vec<Outcome<i32, &'static str>> =
+                vec![Outcome::Ok(10), Outcome::Ok(20), Outcome::Ok(30)];
+            let final_variants: Vec<Outcome<i32, &'static str>> = vec![
+                Outcome::Ok(99),
+                Outcome::Err("late"),
+                Outcome::Cancelled(CancelReason::user("test")),
+            ];
+            for final_out in final_variants {
+                let mut full = sample.clone();
+                full.push(final_out.clone());
+                let total = full.len();
+                let lhs =
+                    pipeline_with_final::<i32, &'static str>(sample.clone(), final_out, total);
+                let rhs = pipeline_n_outcomes::<i32, &'static str>(full, total);
+                assert_same_shape(&lhs, &rhs);
+            }
+        }
+
+        /// LAW-4: Short-circuit is strict — a non-Ok at index N makes the
+        /// result depend only on outcomes[..=N]. Trailing Oks in the vec are
+        /// ignored, i.e. passing them vs truncating yields the same result.
+        #[test]
+        fn law_short_circuit_ignores_trailing_outcomes() {
+            let with_trailing: Vec<Outcome<i32, &'static str>> = vec![
+                Outcome::Ok(1),
+                Outcome::Err("midway"),
+                Outcome::Ok(999),    // ignored
+                Outcome::Ok(12_345), // ignored
+            ];
+            let truncated: Vec<Outcome<i32, &'static str>> = with_trailing[..2].to_vec();
+            let lhs = pipeline_n_outcomes::<i32, &'static str>(with_trailing, 5);
+            let rhs = pipeline_n_outcomes::<i32, &'static str>(truncated, 5);
+            assert_same_shape(&lhs, &rhs);
+        }
+
+        /// LAW-5: `failed_at.total_stages` is exactly the caller-supplied
+        /// total across every failure mode in every constructor, even when
+        /// the vec is shorter than total.
+        #[test]
+        fn law_failed_at_total_stages_is_preserved() {
+            for &total in &[1usize, 2, 3, 5, 10] {
+                // 2-variant: o1 fails
+                let r = pipeline2_outcomes::<i32, &'static str>(Outcome::Err("x"), None);
+                if let PipelineResult::Failed { failed_at, .. } = r {
+                    assert_eq!(failed_at.total_stages, 2);
+                }
+                // n-variant: fail at index 0 with various totals
+                let r =
+                    pipeline_n_outcomes::<i32, &'static str>(vec![Outcome::Err("x")], total.max(1));
+                if let PipelineResult::Failed { failed_at, .. } = r {
+                    assert_eq!(failed_at.total_stages, total.max(1));
+                    assert_eq!(failed_at.index, 0);
+                }
+            }
+        }
+
+        /// LAW-6: Cancel and panic precedence — a Cancelled or Panicked at
+        /// index N wins over any later Ok/Err in the vec. Distinct from a
+        /// plain Err because the failure category carries different recovery
+        /// semantics downstream.
+        #[test]
+        fn law_cancelled_and_panicked_beat_later_outcomes() {
+            let vec_with_late_ok: Vec<Outcome<i32, &'static str>> = vec![
+                Outcome::Ok(1),
+                Outcome::Cancelled(CancelReason::user("test")),
+                Outcome::Ok(2),
+            ];
+            let r = pipeline_n_outcomes::<i32, &'static str>(vec_with_late_ok, 3);
+            match r {
+                PipelineResult::Cancelled { cancelled_at, .. } => {
+                    assert_eq!(cancelled_at.index, 1);
+                    assert_eq!(cancelled_at.total_stages, 3);
+                }
+                other => panic!("expected Cancelled, got {other:?}"),
+            }
+
+            let vec_with_panic: Vec<Outcome<i32, &'static str>> = vec![
+                Outcome::Ok(1),
+                Outcome::Panicked(PanicPayload::new("boom")),
+                Outcome::Err("late"),
+            ];
+            let r = pipeline_n_outcomes::<i32, &'static str>(vec_with_panic, 3);
+            match r {
+                PipelineResult::Panicked { panicked_at, .. } => {
+                    assert_eq!(panicked_at.index, 1);
+                    assert_eq!(panicked_at.total_stages, 3);
+                }
+                other => panic!("expected Panicked, got {other:?}"),
+            }
+        }
+
+        /// LAW-7: Single-stage identity — pipeline_n_outcomes of a single Ok
+        /// equals Completed(value, 1).
+        #[test]
+        fn law_single_stage_ok_is_identity() {
+            let r = pipeline_n_outcomes::<i32, &'static str>(vec![Outcome::Ok(42)], 1);
+            match r {
+                PipelineResult::Completed {
+                    value,
+                    stages_completed,
+                } => {
+                    assert_eq!(value, 42);
+                    assert_eq!(stages_completed, 1);
+                }
+                other => panic!("expected Completed(42, 1), got {other:?}"),
+            }
+        }
+
+        /// LAW-8: Partial completion is reported honestly — all-Ok vec
+        /// shorter than total_stages yields Completed with stages_executed =
+        /// provided, NOT total_stages. Callers building incrementally must
+        /// be able to distinguish "done" from "so far so good".
+        #[test]
+        fn law_partial_completion_reports_provided_count() {
+            let r =
+                pipeline_n_outcomes::<i32, &'static str>(vec![Outcome::Ok(1), Outcome::Ok(2)], 5);
+            match r {
+                PipelineResult::Completed {
+                    value,
+                    stages_completed,
+                } => {
+                    assert_eq!(value, 2);
+                    assert_eq!(
+                        stages_completed, 2,
+                        "partial run must not report the full total as executed"
+                    );
+                }
+                other => panic!("expected Completed(2, 2), got {other:?}"),
+            }
+        }
+    }
+}

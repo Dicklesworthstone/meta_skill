@@ -1,0 +1,62 @@
+# Codecov Configuration
+# https://docs.codecov.com/docs/codecov-yaml
+
+coverage:
+  # Project-wide thresholds
+  status:
+    project:
+      default:
+        target: 70%          # Target overall coverage
+        threshold: 5%        # Allow 5% drop before failing
+        informational: false # Block PRs if below threshold
+
+    # Per-module thresholds (patch coverage)
+    patch:
+      default:
+        target: 80%          # New code should have higher coverage
+        threshold: 10%       # More lenient for incremental changes
+        informational: true  # Don't block, but report
+
+  # Precision for percentages
+  precision: 2
+  round: down
+  range: "50...100"  # Color range: red at 50%, green at 100%
+
+# Comment configuration for PRs
+comment:
+  layout: "reach,diff,flags,files"
+  behavior: default
+  require_changes: true       # Only comment if coverage changed
+  require_base: true          # Require base commit for comparison
+  require_head: true          # Require head commit
+
+# Flag configuration for different test types
+flags:
+  unit:
+    paths:
+      - src/
+    carryforward: true
+  integration:
+    paths:
+      - tests/
+    carryforward: true
+
+# Ignore certain paths from coverage
+ignore:
+  - "**/*.snap"              # Snapshot files
+  - "tests/common/**"        # Test infrastructure
+  - "benches/**"             # Benchmarks
+  - "examples/**"            # Examples
+
+# Parsers configuration
+parsers:
+  gcov:
+    branch_detection:
+      conditional: yes
+      loop: yes
+      method: no
+      macro: no
+
+# GitHub integration
+github_checks:
+  annotations: true          # Show coverage annotations in PR diffs

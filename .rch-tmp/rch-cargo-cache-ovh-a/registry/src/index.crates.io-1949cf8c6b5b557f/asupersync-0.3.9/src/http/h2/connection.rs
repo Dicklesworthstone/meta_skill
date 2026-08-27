@@ -1,0 +1,6503 @@
+//! HTTP/2 connection management.
+//!
+//! Manages HTTP/2 connection state, settings negotiation, and frame processing.
+
+use std::collections::VecDeque;
+
+use crate::types::Time;
+
+use crate::bytes::{Bytes, BytesMut};
+use crate::codec::{Decoder, Encoder};
+
+use super::error::{ErrorCode, H2Error};
+use super::frame::{
+    ContinuationFrame, DataFrame, FRAME_HEADER_SIZE, Frame, FrameHeader, FrameType, GoAwayFrame,
+    HeadersFrame, PingFrame, PushPromiseFrame, RstStreamFrame, Setting, SettingsFrame,
+    WindowUpdateFrame, parse_frame,
+};
+use super::hpack::{self, Header};
+use super::settings::{DEFAULT_INITIAL_WINDOW_SIZE, Settings};
+use super::stream::{Stream, StreamState, StreamStore};
+
+/// Connection preface that clients must send.
+pub const CLIENT_PREFACE: &[u8] = b"PRI * HTTP/2.0\r\n\r\nSM\r\n\r\n";
+
+/// Default connection-level window size.
+pub const DEFAULT_CONNECTION_WINDOW_SIZE: i32 = 65535;
+
+/// Default RST_STREAM rate limit: max frames within the window before GOAWAY.
+///
+/// Protects against CVE-2023-44487 (Rapid Reset) class attacks where a peer
+/// opens and immediately resets streams in a tight loop, exhausting server
+/// resources while each individual stream appears short-lived.
+const DEFAULT_RST_STREAM_RATE_LIMIT: u32 = 100;
+
+/// Default window duration for RST_STREAM rate limiting (in milliseconds).
+const DEFAULT_RST_STREAM_RATE_WINDOW_MS: u128 = 30_000;
+
+/// Last-stream-id advertised by the stage-1 graceful-shutdown GOAWAY.
+///
+/// RFC 9113 §6.8: a graceful shutdown starts with a GOAWAY carrying the
+/// maximum stream identifier (2^31 - 1) and NO_ERROR, which warns the peer
+/// that shutdown is imminent without refusing any in-flight stream.
+const GRACEFUL_SHUTDOWN_LAST_STREAM_ID: u32 = 0x7fff_ffff;
+
+/// Configurable RST_STREAM rate limit for CVE-2023-44487 protection.
+///
+/// **Security warning**: Increasing these limits or disabling rate limiting
+/// exposes the server to Rapid Reset attacks. Only relax these values if your
+/// deployment has external DoS protection (e.g., a reverse proxy or load
+/// balancer that performs its own RST_STREAM rate limiting).
+///
+/// # Defaults
+///
+/// | Parameter | Default | Meaning |
+/// |-----------|---------|---------|
+/// | `max_rst_streams` | 100 | Max RST_STREAM frames per window |
+/// | `rst_window_ms` | 30,000 | Window duration in milliseconds |
+#[derive(Debug, Clone, Copy)]
+pub struct RstStreamRateLimit {
+    /// Maximum RST_STREAM frames allowed within the window.
+    pub max_rst_streams: u32,
+    /// Window duration in milliseconds.
+    pub rst_window_ms: u128,
+}
+
+impl Default for RstStreamRateLimit {
+    fn default() -> Self {
+        Self {
+            max_rst_streams: DEFAULT_RST_STREAM_RATE_LIMIT,
+            rst_window_ms: DEFAULT_RST_STREAM_RATE_WINDOW_MS,
+        }
+    }
+}
+
+fn wall_clock_now() -> Time {
+    crate::time::wall_now()
+}
+
+/// Connection state.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ConnectionState {
+    /// Waiting for preface (client) or initial settings.
+    Handshaking,
+    /// Connection is open and operational.
+    Open,
+    /// GOAWAY sent or received, draining.
+    Closing,
+    /// Connection is closed.
+    Closed,
+}
+
+/// HTTP/2 frame codec for encoding/decoding frames from a byte stream.
+#[derive(Debug)]
+pub struct FrameCodec {
+    /// Maximum frame size for decoding.
+    max_frame_size: u32,
+    /// Partial header being decoded.
+    partial_header: Option<FrameHeader>,
+}
+
+impl FrameCodec {
+    /// Create a new frame codec.
+    #[must_use]
+    pub fn new() -> Self {
+        Self {
+            max_frame_size: super::frame::DEFAULT_MAX_FRAME_SIZE,
+            partial_header: None,
+        }
+    }
+
+    /// Set the maximum frame size.
+    pub fn set_max_frame_size(&mut self, size: u32) {
+        self.max_frame_size = size;
+    }
+}
+
+impl Default for FrameCodec {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl Decoder for FrameCodec {
+    type Item = Frame;
+    type Error = H2Error;
+
+    fn decode(&mut self, src: &mut BytesMut) -> Result<Option<Self::Item>, Self::Error> {
+        loop {
+            // First, try to parse the header if we don't have one.
+            let header = if let Some(header) = self.partial_header.take() {
+                header
+            } else {
+                if src.len() < FRAME_HEADER_SIZE {
+                    return Ok(None);
+                }
+                FrameHeader::parse(src)?
+            };
+
+            // Validate frame size.
+            if header.length > self.max_frame_size {
+                return Err(H2Error::frame_size(format!(
+                    "frame too large: {} > {}",
+                    header.length, self.max_frame_size
+                )));
+            }
+
+            // Check if we have the full payload.
+            let payload_len = header.length as usize;
+            if src.len() < payload_len {
+                self.partial_header = Some(header);
+                return Ok(None);
+            }
+
+            // Extract payload first. For unknown extension frame types, HTTP/2 requires
+            // endpoints to ignore them while preserving connection state.
+            let payload = src.split_to(payload_len).freeze();
+            if FrameType::from_u8(header.frame_type).is_none() {
+                continue;
+            }
+
+            let frame = parse_frame(&header, payload)?;
+            return Ok(Some(frame));
+        }
+    }
+}
+
+impl<T: AsRef<Frame>> Encoder<T> for FrameCodec {
+    type Error = H2Error;
+
+    fn encode(&mut self, item: T, dst: &mut BytesMut) -> Result<(), Self::Error> {
+        // br-asupersync-pt23uf: Frame::encode now returns Result; propagate
+        // FRAME_SIZE_ERROR to the connection codec layer instead of the
+        // previous panic on >16M payloads.
+        item.as_ref().encode(dst)?;
+        Ok(())
+    }
+}
+
+impl AsRef<Self> for Frame {
+    fn as_ref(&self) -> &Self {
+        self
+    }
+}
+
+/// Pending operation to send.
+#[derive(Debug)]
+#[allow(missing_docs)]
+pub enum PendingOp {
+    /// Settings frame to send.
+    Settings(SettingsFrame),
+    /// Settings ACK to send.
+    SettingsAck,
+    /// Ping ACK to send.
+    PingAck([u8; 8]),
+    /// Window update to send.
+    WindowUpdate { stream_id: u32, increment: u32 },
+    /// Headers to send.
+    Headers {
+        stream_id: u32,
+        headers: Vec<Header>,
+        end_stream: bool,
+    },
+    /// Push promise to send.
+    PushPromise {
+        stream_id: u32,
+        promised_stream_id: u32,
+        headers: Vec<Header>,
+    },
+    /// Continuation of header block.
+    Continuation {
+        stream_id: u32,
+        header_block: Bytes,
+        end_headers: bool,
+    },
+    /// Data to send.
+    Data {
+        stream_id: u32,
+        data: Bytes,
+        end_stream: bool,
+    },
+    /// RST_STREAM to send.
+    RstStream {
+        stream_id: u32,
+        error_code: ErrorCode,
+    },
+    /// GOAWAY to send.
+    GoAway {
+        last_stream_id: u32,
+        error_code: ErrorCode,
+        debug_data: Bytes,
+    },
+}
+
+impl PendingOp {
+    fn references_stream(&self, stream_id: u32) -> bool {
+        match self {
+            Self::Settings(_) | Self::SettingsAck | Self::PingAck(_) | Self::GoAway { .. } => false,
+            Self::WindowUpdate {
+                stream_id: op_stream,
+                ..
+            }
+            | Self::Headers {
+                stream_id: op_stream,
+                ..
+            }
+            | Self::Continuation {
+                stream_id: op_stream,
+                ..
+            }
+            | Self::Data {
+                stream_id: op_stream,
+                ..
+            }
+            | Self::RstStream {
+                stream_id: op_stream,
+                ..
+            } => *op_stream == stream_id,
+            Self::PushPromise {
+                stream_id: associated_stream,
+                promised_stream_id,
+                ..
+            } => *associated_stream == stream_id || *promised_stream_id == stream_id,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+struct PushPromiseAccumulator {
+    associated_stream_id: u32,
+    promised_stream_id: u32,
+}
+
+/// HTTP/2 connection.
+#[derive(Debug)]
+#[allow(clippy::struct_excessive_bools)]
+pub struct Connection {
+    /// Connection state.
+    state: ConnectionState,
+    /// Whether this is a client or server connection.
+    is_client: bool,
+    /// Local settings.
+    local_settings: Settings,
+    /// Remote settings (peer's settings).
+    remote_settings: Settings,
+    /// Whether we've received the peer's settings.
+    received_settings: bool,
+    /// Stream store.
+    streams: StreamStore,
+    /// HPACK encoder.
+    hpack_encoder: hpack::Encoder,
+    /// HPACK decoder.
+    hpack_decoder: hpack::Decoder,
+    /// Connection-level send window.
+    send_window: i32,
+    /// Connection-level receive window.
+    recv_window: i32,
+    /// Last stream ID processed.
+    last_stream_id: u32,
+    /// Smallest last-stream-id advertised by received GOAWAY frames.
+    received_goaway_last_stream_id: Option<u32>,
+    /// Last-stream-id advertised in the GOAWAY we sent, if any.
+    ///
+    /// This value is frozen at GOAWAY send time. Using the mutable
+    /// `last_stream_id` after that would let later bookkeeping widen the
+    /// refusal boundary for new peer streams, which violates RFC 9113 §6.8.
+    sent_goaway_last_stream_id: Option<u32>,
+    /// GOAWAY received.
+    goaway_received: bool,
+    /// GOAWAY sent.
+    goaway_sent: bool,
+    /// A stage-1 graceful-shutdown GOAWAY (last_stream_id = 2^31 - 1) was
+    /// sent and the definitive stage-2 GOAWAY has not been sent yet.
+    graceful_shutdown_pending: bool,
+    /// Pending operations to process.
+    pending_ops: VecDeque<PendingOp>,
+    /// Clock source used by timeout and rate-limit bookkeeping. Carries the
+    /// runtime [`Time`] so a virtual-time driver (lab runtime) drives h2
+    /// deadlines deterministically instead of always reading the wall clock.
+    time_getter: fn() -> Time,
+    /// Stream ID being continued (for CONTINUATION frames).
+    continuation_stream_id: Option<u32>,
+    /// When the current continuation sequence started.
+    ///
+    /// Set when a HEADERS or PUSH_PROMISE frame is received without END_HEADERS.
+    /// Used to enforce timeout on incomplete CONTINUATION sequences.
+    continuation_started_at: Option<Time>,
+    /// Pending PUSH_PROMISE header block, if any.
+    pending_push_promise: Option<PushPromiseAccumulator>,
+    /// RST_STREAM rate limit configuration.
+    rst_rate_limit: RstStreamRateLimit,
+    /// RST_STREAM frames received in the current rate-limit window.
+    rst_stream_count: u32,
+    /// Start of the current RST_STREAM rate-limit window.
+    rst_stream_window_start: Time,
+}
+
+impl Connection {
+    /// Create a new client connection.
+    #[must_use]
+    pub fn client(settings: Settings) -> Self {
+        Self::client_with_time_getter(settings, wall_clock_now)
+    }
+
+    /// Create a new client connection with a custom time source.
+    #[must_use]
+    pub fn client_with_time_getter(settings: Settings, time_getter: fn() -> Time) -> Self {
+        let max_header_list_size = settings.max_header_list_size;
+        let initial_send_window = DEFAULT_INITIAL_WINDOW_SIZE;
+        let initial_recv_window = settings.initial_window_size;
+        let mut decoder = hpack::Decoder::new();
+        decoder.set_max_header_list_size(max_header_list_size as usize);
+        // The decoder rejects any peer dynamic-table-size update above
+        // `allowed_table_size`, which MUST equal the SETTINGS_HEADER_TABLE_SIZE
+        // we advertise to the peer (RFC 7541 §6.3). Without this it stays at the
+        // 4096 default, so advertising a larger table would make us kill a
+        // spec-conforming peer with a COMPRESSION_ERROR.
+        decoder.set_allowed_table_size(settings.header_table_size as usize);
+        Self {
+            state: ConnectionState::Handshaking,
+            is_client: true,
+            local_settings: settings,
+            remote_settings: Settings::default(),
+            received_settings: false,
+            streams: StreamStore::new_with_local_recv_window(
+                true,
+                initial_send_window,
+                initial_recv_window,
+                max_header_list_size,
+            ),
+            hpack_encoder: hpack::Encoder::new(),
+            hpack_decoder: decoder,
+            send_window: DEFAULT_CONNECTION_WINDOW_SIZE,
+            recv_window: DEFAULT_CONNECTION_WINDOW_SIZE,
+            last_stream_id: 0,
+            received_goaway_last_stream_id: None,
+            sent_goaway_last_stream_id: None,
+            goaway_received: false,
+            goaway_sent: false,
+            graceful_shutdown_pending: false,
+            pending_ops: VecDeque::new(),
+            time_getter,
+            continuation_stream_id: None,
+            continuation_started_at: None,
+            pending_push_promise: None,
+            rst_rate_limit: RstStreamRateLimit::default(),
+            rst_stream_count: 0,
+            rst_stream_window_start: time_getter(),
+        }
+    }
+
+    /// Create a new server connection.
+    #[must_use]
+    pub fn server(settings: Settings) -> Self {
+        Self::server_with_time_getter(settings, wall_clock_now)
+    }
+
+    /// Create a new server connection with a custom time source.
+    #[must_use]
+    pub fn server_with_time_getter(settings: Settings, time_getter: fn() -> Time) -> Self {
+        let max_header_list_size = settings.max_header_list_size;
+        let initial_send_window = DEFAULT_INITIAL_WINDOW_SIZE;
+        let initial_recv_window = settings.initial_window_size;
+        let mut decoder = hpack::Decoder::new();
+        decoder.set_max_header_list_size(max_header_list_size as usize);
+        // The decoder rejects any peer dynamic-table-size update above
+        // `allowed_table_size`, which MUST equal the SETTINGS_HEADER_TABLE_SIZE
+        // we advertise to the peer (RFC 7541 §6.3). Without this it stays at the
+        // 4096 default, so advertising a larger table would make us kill a
+        // spec-conforming peer with a COMPRESSION_ERROR.
+        decoder.set_allowed_table_size(settings.header_table_size as usize);
+        Self {
+            state: ConnectionState::Handshaking,
+            is_client: false,
+            local_settings: settings,
+            remote_settings: Settings::default(),
+            received_settings: false,
+            streams: StreamStore::new_with_local_recv_window(
+                false,
+                initial_send_window,
+                initial_recv_window,
+                max_header_list_size,
+            ),
+            hpack_encoder: hpack::Encoder::new(),
+            hpack_decoder: decoder,
+            send_window: DEFAULT_CONNECTION_WINDOW_SIZE,
+            recv_window: DEFAULT_CONNECTION_WINDOW_SIZE,
+            last_stream_id: 0,
+            received_goaway_last_stream_id: None,
+            sent_goaway_last_stream_id: None,
+            goaway_received: false,
+            goaway_sent: false,
+            graceful_shutdown_pending: false,
+            pending_ops: VecDeque::new(),
+            time_getter,
+            continuation_stream_id: None,
+            continuation_started_at: None,
+            pending_push_promise: None,
+            rst_rate_limit: RstStreamRateLimit::default(),
+            rst_stream_count: 0,
+            rst_stream_window_start: time_getter(),
+        }
+    }
+
+    /// Configure the RST_STREAM rate limit for CVE-2023-44487 protection.
+    ///
+    /// **Security warning**: Relaxing these limits exposes the server to Rapid
+    /// Reset attacks. Only increase if external DoS protection is in place.
+    #[must_use]
+    pub fn rst_stream_rate_limit(mut self, limit: RstStreamRateLimit) -> Self {
+        self.rst_rate_limit = limit;
+        self
+    }
+
+    /// Get the connection state.
+    #[must_use]
+    pub fn state(&self) -> ConnectionState {
+        self.state
+    }
+
+    /// Check if this is a client connection.
+    #[must_use]
+    pub fn is_client(&self) -> bool {
+        self.is_client
+    }
+
+    /// Get local settings.
+    #[must_use]
+    pub fn local_settings(&self) -> &Settings {
+        &self.local_settings
+    }
+
+    /// Get remote settings.
+    #[must_use]
+    pub fn remote_settings(&self) -> &Settings {
+        &self.remote_settings
+    }
+
+    /// Get the connection-level send window.
+    #[must_use]
+    pub fn send_window(&self) -> i32 {
+        self.send_window
+    }
+
+    /// Get the connection-level receive window.
+    #[must_use]
+    pub fn recv_window(&self) -> i32 {
+        self.recv_window
+    }
+
+    /// Get a stream by ID.
+    #[must_use]
+    pub fn stream(&self, id: u32) -> Option<&Stream> {
+        self.streams.get(id)
+    }
+
+    /// Get a mutable stream by ID.
+    #[must_use]
+    pub fn stream_mut(&mut self, id: u32) -> Option<&mut Stream> {
+        self.streams.get_mut(id)
+    }
+
+    /// Check if GOAWAY has been received.
+    #[must_use]
+    pub fn goaway_received(&self) -> bool {
+        self.goaway_received
+    }
+
+    /// Check if a GOAWAY has been sent (immediate or graceful, either stage).
+    #[must_use]
+    pub fn goaway_sent(&self) -> bool {
+        self.goaway_sent
+    }
+
+    /// Check if a stage-1 graceful-shutdown warning has been sent but the
+    /// definitive stage-2 GOAWAY has not yet been sent.
+    ///
+    /// While pending, peer-initiated streams are still accepted; drain
+    /// supervisors must call [`Connection::finalize_graceful_shutdown`]
+    /// before treating the connection as refusing new work.
+    #[must_use]
+    pub fn graceful_shutdown_pending(&self) -> bool {
+        self.graceful_shutdown_pending
+    }
+
+    /// Last-stream-id advertised by the GOAWAY we sent, if any.
+    ///
+    /// During a pending graceful shutdown this is 2^31 - 1 (the stage-1
+    /// warning value); after [`Connection::finalize_graceful_shutdown`] or
+    /// [`Connection::goaway`] it is the definitive refusal boundary.
+    #[must_use]
+    pub fn sent_goaway_last_stream_id(&self) -> Option<u32> {
+        self.sent_goaway_last_stream_id
+    }
+
+    /// Number of streams that currently count as active (RFC 9113 §5.1.2:
+    /// open, half-closed, or reserved).
+    ///
+    /// This is the in-flight figure a graceful-drain supervisor (for
+    /// example `server::shutdown::GracefulDrainSupervisor`) observes while
+    /// draining an HTTP/2 connection.
+    #[must_use]
+    pub fn active_stream_count(&self) -> usize {
+        self.streams.active_count()
+    }
+
+    /// Check whether graceful shutdown has fully drained this connection.
+    ///
+    /// True once a definitive GOAWAY has been sent (immediate
+    /// [`Connection::goaway`] or stage-2
+    /// [`Connection::finalize_graceful_shutdown`]) and no active streams
+    /// remain. The transport can then be closed without stranding work.
+    #[must_use]
+    pub fn graceful_shutdown_complete(&self) -> bool {
+        self.goaway_sent && !self.graceful_shutdown_pending && self.streams.active_count() == 0
+    }
+
+    /// Check if we're expecting CONTINUATION frames.
+    #[must_use]
+    pub fn is_awaiting_continuation(&self) -> bool {
+        self.continuation_stream_id.is_some()
+    }
+
+    /// Get the stream ID we're expecting CONTINUATION for, if any.
+    #[must_use]
+    pub fn continuation_stream_id(&self) -> Option<u32> {
+        self.continuation_stream_id
+    }
+
+    /// Check if the current CONTINUATION sequence has timed out.
+    ///
+    /// Returns `Ok(())` if no timeout has occurred, or an error if the
+    /// CONTINUATION sequence has been pending for longer than the configured
+    /// timeout.
+    ///
+    /// The caller should invoke this method periodically (e.g., each time
+    /// the connection is polled) to detect and handle timeout conditions.
+    ///
+    /// When a timeout is detected, this method:
+    /// 1. Clears the continuation state
+    /// 2. Returns a protocol error
+    ///
+    /// The caller should then send GOAWAY and close the connection.
+    pub fn check_continuation_timeout(&mut self) -> Result<(), H2Error> {
+        if let Some(started_at) = self.continuation_started_at {
+            let timeout_ms = self.local_settings.continuation_timeout_ms;
+            let elapsed =
+                std::time::Duration::from_nanos((self.time_getter)().duration_since(started_at));
+
+            if elapsed.as_millis() >= u128::from(timeout_ms) {
+                // Clear continuation state
+                let stream_id = self.continuation_stream_id.take();
+                self.continuation_started_at = None;
+                self.pending_push_promise = None;
+
+                return Err(H2Error::protocol(format!(
+                    "CONTINUATION timeout: no END_HEADERS within {timeout_ms}ms for stream {stream_id:?}",
+                )));
+            }
+        }
+        Ok(())
+    }
+
+    /// Time remaining before the in-flight CONTINUATION sequence times out, or
+    /// `None` when no header-block continuation is pending.
+    ///
+    /// Unlike [`Connection::check_continuation_timeout`] (which only runs when
+    /// a frame arrives), this lets the connection driver arm a
+    /// frame-arrival-independent deadline so a peer that opens a header block
+    /// and then stalls is reclaimed instead of hanging forever
+    /// (br-asupersync-mfqfst L4). Returns `Some(Duration::ZERO)` once the
+    /// budget is already spent.
+    #[must_use]
+    pub fn continuation_timeout_remaining(&self) -> Option<std::time::Duration> {
+        let started_at = self.continuation_started_at?;
+        let budget = std::time::Duration::from_millis(self.local_settings.continuation_timeout_ms);
+        let elapsed =
+            std::time::Duration::from_nanos((self.time_getter)().duration_since(started_at));
+        Some(budget.saturating_sub(elapsed))
+    }
+
+    /// Queue initial settings frame.
+    pub fn queue_initial_settings(&mut self) {
+        let settings = SettingsFrame::new(
+            self.local_settings
+                .to_settings_minimal_for_role(self.is_client),
+        );
+        self.pending_ops.push_back(PendingOp::Settings(settings));
+    }
+
+    /// Open a new stream and send headers.
+    pub fn open_stream(&mut self, headers: Vec<Header>, end_stream: bool) -> Result<u32, H2Error> {
+        if self.goaway_received || self.goaway_sent {
+            return Err(H2Error::protocol("cannot open new streams after GOAWAY"));
+        }
+
+        let stream_id = self.streams.allocate_stream_id()?;
+        let stream = self.streams.get_mut(stream_id).ok_or_else(|| {
+            H2Error::connection(
+                ErrorCode::InternalError,
+                "allocated stream missing from store",
+            )
+        })?;
+        stream.send_headers(end_stream)?;
+
+        self.pending_ops.push_back(PendingOp::Headers {
+            stream_id,
+            headers,
+            end_stream,
+        });
+
+        Ok(stream_id)
+    }
+
+    /// Send data on a stream.
+    pub fn send_data(
+        &mut self,
+        stream_id: u32,
+        data: Bytes,
+        end_stream: bool,
+    ) -> Result<(), H2Error> {
+        let stream = self.streams.get_mut(stream_id).ok_or_else(|| {
+            H2Error::stream(stream_id, ErrorCode::StreamClosed, "stream not found")
+        })?;
+
+        stream.send_data(end_stream)?;
+
+        self.pending_ops.push_back(PendingOp::Data {
+            stream_id,
+            data,
+            end_stream,
+        });
+
+        Ok(())
+    }
+
+    /// Send headers on a stream (for responses or trailers).
+    pub fn send_headers(
+        &mut self,
+        stream_id: u32,
+        headers: Vec<Header>,
+        end_stream: bool,
+    ) -> Result<(), H2Error> {
+        let stream = self.streams.get_mut(stream_id).ok_or_else(|| {
+            H2Error::stream(stream_id, ErrorCode::StreamClosed, "stream not found")
+        })?;
+
+        stream.send_headers(end_stream)?;
+
+        self.pending_ops.push_back(PendingOp::Headers {
+            stream_id,
+            headers,
+            end_stream,
+        });
+
+        Ok(())
+    }
+
+    /// Send a server push promise on an existing peer-initiated stream.
+    pub fn send_push_promise(
+        &mut self,
+        stream_id: u32,
+        headers: Vec<Header>,
+    ) -> Result<u32, H2Error> {
+        if self.is_client {
+            return Err(H2Error::protocol("clients cannot send PUSH_PROMISE"));
+        }
+        if self.goaway_received || self.goaway_sent {
+            return Err(H2Error::protocol("cannot send PUSH_PROMISE after GOAWAY"));
+        }
+        if !self.remote_settings.enable_push {
+            return Err(H2Error::stream(
+                stream_id,
+                ErrorCode::RefusedStream,
+                "peer disabled server push",
+            ));
+        }
+        if stream_id == 0 || stream_id.is_multiple_of(2) {
+            return Err(H2Error::protocol(
+                "PUSH_PROMISE requires a client-initiated associated stream",
+            ));
+        }
+        if let Err(why) = validate_h2_pseudo_headers(
+            &headers, /* is_request = */ true, /* is_trailers = */ false,
+        ) {
+            return Err(H2Error::stream(stream_id, ErrorCode::ProtocolError, why));
+        }
+
+        let assoc_state = match self.streams.get(stream_id) {
+            Some(stream) => stream.state(),
+            None => {
+                return Err(H2Error::stream(
+                    stream_id,
+                    ErrorCode::StreamClosed,
+                    "PUSH_PROMISE on unknown associated stream",
+                ));
+            }
+        };
+        if !matches!(
+            assoc_state,
+            StreamState::Open | StreamState::HalfClosedRemote
+        ) {
+            let code = if assoc_state.is_closed() {
+                ErrorCode::StreamClosed
+            } else {
+                ErrorCode::ProtocolError
+            };
+            return Err(H2Error::stream(
+                stream_id,
+                code,
+                "PUSH_PROMISE on stream not in open or half-closed (remote) state",
+            ));
+        }
+
+        let promised_stream_id = self.streams.reserve_local_stream()?;
+        self.pending_ops.push_back(PendingOp::PushPromise {
+            stream_id,
+            promised_stream_id,
+            headers,
+        });
+
+        Ok(promised_stream_id)
+    }
+
+    /// Reset a stream.
+    pub fn reset_stream(&mut self, stream_id: u32, error_code: ErrorCode) {
+        if let Some(stream) = self.streams.get_mut(stream_id) {
+            stream.reset(error_code);
+        }
+        self.pending_ops.push_back(PendingOp::RstStream {
+            stream_id,
+            error_code,
+        });
+    }
+
+    /// Send GOAWAY and start an immediate shutdown.
+    ///
+    /// The advertised last-stream-id is frozen at the highest stream
+    /// processed so far; peer streams above it are refused from this point
+    /// on. For the RFC 9113 §6.8 two-stage graceful variant that keeps
+    /// accepting racing in-flight streams first, use
+    /// [`Connection::begin_graceful_shutdown`] /
+    /// [`Connection::finalize_graceful_shutdown`].
+    pub fn goaway(&mut self, error_code: ErrorCode, debug_data: Bytes) {
+        if !self.goaway_sent {
+            self.goaway_sent = true;
+            self.state = ConnectionState::Closing;
+            let last_stream_id = self.last_stream_id;
+            self.sent_goaway_last_stream_id = Some(last_stream_id);
+            self.pending_ops.push_back(PendingOp::GoAway {
+                last_stream_id,
+                error_code,
+                debug_data,
+            });
+        }
+    }
+
+    /// Begin an RFC 9113 §6.8 graceful shutdown (stage 1 of 2).
+    ///
+    /// Queues a GOAWAY with last-stream-id 2^31 - 1 and NO_ERROR: the peer
+    /// learns shutdown is imminent and should stop creating streams, but no
+    /// in-flight or racing stream is refused yet. The local side stops
+    /// opening new streams immediately ([`Connection::open_stream`] fails
+    /// once a GOAWAY is sent).
+    ///
+    /// After allowing in-flight stream creation to settle (at least one
+    /// round trip; a drain supervisor tick works), call
+    /// [`Connection::finalize_graceful_shutdown`] to advertise the
+    /// definitive boundary. A connection that is already idle
+    /// ([`Connection::active_stream_count`] == 0) can be finalized
+    /// immediately — that is the drain-start fast path for idle keep-alive
+    /// connections.
+    ///
+    /// No-op if a GOAWAY (graceful or immediate) was already sent.
+    pub fn begin_graceful_shutdown(&mut self, debug_data: Bytes) {
+        if self.goaway_sent {
+            return;
+        }
+        self.goaway_sent = true;
+        self.graceful_shutdown_pending = true;
+        self.state = ConnectionState::Closing;
+        self.sent_goaway_last_stream_id = Some(GRACEFUL_SHUTDOWN_LAST_STREAM_ID);
+        self.pending_ops.push_back(PendingOp::GoAway {
+            last_stream_id: GRACEFUL_SHUTDOWN_LAST_STREAM_ID,
+            error_code: ErrorCode::NoError,
+            debug_data,
+        });
+    }
+
+    /// Finalize an RFC 9113 §6.8 graceful shutdown (stage 2 of 2).
+    ///
+    /// Queues a GOAWAY with NO_ERROR and the highest stream identifier
+    /// actually processed, ratcheting the advertised boundary down from the
+    /// stage-1 value (RFC 9113 §6.8 forbids raising it). Peer streams above
+    /// the boundary are refused with `RST_STREAM(REFUSED_STREAM)` from this
+    /// point on; once the remaining active streams complete,
+    /// [`Connection::graceful_shutdown_complete`] reports true.
+    ///
+    /// Calling this without [`Connection::begin_graceful_shutdown`] behaves
+    /// like an immediate `goaway(ErrorCode::NoError, ..)`. No-op if a
+    /// definitive GOAWAY was already sent.
+    pub fn finalize_graceful_shutdown(&mut self, debug_data: Bytes) {
+        if self.goaway_sent && !self.graceful_shutdown_pending {
+            // A definitive boundary is already on the wire; never widen or
+            // re-advertise it.
+            return;
+        }
+        let last_stream_id = self
+            .sent_goaway_last_stream_id
+            .map_or(self.last_stream_id, |prev| self.last_stream_id.min(prev));
+        self.goaway_sent = true;
+        self.graceful_shutdown_pending = false;
+        self.state = ConnectionState::Closing;
+        self.sent_goaway_last_stream_id = Some(last_stream_id);
+        self.pending_ops.push_back(PendingOp::GoAway {
+            last_stream_id,
+            error_code: ErrorCode::NoError,
+            debug_data,
+        });
+    }
+
+    /// Process an incoming frame.
+    pub fn process_frame(&mut self, frame: Frame) -> Result<Option<ReceivedFrame>, H2Error> {
+        // Check continuation timeout before processing
+        self.check_continuation_timeout()?;
+
+        // Prevent memory exhaustion from PING/SETTINGS floods (CVE-2019-9512 / CVE-2019-9515).
+        if self.pending_ops.len() > 10_000 {
+            return Err(H2Error::connection(
+                ErrorCode::EnhanceYourCalm,
+                "too many pending operations, possible flood attack",
+            ));
+        }
+
+        // RFC 9113 §6.10: CONTINUATION frame sequencing. Either side of the
+        // boundary is a connection-level PROTOCOL_ERROR.
+        match (&frame, self.continuation_stream_id) {
+            // Mid-sequence: only CONTINUATION on the expected stream is
+            // valid; anything else (including CONTINUATION on a different
+            // stream) terminates the connection.
+            (Frame::Continuation(cont), Some(expected)) if cont.stream_id == expected => {}
+            (_, Some(_)) => {
+                return Err(H2Error::protocol("expected CONTINUATION frame"));
+            }
+            // br-asupersync-pxb77u: outside a sequence, CONTINUATION is
+            // forbidden. Pre-fix paths returned a stream-level
+            // PROTOCOL_ERROR via stream.recv_continuation when the stream
+            // existed but headers were complete — non-conformant with
+            // §6.10's connection-error mandate.
+            (Frame::Continuation(_), None) => {
+                return Err(H2Error::protocol(
+                    "CONTINUATION without preceding HEADERS/PUSH_PROMISE (RFC 9113 §6.10)",
+                ));
+            }
+            (_, None) => {}
+        }
+
+        // br-asupersync-lcvdj0: RFC 9113 §3.4 / §3.5 — the first frame
+        // sent and received on an HTTP/2 connection MUST be a SETTINGS
+        // frame. Any other frame received in the Handshaking state is
+        // a connection-level PROTOCOL_ERROR. Pre-fix `process_frame`
+        // dispatched on frame type without checking the connection
+        // state; a peer could send DATA / RST_STREAM / PING /
+        // WINDOW_UPDATE / HEADERS / PUSH_PROMISE on a fresh connection
+        // and (for the frame types that do not also fail their own
+        // stream-id-zero / flag validation) have it processed
+        // normally. After this guard, only SETTINGS advances out of
+        // Handshaking; everything else triggers a GOAWAY-bound
+        // PROTOCOL_ERROR.
+        if matches!(self.state, ConnectionState::Handshaking)
+            && !matches!(frame, Frame::Settings(_))
+        {
+            return Err(H2Error::protocol(
+                "first frame on the connection must be SETTINGS (RFC 9113 §3.4)",
+            ));
+        }
+
+        let result = match frame {
+            Frame::Data(f) => self.process_data(f),
+            Frame::Headers(f) => self.process_headers(f),
+            Frame::Priority(f) => {
+                if let Some(stream) = self.streams.get_mut(f.stream_id) {
+                    stream.set_priority(f.priority);
+                }
+                Ok(None)
+            }
+            Frame::RstStream(f) => self.process_rst_stream(f).map(Some),
+            Frame::Settings(f) => self.process_settings(&f),
+            Frame::PushPromise(f) => self.process_push_promise(&f),
+            Frame::Ping(f) => Ok(self.process_ping(f)),
+            Frame::GoAway(f) => Ok(Some(self.process_goaway(f))),
+            Frame::WindowUpdate(f) => self.process_window_update(f),
+            Frame::Continuation(f) => self.process_continuation(f),
+            Frame::Unknown { .. } => Ok(None), // RFC 7540 §4.1: ignore unknown types
+        };
+
+        // Prune closed streams when the map grows large relative to the
+        // configured maximum. This prevents unbounded memory growth on
+        // long-lived connections where many streams are opened and closed.
+        // We cap the threshold to ensure that a default unlimited (u32::MAX)
+        // max_concurrent_streams doesn't completely disable pruning.
+        let max = self.local_settings.max_concurrent_streams as usize;
+        let threshold = std::cmp::min(max, 16_384).saturating_mul(2);
+        if self.streams.len() > threshold {
+            self.prune_closed_streams_without_pending_frames();
+        }
+
+        result
+    }
+
+    /// Update last_stream_id to track the highest processed stream.
+    fn track_stream_id(&mut self, stream_id: u32) {
+        if stream_id > self.last_stream_id {
+            self.last_stream_id = stream_id;
+        }
+    }
+
+    fn stream_exceeds_sent_goaway(&self, stream_id: u32) -> bool {
+        self.sent_goaway_last_stream_id
+            .is_some_and(|last_stream_id| stream_id > last_stream_id)
+    }
+
+    fn stream_can_emit_queued_frames(&self, stream_id: u32) -> bool {
+        self.streams
+            .get(stream_id)
+            .is_some_and(|stream| stream.error_code().is_none())
+    }
+
+    /// Process DATA frame.
+    fn process_data(&mut self, frame: DataFrame) -> Result<Option<ReceivedFrame>, H2Error> {
+        // RFC 7540 §5.1: receiving DATA on an idle stream MUST be treated as a
+        // connection error of type PROTOCOL_ERROR. Check before get_or_create
+        // to avoid polluting last_stream_id and leaking idle Stream entries.
+        if self.streams.is_idle_stream_id(frame.stream_id) {
+            return Err(H2Error::protocol("DATA received on idle stream"));
+        }
+
+        let refused = self.stream_exceeds_sent_goaway(frame.stream_id);
+        if !refused {
+            // Track stream ID only after the idle check passes, and only if not refused.
+            self.track_stream_id(frame.stream_id);
+        }
+
+        // RFC 9113 §6.9.1: the entire DATA frame payload is flow-controlled,
+        // including the Pad Length octet and Padding. Charge the windows by the
+        // on-the-wire payload length, NOT the (smaller) unpadded application
+        // data length — otherwise padded frames under-debit the windows, the
+        // peer's send window is never replenished, and the connection deadlocks.
+        let payload_len = frame.flow_controlled_len;
+        let window_delta = i32::try_from(payload_len)
+            .map_err(|_| H2Error::flow_control("data too large for window"))?;
+        if window_delta > self.recv_window {
+            return Err(H2Error::flow_control(
+                "data exceeds connection flow control window",
+            ));
+        }
+
+        // Decrement the connection-level receive window BEFORE the stream-level
+        // check. The peer counted these bytes against their send window when
+        // they transmitted the DATA frame, so we must count them here even if
+        // the stream rejects the data (e.g. StreamClosed). Failing to do so
+        // desynchronizes the connection flow-control windows.
+        self.recv_window -= window_delta;
+
+        // Perform connection-level WINDOW_UPDATE check immediately after decrementing,
+        // BEFORE any stream-level operations that might return early with a stream error.
+        // If we don't do this, DATA frames on closed streams will permanently leak
+        // connection window capacity, leading to connection deadlocks.
+        let low_watermark = DEFAULT_CONNECTION_WINDOW_SIZE / 2;
+        if self.recv_window < low_watermark {
+            let increment = i64::from(DEFAULT_CONNECTION_WINDOW_SIZE) - i64::from(self.recv_window);
+            let increment = u32::try_from(increment)
+                .map_err(|_| H2Error::flow_control("window increment too large"))?;
+            self.send_connection_window_update(increment)?;
+        }
+
+        // Look up the stream. If the stream was closed and pruned, treat
+        // it as a stream error (RFC 7540 §5.1).
+        let stream = self.streams.get_mut(frame.stream_id).ok_or_else(|| {
+            H2Error::stream(
+                frame.stream_id,
+                ErrorCode::StreamClosed,
+                "DATA received on closed stream",
+            )
+        })?;
+        stream.recv_data(payload_len, frame.end_stream)?;
+
+        // Auto stream-level WINDOW_UPDATE when recv window drops below 25%.
+        if stream.state().can_recv() {
+            if let Some(increment) = stream.auto_window_update_increment() {
+                // Cannot call send_stream_window_update while stream is borrowed,
+                // so we update the stream's recv_window and queue the op directly.
+                stream
+                    .update_recv_window(i32::try_from(increment).map_err(|_| {
+                        H2Error::flow_control("stream window increment too large")
+                    })?)?;
+                self.pending_ops.push_back(PendingOp::WindowUpdate {
+                    stream_id: frame.stream_id,
+                    increment,
+                });
+            }
+        }
+
+        if refused {
+            Ok(None)
+        } else {
+            Ok(Some(ReceivedFrame::Data {
+                stream_id: frame.stream_id,
+                data: frame.data,
+                end_stream: frame.end_stream,
+            }))
+        }
+    }
+
+    /// Process HEADERS frame.
+    fn process_headers(&mut self, frame: HeadersFrame) -> Result<Option<ReceivedFrame>, H2Error> {
+        // RFC 9113 §6.8: After sending GOAWAY, refuse new streams with IDs
+        // above the advertised last_stream_id. Without this, a misbehaving
+        // peer could open unbounded streams during the drain phase.
+        // We MUST still process the headers through HPACK to keep compression state
+        // synchronized, but we will discard the result and send a RST_STREAM.
+        let refused = self.stream_exceeds_sent_goaway(frame.stream_id);
+
+        // Validate stream creation before tracking last_stream_id.
+        // If get_or_create fails (e.g., invalid stream parity or monotonicity
+        // violation), we must not pollute last_stream_id — GOAWAY must only
+        // report the highest actually-processed stream (RFC 7540 §6.8).
+        {
+            let _ = self.streams.get_or_create(frame.stream_id)?;
+        }
+
+        if !refused {
+            self.track_stream_id(frame.stream_id);
+        }
+
+        // Re-borrow the stream (guaranteed to exist after get_or_create).
+        let stream = self.streams.get_mut(frame.stream_id).ok_or_else(|| {
+            H2Error::connection(
+                ErrorCode::InternalError,
+                "stream disappeared after get_or_create",
+            )
+        })?;
+        // br-asupersync-pyhaov: thread direction so Stream can apply
+        // the server-side trailers-MUST-have-END_STREAM rule.
+        stream.recv_headers(frame.end_stream, frame.end_headers, self.is_client)?;
+
+        if let Some(priority) = frame.priority {
+            stream.set_priority(priority);
+        }
+
+        stream.add_header_fragment(frame.header_block)?;
+
+        if frame.end_headers {
+            self.continuation_stream_id = None;
+            self.continuation_started_at = None;
+            let result = self.decode_headers(frame.stream_id, frame.end_stream);
+            if refused {
+                self.pending_ops.push_back(PendingOp::RstStream {
+                    stream_id: frame.stream_id,
+                    error_code: ErrorCode::RefusedStream,
+                });
+                // Close the local record too: a refused stream is one we
+                // will take no action on, and leaving it active would block
+                // graceful-drain quiescence (active_stream_count) forever.
+                if let Some(stream) = self.streams.get_mut(frame.stream_id) {
+                    stream.reset(ErrorCode::RefusedStream);
+                }
+                result?; // bubble up compression errors
+                Ok(None)
+            } else {
+                result
+            }
+        } else {
+            self.continuation_stream_id = Some(frame.stream_id);
+            self.continuation_started_at = Some((self.time_getter)());
+            Ok(None)
+        }
+    }
+
+    /// Process CONTINUATION frame.
+    fn process_continuation(
+        &mut self,
+        frame: ContinuationFrame,
+    ) -> Result<Option<ReceivedFrame>, H2Error> {
+        if let Some(pending) = self.pending_push_promise {
+            if pending.associated_stream_id == frame.stream_id {
+                let promised_stream_id = pending.promised_stream_id;
+                let promised = self.streams.get_mut(promised_stream_id).ok_or_else(|| {
+                    H2Error::stream(
+                        promised_stream_id,
+                        ErrorCode::StreamClosed,
+                        "promised stream not found",
+                    )
+                })?;
+                promised.add_header_fragment(frame.header_block)?;
+
+                if frame.end_headers {
+                    self.pending_push_promise = None;
+                    self.continuation_stream_id = None;
+                    self.continuation_started_at = None;
+                    return self.decode_push_promise(frame.stream_id, promised_stream_id);
+                }
+
+                return Ok(None);
+            }
+        }
+
+        let stream = self
+            .streams
+            .get_mut(frame.stream_id)
+            .ok_or_else(|| H2Error::protocol("CONTINUATION for unknown stream"))?;
+
+        stream.recv_continuation(frame.header_block, frame.end_headers)?;
+
+        if frame.end_headers {
+            self.continuation_stream_id = None;
+            self.continuation_started_at = None;
+            // Get end_stream from stream state
+            let end_stream = matches!(
+                stream.state(),
+                StreamState::HalfClosedRemote | StreamState::Closed
+            );
+            let refused = self.stream_exceeds_sent_goaway(frame.stream_id);
+            let result = self.decode_headers(frame.stream_id, end_stream);
+            if refused {
+                self.pending_ops.push_back(PendingOp::RstStream {
+                    stream_id: frame.stream_id,
+                    error_code: ErrorCode::RefusedStream,
+                });
+                // Mirror process_headers: close the local record so a
+                // refused stream cannot pin active_stream_count above zero
+                // during graceful drain.
+                if let Some(stream) = self.streams.get_mut(frame.stream_id) {
+                    stream.reset(ErrorCode::RefusedStream);
+                }
+                result?; // bubble up compression errors
+                Ok(None)
+            } else {
+                result
+            }
+        } else {
+            Ok(None)
+        }
+    }
+
+    /// Decode accumulated headers for a stream.
+    ///
+    /// br-asupersync-vqpx88: applies RFC 9113 §8.3 / §8.3.1 / §8.3.2
+    /// pseudo-header structural validation to the HPACK-decoded
+    /// header block. Direction is inferred from `self.is_client`:
+    /// when we are a server, incoming HEADERS frames carry requests
+    /// (validated against §8.3.1); when we are a client, incoming
+    /// HEADERS frames carry responses (validated against §8.3.2).
+    /// Per RFC 9113 §8.1.1 a malformed message is a stream error of
+    /// type `PROTOCOL_ERROR` — *not* a connection error — so the
+    /// rejection is scoped to the offending stream and the
+    /// connection survives to serve other peers.
+    fn decode_headers(
+        &mut self,
+        stream_id: u32,
+        end_stream: bool,
+    ) -> Result<Option<ReceivedFrame>, H2Error> {
+        let stream = self.streams.get_mut(stream_id).ok_or_else(|| {
+            H2Error::connection(ErrorCode::InternalError, "decode_headers missing stream")
+        })?;
+        // br-asupersync-0eyf7t — RFC 9113 §8.1: trailers MUST NOT
+        // contain pseudo-header fields. A second HEADERS-with-
+        // END_HEADERS for the same stream is either trailers
+        // (server-side: always; client-side: when END_STREAM is
+        // set) or 1xx informational (client-side: when END_STREAM
+        // is not set). Capture the discrimination here, before any
+        // mutation, so the validator can reject pseudo-headers in
+        // the trailers section. is_request is unchanged from
+        // br-asupersync-vqpx88: server sees requests, client sees
+        // responses.
+        let is_subsequent_headers = stream.initial_headers_decoded();
+        let is_request = !self.is_client;
+        // br-asupersync-k4jj9p: a client may receive 1xx informational
+        // HEADERS (e.g. 100 Continue, 103 Early Hints) followed by the
+        // final 2xx/3xx/4xx/5xx HEADERS even when the final response is
+        // bodyless. Per RFC 9113 §8.1 + §8.3.2, only the FINAL response
+        // promotes the stream to "initial headers decoded"; subsequent
+        // HEADERS before a final response are still informational, NOT
+        // trailers. Compute a tentative is_trailers and refine it after
+        // header decoding using the just-observed :status pseudo-header.
+        let tentative_is_trailers = is_subsequent_headers && (is_request || end_stream);
+
+        let fragments = stream.take_header_fragments();
+
+        // Concatenate all fragments
+        let total_len: usize = fragments.iter().map(Bytes::len).sum();
+        let max_fragment_size =
+            Stream::max_header_fragment_size_for(self.local_settings.max_header_list_size);
+        if total_len > max_fragment_size {
+            return Err(H2Error::stream(
+                stream_id,
+                ErrorCode::EnhanceYourCalm,
+                "accumulated header fragments too large",
+            ));
+        }
+        let mut combined = BytesMut::with_capacity(total_len);
+        for fragment in fragments {
+            combined.extend_from_slice(&fragment);
+        }
+
+        // Decode headers
+        let mut src = combined.freeze();
+        let headers = self.hpack_decoder.decode(&mut src)?;
+
+        // br-asupersync-k4jj9p: refine is_trailers using the just-observed
+        // :status pseudo-header. CLIENT side: a subsequent HEADERS is
+        // trailers ONLY if there is NO :status pseudo-header (since 1xx
+        // informational AND final responses both carry :status). SERVER
+        // side keeps the original semantics — any subsequent HEADERS is
+        // trailers (1xx informational is impossible request-side).
+        let observed_status = headers
+            .iter()
+            .find(|h| h.name.as_bytes() == b":status")
+            .and_then(|h| std::str::from_utf8(h.value.as_bytes()).ok())
+            .and_then(|s| s.parse::<u16>().ok());
+        let is_informational_response =
+            !is_request && observed_status.is_some_and(|s| (100..200).contains(&s));
+        let is_trailers = if is_request {
+            tentative_is_trailers
+        } else {
+            // Client side: trailers iff subsequent-headers AND no :status.
+            // end_stream alone is NOT sufficient — a bodyless final
+            // response after 1xx has end_stream=true but is NOT trailers.
+            is_subsequent_headers && observed_status.is_none() && end_stream
+        };
+
+        // br-asupersync-vqpx88 + br-asupersync-0eyf7t: RFC 9113
+        // §8.3.1/§8.3.2 pseudo-header structural validation, plus
+        // the §8.1 trailers-have-no-pseudo-headers rule. The
+        // is_trailers flag short-circuits to a stricter
+        // no-pseudo-headers path inside the validator while still
+        // applying the regular-header validations
+        // (lowercase names, connection-specific header ban).
+        if let Err(why) = validate_h2_pseudo_headers(&headers, is_request, is_trailers) {
+            return Err(H2Error::stream(stream_id, ErrorCode::ProtocolError, why));
+        }
+
+        // br-asupersync-0eyf7t + br-asupersync-k4jj9p — mark the
+        // initial-headers gate ONLY when we've observed the FINAL
+        // response (not a 1xx informational). Marking on 1xx would
+        // mis-classify the subsequent final-response HEADERS as
+        // trailers, rejecting its valid :status pseudo-header.
+        let should_mark_initial = !is_trailers && !is_informational_response;
+        if should_mark_initial {
+            if let Some(stream) = self.streams.get_mut(stream_id) {
+                stream.mark_initial_headers_decoded();
+            }
+        }
+
+        Ok(Some(ReceivedFrame::Headers {
+            stream_id,
+            headers,
+            end_stream,
+        }))
+    }
+
+    /// Decode accumulated PUSH_PROMISE headers for a promised stream.
+    fn decode_push_promise(
+        &mut self,
+        associated_stream_id: u32,
+        promised_stream_id: u32,
+    ) -> Result<Option<ReceivedFrame>, H2Error> {
+        let promised = self.streams.get_mut(promised_stream_id).ok_or_else(|| {
+            H2Error::stream(
+                promised_stream_id,
+                ErrorCode::StreamClosed,
+                "promised stream not found",
+            )
+        })?;
+        let fragments = promised.take_header_fragments();
+
+        let total_len: usize = fragments.iter().map(Bytes::len).sum();
+        let max_fragment_size =
+            Stream::max_header_fragment_size_for(self.local_settings.max_header_list_size);
+        if total_len > max_fragment_size {
+            return Err(H2Error::stream(
+                promised_stream_id,
+                ErrorCode::EnhanceYourCalm,
+                "accumulated header fragments too large",
+            ));
+        }
+        let mut combined = BytesMut::with_capacity(total_len);
+        for fragment in fragments {
+            combined.extend_from_slice(&fragment);
+        }
+
+        let mut src = combined.freeze();
+        let headers = self.hpack_decoder.decode(&mut src)?;
+
+        // br-asupersync-vqpx88: PUSH_PROMISE carries request semantics
+        // (RFC 9113 §8.4 — server-pushed request that the server
+        // promises to fulfil). The pseudo-header set is validated as
+        // a request regardless of our local role; per §8.4 a client
+        // receiving an invalid PUSH_PROMISE MUST treat it as a
+        // stream error of type PROTOCOL_ERROR scoped to the
+        // promised stream (not the associated stream).
+        // PUSH_PROMISE always carries a request header block (no
+        // trailers form); is_trailers=false.
+        if let Err(why) = validate_h2_pseudo_headers(
+            &headers, /* is_request = */ true, /* is_trailers = */ false,
+        ) {
+            return Err(H2Error::stream(
+                promised_stream_id,
+                ErrorCode::ProtocolError,
+                why,
+            ));
+        }
+
+        Ok(Some(ReceivedFrame::PushPromise {
+            stream_id: associated_stream_id,
+            promised_stream_id,
+            headers,
+        }))
+    }
+
+    /// Process RST_STREAM frame.
+    ///
+    /// RFC 7540 §5.1: RST_STREAM received on a stream in the idle state MUST
+    /// be treated as a connection error of type PROTOCOL_ERROR.
+    ///
+    /// Includes rate limiting to protect against CVE-2023-44487 (HTTP/2 Rapid
+    /// Reset) class attacks. If the peer sends more than `DEFAULT_RST_STREAM_RATE_LIMIT`
+    /// RST_STREAM frames within `DEFAULT_RST_STREAM_RATE_WINDOW_MS`, the connection is
+    /// terminated with ENHANCE_YOUR_CALM.
+    fn process_rst_stream(&mut self, frame: RstStreamFrame) -> Result<ReceivedFrame, H2Error> {
+        // RFC 7540 §6.4: RST_STREAM frames MUST NOT be sent for stream 0.
+        if frame.stream_id == 0 {
+            return Err(H2Error::protocol("RST_STREAM with stream ID 0"));
+        }
+
+        // RFC 7540 §5.1: receiving RST_STREAM on an idle stream MUST be
+        // treated as a connection error of type PROTOCOL_ERROR.
+        if self.streams.is_idle_stream_id(frame.stream_id) {
+            return Err(H2Error::protocol("RST_STREAM received on idle stream"));
+        }
+
+        // Track stream ID so GOAWAY last_stream_id is correct (RFC 9113 §6.8).
+        self.track_stream_id(frame.stream_id);
+
+        // Rate-limit RST_STREAM frames (CVE-2023-44487 mitigation).
+        let elapsed = std::time::Duration::from_nanos(
+            (self.time_getter)().duration_since(self.rst_stream_window_start),
+        )
+        .as_millis();
+        if elapsed >= self.rst_rate_limit.rst_window_ms {
+            // Reset the window.
+            self.rst_stream_count = 0;
+            self.rst_stream_window_start = (self.time_getter)();
+        }
+
+        // Fail closed at the configured limit instead of incrementing first.
+        // This preserves the "N allowed, N+1 rejected" contract even when the
+        // configured ceiling is `u32::MAX`, where a direct increment would wrap.
+        if self.rst_stream_count >= self.rst_rate_limit.max_rst_streams {
+            return Err(H2Error::connection(
+                ErrorCode::EnhanceYourCalm,
+                "RST_STREAM flood detected",
+            ));
+        }
+        self.rst_stream_count += 1;
+
+        if let Some(stream) = self.streams.get_mut(frame.stream_id) {
+            stream.reset(frame.error_code);
+        }
+
+        Ok(ReceivedFrame::Reset {
+            stream_id: frame.stream_id,
+            error_code: frame.error_code,
+        })
+    }
+
+    /// Process SETTINGS frame.
+    fn process_settings(
+        &mut self,
+        frame: &SettingsFrame,
+    ) -> Result<Option<ReceivedFrame>, H2Error> {
+        if frame.ack {
+            // ACK received for our settings
+            return Ok(None);
+        }
+
+        // br-asupersync-wk370q: validate ALL settings BEFORE applying
+        // any side-effect. Pre-fix this loop applied each setting in
+        // turn (mutating self.remote_settings, self.streams,
+        // self.hpack_encoder) and returned early on the first
+        // failure — leaving partial state behind. With the SETTINGS
+        // frame as a whole rejected, the connection would proceed to
+        // GOAWAY but the per-stream initial_window_size, the HPACK
+        // encoder table size, and the connection-level
+        // remote_settings would have absorbed every setting before
+        // the failing one. That partial state is observable during
+        // the GOAWAY drain and contradicts what the peer thinks the
+        // connection state is — flow-control desync, HPACK encoder
+        // table-size leak, etc.
+        //
+        // The fix: stage every setting onto a clone of
+        // remote_settings, fail-stop on first error, and only apply
+        // side-effects after every setting in the frame validates
+        // successfully.
+        let mut staged = self.remote_settings.clone();
+        for setting in &frame.settings {
+            // RFC 7540 §6.5.2: A server MUST NOT send SETTINGS_ENABLE_PUSH.
+            // Therefore a client that receives it must treat this as PROTOCOL_ERROR.
+            if self.is_client && matches!(setting, Setting::EnablePush(_)) {
+                return Err(H2Error::protocol(
+                    "server MUST NOT send SETTINGS_ENABLE_PUSH",
+                ));
+            }
+            if let Setting::InitialWindowSize(size) = setting {
+                self.streams.check_initial_window_size(*size)?;
+            }
+            staged.apply(*setting)?;
+        }
+
+        // Validation passed — commit the staged settings atomically
+        // and apply derived side-effects in a second pass that cannot
+        // fail (set_initial_window_size is the only fallible call,
+        // and it only fails when the new value would overflow a
+        // u31; staged already accepted the value so this is safe).
+        self.remote_settings = staged;
+        for setting in &frame.settings {
+            match setting {
+                Setting::InitialWindowSize(size) => {
+                    self.streams.set_initial_window_size(*size)?;
+                }
+                Setting::HeaderTableSize(size) => {
+                    // Cap to 1 MiB (same limit as the decoder) to prevent
+                    // unbounded encoder table growth from a peer's SETTINGS.
+                    let capped = (*size as usize).min(1024 * 1024);
+                    self.hpack_encoder.set_max_table_size(capped);
+                }
+                Setting::MaxConcurrentStreams(max) => {
+                    self.streams.set_max_concurrent_streams(*max);
+                }
+                Setting::MaxFrameSize(size) => {
+                    // Update frame codec when we have one
+                    let _ = size;
+                }
+                _ => {}
+            }
+        }
+
+        // Send ACK
+        self.pending_ops.push_back(PendingOp::SettingsAck);
+
+        if !self.received_settings {
+            self.received_settings = true;
+            self.state = ConnectionState::Open;
+        }
+
+        Ok(None)
+    }
+
+    /// Process PUSH_PROMISE frame.
+    fn process_push_promise(
+        &mut self,
+        frame: &PushPromiseFrame,
+    ) -> Result<Option<ReceivedFrame>, H2Error> {
+        if !self.is_client {
+            return Err(H2Error::protocol("server received PUSH_PROMISE"));
+        }
+        if !self.local_settings.enable_push {
+            return Err(H2Error::protocol("push not enabled"));
+        }
+        if frame.stream_id.is_multiple_of(2) {
+            return Err(H2Error::protocol("PUSH_PROMISE on server-initiated stream"));
+        }
+
+        // RFC 9113 §6.8: After sending GOAWAY, refuse new streams with IDs
+        // above the advertised last_stream_id.
+        if self.stream_exceeds_sent_goaway(frame.promised_stream_id) {
+            self.pending_ops.push_back(PendingOp::RstStream {
+                stream_id: frame.promised_stream_id,
+                error_code: ErrorCode::RefusedStream,
+            });
+            return Ok(None);
+        }
+
+        // RFC 7540 §5.1: "An endpoint receiving a PUSH_PROMISE on a stream
+        // that is neither 'open' nor 'half-closed (local)' MUST treat this
+        // as a connection error of type PROTOCOL_ERROR."
+        let assoc_state = match self.streams.get(frame.stream_id) {
+            Some(stream) => stream.state(),
+            None => {
+                return Err(H2Error::protocol("PUSH_PROMISE on unknown stream"));
+            }
+        };
+        if !matches!(
+            assoc_state,
+            StreamState::Open | StreamState::HalfClosedLocal
+        ) {
+            let code = if assoc_state.is_closed() {
+                ErrorCode::StreamClosed
+            } else {
+                ErrorCode::ProtocolError
+            };
+            return Err(H2Error::stream(
+                frame.stream_id,
+                code,
+                "PUSH_PROMISE on stream not in open or half-closed (local) state",
+            ));
+        }
+
+        let max_concurrent = self.local_settings.max_concurrent_streams;
+        if self.streams.active_count() as u32 >= max_concurrent {
+            // RST_STREAM must target the promised stream (RFC 7540 §8.2.2),
+            // not the parent request stream.
+            return Err(H2Error::stream(
+                frame.promised_stream_id,
+                ErrorCode::RefusedStream,
+                "max concurrent streams exceeded",
+            ));
+        }
+
+        let promised_stream_id = frame.promised_stream_id;
+        let promised_stream = self.streams.reserve_remote_stream(promised_stream_id)?;
+        promised_stream.add_header_fragment(frame.header_block.clone())?;
+
+        if frame.end_headers {
+            self.continuation_stream_id = None;
+            self.continuation_started_at = None;
+            self.decode_push_promise(frame.stream_id, promised_stream_id)
+        } else {
+            self.pending_push_promise = Some(PushPromiseAccumulator {
+                associated_stream_id: frame.stream_id,
+                promised_stream_id,
+            });
+            self.continuation_stream_id = Some(frame.stream_id);
+            self.continuation_started_at = Some((self.time_getter)());
+            Ok(None)
+        }
+    }
+
+    /// Process PING frame.
+    fn process_ping(&mut self, frame: PingFrame) -> Option<ReceivedFrame> {
+        if !frame.ack {
+            // Send PING ACK
+            self.pending_ops
+                .push_back(PendingOp::PingAck(frame.opaque_data));
+        }
+        None
+    }
+
+    /// Process GOAWAY frame.
+    fn process_goaway(&mut self, frame: GoAwayFrame) -> ReceivedFrame {
+        self.goaway_received = true;
+        self.state = ConnectionState::Closing;
+        let effective_last_stream_id = self
+            .received_goaway_last_stream_id
+            .map_or(frame.last_stream_id, |previous| {
+                previous.min(frame.last_stream_id)
+            });
+        self.received_goaway_last_stream_id = Some(effective_last_stream_id);
+
+        // Reset locally-initiated streams that weren't processed by the peer.
+        // The last_stream_id only restricts streams initiated by the receiver of the GOAWAY.
+        for stream_id in self.streams.active_stream_ids() {
+            let is_local = (stream_id % 2 == 1) == self.is_client;
+            if is_local && stream_id > effective_last_stream_id {
+                if let Some(stream) = self.streams.get_mut(stream_id) {
+                    stream.reset(ErrorCode::RefusedStream);
+                }
+            }
+        }
+
+        ReceivedFrame::GoAway {
+            last_stream_id: effective_last_stream_id,
+            error_code: frame.error_code,
+            debug_data: frame.debug_data,
+        }
+    }
+
+    /// Process WINDOW_UPDATE frame.
+    fn process_window_update(
+        &mut self,
+        frame: WindowUpdateFrame,
+    ) -> Result<Option<ReceivedFrame>, H2Error> {
+        let increment = i32::try_from(frame.increment)
+            .map_err(|_| H2Error::flow_control("window increment too large"))?;
+        // RFC 9113 §6.9.1: increment of 0 on the connection flow-control
+        // window (stream 0) MUST be treated as a connection error of type
+        // PROTOCOL_ERROR.  On any other stream it MUST be a stream error.
+        if increment == 0 {
+            if frame.stream_id == 0 {
+                return Err(H2Error::protocol("WINDOW_UPDATE with zero increment"));
+            }
+            return Err(H2Error::stream(
+                frame.stream_id,
+                ErrorCode::ProtocolError,
+                "WINDOW_UPDATE with zero increment",
+            ));
+        }
+        if frame.stream_id == 0 {
+            // Connection-level window update
+            // Check for overflow using wider arithmetic before adding
+            let new_window = i64::from(self.send_window) + i64::from(increment);
+            if new_window > i64::from(i32::MAX) {
+                return Err(H2Error::flow_control("connection window overflow"));
+            }
+            self.send_window = new_window as i32;
+        } else {
+            // Stream-level window update
+            // RFC 7540 §5.1: receiving WINDOW_UPDATE on an idle stream
+            // MUST be treated as a connection error of type PROTOCOL_ERROR.
+            if self.streams.is_idle_stream_id(frame.stream_id) {
+                return Err(H2Error::protocol("WINDOW_UPDATE received on idle stream"));
+            }
+            if let Some(stream) = self.streams.get_mut(frame.stream_id) {
+                stream.update_send_window(increment)?;
+            }
+        }
+
+        Ok(None)
+    }
+
+    /// Get next pending frame to send.
+    #[allow(clippy::too_many_lines)]
+    pub fn next_frame(&mut self) -> Option<Frame> {
+        let mut blocked_data = false;
+        let pending_len = self.pending_ops.len();
+        let mut skipped_ops = std::collections::VecDeque::new();
+        let mut newly_queued_ops = std::collections::VecDeque::new();
+        let mut returned_frame = None;
+
+        for _ in 0..pending_len {
+            let op = self.pending_ops.pop_front()?;
+
+            match op {
+                PendingOp::Settings(frame) => {
+                    returned_frame = Some(Frame::Settings(frame));
+                    break;
+                }
+                PendingOp::SettingsAck => {
+                    returned_frame = Some(Frame::Settings(SettingsFrame::ack()));
+                    break;
+                }
+                PendingOp::PingAck(data) => {
+                    returned_frame = Some(Frame::Ping(PingFrame::ack(data)));
+                    break;
+                }
+                PendingOp::WindowUpdate {
+                    stream_id,
+                    increment,
+                } => {
+                    if stream_id != 0 && !self.stream_can_emit_queued_frames(stream_id) {
+                        continue;
+                    }
+                    returned_frame = Some(Frame::WindowUpdate(WindowUpdateFrame::new(
+                        stream_id, increment,
+                    )));
+                    break;
+                }
+                PendingOp::Headers {
+                    stream_id,
+                    headers,
+                    end_stream,
+                } => {
+                    if !self.stream_can_emit_queued_frames(stream_id) {
+                        continue;
+                    }
+                    // Encode headers
+                    let mut encoded = BytesMut::new();
+                    self.hpack_encoder.encode(&headers, &mut encoded);
+                    let encoded = encoded.freeze();
+
+                    let max_frame_size = self.remote_settings.max_frame_size as usize;
+
+                    if encoded.len() <= max_frame_size {
+                        // Fits in a single HEADERS frame
+                        returned_frame = Some(Frame::Headers(HeadersFrame::new(
+                            stream_id, encoded, end_stream, true, // end_headers
+                        )));
+                        break;
+                    }
+
+                    // Need CONTINUATION frames - split the header block
+                    let first_chunk = encoded.slice(..max_frame_size);
+                    let remaining = encoded.slice(max_frame_size..);
+
+                    // Queue CONTINUATION frames for remaining data.
+                    // Push to newly_queued_ops so they are emitted immediately after
+                    // this HEADERS frame, before any other pending ops
+                    // (RFC 9113 §6.10 requires CONTINUATION to follow HEADERS
+                    // without interleaving other frame types).
+                    let mut offset = 0;
+                    while offset < remaining.len() {
+                        let chunk_end = (offset + max_frame_size).min(remaining.len());
+                        let chunk = remaining.slice(offset..chunk_end);
+                        let is_last = chunk_end == remaining.len();
+                        newly_queued_ops.push_back(PendingOp::Continuation {
+                            stream_id,
+                            header_block: chunk,
+                            end_headers: is_last,
+                        });
+                        offset = chunk_end;
+                    }
+
+                    returned_frame = Some(Frame::Headers(HeadersFrame::new(
+                        stream_id,
+                        first_chunk,
+                        end_stream,
+                        false, // end_headers = false, CONTINUATION follows
+                    )));
+                    break;
+                }
+                PendingOp::PushPromise {
+                    stream_id,
+                    promised_stream_id,
+                    headers,
+                } => {
+                    if !self.stream_can_emit_queued_frames(stream_id)
+                        || !self.stream_can_emit_queued_frames(promised_stream_id)
+                    {
+                        continue;
+                    }
+
+                    let mut encoded = BytesMut::new();
+                    self.hpack_encoder.encode(&headers, &mut encoded);
+                    let encoded = encoded.freeze();
+
+                    let max_frame_size = self.remote_settings.max_frame_size as usize;
+                    debug_assert!(max_frame_size > 4);
+                    let first_chunk_limit = max_frame_size - 4;
+
+                    if encoded.len() <= first_chunk_limit {
+                        returned_frame = Some(Frame::PushPromise(PushPromiseFrame {
+                            stream_id,
+                            promised_stream_id,
+                            header_block: encoded,
+                            end_headers: true,
+                        }));
+                        break;
+                    }
+
+                    let first_chunk = encoded.slice(..first_chunk_limit);
+                    let remaining = encoded.slice(first_chunk_limit..);
+
+                    let mut offset = 0;
+                    while offset < remaining.len() {
+                        let chunk_end = (offset + max_frame_size).min(remaining.len());
+                        let chunk = remaining.slice(offset..chunk_end);
+                        let is_last = chunk_end == remaining.len();
+                        newly_queued_ops.push_back(PendingOp::Continuation {
+                            stream_id,
+                            header_block: chunk,
+                            end_headers: is_last,
+                        });
+                        offset = chunk_end;
+                    }
+
+                    returned_frame = Some(Frame::PushPromise(PushPromiseFrame {
+                        stream_id,
+                        promised_stream_id,
+                        header_block: first_chunk,
+                        end_headers: false,
+                    }));
+                    break;
+                }
+                PendingOp::Continuation {
+                    stream_id,
+                    header_block,
+                    end_headers,
+                } => {
+                    if !self.stream_can_emit_queued_frames(stream_id) {
+                        continue;
+                    }
+                    returned_frame = Some(Frame::Continuation(ContinuationFrame {
+                        stream_id,
+                        header_block,
+                        end_headers,
+                    }));
+                    break;
+                }
+                PendingOp::Data {
+                    stream_id,
+                    data,
+                    end_stream,
+                } => {
+                    let stream_avail = match self.streams.get(stream_id) {
+                        // A reset stream cannot send any queued frames, but a
+                        // normally-closed stream may still need to flush the
+                        // final chunk that closed it.
+                        Some(stream) if stream.error_code().is_none() => {
+                            stream.send_window().max(0).cast_unsigned()
+                        }
+                        _ => continue,
+                    };
+
+                    // Determine the maximum sendable bytes from flow control windows and max_frame_size.
+                    let conn_avail = self.send_window.max(0).cast_unsigned();
+                    let frame_size_limit = self.remote_settings.max_frame_size;
+                    let max_send = conn_avail.min(stream_avail).min(frame_size_limit) as usize;
+
+                    if max_send == 0 && !data.is_empty() {
+                        // No send window available; re-queue for later.
+                        skipped_ops.push_back(PendingOp::Data {
+                            stream_id,
+                            data,
+                            end_stream,
+                        });
+                        blocked_data = true;
+                        continue;
+                    }
+
+                    let send_len = data.len().min(max_send);
+                    let (to_send, remainder) = if send_len < data.len() {
+                        (data.slice(..send_len), Some(data.slice(send_len..)))
+                    } else {
+                        (data, None)
+                    };
+
+                    // Re-queue leftover data (end_stream only on the final piece).
+                    let actually_end = end_stream && remainder.is_none();
+                    if let Some(rest) = remainder {
+                        skipped_ops.push_back(PendingOp::Data {
+                            stream_id,
+                            data: rest,
+                            end_stream,
+                        });
+                    }
+
+                    // Consume send windows.
+                    let consumed = u32::try_from(to_send.len())
+                        .expect("send_len already clamped to u32 range");
+                    self.send_window -= consumed.cast_signed();
+                    if let Some(stream) = self.streams.get_mut(stream_id) {
+                        stream.consume_send_window(consumed);
+                    }
+
+                    returned_frame = Some(Frame::Data(DataFrame::new(
+                        stream_id,
+                        to_send,
+                        actually_end,
+                    )));
+                    break;
+                }
+                PendingOp::RstStream {
+                    stream_id,
+                    error_code,
+                } => {
+                    returned_frame =
+                        Some(Frame::RstStream(RstStreamFrame::new(stream_id, error_code)));
+                    break;
+                }
+                PendingOp::GoAway {
+                    last_stream_id,
+                    error_code,
+                    debug_data,
+                } => {
+                    let mut frame = GoAwayFrame::new(last_stream_id, error_code);
+                    frame.debug_data = debug_data;
+                    returned_frame = Some(Frame::GoAway(frame));
+                    break;
+                }
+            }
+        }
+
+        // Rebuild self.pending_ops while preserving precise ordering.
+        // 1. newly_queued_ops (e.g. CONTINUATION) must go first so they are emitted next.
+        // 2. skipped_ops (e.g. blocked DATA) go next so they maintain their original relative order.
+        // 3. The remainder of self.pending_ops stays at the back.
+        for op in skipped_ops.into_iter().rev() {
+            self.pending_ops.push_front(op);
+        }
+        for op in newly_queued_ops.into_iter().rev() {
+            self.pending_ops.push_front(op);
+        }
+
+        if returned_frame.is_some() {
+            return returned_frame;
+        }
+
+        if blocked_data {
+            return None;
+        }
+
+        None
+    }
+
+    /// Check if there are pending frames to send.
+    #[must_use]
+    pub fn has_pending_frames(&self) -> bool {
+        !self.pending_ops.is_empty()
+    }
+
+    /// Check whether any queued outbound frame still belongs to `stream_id`.
+    ///
+    /// This lets the HTTP/2 listener keep request in-flight accounting alive
+    /// until response frames have actually left the connection queue rather
+    /// than only until the handler has produced a response. That distinction
+    /// matters when DATA is flow-control-blocked and remains in `pending_ops`
+    /// across drain-supervisor observations.
+    #[must_use]
+    pub fn has_pending_frames_for_stream(&self, stream_id: u32) -> bool {
+        self.pending_ops
+            .iter()
+            .any(|op| op.references_stream(stream_id))
+    }
+
+    fn prune_closed_streams_without_pending_frames(&mut self) {
+        let pending_ops = &self.pending_ops;
+        self.streams.prune_closed_except(|stream_id| {
+            pending_ops.iter().any(|op| op.references_stream(stream_id))
+        });
+    }
+
+    /// Send a WINDOW_UPDATE for connection-level flow control.
+    ///
+    /// # Errors
+    ///
+    /// Returns `H2Error` if `increment` is zero (RFC 7540 §6.9) or exceeds `i32::MAX`.
+    pub fn send_connection_window_update(&mut self, increment: u32) -> Result<(), H2Error> {
+        if increment == 0 {
+            return Err(H2Error::flow_control(
+                "WINDOW_UPDATE increment must be non-zero (RFC 7540 §6.9)",
+            ));
+        }
+        let delta = i32::try_from(increment)
+            .map_err(|_| H2Error::flow_control("window increment too large"))?;
+        let new_window = i64::from(self.recv_window) + i64::from(delta);
+        if new_window > i64::from(i32::MAX) {
+            return Err(H2Error::flow_control("connection window overflow"));
+        }
+        self.recv_window = new_window as i32;
+        self.pending_ops.push_back(PendingOp::WindowUpdate {
+            stream_id: 0,
+            increment,
+        });
+        Ok(())
+    }
+
+    /// Send a WINDOW_UPDATE for stream-level flow control.
+    ///
+    /// # Errors
+    ///
+    /// Returns `H2Error` if `increment` is zero (RFC 7540 §6.9) or exceeds `i32::MAX`.
+    pub fn send_stream_window_update(
+        &mut self,
+        stream_id: u32,
+        increment: u32,
+    ) -> Result<(), H2Error> {
+        if increment == 0 {
+            return Err(H2Error::flow_control(
+                "WINDOW_UPDATE increment must be non-zero (RFC 7540 §6.9)",
+            ));
+        }
+        let delta = i32::try_from(increment)
+            .map_err(|_| H2Error::flow_control("window increment too large"))?;
+        if let Some(stream) = self.streams.get_mut(stream_id) {
+            stream.update_recv_window(delta)?;
+        } else {
+            // Stream already closed/pruned — skip the WINDOW_UPDATE to avoid
+            // sending it for a stream the peer may consider idle (protocol error).
+            return Ok(());
+        }
+        self.pending_ops.push_back(PendingOp::WindowUpdate {
+            stream_id,
+            increment,
+        });
+        Ok(())
+    }
+
+    /// Prune closed streams.
+    pub fn prune_closed_streams(&mut self) {
+        self.prune_closed_streams_without_pending_frames();
+    }
+}
+
+/// Received frame event.
+#[derive(Debug)]
+#[allow(missing_docs)]
+pub enum ReceivedFrame {
+    /// Received headers.
+    Headers {
+        stream_id: u32,
+        headers: Vec<Header>,
+        end_stream: bool,
+    },
+    /// Received PUSH_PROMISE.
+    PushPromise {
+        stream_id: u32,
+        promised_stream_id: u32,
+        headers: Vec<Header>,
+    },
+    /// Received data.
+    Data {
+        stream_id: u32,
+        data: Bytes,
+        end_stream: bool,
+    },
+    /// Stream was reset.
+    Reset {
+        stream_id: u32,
+        error_code: ErrorCode,
+    },
+    /// Connection is closing.
+    GoAway {
+        last_stream_id: u32,
+        error_code: ErrorCode,
+        debug_data: Bytes,
+    },
+}
+
+/// RFC 9113 §8.3 / §8.3.1 / §8.3.2 pseudo-header structural validation
+/// for an HPACK-decoded header block.
+///
+/// Returns `Err(reason)` on any malformed shape so the caller can map it
+/// to `ErrorCode::ProtocolError`. The first failure short-circuits.
+///
+/// **What this validates** (the §8.3 structural rules):
+///
+/// 1. **Sequencing**: every pseudo-header (a header whose name starts
+///    with `:`) MUST appear *before* any regular header. Once a
+///    regular header is seen, encountering a pseudo-header is malformed
+///    (RFC 9113 §8.3, last paragraph).
+/// 2. **No duplicates**: any given pseudo-header MUST appear at most
+///    once (RFC 9113 §8.3.1, §8.3.2). HPACK can compress repeats but
+///    the validation runs on the decoded list, so duplicates are
+///    rejected.
+/// 3. **No unknown pseudo-headers**: only `:method`, `:scheme`,
+///    `:path`, `:authority`, `:status`, `:protocol` (the last for
+///    extended CONNECT, RFC 8441) are defined. Anything else with a
+///    leading `:` is malformed (RFC 9113 §8.3).
+/// 4. **Direction-specific required/forbidden sets**:
+///    - **request** (`is_request == true`, server receiving HEADERS):
+///      MUST have `:method`. Non-CONNECT requests MUST also have
+///      `:scheme` and `:path`. CONNECT requests MUST have `:authority`
+///      and MUST NOT have `:scheme` or `:path` (RFC 9113 §8.5). Must
+///      NOT have `:status`.
+///    - **response** (`is_request == false`, client receiving HEADERS):
+///      MUST have `:status` and MUST NOT have `:method`/`:scheme`/
+///      `:path`/`:authority`/`:protocol` (RFC 9113 §8.3.2).
+/// 5. **Regular header name lower-case**: regular header names MUST
+///    NOT contain uppercase ASCII (RFC 9113 §8.2.1). Pseudo-headers
+///    are exempt.
+///
+/// **What this does NOT validate** (deeper §8.3.1 value-syntax checks
+/// — path-form, scheme syntax, authority form, status range, method
+/// token, header-value byte set): those are the depth implemented in
+/// `crate::http::h3_native::validate_request_pseudo_headers_with_settings`
+/// and represent a follow-up. The structural rules above are the ones
+/// flagged by the bead and are the highest-value subset because they
+/// catch the entire class of confusion attacks where a peer smuggles
+/// a `:method`/`:authority`/`:status` *after* a regular header to bypass
+/// upstream filters that only inspect the first header pair.
+fn validate_h2_pseudo_headers(
+    headers: &[Header],
+    is_request: bool,
+    is_trailers: bool,
+) -> Result<(), &'static str> {
+    // br-asupersync-0eyf7t — RFC 9113 §8.1: "Trailer fields MUST NOT
+    // include pseudo-header fields (Section 8.3)". Reject any
+    // pseudo-header in a trailers block before the rest of the
+    // structural validation runs. Regular-header validations
+    // (lowercase names per §8.2.1, connection-specific header ban
+    // per §8.2.2) still apply and are run below.
+    if is_trailers {
+        for h in headers {
+            let name: &[u8] = h.name.as_bytes();
+            if name.is_empty() {
+                return Err("empty header name");
+            }
+            if name.first().copied() == Some(b':') {
+                return Err("trailers section MUST NOT contain pseudo-header fields \
+                     (RFC 9113 §8.1)");
+            }
+            if name.iter().any(|b| b.is_ascii_uppercase()) {
+                return Err(
+                    "regular header field name in trailers contains uppercase ASCII \
+                     (RFC 9113 §8.2.1 violation)",
+                );
+            }
+            match name {
+                b"connection" | b"keep-alive" | b"proxy-connection" | b"transfer-encoding"
+                | b"upgrade" => {
+                    return Err(
+                        "connection-specific header field forbidden in HTTP/2 trailers \
+                         (RFC 9113 §8.2.2)",
+                    );
+                }
+                b"te" if h.value.as_bytes() != b"trailers" => {
+                    return Err("te header field MUST have value \"trailers\" in HTTP/2 \
+                         (RFC 9113 §8.2.2)");
+                }
+                _ => {}
+            }
+        }
+        return Ok(());
+    }
+
+    let mut seen_regular = false;
+    let mut seen_method = false;
+    let mut seen_scheme = false;
+    let mut seen_path = false;
+    let mut seen_authority = false;
+    let mut seen_status = false;
+    let mut seen_protocol = false;
+    let mut method_value: Option<&[u8]> = None;
+
+    for h in headers {
+        let name: &[u8] = h.name.as_bytes();
+        if name.is_empty() {
+            return Err("empty header name");
+        }
+        if name.first().copied() == Some(b':') {
+            // Pseudo-header.
+            if seen_regular {
+                return Err("pseudo-header field appears after a regular header field \
+                     (RFC 9113 §8.3 — header-block ordering violation)");
+            }
+            match name {
+                b":method" => {
+                    if seen_method {
+                        return Err("duplicate :method pseudo-header");
+                    }
+                    seen_method = true;
+                    method_value = Some(h.value.as_bytes());
+                }
+                b":scheme" => {
+                    if seen_scheme {
+                        return Err("duplicate :scheme pseudo-header");
+                    }
+                    seen_scheme = true;
+                }
+                b":path" => {
+                    if seen_path {
+                        return Err("duplicate :path pseudo-header");
+                    }
+                    seen_path = true;
+                }
+                b":authority" => {
+                    if seen_authority {
+                        return Err("duplicate :authority pseudo-header");
+                    }
+                    seen_authority = true;
+                }
+                b":status" => {
+                    if seen_status {
+                        return Err("duplicate :status pseudo-header");
+                    }
+                    seen_status = true;
+                }
+                b":protocol" => {
+                    if seen_protocol {
+                        return Err("duplicate :protocol pseudo-header");
+                    }
+                    seen_protocol = true;
+                }
+                _ => {
+                    return Err("unknown pseudo-header field \
+                         (RFC 9113 §8.3 — only :method/:scheme/:path/:authority/:status \
+                         and :protocol for extended CONNECT are defined)");
+                }
+            }
+        } else {
+            // Regular header. Once we've seen one, no further pseudo-
+            // headers may appear.
+            seen_regular = true;
+            // RFC 9113 §8.2.1: regular header names MUST NOT contain
+            // uppercase ASCII characters.
+            if name.iter().any(|b| b.is_ascii_uppercase()) {
+                return Err("regular header field name contains uppercase ASCII \
+                     (RFC 9113 §8.2.1 violation)");
+            }
+            // br-asupersync-rmfjui — RFC 9113 §8.2.2: connection-
+            // specific header fields MUST NOT be transmitted in
+            // HTTP/2; any message containing them is malformed and
+            // MUST be treated as a stream error of PROTOCOL_ERROR.
+            // The exception is `te`, whose name is permitted but
+            // whose value MUST be exactly the token "trailers".
+            match name {
+                b"connection" | b"keep-alive" | b"proxy-connection" | b"transfer-encoding"
+                | b"upgrade" => {
+                    return Err("connection-specific header field forbidden in HTTP/2 \
+                         (RFC 9113 §8.2.2)");
+                }
+                b"te" if h.value.as_bytes() != b"trailers" => {
+                    return Err("te header field MUST have value \"trailers\" in HTTP/2 \
+                         (RFC 9113 §8.2.2)");
+                }
+                _ => {}
+            }
+        }
+    }
+
+    // Direction-specific required/forbidden checks.
+    if is_request {
+        if seen_status {
+            return Err("request must not include :status pseudo-header");
+        }
+        if !seen_method {
+            return Err("request missing required :method pseudo-header");
+        }
+        let is_connect = method_value == Some(b"CONNECT");
+        if is_connect {
+            if !seen_authority {
+                return Err("CONNECT request missing required :authority pseudo-header");
+            }
+            // RFC 9113 §8.5: CONNECT requests MUST NOT include :scheme
+            // or :path. Extended CONNECT (RFC 8441 / :protocol) is
+            // the documented exception, allowed only when negotiated
+            // via SETTINGS_ENABLE_CONNECT_PROTOCOL — that negotiation
+            // is not represented in the structural validation here,
+            // so we follow the conservative §8.5 rule. A future
+            // pass that wires SETTINGS_ENABLE_CONNECT_PROTOCOL
+            // through to this validator should relax this branch
+            // (and align with h3_native's
+            // `validate_request_pseudo_headers_with_settings`).
+            if seen_protocol && (seen_scheme || seen_path) {
+                // Tolerate :protocol presence for the extended-CONNECT
+                // case (the deeper :protocol value validation lives
+                // in the follow-up). Fall through.
+            } else if seen_scheme || seen_path {
+                return Err("CONNECT request must not include :scheme or :path \
+                     (RFC 9113 §8.5)");
+            }
+        } else {
+            if !seen_scheme {
+                return Err("non-CONNECT request missing required :scheme pseudo-header");
+            }
+            if !seen_path {
+                return Err("non-CONNECT request missing required :path pseudo-header");
+            }
+            if seen_protocol {
+                return Err(
+                    ":protocol pseudo-header is only valid for extended CONNECT \
+                     (RFC 8441) and was sent on a non-CONNECT request",
+                );
+            }
+        }
+    } else {
+        // Response.
+        if !seen_status {
+            return Err("response missing required :status pseudo-header");
+        }
+        if seen_method || seen_scheme || seen_path || seen_authority || seen_protocol {
+            return Err("response must not include request pseudo-headers \
+                 (:method/:scheme/:path/:authority/:protocol — RFC 9113 §8.3.2)");
+        }
+    }
+
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    #![allow(
+        clippy::pedantic,
+        clippy::nursery,
+        clippy::expect_fun_call,
+        clippy::map_unwrap_or,
+        clippy::cast_possible_wrap,
+        clippy::future_not_send
+    )]
+    use super::*;
+    use crate::bytes::Bytes;
+    use crate::http::h2::settings;
+    use std::sync::atomic::{AtomicU64, Ordering};
+    use std::sync::{Mutex, OnceLock};
+    use std::time::Duration;
+
+    static TEST_TIME_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+    static TEST_NOW_BASE: OnceLock<Time> = OnceLock::new();
+    static TEST_NOW_OFFSET_MS: AtomicU64 = AtomicU64::new(0);
+
+    fn lock_test_clock() -> std::sync::MutexGuard<'static, ()> {
+        TEST_TIME_LOCK
+            .get_or_init(|| Mutex::new(()))
+            .lock()
+            .expect("test time lock poisoned")
+    }
+
+    fn set_test_time_offset(duration: Duration) {
+        let millis = u64::try_from(duration.as_millis()).expect("duration fits u64 millis");
+        // The offset is standalone test state; it does not publish side data.
+        TEST_NOW_OFFSET_MS.store(millis, Ordering::Relaxed);
+    }
+
+    fn advance_test_time(duration: Duration) {
+        let millis = u64::try_from(duration.as_millis()).expect("duration fits u64 millis");
+        TEST_NOW_OFFSET_MS.fetch_add(millis, Ordering::Relaxed);
+    }
+
+    fn test_now() -> Time {
+        // Fixed deterministic base so virtual-time offsets are fully reproducible
+        // (no dependency on the wall clock).
+        *TEST_NOW_BASE.get_or_init(|| Time::from_secs(1_000_000))
+            + Duration::from_millis(TEST_NOW_OFFSET_MS.load(Ordering::Relaxed))
+    }
+
+    fn encode_test_headers(headers: &[(&str, &str)]) -> Bytes {
+        let mut encoder = hpack::Encoder::new();
+        let mut encoded = BytesMut::new();
+        encoder.encode(
+            &headers
+                .iter()
+                .map(|(name, value)| Header::new(*name, *value))
+                .collect::<Vec<_>>(),
+            &mut encoded,
+        );
+        encoded.freeze()
+    }
+
+    fn test_request_headers(path: &str) -> Bytes {
+        encode_test_headers(&[
+            (":method", "GET"),
+            (":scheme", "https"),
+            (":path", path),
+            (":authority", "example.com"),
+        ])
+    }
+
+    fn test_request_header_vec(path: &str) -> Vec<Header> {
+        vec![
+            Header::new(":method", "GET"),
+            Header::new(":scheme", "https"),
+            Header::new(":path", path),
+            Header::new(":authority", "example.com"),
+        ]
+    }
+
+    fn test_response_headers(status: &str) -> Bytes {
+        encode_test_headers(&[(":status", status)])
+    }
+
+    #[test]
+    fn data_frame_triggers_connection_window_update_on_low_watermark() {
+        let mut conn = Connection::server(Settings::default());
+        conn.state = ConnectionState::Open;
+        let payload_len = (DEFAULT_CONNECTION_WINDOW_SIZE / 2) + 2;
+        let payload_len_usize = usize::try_from(payload_len).expect("payload_len non-negative");
+        let payload_len_u32 = u32::try_from(payload_len).expect("payload_len fits u32");
+        let data = Bytes::from(vec![0_u8; payload_len_usize]);
+        let headers = Frame::Headers(HeadersFrame::new(
+            1,
+            test_request_headers("/flow-control"),
+            false,
+            true,
+        ));
+        let frame = Frame::Data(DataFrame::new(1, data, false));
+
+        conn.process_frame(headers).expect("process headers frame");
+        conn.process_frame(frame).expect("process data frame");
+
+        assert!(conn.has_pending_frames(), "expected WINDOW_UPDATE(s)");
+        // Both stream-level and connection-level WINDOW_UPDATEs may be queued.
+        let mut found_connection_update = false;
+        while let Some(pending) = conn.next_frame() {
+            if let Frame::WindowUpdate(update) = pending {
+                if update.stream_id == 0 {
+                    assert_eq!(update.increment, payload_len_u32);
+                    found_connection_update = true;
+                }
+            }
+        }
+        assert!(
+            found_connection_update,
+            "expected connection-level WINDOW_UPDATE"
+        );
+    }
+
+    #[test]
+    fn data_frame_exceeding_connection_window_errors() {
+        let mut conn = Connection::server(Settings::default());
+        conn.state = ConnectionState::Open;
+        conn.recv_window = 1;
+
+        let headers = Frame::Headers(HeadersFrame::new(
+            1,
+            test_request_headers("/flow-control"),
+            false,
+            true,
+        ));
+        conn.process_frame(headers).expect("process headers frame");
+
+        let data = Bytes::from(vec![0_u8; 2]);
+        let frame = Frame::Data(DataFrame::new(1, data, false));
+        let result = conn.process_frame(frame);
+
+        assert!(result.is_err());
+        let err = result.expect_err("flow control error");
+        assert_eq!(err.code, ErrorCode::FlowControlError);
+    }
+
+    /// Regression: when stream.recv_data() fails with a stream-level error
+    /// (e.g., data on a closed stream), the connection recv_window must still
+    /// be decremented. The peer counted these bytes against their send window
+    /// when transmitting; failing to account for them desynchronizes flow control.
+    #[test]
+    fn data_on_closed_stream_still_decrements_connection_window() {
+        let mut conn = Connection::server(Settings::default());
+        conn.state = ConnectionState::Open;
+
+        // Open stream 1 via HEADERS.
+        let headers = Frame::Headers(HeadersFrame::new(
+            1,
+            test_request_headers("/flow-control"),
+            false,
+            true,
+        ));
+        conn.process_frame(headers).unwrap();
+
+        // Reset stream 1 so it becomes closed.
+        let rst = Frame::RstStream(RstStreamFrame::new(1, ErrorCode::Cancel));
+        conn.process_frame(rst).unwrap();
+        assert_eq!(conn.stream(1).unwrap().state(), StreamState::Closed);
+
+        let window_before = conn.recv_window();
+        let payload = Bytes::from(vec![0_u8; 100]);
+
+        // DATA on closed stream should fail with a stream error…
+        let frame = Frame::Data(DataFrame::new(1, payload, false));
+        let err = conn.process_frame(frame).unwrap_err();
+        assert_eq!(err.code, ErrorCode::StreamClosed);
+
+        // …but the connection window MUST still be decremented by 100 bytes.
+        assert_eq!(
+            conn.recv_window(),
+            window_before.saturating_sub(100),
+            "connection recv_window must be decremented even on stream-level errors"
+        );
+    }
+
+    #[test]
+    fn test_frame_codec_decode() {
+        let mut codec = FrameCodec::new();
+
+        // Create a PING frame
+        let frame = PingFrame::new([1, 2, 3, 4, 5, 6, 7, 8]);
+        let mut buf = BytesMut::new();
+        Frame::Ping(frame)
+            .encode(&mut buf)
+            .expect("Ping frame fits");
+
+        // Decode it
+        let decoded = codec.decode(&mut buf).unwrap().unwrap();
+        match decoded {
+            Frame::Ping(ping) => {
+                assert_eq!(ping.opaque_data, [1, 2, 3, 4, 5, 6, 7, 8]);
+                assert!(!ping.ack);
+            }
+            _ => panic!("expected PING frame"),
+        }
+    }
+
+    #[test]
+    fn test_frame_codec_skips_unknown_frame_type() {
+        let mut codec = FrameCodec::new();
+        let mut buf = BytesMut::new();
+
+        // Unknown extension frame type (0xFF) should be ignored.
+        FrameHeader {
+            length: 3,
+            frame_type: 0xFF,
+            flags: 0,
+            stream_id: 0,
+        }
+        .write(&mut buf);
+        buf.extend_from_slice(&[1, 2, 3]);
+
+        let ping = PingFrame::new([9, 8, 7, 6, 5, 4, 3, 2]);
+        Frame::Ping(ping).encode(&mut buf).expect("Ping frame fits");
+
+        let decoded = codec.decode(&mut buf).unwrap().unwrap();
+        match decoded {
+            Frame::Ping(p) => assert_eq!(p.opaque_data, [9, 8, 7, 6, 5, 4, 3, 2]),
+            _ => panic!("expected PING frame"),
+        }
+    }
+
+    #[test]
+    fn test_frame_codec_unknown_frame_without_followup_returns_none() {
+        let mut codec = FrameCodec::new();
+        let mut buf = BytesMut::new();
+
+        FrameHeader {
+            length: 2,
+            frame_type: 0xFE,
+            flags: 0,
+            stream_id: 0,
+        }
+        .write(&mut buf);
+        buf.extend_from_slice(&[0xAA, 0xBB]);
+
+        let decoded = codec.decode(&mut buf).unwrap();
+        assert!(decoded.is_none(), "expected no decoded frame");
+        assert!(buf.is_empty(), "unknown frame bytes should be consumed");
+    }
+
+    #[test]
+    fn test_connection_client_settings() {
+        let mut conn = Connection::client(Settings::client());
+        conn.queue_initial_settings();
+
+        assert!(conn.has_pending_frames());
+        let frame = conn.next_frame().unwrap();
+        match frame {
+            Frame::Settings(settings) => {
+                assert!(!settings.ack);
+                assert!(
+                    settings
+                        .settings
+                        .iter()
+                        .any(|setting| matches!(setting, Setting::EnablePush(false)))
+                );
+            }
+            _ => panic!("expected SETTINGS frame"),
+        }
+    }
+
+    #[test]
+    fn test_connection_process_settings() {
+        let mut conn = Connection::client(Settings::client());
+
+        // Process server settings
+        let settings = SettingsFrame::new(vec![
+            Setting::MaxConcurrentStreams(100),
+            Setting::InitialWindowSize(32768),
+        ]);
+        conn.process_frame(Frame::Settings(settings)).unwrap();
+
+        // Should have queued ACK
+        assert!(conn.has_pending_frames());
+        let frame = conn.next_frame().unwrap();
+        match frame {
+            Frame::Settings(settings) => {
+                assert!(settings.ack);
+            }
+            _ => panic!("expected SETTINGS ACK"),
+        }
+
+        // Remote settings should be updated
+        assert_eq!(conn.remote_settings().max_concurrent_streams, 100);
+        assert_eq!(conn.remote_settings().initial_window_size, 32768);
+    }
+
+    #[test]
+    fn local_initial_window_sizes_receive_side_not_peer_send_side() {
+        let mut settings = Settings::server();
+        settings.initial_window_size = 32_768;
+        let mut conn = Connection::server(settings);
+
+        let stream1 = conn.streams.get_or_create(1).unwrap();
+        assert_eq!(
+            stream1.send_window(),
+            i32::try_from(DEFAULT_INITIAL_WINDOW_SIZE).unwrap(),
+            "peer send window starts at the RFC default until peer SETTINGS arrives"
+        );
+        assert_eq!(
+            stream1.recv_window(),
+            32_768,
+            "local SETTINGS_INITIAL_WINDOW_SIZE must initialize our receive window"
+        );
+
+        conn.process_frame(Frame::Settings(SettingsFrame::new(vec![
+            Setting::InitialWindowSize(100_000),
+        ])))
+        .unwrap();
+        let stream3 = conn.streams.get_or_create(3).unwrap();
+        assert_eq!(stream3.send_window(), 100_000);
+        assert_eq!(
+            stream3.recv_window(),
+            32_768,
+            "peer SETTINGS_INITIAL_WINDOW_SIZE must not rewrite our receive window"
+        );
+    }
+
+    /// Regression: peer's MaxConcurrentStreams must constrain stream creation,
+    /// not just be stored in remote_settings. Without forwarding to StreamStore,
+    /// the local side could exceed the peer's limit (RFC 7540 §5.1.2 violation).
+    #[test]
+    fn settings_max_concurrent_streams_constrains_open_stream() {
+        let mut conn = Connection::client(Settings::client());
+        // Simulate receiving server settings with max_concurrent_streams = 2.
+        let settings = SettingsFrame::new(vec![Setting::MaxConcurrentStreams(2)]);
+        conn.process_frame(Frame::Settings(settings)).unwrap();
+        // Drain ACK.
+        let _ = conn.next_frame();
+
+        let headers = vec![
+            Header::new(":method", "GET"),
+            Header::new(":path", "/"),
+            Header::new(":scheme", "https"),
+            Header::new(":authority", "example.com"),
+        ];
+
+        // Open 2 streams (should succeed).
+        conn.open_stream(headers.clone(), false).unwrap();
+        conn.open_stream(headers.clone(), false).unwrap();
+
+        // Third stream should be refused (exceeds peer limit).
+        let result = conn.open_stream(headers, false);
+        assert!(
+            result.is_err(),
+            "third stream must be refused when peer MaxConcurrentStreams=2"
+        );
+    }
+
+    #[test]
+    fn test_connection_client_rejects_server_enable_push_setting() {
+        let mut conn = Connection::client(Settings::client());
+        let settings = SettingsFrame::new(vec![Setting::EnablePush(false)]);
+
+        let err = conn.process_frame(Frame::Settings(settings)).unwrap_err();
+        assert_eq!(err.code, ErrorCode::ProtocolError);
+        assert!(
+            !conn.has_pending_frames(),
+            "invalid settings must not be ACKed"
+        );
+    }
+
+    #[test]
+    fn test_connection_server_initial_settings_omit_enable_push() {
+        let mut local = Settings::server();
+        local.enable_push = false;
+        let mut conn = Connection::server(local);
+        conn.queue_initial_settings();
+
+        let frame = conn.next_frame().expect("expected initial settings frame");
+        match frame {
+            Frame::Settings(settings) => {
+                assert!(
+                    !settings
+                        .settings
+                        .iter()
+                        .any(|setting| matches!(setting, Setting::EnablePush(_)))
+                );
+            }
+            _ => panic!("expected SETTINGS frame"),
+        }
+    }
+
+    #[test]
+    fn test_connection_process_ping() {
+        let mut conn = Connection::client(Settings::client());
+        conn.state = ConnectionState::Open;
+
+        let ping = PingFrame::new([1, 2, 3, 4, 5, 6, 7, 8]);
+        conn.process_frame(Frame::Ping(ping)).unwrap();
+
+        // Should have queued PING ACK
+        let frame = conn.next_frame().unwrap();
+        match frame {
+            Frame::Ping(ping) => {
+                assert!(ping.ack);
+                assert_eq!(ping.opaque_data, [1, 2, 3, 4, 5, 6, 7, 8]);
+            }
+            _ => panic!("expected PING ACK"),
+        }
+    }
+
+    #[test]
+    fn test_connection_open_stream() {
+        let mut conn = Connection::client(Settings::client());
+        conn.state = ConnectionState::Open;
+
+        let headers = vec![
+            Header::new(":method", "GET"),
+            Header::new(":path", "/"),
+            Header::new(":scheme", "https"),
+            Header::new(":authority", "example.com"),
+        ];
+
+        let stream_id = conn.open_stream(headers, false).unwrap();
+        assert_eq!(stream_id, 1);
+
+        // Should have queued HEADERS frame
+        let frame = conn.next_frame().unwrap();
+        match frame {
+            Frame::Headers(h) => {
+                assert_eq!(h.stream_id, 1);
+                assert!(!h.end_stream);
+                assert!(h.end_headers);
+            }
+            _ => panic!("expected HEADERS frame"),
+        }
+    }
+
+    #[test]
+    fn data_frame_triggers_stream_window_update_on_low_watermark() {
+        let mut conn = Connection::server(Settings::default());
+        conn.state = ConnectionState::Open;
+        // Open a stream via headers.
+        let headers = Frame::Headers(HeadersFrame::new(
+            1,
+            test_request_headers("/flow-control"),
+            false,
+            true,
+        ));
+        conn.process_frame(headers).expect("process headers");
+
+        let initial_window = settings::DEFAULT_INITIAL_WINDOW_SIZE;
+        // Send data that crosses the 25% threshold for the *stream*.
+        // Calculate payload length with overflow protection
+        let payload_len = initial_window
+            .saturating_mul(3)
+            .saturating_div(4)
+            .saturating_add(2);
+        let data = Bytes::from(vec![0_u8; payload_len as usize]);
+        let frame = Frame::Data(DataFrame::new(1, data, false));
+        conn.process_frame(frame).expect("process data");
+
+        // Drain pending frames; look for a stream-level WINDOW_UPDATE (stream_id != 0).
+        let mut found_stream_update = false;
+        while let Some(f) = conn.next_frame() {
+            if let Frame::WindowUpdate(wu) = f {
+                if wu.stream_id == 1 {
+                    found_stream_update = true;
+                    assert_eq!(wu.increment, payload_len);
+                }
+            }
+        }
+        assert!(
+            found_stream_update,
+            "expected stream-level WINDOW_UPDATE for stream 1"
+        );
+    }
+
+    #[test]
+    fn data_frame_no_stream_window_update_when_above_watermark() {
+        let mut conn = Connection::server(Settings::default());
+        conn.state = ConnectionState::Open;
+        let headers = Frame::Headers(HeadersFrame::new(
+            1,
+            test_request_headers("/flow-control"),
+            false,
+            true,
+        ));
+        conn.process_frame(headers).expect("process headers");
+
+        // Small payload: stays above the watermark.
+        let data = Bytes::from(vec![0_u8; 100]);
+        let frame = Frame::Data(DataFrame::new(1, data, false));
+        conn.process_frame(frame).expect("process data");
+
+        // No stream-level WINDOW_UPDATE should be queued.
+        while let Some(f) = conn.next_frame() {
+            if let Frame::WindowUpdate(wu) = f {
+                assert_ne!(wu.stream_id, 1, "unexpected stream-level WINDOW_UPDATE");
+            }
+        }
+    }
+
+    #[test]
+    fn send_data_respects_send_window() {
+        let mut conn = Connection::client(Settings::client());
+        conn.state = ConnectionState::Open;
+
+        let headers = vec![
+            Header::new(":method", "POST"),
+            Header::new(":path", "/upload"),
+            Header::new(":scheme", "https"),
+            Header::new(":authority", "example.com"),
+        ];
+        let stream_id = conn.open_stream(headers, false).unwrap();
+        // Drain the HEADERS frame.
+        let _ = conn.next_frame().unwrap();
+
+        // Shrink the connection send window to a small value.
+        // Default is 65535; reduce it so only 100 bytes can be sent.
+        conn.send_window = 100;
+
+        // Queue 300 bytes of data.
+        let data = Bytes::from(vec![0xAB_u8; 300]);
+        conn.send_data(stream_id, data, true).unwrap();
+
+        // First frame: should be clamped to 100 bytes (connection window limit).
+        let frame1 = conn.next_frame().expect("expected first DATA frame");
+        match frame1 {
+            Frame::Data(d) => {
+                assert_eq!(d.data.len(), 100, "should be clamped to send window");
+                assert!(!d.end_stream, "not the final chunk");
+            }
+            other => panic!("expected DATA frame, got {other:?}"),
+        }
+
+        // Connection window is now 0; next call should re-queue and return None
+        // (since there's no other frame type pending, it recurses but data is re-queued).
+        // Replenish the window so remaining data can flow.
+        conn.send_window = 300;
+        let frame2 = conn.next_frame().expect("expected second DATA frame");
+        match frame2 {
+            Frame::Data(d) => {
+                assert_eq!(d.data.len(), 200, "remaining 200 bytes");
+                assert!(d.end_stream, "final chunk should carry end_stream");
+            }
+            other => panic!("expected DATA frame, got {other:?}"),
+        }
+
+        assert!(!conn.has_pending_frames(), "all data should be sent");
+    }
+
+    #[test]
+    fn send_data_respects_stream_send_window() {
+        let mut conn = Connection::client(Settings::client());
+        conn.state = ConnectionState::Open;
+
+        let headers = vec![
+            Header::new(":method", "POST"),
+            Header::new(":path", "/"),
+            Header::new(":scheme", "https"),
+            Header::new(":authority", "example.com"),
+        ];
+        let stream_id = conn.open_stream(headers, false).unwrap();
+        let _ = conn.next_frame().unwrap(); // drain HEADERS
+
+        // Shrink the *stream* send window to 50 bytes (connection window stays large).
+        conn.stream_mut(stream_id)
+            .unwrap()
+            .consume_send_window(65535 - 50);
+
+        let data = Bytes::from(vec![0xCD_u8; 200]);
+        conn.send_data(stream_id, data, true).unwrap();
+
+        let frame1 = conn.next_frame().expect("expected first DATA frame");
+        match frame1 {
+            Frame::Data(d) => {
+                assert_eq!(d.data.len(), 50, "clamped to stream send window");
+                assert!(!d.end_stream);
+            }
+            other => panic!("expected DATA frame, got {other:?}"),
+        }
+
+        // Restore stream window and send remaining.
+        conn.stream_mut(stream_id)
+            .unwrap()
+            .update_send_window(200)
+            .unwrap();
+        let frame2 = conn.next_frame().expect("expected second DATA frame");
+        match frame2 {
+            Frame::Data(d) => {
+                assert_eq!(d.data.len(), 150);
+                assert!(d.end_stream);
+            }
+            other => panic!("expected DATA frame, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn send_data_respects_max_frame_size() {
+        let mut conn = Connection::client(Settings::client());
+        conn.state = ConnectionState::Open;
+        // Set a small max_frame_size for testing
+        conn.remote_settings.max_frame_size = 100;
+
+        let headers = vec![
+            Header::new(":method", "POST"),
+            Header::new(":path", "/"),
+            Header::new(":scheme", "https"),
+            Header::new(":authority", "example.com"),
+        ];
+        let stream_id = conn.open_stream(headers, false).unwrap();
+        let _ = conn.next_frame().unwrap(); // drain HEADERS
+
+        // Queue 300 bytes of data
+        let data = Bytes::from(vec![0xEE_u8; 300]);
+        conn.send_data(stream_id, data, true).unwrap();
+
+        // First frame should be clamped to max_frame_size (100 bytes)
+        let frame1 = conn.next_frame().expect("expected first DATA frame");
+        match frame1 {
+            Frame::Data(d) => {
+                assert_eq!(d.data.len(), 100, "clamped to max_frame_size");
+                assert!(!d.end_stream);
+            }
+            other => panic!("expected DATA frame, got {other:?}"),
+        }
+
+        // Second frame
+        let frame2 = conn.next_frame().expect("expected second DATA frame");
+        match frame2 {
+            Frame::Data(d) => {
+                assert_eq!(d.data.len(), 100);
+                assert!(!d.end_stream);
+            }
+            other => panic!("expected DATA frame, got {other:?}"),
+        }
+
+        // Third frame (final)
+        let frame3 = conn.next_frame().expect("expected third DATA frame");
+        match frame3 {
+            Frame::Data(d) => {
+                assert_eq!(d.data.len(), 100);
+                assert!(d.end_stream);
+            }
+            other => panic!("expected DATA frame, got {other:?}"),
+        }
+
+        assert!(!conn.has_pending_frames());
+    }
+
+    #[test]
+    fn final_data_flushes_after_stream_enters_closed_state() {
+        let mut conn = Connection::client(Settings::client());
+        conn.state = ConnectionState::Open;
+
+        let headers = vec![
+            Header::new(":method", "POST"),
+            Header::new(":path", "/upload"),
+            Header::new(":scheme", "https"),
+            Header::new(":authority", "example.com"),
+        ];
+        let stream_id = conn.open_stream(headers, false).unwrap();
+        let _ = conn.next_frame().unwrap(); // drain request HEADERS
+
+        // Peer ends its side of the stream first.
+        let response = Frame::Headers(HeadersFrame::new(
+            stream_id,
+            test_response_headers("200"),
+            true,
+            true,
+        ));
+        conn.process_frame(response).unwrap();
+        assert_eq!(
+            conn.stream(stream_id).unwrap().state(),
+            StreamState::HalfClosedRemote
+        );
+
+        conn.send_data(stream_id, Bytes::from_static(b"payload"), true)
+            .unwrap();
+        assert_eq!(conn.stream(stream_id).unwrap().state(), StreamState::Closed);
+
+        let frame = conn
+            .next_frame()
+            .expect("final DATA must still be emitted after local close");
+        match frame {
+            Frame::Data(data) => {
+                assert_eq!(data.stream_id, stream_id);
+                assert_eq!(data.data, Bytes::from_static(b"payload"));
+                assert!(data.end_stream);
+            }
+            other => panic!("expected DATA frame, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn large_headers_use_continuation_frames() {
+        let mut conn = Connection::client(Settings::client());
+        conn.state = ConnectionState::Open;
+        // Set a very small max_frame_size to force CONTINUATION
+        conn.remote_settings.max_frame_size = 50;
+
+        // Create headers that will encode to more than 50 bytes
+        let mut headers = vec![
+            Header::new(":method", "GET"),
+            Header::new(":path", "/some/very/long/path/that/exceeds/frame/size"),
+            Header::new(":scheme", "https"),
+            Header::new(":authority", "example.com"),
+        ];
+        // Add more headers to ensure we exceed the limit
+        for i in 0..10 {
+            headers.push(Header::new(
+                format!("x-custom-header-{i}"),
+                format!("value-{i}"),
+            ));
+        }
+
+        let stream_id = conn.open_stream(headers, true).unwrap();
+
+        // First frame should be HEADERS with end_headers=false
+        let frame1 = conn.next_frame().expect("expected HEADERS frame");
+        match &frame1 {
+            Frame::Headers(h) => {
+                assert_eq!(h.stream_id, stream_id);
+                assert!(h.end_stream);
+                assert!(!h.end_headers, "should have CONTINUATION following");
+                assert_eq!(h.header_block.len(), 50);
+            }
+            other => panic!("expected HEADERS frame, got {other:?}"),
+        }
+
+        // Subsequent frames should be CONTINUATION
+        let mut continuation_count = 0;
+        let mut last_end_headers = false;
+        while let Some(frame) = conn.next_frame() {
+            match frame {
+                Frame::Continuation(c) => {
+                    assert_eq!(c.stream_id, stream_id);
+                    continuation_count += 1;
+                    last_end_headers = c.end_headers;
+                    if c.end_headers {
+                        break;
+                    }
+                }
+                other => panic!("expected CONTINUATION frame, got {other:?}"),
+            }
+        }
+
+        assert!(
+            continuation_count >= 1,
+            "should have at least one CONTINUATION"
+        );
+        assert!(last_end_headers, "last frame should have end_headers=true");
+    }
+
+    #[test]
+    fn send_push_promise_queues_frame_and_reserves_local_stream() {
+        let mut conn = Connection::server(Settings::server());
+        conn.state = ConnectionState::Open;
+
+        let request = Frame::Headers(HeadersFrame::new(
+            1,
+            test_request_headers("/index"),
+            false,
+            true,
+        ));
+        let _ = conn.process_frame(request).unwrap();
+
+        let promised_stream_id = conn
+            .send_push_promise(1, test_request_header_vec("/style.css"))
+            .unwrap();
+        assert_eq!(promised_stream_id, 2);
+        assert_eq!(
+            conn.stream(promised_stream_id).unwrap().state(),
+            StreamState::ReservedLocal
+        );
+
+        match conn.next_frame().expect("PUSH_PROMISE should be queued") {
+            Frame::PushPromise(push) => {
+                assert_eq!(push.stream_id, 1);
+                assert_eq!(push.promised_stream_id, promised_stream_id);
+                assert!(push.end_headers);
+                assert!(!push.header_block.is_empty());
+            }
+            other => panic!("expected PUSH_PROMISE frame, got {other:?}"),
+        }
+
+        conn.send_headers(
+            promised_stream_id,
+            vec![Header::new(":status", "200")],
+            true,
+        )
+        .unwrap();
+        match conn
+            .next_frame()
+            .expect("promised response HEADERS should be queued")
+        {
+            Frame::Headers(headers) => {
+                assert_eq!(headers.stream_id, promised_stream_id);
+                assert!(headers.end_stream);
+            }
+            other => panic!("expected promised response HEADERS, got {other:?}"),
+        }
+        assert_eq!(
+            conn.stream(promised_stream_id).unwrap().state(),
+            StreamState::Closed
+        );
+    }
+
+    #[test]
+    fn send_push_promise_large_headers_use_continuation_frames() {
+        let mut conn = Connection::server(Settings::server());
+        conn.state = ConnectionState::Open;
+        conn.remote_settings.max_frame_size = 50;
+
+        let request = Frame::Headers(HeadersFrame::new(
+            1,
+            test_request_headers("/index"),
+            false,
+            true,
+        ));
+        let _ = conn.process_frame(request).unwrap();
+
+        let mut push_headers = test_request_header_vec("/large-pushed-resource");
+        for i in 0..10 {
+            push_headers.push(Header::new(
+                format!("x-push-header-{i}"),
+                format!("push-value-{i}"),
+            ));
+        }
+
+        let promised_stream_id = conn.send_push_promise(1, push_headers).unwrap();
+        match conn.next_frame().expect("PUSH_PROMISE should be queued") {
+            Frame::PushPromise(push) => {
+                assert_eq!(push.stream_id, 1);
+                assert_eq!(push.promised_stream_id, promised_stream_id);
+                assert!(!push.end_headers);
+                assert_eq!(
+                    push.header_block.len(),
+                    46,
+                    "PUSH_PROMISE payload reserves four bytes for promised_stream_id"
+                );
+            }
+            other => panic!("expected PUSH_PROMISE frame, got {other:?}"),
+        }
+
+        let mut continuation_count = 0;
+        let mut last_end_headers = false;
+        while let Some(frame) = conn.next_frame() {
+            match frame {
+                Frame::Continuation(c) => {
+                    assert_eq!(c.stream_id, 1);
+                    continuation_count += 1;
+                    last_end_headers = c.end_headers;
+                    if c.end_headers {
+                        break;
+                    }
+                }
+                other => panic!("expected CONTINUATION frame, got {other:?}"),
+            }
+        }
+
+        assert!(
+            continuation_count >= 1,
+            "large PUSH_PROMISE should emit CONTINUATION"
+        );
+        assert!(last_end_headers, "last continuation must end headers");
+    }
+
+    #[test]
+    fn send_push_promise_rejects_peer_disabled_push_without_reservation() {
+        let mut conn = Connection::server(Settings::server());
+        conn.state = ConnectionState::Open;
+        conn.remote_settings.enable_push = false;
+
+        let request = Frame::Headers(HeadersFrame::new(
+            1,
+            test_request_headers("/index"),
+            false,
+            true,
+        ));
+        let _ = conn.process_frame(request).unwrap();
+
+        let err = conn
+            .send_push_promise(1, test_request_header_vec("/style.css"))
+            .unwrap_err();
+        assert_eq!(err.code, ErrorCode::RefusedStream);
+        assert_eq!(err.stream_id, Some(1));
+        assert!(
+            conn.stream(2).is_none(),
+            "disabled push must not reserve a promised stream"
+        );
+    }
+
+    #[test]
+    fn send_push_promise_rejects_after_goaway_without_reservation() {
+        let mut conn = Connection::server(Settings::server());
+        conn.state = ConnectionState::Open;
+
+        let request = Frame::Headers(HeadersFrame::new(
+            1,
+            test_request_headers("/index"),
+            false,
+            true,
+        ));
+        let _ = conn.process_frame(request).unwrap();
+        conn.begin_graceful_shutdown(Bytes::new());
+
+        let err = conn
+            .send_push_promise(1, test_request_header_vec("/style.css"))
+            .unwrap_err();
+        assert_eq!(err.code, ErrorCode::ProtocolError);
+        assert!(
+            conn.stream(2).is_none(),
+            "GOAWAY rejection must not reserve a promised stream"
+        );
+    }
+
+    #[test]
+    fn send_push_promise_enforces_peer_max_concurrent_streams() {
+        let mut conn = Connection::server(Settings::server());
+        conn.state = ConnectionState::Open;
+        conn.streams.set_max_concurrent_streams(1);
+
+        let request = Frame::Headers(HeadersFrame::new(
+            1,
+            test_request_headers("/index"),
+            false,
+            true,
+        ));
+        let _ = conn.process_frame(request).unwrap();
+
+        let err = conn
+            .send_push_promise(1, test_request_header_vec("/style.css"))
+            .unwrap_err();
+        assert_eq!(err.code, ErrorCode::ProtocolError);
+        assert!(err.message.contains("max concurrent streams exceeded"));
+        assert!(
+            conn.stream(2).is_none(),
+            "max-concurrent rejection must not reserve a promised stream"
+        );
+    }
+
+    #[test]
+    fn push_promise_rejected_when_disabled() {
+        let mut conn = Connection::client(Settings::client());
+        conn.state = ConnectionState::Open;
+
+        let headers = vec![
+            Header::new(":method", "GET"),
+            Header::new(":path", "/"),
+            Header::new(":scheme", "https"),
+            Header::new(":authority", "example.com"),
+        ];
+        let stream_id = conn.open_stream(headers, false).unwrap();
+
+        let frame = Frame::PushPromise(PushPromiseFrame {
+            stream_id,
+            promised_stream_id: 2,
+            header_block: test_request_headers("/pushed"),
+            end_headers: true,
+        });
+
+        let err = conn.process_frame(frame).unwrap_err();
+        assert_eq!(err.code, ErrorCode::ProtocolError);
+    }
+
+    #[test]
+    fn push_promise_creates_reserved_stream() {
+        let mut settings = Settings::client();
+        settings.enable_push = true;
+        let mut conn = Connection::client(settings);
+        conn.state = ConnectionState::Open;
+
+        let headers = vec![
+            Header::new(":method", "GET"),
+            Header::new(":path", "/"),
+            Header::new(":scheme", "https"),
+            Header::new(":authority", "example.com"),
+        ];
+        let stream_id = conn.open_stream(headers, false).unwrap();
+
+        let frame = Frame::PushPromise(PushPromiseFrame {
+            stream_id,
+            promised_stream_id: 2,
+            header_block: test_request_headers("/pushed"),
+            end_headers: true,
+        });
+
+        let received = conn.process_frame(frame).unwrap().unwrap();
+        match received {
+            ReceivedFrame::PushPromise {
+                promised_stream_id, ..
+            } => assert_eq!(promised_stream_id, 2),
+            other => panic!("expected PushPromise frame, got {other:?}"),
+        }
+
+        let promised = conn.stream(2).expect("promised stream exists");
+        assert_eq!(promised.state(), StreamState::ReservedRemote);
+    }
+
+    #[test]
+    fn push_promise_continuation_accumulates() {
+        let mut settings = Settings::client();
+        settings.enable_push = true;
+        let mut conn = Connection::client(settings);
+        conn.state = ConnectionState::Open;
+
+        let headers = vec![
+            Header::new(":method", "GET"),
+            Header::new(":path", "/"),
+            Header::new(":scheme", "https"),
+            Header::new(":authority", "example.com"),
+        ];
+        let stream_id = conn.open_stream(headers, false).unwrap();
+
+        let mut promise_headers = vec![
+            Header::new(":method", "GET"),
+            Header::new(":path", "/pushed"),
+            Header::new(":scheme", "https"),
+            Header::new(":authority", "example.com"),
+        ];
+
+        let mut encoded = BytesMut::new();
+        conn.hpack_encoder.encode(&promise_headers, &mut encoded);
+        if encoded.len() < 2 {
+            promise_headers.push(Header::new("x-extra", "1"));
+            encoded.clear();
+            conn.hpack_encoder.encode(&promise_headers, &mut encoded);
+        }
+        assert!(encoded.len() >= 2);
+
+        let encoded = encoded.freeze();
+        let split = encoded.len() / 2;
+        let first = encoded.slice(..split);
+        let second = encoded.slice(split..);
+
+        let push = Frame::PushPromise(PushPromiseFrame {
+            stream_id,
+            promised_stream_id: 2,
+            header_block: first,
+            end_headers: false,
+        });
+        assert!(conn.process_frame(push).unwrap().is_none());
+
+        let continuation = Frame::Continuation(ContinuationFrame {
+            stream_id,
+            header_block: second,
+            end_headers: true,
+        });
+
+        let received = conn.process_frame(continuation).unwrap().unwrap();
+        match received {
+            ReceivedFrame::PushPromise {
+                promised_stream_id,
+                headers: decoded,
+                ..
+            } => {
+                assert_eq!(promised_stream_id, 2);
+                assert_eq!(decoded, promise_headers);
+            }
+            other => panic!("expected PushPromise frame, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn push_promise_rejected_on_server_connection() {
+        let mut conn = Connection::server(Settings::server());
+        conn.state = ConnectionState::Open;
+
+        let frame = Frame::PushPromise(PushPromiseFrame {
+            stream_id: 1,
+            promised_stream_id: 2,
+            header_block: Bytes::new(),
+            end_headers: true,
+        });
+
+        let err = conn.process_frame(frame).unwrap_err();
+        assert_eq!(err.code, ErrorCode::ProtocolError);
+    }
+
+    #[test]
+    fn push_promise_rejected_for_invalid_promised_id() {
+        let mut settings = Settings::client();
+        settings.enable_push = true;
+        let mut conn = Connection::client(settings);
+        conn.state = ConnectionState::Open;
+
+        let headers = vec![
+            Header::new(":method", "GET"),
+            Header::new(":path", "/"),
+            Header::new(":scheme", "https"),
+            Header::new(":authority", "example.com"),
+        ];
+        let stream_id = conn.open_stream(headers, false).unwrap();
+
+        let frame = Frame::PushPromise(PushPromiseFrame {
+            stream_id,
+            promised_stream_id: 3,
+            header_block: Bytes::new(),
+            end_headers: true,
+        });
+
+        let err = conn.process_frame(frame).unwrap_err();
+        assert_eq!(err.code, ErrorCode::ProtocolError);
+    }
+
+    #[test]
+    fn push_promise_rejected_for_unknown_associated_stream() {
+        let mut settings = Settings::client();
+        settings.enable_push = true;
+        let mut conn = Connection::client(settings);
+        conn.state = ConnectionState::Open;
+
+        let frame = Frame::PushPromise(PushPromiseFrame {
+            stream_id: 1,
+            promised_stream_id: 2,
+            header_block: Bytes::new(),
+            end_headers: true,
+        });
+
+        let err = conn.process_frame(frame).unwrap_err();
+        assert_eq!(err.code, ErrorCode::ProtocolError);
+        // RFC 7540 §5.1: PUSH_PROMISE referencing an unknown stream is a
+        // connection error, so no stream_id is attached.
+        assert_eq!(err.stream_id, None);
+    }
+
+    #[test]
+    fn continuation_timeout_not_triggered_when_no_continuation() {
+        let mut conn = Connection::server(Settings::default());
+        conn.state = ConnectionState::Open;
+
+        // No continuation in progress - timeout check should succeed
+        assert!(conn.check_continuation_timeout().is_ok());
+        assert!(!conn.is_awaiting_continuation());
+    }
+
+    #[test]
+    fn continuation_timeout_not_triggered_when_within_limit() {
+        let _clock = lock_test_clock();
+        set_test_time_offset(Duration::ZERO);
+        let settings = Settings {
+            continuation_timeout_ms: 5000, // 5 seconds
+            ..Default::default()
+        };
+        let mut conn = Connection::server_with_time_getter(settings, test_now);
+        conn.state = ConnectionState::Open;
+
+        // Receive HEADERS without END_HEADERS
+        let headers = Frame::Headers(HeadersFrame::new(1, Bytes::new(), false, false));
+        let result = conn.process_frame(headers);
+        assert!(result.is_ok());
+        assert!(conn.is_awaiting_continuation());
+
+        advance_test_time(Duration::from_millis(10));
+
+        // Custom clock remains within the timeout window.
+        assert!(conn.check_continuation_timeout().is_ok());
+        assert!(conn.is_awaiting_continuation());
+    }
+
+    #[test]
+    fn continuation_clears_timeout_on_completion() {
+        let mut conn = Connection::server(Settings::default());
+        conn.state = ConnectionState::Open;
+
+        // Receive HEADERS without END_HEADERS
+        let encoded = test_request_headers("/continuation");
+        let split = encoded.len() / 2;
+        let headers = Frame::Headers(HeadersFrame::new(1, encoded.slice(..split), false, false));
+        conn.process_frame(headers).unwrap();
+        assert!(conn.is_awaiting_continuation());
+        assert!(conn.continuation_started_at.is_some());
+
+        // Receive CONTINUATION with END_HEADERS
+        let continuation = Frame::Continuation(ContinuationFrame {
+            stream_id: 1,
+            header_block: encoded.slice(split..),
+            end_headers: true,
+        });
+        conn.process_frame(continuation).unwrap();
+
+        // Continuation state should be cleared
+        assert!(!conn.is_awaiting_continuation());
+        assert!(conn.continuation_started_at.is_none());
+    }
+
+    #[test]
+    fn continuation_timeout_triggers_after_expiry() {
+        let _clock = lock_test_clock();
+        set_test_time_offset(Duration::ZERO);
+        let settings = Settings {
+            continuation_timeout_ms: 50, // 50ms for fast test
+            ..Default::default()
+        };
+        let mut conn = Connection::server_with_time_getter(settings, test_now);
+        conn.state = ConnectionState::Open;
+
+        // Receive HEADERS without END_HEADERS
+        let headers = Frame::Headers(HeadersFrame::new(1, Bytes::new(), false, false));
+        conn.process_frame(headers).unwrap();
+        assert!(conn.is_awaiting_continuation());
+
+        advance_test_time(Duration::from_millis(60));
+
+        // Timeout should trigger
+        let err = conn.check_continuation_timeout().unwrap_err();
+        assert_eq!(err.code, ErrorCode::ProtocolError);
+        assert!(err.message.contains("CONTINUATION timeout"));
+
+        // Continuation state should be cleared
+        assert!(!conn.is_awaiting_continuation());
+        assert!(conn.continuation_started_at.is_none());
+    }
+
+    #[test]
+    fn continuation_timeout_on_next_frame() {
+        let _clock = lock_test_clock();
+        set_test_time_offset(Duration::ZERO);
+        let settings = Settings {
+            continuation_timeout_ms: 50, // 50ms for fast test
+            ..Default::default()
+        };
+        let mut conn = Connection::server_with_time_getter(settings, test_now);
+        conn.state = ConnectionState::Open;
+
+        // Receive HEADERS without END_HEADERS
+        let headers = Frame::Headers(HeadersFrame::new(1, Bytes::new(), false, false));
+        conn.process_frame(headers).unwrap();
+
+        advance_test_time(Duration::from_millis(60));
+
+        // Try to process another CONTINUATION - should fail with timeout
+        let continuation = Frame::Continuation(ContinuationFrame {
+            stream_id: 1,
+            header_block: Bytes::new(),
+            end_headers: true,
+        });
+        let err = conn.process_frame(continuation).unwrap_err();
+        assert_eq!(err.code, ErrorCode::ProtocolError);
+        assert!(err.message.contains("CONTINUATION timeout"));
+    }
+
+    #[test]
+    fn push_promise_continuation_timeout() {
+        let _clock = lock_test_clock();
+        set_test_time_offset(Duration::ZERO);
+        let mut settings = Settings::client();
+        settings.enable_push = true;
+        settings.continuation_timeout_ms = 50;
+        let mut conn = Connection::client_with_time_getter(settings, test_now);
+        conn.state = ConnectionState::Open;
+
+        // First open a stream
+        let headers = vec![
+            Header::new(":method", "GET"),
+            Header::new(":path", "/"),
+            Header::new(":scheme", "https"),
+            Header::new(":authority", "example.com"),
+        ];
+        let stream_id = conn.open_stream(headers, false).unwrap();
+        let _ = conn.next_frame(); // drain HEADERS
+
+        // Receive PUSH_PROMISE without END_HEADERS
+        let push = Frame::PushPromise(PushPromiseFrame {
+            stream_id,
+            promised_stream_id: 2,
+            header_block: Bytes::new(),
+            end_headers: false,
+        });
+        conn.process_frame(push).unwrap();
+        assert!(conn.is_awaiting_continuation());
+
+        advance_test_time(Duration::from_millis(60));
+
+        // Timeout should trigger
+        let err = conn.check_continuation_timeout().unwrap_err();
+        assert_eq!(err.code, ErrorCode::ProtocolError);
+        assert!(err.message.contains("CONTINUATION timeout"));
+    }
+
+    // =========================================================================
+    // Additional PUSH_PROMISE Security Tests (bd-1ckh)
+    // =========================================================================
+
+    #[test]
+    fn push_promise_rejected_on_closed_stream() {
+        let mut settings = Settings::client();
+        settings.enable_push = true;
+        let mut conn = Connection::client(settings);
+        conn.state = ConnectionState::Open;
+
+        // Open and then close a stream
+        let headers = vec![
+            Header::new(":method", "GET"),
+            Header::new(":path", "/"),
+            Header::new(":scheme", "https"),
+            Header::new(":authority", "example.com"),
+        ];
+        let stream_id = conn.open_stream(headers, true).unwrap(); // end_stream=true
+        let _ = conn.next_frame(); // drain HEADERS
+
+        // Simulate receiving response headers with END_STREAM to fully close
+        let response = Frame::Headers(HeadersFrame::new(
+            stream_id,
+            test_response_headers("200"),
+            true,
+            true,
+        ));
+        conn.process_frame(response).unwrap();
+
+        // Stream should now be closed
+        assert_eq!(conn.stream(stream_id).unwrap().state(), StreamState::Closed);
+
+        // PUSH_PROMISE on closed stream should fail
+        let frame = Frame::PushPromise(PushPromiseFrame {
+            stream_id,
+            promised_stream_id: 2,
+            header_block: test_request_headers("/pushed"),
+            end_headers: true,
+        });
+
+        let err = conn.process_frame(frame).unwrap_err();
+        assert_eq!(err.code, ErrorCode::StreamClosed);
+    }
+
+    /// RFC 7540 §5.1: PUSH_PROMISE must only be received on streams in
+    /// "open" or "half-closed (local)" state. A stream in HalfClosedRemote
+    /// (where the server already sent END_STREAM) must be rejected.
+    #[test]
+    fn push_promise_rejected_on_half_closed_remote_stream() {
+        let mut settings = Settings::client();
+        settings.enable_push = true;
+        let mut conn = Connection::client(settings);
+        conn.state = ConnectionState::Open;
+
+        // Open a stream without END_STREAM so it enters Open state.
+        let headers = vec![
+            Header::new(":method", "GET"),
+            Header::new(":path", "/"),
+            Header::new(":scheme", "https"),
+            Header::new(":authority", "example.com"),
+        ];
+        let stream_id = conn.open_stream(headers, false).unwrap();
+        let _ = conn.next_frame(); // drain HEADERS
+
+        // Receive response headers with END_STREAM from server.
+        // This puts the stream into HalfClosedRemote from client's perspective.
+        let response = Frame::Headers(HeadersFrame::new(
+            stream_id,
+            test_response_headers("200"),
+            true,
+            true,
+        ));
+        conn.process_frame(response).unwrap();
+
+        assert_eq!(
+            conn.stream(stream_id).unwrap().state(),
+            StreamState::HalfClosedRemote
+        );
+
+        // PUSH_PROMISE on HalfClosedRemote stream should be rejected.
+        let frame = Frame::PushPromise(PushPromiseFrame {
+            stream_id,
+            promised_stream_id: 2,
+            header_block: test_request_headers("/pushed"),
+            end_headers: true,
+        });
+
+        let err = conn.process_frame(frame).unwrap_err();
+        assert_eq!(
+            err.code,
+            ErrorCode::ProtocolError,
+            "PUSH_PROMISE on half-closed (remote) stream must be PROTOCOL_ERROR"
+        );
+    }
+
+    #[test]
+    fn push_promise_enforces_max_concurrent_streams() {
+        let mut settings = Settings::client();
+        settings.enable_push = true;
+        settings.max_concurrent_streams = 3; // Very low limit for testing
+        let mut conn = Connection::client(settings);
+        conn.state = ConnectionState::Open;
+
+        // Open client stream
+        let headers = vec![
+            Header::new(":method", "GET"),
+            Header::new(":path", "/"),
+            Header::new(":scheme", "https"),
+            Header::new(":authority", "example.com"),
+        ];
+        let stream_id = conn.open_stream(headers, false).unwrap();
+        let _ = conn.next_frame();
+
+        // First push should succeed (now 2 active: stream 1 + pushed 2)
+        let push1 = Frame::PushPromise(PushPromiseFrame {
+            stream_id,
+            promised_stream_id: 2,
+            header_block: test_request_headers("/pushed-2"),
+            end_headers: true,
+        });
+        assert!(conn.process_frame(push1).is_ok());
+
+        // Second push should succeed (now 3 active: stream 1 + pushed 2 + pushed 4)
+        let push2 = Frame::PushPromise(PushPromiseFrame {
+            stream_id,
+            promised_stream_id: 4,
+            header_block: test_request_headers("/pushed-4"),
+            end_headers: true,
+        });
+        assert!(conn.process_frame(push2).is_ok());
+
+        // Third push should fail - max concurrent streams exceeded
+        let push3 = Frame::PushPromise(PushPromiseFrame {
+            stream_id,
+            promised_stream_id: 6,
+            header_block: test_request_headers("/pushed-6"),
+            end_headers: true,
+        });
+        let err = conn.process_frame(push3).unwrap_err();
+        assert_eq!(err.code, ErrorCode::RefusedStream);
+    }
+
+    #[test]
+    fn push_promise_rejected_for_duplicate_stream_id() {
+        let mut settings = Settings::client();
+        settings.enable_push = true;
+        let mut conn = Connection::client(settings);
+        conn.state = ConnectionState::Open;
+
+        let headers = vec![
+            Header::new(":method", "GET"),
+            Header::new(":path", "/"),
+            Header::new(":scheme", "https"),
+            Header::new(":authority", "example.com"),
+        ];
+        let stream_id = conn.open_stream(headers, false).unwrap();
+        let _ = conn.next_frame();
+
+        // First push with stream ID 2
+        let push1 = Frame::PushPromise(PushPromiseFrame {
+            stream_id,
+            promised_stream_id: 2,
+            header_block: test_request_headers("/pushed-2"),
+            end_headers: true,
+        });
+        assert!(conn.process_frame(push1).is_ok());
+
+        // Trying to push with same stream ID 2 again should fail
+        let push2 = Frame::PushPromise(PushPromiseFrame {
+            stream_id,
+            promised_stream_id: 2,
+            header_block: test_request_headers("/pushed-2"),
+            end_headers: true,
+        });
+        let err = conn.process_frame(push2).unwrap_err();
+        assert_eq!(err.code, ErrorCode::ProtocolError);
+    }
+
+    #[test]
+    fn push_promise_monotonic_stream_id() {
+        let mut settings = Settings::client();
+        settings.enable_push = true;
+        let mut conn = Connection::client(settings);
+        conn.state = ConnectionState::Open;
+
+        let headers = vec![
+            Header::new(":method", "GET"),
+            Header::new(":path", "/"),
+            Header::new(":scheme", "https"),
+            Header::new(":authority", "example.com"),
+        ];
+        let stream_id = conn.open_stream(headers, false).unwrap();
+        let _ = conn.next_frame();
+
+        // Push with stream ID 4 first
+        let push1 = Frame::PushPromise(PushPromiseFrame {
+            stream_id,
+            promised_stream_id: 4,
+            header_block: test_request_headers("/pushed-4"),
+            end_headers: true,
+        });
+        assert!(conn.process_frame(push1).is_ok());
+
+        // Push with stream ID 2 (lower) should fail - IDs must be monotonically increasing
+        let push2 = Frame::PushPromise(PushPromiseFrame {
+            stream_id,
+            promised_stream_id: 2,
+            header_block: test_request_headers("/pushed-2"),
+            end_headers: true,
+        });
+        let err = conn.process_frame(push2).unwrap_err();
+        assert_eq!(err.code, ErrorCode::ProtocolError);
+    }
+
+    #[test]
+    fn push_promise_attack_flood_bounded() {
+        // Simulates a malicious server sending many PUSH_PROMISE frames.
+        // The implementation must bound resource usage via max_concurrent_streams.
+        let mut settings = Settings::client();
+        settings.enable_push = true;
+        settings.max_concurrent_streams = 10;
+        let mut conn = Connection::client(settings);
+        conn.state = ConnectionState::Open;
+
+        let headers = vec![
+            Header::new(":method", "GET"),
+            Header::new(":path", "/"),
+            Header::new(":scheme", "https"),
+            Header::new(":authority", "example.com"),
+        ];
+        let stream_id = conn.open_stream(headers, false).unwrap();
+        let _ = conn.next_frame();
+
+        let mut accepted = 0;
+        let mut rejected = 0;
+
+        // Try to push 100 streams
+        for i in 0_u32..100 {
+            // Generate even IDs with overflow protection: 2, 4, 6, ...
+            let promised_id = i.saturating_add(1).saturating_mul(2);
+            let push = Frame::PushPromise(PushPromiseFrame {
+                stream_id,
+                promised_stream_id: promised_id,
+                header_block: test_request_headers("/pushed"),
+                end_headers: true,
+            });
+
+            match conn.process_frame(push) {
+                Ok(_) => accepted += 1,
+                Err(e) if e.code == ErrorCode::RefusedStream => rejected += 1,
+                Err(e) => panic!("unexpected error: {e:?}"),
+            }
+        }
+
+        // Should accept up to max_concurrent_streams - 1 (minus the original request stream)
+        assert_eq!(
+            accepted, 9,
+            "should accept max_concurrent_streams - 1 pushes"
+        );
+        assert_eq!(rejected, 91, "should reject the rest");
+    }
+
+    #[test]
+    fn push_promise_on_server_initiated_stream_rejected() {
+        // PUSH_PROMISE must be sent on client-initiated (odd) stream
+        let mut settings = Settings::client();
+        settings.enable_push = true;
+        let mut conn = Connection::client(settings);
+        conn.state = ConnectionState::Open;
+
+        // Open a client stream first
+        let headers = vec![
+            Header::new(":method", "GET"),
+            Header::new(":path", "/"),
+            Header::new(":scheme", "https"),
+            Header::new(":authority", "example.com"),
+        ];
+        let _ = conn.open_stream(headers, false).unwrap();
+        let _ = conn.next_frame();
+
+        // Try to send PUSH_PROMISE on an even (server-initiated) stream ID
+        let frame = Frame::PushPromise(PushPromiseFrame {
+            stream_id: 2, // Even = server-initiated = invalid for PUSH_PROMISE
+            promised_stream_id: 4,
+            header_block: Bytes::new(),
+            end_headers: true,
+        });
+
+        let err = conn.process_frame(frame).unwrap_err();
+        assert_eq!(err.code, ErrorCode::ProtocolError);
+    }
+
+    // =========================================================================
+    // SETTINGS ACK Flow Tests (bd-1oo7)
+    // =========================================================================
+
+    #[test]
+    fn test_settings_ack_is_no_op() {
+        // SETTINGS ACK should be silently accepted
+        let mut conn = Connection::client(Settings::client());
+        conn.state = ConnectionState::Open;
+
+        let ack_frame = Frame::Settings(SettingsFrame::ack());
+        let result = conn.process_frame(ack_frame);
+
+        assert!(result.is_ok());
+        assert!(result.unwrap().is_none());
+    }
+
+    #[test]
+    fn test_settings_updates_remote_settings() {
+        let mut conn = Connection::server(Settings::default());
+        conn.state = ConnectionState::Open;
+
+        // Initial values (DEFAULT_MAX_CONCURRENT_STREAMS = 256)
+        assert_eq!(conn.remote_settings().max_concurrent_streams, 256);
+        assert_eq!(
+            conn.remote_settings().initial_window_size,
+            settings::DEFAULT_INITIAL_WINDOW_SIZE
+        );
+
+        // Apply new settings
+        let settings = SettingsFrame::new(vec![
+            Setting::MaxConcurrentStreams(50),
+            Setting::InitialWindowSize(32768),
+            Setting::MaxFrameSize(32768),
+        ]);
+        conn.process_frame(Frame::Settings(settings)).unwrap();
+
+        // Verify updates
+        assert_eq!(conn.remote_settings().max_concurrent_streams, 50);
+        assert_eq!(conn.remote_settings().initial_window_size, 32768);
+        assert_eq!(conn.remote_settings().max_frame_size, 32768);
+    }
+
+    #[test]
+    fn local_initial_window_configures_receive_not_peer_send_window() {
+        let conn_settings = Settings {
+            initial_window_size: 32_768,
+            ..Settings::default()
+        };
+        let mut conn = Connection::server(conn_settings);
+
+        let stream_id = conn.streams.allocate_stream_id().unwrap();
+        let stream = conn.streams.get(stream_id).unwrap();
+        assert_eq!(
+            stream.send_window(),
+            settings::DEFAULT_INITIAL_WINDOW_SIZE as i32
+        );
+        assert_eq!(stream.recv_window(), 32_768);
+
+        conn.streams.set_initial_window_size(100_000).unwrap();
+        let stream = conn.streams.get(stream_id).unwrap();
+        assert_eq!(stream.send_window(), 100_000);
+        assert_eq!(stream.recv_window(), 32_768);
+    }
+
+    #[test]
+    fn test_settings_invalid_initial_window_size() {
+        let mut conn = Connection::server(Settings::default());
+        conn.state = ConnectionState::Open;
+
+        // Initial window size > 2^31 - 1 is invalid per RFC 7540 Section 6.5.2:
+        // "Values above the maximum flow-control window size of 2^31-1 MUST be
+        // treated as a connection error of type FLOW_CONTROL_ERROR"
+        let settings = SettingsFrame::new(vec![Setting::InitialWindowSize(0x8000_0000)]);
+        let err = conn.process_frame(Frame::Settings(settings)).unwrap_err();
+
+        assert_eq!(err.code, ErrorCode::FlowControlError);
+    }
+
+    #[test]
+    fn test_settings_invalid_max_frame_size() {
+        let mut conn = Connection::server(Settings::default());
+        conn.state = ConnectionState::Open;
+
+        // Max frame size must be between 16384 and 16777215
+        let settings = SettingsFrame::new(vec![Setting::MaxFrameSize(100)]); // Too small
+        let err = conn.process_frame(Frame::Settings(settings)).unwrap_err();
+
+        assert_eq!(err.code, ErrorCode::ProtocolError);
+    }
+
+    // br-asupersync-wk370q: a SETTINGS frame whose body is
+    // [<valid InitialWindowSize=12345>, <invalid MaxFrameSize=100>]
+    // must be rejected ATOMICALLY — neither remote_settings nor
+    // any per-stream initial_window_size may absorb the leading
+    // valid setting. Pre-fix, the InitialWindowSize landed on
+    // remote_settings + every stream BEFORE the MaxFrameSize
+    // failure aborted the loop, producing a partial-state
+    // window for the GOAWAY drain in which our flow-control view
+    // diverged from the peer's.
+    #[test]
+    fn test_settings_partial_apply_is_rejected_atomically_wk370q() {
+        let mut conn = Connection::server(Settings::default());
+        conn.state = ConnectionState::Open;
+        let initial_window_before = conn.remote_settings.initial_window_size;
+
+        // Ensure at least one stream exists so we can verify its
+        // initial window is NOT touched by the failed SETTINGS frame.
+        conn.streams.get_or_create(1).expect("create stream 1");
+        let stream_window_before = conn
+            .streams
+            .get(1)
+            .expect("stream 1 must exist")
+            .send_window();
+
+        // Frame: [InitialWindowSize=12345 (valid), MaxFrameSize=100 (invalid)]
+        let bad_settings = SettingsFrame::new(vec![
+            Setting::InitialWindowSize(12345),
+            Setting::MaxFrameSize(100),
+        ]);
+        let err = conn
+            .process_frame(Frame::Settings(bad_settings))
+            .unwrap_err();
+        assert_eq!(err.code, ErrorCode::ProtocolError);
+
+        // remote_settings.initial_window_size MUST be unchanged.
+        assert_eq!(
+            conn.remote_settings.initial_window_size, initial_window_before,
+            "remote_settings.initial_window_size leaked from a partially-applied SETTINGS frame"
+        );
+
+        // Stream 1's send window MUST be unchanged.
+        let stream_window_after = conn
+            .streams
+            .get(1)
+            .expect("stream 1 must still exist")
+            .send_window();
+        assert_eq!(
+            stream_window_after, stream_window_before,
+            "stream send_window leaked from a partially-applied SETTINGS frame"
+        );
+    }
+
+    #[test]
+    fn test_settings_transitions_to_open() {
+        let mut conn = Connection::server(Settings::default());
+        assert_eq!(conn.state, ConnectionState::Handshaking);
+
+        // First SETTINGS from peer transitions to Open
+        let settings = SettingsFrame::new(vec![]);
+        conn.process_frame(Frame::Settings(settings)).unwrap();
+
+        assert_eq!(conn.state, ConnectionState::Open);
+    }
+
+    // =========================================================================
+    // GOAWAY Edge Case Tests (bd-1oo7)
+    // =========================================================================
+
+    #[test]
+    fn test_goaway_rejects_new_streams() {
+        let mut conn = Connection::client(Settings::client());
+        conn.state = ConnectionState::Open;
+
+        // Open a stream
+        let headers = vec![
+            Header::new(":method", "GET"),
+            Header::new(":path", "/"),
+            Header::new(":scheme", "https"),
+            Header::new(":authority", "example.com"),
+        ];
+        conn.open_stream(headers.clone(), false).unwrap();
+
+        // Receive GOAWAY
+        let goaway = Frame::GoAway(GoAwayFrame::new(1, ErrorCode::NoError));
+        conn.process_frame(goaway).unwrap();
+
+        assert!(conn.goaway_received());
+        assert_eq!(conn.state, ConnectionState::Closing);
+
+        // Trying to open new streams should fail
+        let err = conn.open_stream(headers, false).unwrap_err();
+        assert_eq!(err.code, ErrorCode::ProtocolError);
+    }
+
+    #[test]
+    fn test_goaway_sent_rejects_new_streams() {
+        let mut conn = Connection::client(Settings::client());
+        conn.state = ConnectionState::Open;
+
+        let headers = vec![
+            Header::new(":method", "GET"),
+            Header::new(":path", "/"),
+            Header::new(":scheme", "https"),
+            Header::new(":authority", "example.com"),
+        ];
+
+        conn.goaway(ErrorCode::NoError, Bytes::new());
+        assert!(conn.goaway_sent);
+        assert_eq!(conn.state, ConnectionState::Closing);
+
+        let err = conn.open_stream(headers, false).unwrap_err();
+        assert_eq!(err.code, ErrorCode::ProtocolError);
+    }
+
+    #[test]
+    fn test_goaway_resets_streams_above_last_id() {
+        let mut conn = Connection::client(Settings::client());
+        conn.state = ConnectionState::Open;
+
+        // Open multiple streams
+        let headers = vec![
+            Header::new(":method", "GET"),
+            Header::new(":path", "/"),
+            Header::new(":scheme", "https"),
+            Header::new(":authority", "example.com"),
+        ];
+        let stream1 = conn.open_stream(headers.clone(), false).unwrap(); // Stream 1
+        let _ = conn.next_frame(); // Drain HEADERS
+        let stream3 = conn.open_stream(headers.clone(), false).unwrap(); // Stream 3
+        let _ = conn.next_frame(); // Drain HEADERS
+        let stream5 = conn.open_stream(headers, false).unwrap(); // Stream 5
+        let _ = conn.next_frame(); // Drain HEADERS
+
+        assert_eq!(stream1, 1);
+        assert_eq!(stream3, 3);
+        assert_eq!(stream5, 5);
+
+        // GOAWAY with last_stream_id = 1 means streams 3 and 5 were not processed
+        let goaway = Frame::GoAway(GoAwayFrame::new(1, ErrorCode::NoError));
+        let result = conn.process_frame(goaway).unwrap().unwrap();
+
+        match result {
+            ReceivedFrame::GoAway {
+                last_stream_id,
+                error_code,
+                ..
+            } => {
+                assert_eq!(last_stream_id, 1);
+                assert_eq!(error_code, ErrorCode::NoError);
+            }
+            _ => panic!("expected GoAway"),
+        }
+
+        // Stream 1 should still be in its original state
+        assert!(!conn.stream(1).unwrap().state().is_closed());
+
+        // Streams 3 and 5 should be reset
+        assert_eq!(conn.stream(3).unwrap().state(), StreamState::Closed);
+        assert_eq!(conn.stream(5).unwrap().state(), StreamState::Closed);
+    }
+
+    // =========================================================================
+    // Two-stage graceful shutdown / drain tests
+    // (br-asupersync-server-stack-hardening-eeexl1.2 D2.3)
+    // =========================================================================
+
+    #[test]
+    fn begin_graceful_shutdown_warns_without_refusing_racing_streams() {
+        let mut conn = Connection::server(Settings::default());
+        conn.state = ConnectionState::Open;
+
+        // One request is already in flight when drain starts.
+        conn.process_frame(Frame::Headers(HeadersFrame::new(
+            1,
+            test_request_headers("/in-flight"),
+            false,
+            true,
+        )))
+        .unwrap();
+
+        conn.begin_graceful_shutdown(Bytes::from_static(b"draining"));
+        assert!(conn.goaway_sent());
+        assert!(conn.graceful_shutdown_pending());
+        assert_eq!(conn.state(), ConnectionState::Closing);
+        assert_eq!(
+            conn.sent_goaway_last_stream_id(),
+            Some(0x7fff_ffff),
+            "stage-1 GOAWAY must advertise the maximum stream id"
+        );
+
+        match conn.next_frame().expect("stage-1 GOAWAY queued") {
+            Frame::GoAway(g) => {
+                assert_eq!(g.last_stream_id, 0x7fff_ffff);
+                assert_eq!(g.error_code, ErrorCode::NoError);
+                assert_eq!(&g.debug_data[..], b"draining");
+            }
+            other => panic!("expected GoAway, got {other:?}"),
+        }
+
+        // A stream racing with the stage-1 warning must still be accepted.
+        let received = conn
+            .process_frame(Frame::Headers(HeadersFrame::new(
+                3,
+                test_request_headers("/racing"),
+                false,
+                true,
+            )))
+            .unwrap();
+        assert!(
+            matches!(received, Some(ReceivedFrame::Headers { stream_id: 3, .. })),
+            "racing stream must be processed during the stage-1 window"
+        );
+        assert_eq!(conn.active_stream_count(), 2);
+        assert!(!conn.graceful_shutdown_complete());
+        assert!(!conn.has_pending_frames(), "no RST for the racing stream");
+    }
+
+    #[test]
+    fn finalize_graceful_shutdown_ratchets_boundary_and_refuses_late_streams() {
+        let mut conn = Connection::server(Settings::default());
+        conn.state = ConnectionState::Open;
+
+        conn.process_frame(Frame::Headers(HeadersFrame::new(
+            1,
+            test_request_headers("/one"),
+            false,
+            true,
+        )))
+        .unwrap();
+        conn.begin_graceful_shutdown(Bytes::new());
+        let _ = conn.next_frame(); // stage-1 GOAWAY
+        conn.process_frame(Frame::Headers(HeadersFrame::new(
+            3,
+            test_request_headers("/racing"),
+            false,
+            true,
+        )))
+        .unwrap();
+
+        conn.finalize_graceful_shutdown(Bytes::new());
+        assert!(!conn.graceful_shutdown_pending());
+        assert_eq!(conn.sent_goaway_last_stream_id(), Some(3));
+        match conn.next_frame().expect("stage-2 GOAWAY queued") {
+            Frame::GoAway(g) => {
+                assert_eq!(
+                    g.last_stream_id, 3,
+                    "stage-2 GOAWAY must ratchet down to the true boundary"
+                );
+                assert_eq!(g.error_code, ErrorCode::NoError);
+            }
+            other => panic!("expected GoAway, got {other:?}"),
+        }
+
+        // A stream above the definitive boundary is refused...
+        let received = conn
+            .process_frame(Frame::Headers(HeadersFrame::new(
+                5,
+                test_request_headers("/late"),
+                true,
+                true,
+            )))
+            .unwrap();
+        assert!(received.is_none(), "refused stream must not surface");
+        match conn.next_frame().expect("RST_STREAM queued") {
+            Frame::RstStream(r) => {
+                assert_eq!(r.stream_id, 5);
+                assert_eq!(r.error_code, ErrorCode::RefusedStream);
+            }
+            other => panic!("expected RstStream, got {other:?}"),
+        }
+        // ...and its local record is closed so drain can quiesce.
+        assert_eq!(conn.stream(5).unwrap().state(), StreamState::Closed);
+        assert_eq!(conn.active_stream_count(), 2);
+    }
+
+    #[test]
+    fn graceful_shutdown_completes_when_in_flight_streams_finish() {
+        let mut conn = Connection::server(Settings::default());
+        conn.state = ConnectionState::Open;
+
+        // Request fully received; response not yet sent (half-closed remote).
+        conn.process_frame(Frame::Headers(HeadersFrame::new(
+            1,
+            test_request_headers("/slow"),
+            true,
+            true,
+        )))
+        .unwrap();
+
+        conn.begin_graceful_shutdown(Bytes::new());
+        let _ = conn.next_frame();
+        conn.finalize_graceful_shutdown(Bytes::new());
+        let _ = conn.next_frame();
+        assert_eq!(conn.active_stream_count(), 1);
+        assert!(!conn.graceful_shutdown_complete());
+
+        // Server finishes the response: stream closes, drain completes.
+        conn.send_headers(1, vec![Header::new(":status", "200")], true)
+            .unwrap();
+        assert_eq!(conn.active_stream_count(), 0);
+        assert!(conn.graceful_shutdown_complete());
+    }
+
+    #[test]
+    fn idle_connection_graceful_shutdown_completes_immediately() {
+        let mut conn = Connection::server(Settings::default());
+        conn.state = ConnectionState::Open;
+
+        conn.begin_graceful_shutdown(Bytes::new());
+        assert!(
+            !conn.graceful_shutdown_complete(),
+            "stage-1 alone is not definitive even when idle"
+        );
+        conn.finalize_graceful_shutdown(Bytes::new());
+        assert!(conn.graceful_shutdown_complete());
+
+        match conn.next_frame().expect("stage-1 GOAWAY") {
+            Frame::GoAway(g) => assert_eq!(g.last_stream_id, 0x7fff_ffff),
+            other => panic!("expected GoAway, got {other:?}"),
+        }
+        match conn.next_frame().expect("stage-2 GOAWAY") {
+            Frame::GoAway(g) => assert_eq!(g.last_stream_id, 0),
+            other => panic!("expected GoAway, got {other:?}"),
+        }
+        assert!(!conn.has_pending_frames());
+    }
+
+    #[test]
+    fn finalize_without_begin_acts_like_immediate_noerror_goaway() {
+        let mut conn = Connection::server(Settings::default());
+        conn.state = ConnectionState::Open;
+
+        conn.process_frame(Frame::Headers(HeadersFrame::new(
+            1,
+            test_request_headers("/only"),
+            true,
+            true,
+        )))
+        .unwrap();
+
+        conn.finalize_graceful_shutdown(Bytes::new());
+        assert!(conn.goaway_sent());
+        assert!(!conn.graceful_shutdown_pending());
+        match conn.next_frame().expect("definitive GOAWAY") {
+            Frame::GoAway(g) => {
+                assert_eq!(g.last_stream_id, 1);
+                assert_eq!(g.error_code, ErrorCode::NoError);
+            }
+            other => panic!("expected GoAway, got {other:?}"),
+        }
+
+        // Repeated finalize must not re-advertise the boundary.
+        conn.finalize_graceful_shutdown(Bytes::new());
+        assert!(!conn.has_pending_frames());
+    }
+
+    #[test]
+    fn graceful_shutdown_after_immediate_goaway_is_noop() {
+        let mut conn = Connection::server(Settings::default());
+        conn.state = ConnectionState::Open;
+
+        conn.process_frame(Frame::Headers(HeadersFrame::new(
+            1,
+            test_request_headers("/pre"),
+            false,
+            true,
+        )))
+        .unwrap();
+        conn.goaway(ErrorCode::NoError, Bytes::new());
+        assert_eq!(conn.sent_goaway_last_stream_id(), Some(1));
+        let _ = conn.next_frame(); // definitive GOAWAY
+
+        conn.begin_graceful_shutdown(Bytes::new());
+        conn.finalize_graceful_shutdown(Bytes::new());
+        assert!(!conn.graceful_shutdown_pending());
+        assert_eq!(
+            conn.sent_goaway_last_stream_id(),
+            Some(1),
+            "boundary must never widen after a definitive GOAWAY"
+        );
+        assert!(
+            !conn.has_pending_frames(),
+            "no extra GOAWAY after an immediate goaway"
+        );
+    }
+
+    #[test]
+    fn refused_continuation_stream_is_closed_locally() {
+        let mut conn = Connection::server(Settings::default());
+        conn.state = ConnectionState::Open;
+
+        conn.process_frame(Frame::Headers(HeadersFrame::new(
+            1,
+            test_request_headers("/one"),
+            false,
+            true,
+        )))
+        .unwrap();
+        conn.begin_graceful_shutdown(Bytes::new());
+        conn.finalize_graceful_shutdown(Bytes::new());
+        let _ = conn.next_frame();
+        let _ = conn.next_frame();
+
+        // A late stream split across HEADERS + CONTINUATION is refused and
+        // its local record closed, exercising the continuation refusal path.
+        let block = test_request_headers("/late-split");
+        let first = block.slice(..1);
+        let rest = block.slice(1..);
+        conn.process_frame(Frame::Headers(HeadersFrame::new(3, first, true, false)))
+            .unwrap();
+        let received = conn
+            .process_frame(Frame::Continuation(ContinuationFrame {
+                stream_id: 3,
+                header_block: rest,
+                end_headers: true,
+            }))
+            .unwrap();
+        assert!(received.is_none(), "refused stream must not surface");
+
+        match conn.next_frame().expect("RST_STREAM queued") {
+            Frame::RstStream(r) => {
+                assert_eq!(r.stream_id, 3);
+                assert_eq!(r.error_code, ErrorCode::RefusedStream);
+            }
+            other => panic!("expected RstStream, got {other:?}"),
+        }
+        assert_eq!(conn.stream(3).unwrap().state(), StreamState::Closed);
+        assert_eq!(conn.active_stream_count(), 1);
+    }
+
+    #[test]
+    fn test_goaway_received_last_stream_id_only_narrows() {
+        let mut conn = Connection::client(Settings::client());
+        conn.state = ConnectionState::Open;
+
+        let headers = vec![
+            Header::new(":method", "GET"),
+            Header::new(":path", "/"),
+            Header::new(":scheme", "https"),
+            Header::new(":authority", "example.com"),
+        ];
+        let _stream1 = conn.open_stream(headers.clone(), false).unwrap();
+        let _ = conn.next_frame();
+        let _stream3 = conn.open_stream(headers.clone(), false).unwrap();
+        let _ = conn.next_frame();
+        let _stream5 = conn.open_stream(headers.clone(), false).unwrap();
+        let _ = conn.next_frame();
+        let _stream7 = conn.open_stream(headers, false).unwrap();
+        let _ = conn.next_frame();
+
+        let first = conn
+            .process_frame(Frame::GoAway(GoAwayFrame::new(5, ErrorCode::NoError)))
+            .unwrap()
+            .unwrap();
+        match first {
+            ReceivedFrame::GoAway { last_stream_id, .. } => assert_eq!(last_stream_id, 5),
+            _ => panic!("expected GoAway"),
+        }
+        assert!(!conn.stream(5).unwrap().state().is_closed());
+        assert_eq!(conn.stream(7).unwrap().state(), StreamState::Closed);
+
+        let second = conn
+            .process_frame(Frame::GoAway(GoAwayFrame::new(7, ErrorCode::InternalError)))
+            .unwrap()
+            .unwrap();
+        match second {
+            ReceivedFrame::GoAway {
+                last_stream_id,
+                error_code,
+                ..
+            } => {
+                assert_eq!(last_stream_id, 5);
+                assert_eq!(error_code, ErrorCode::InternalError);
+            }
+            _ => panic!("expected GoAway"),
+        }
+        assert!(!conn.stream(5).unwrap().state().is_closed());
+
+        let third = conn
+            .process_frame(Frame::GoAway(GoAwayFrame::new(1, ErrorCode::NoError)))
+            .unwrap()
+            .unwrap();
+        match third {
+            ReceivedFrame::GoAway { last_stream_id, .. } => assert_eq!(last_stream_id, 1),
+            _ => panic!("expected GoAway"),
+        }
+        assert_eq!(conn.stream(3).unwrap().state(), StreamState::Closed);
+        assert_eq!(conn.stream(5).unwrap().state(), StreamState::Closed);
+    }
+
+    #[test]
+    fn test_goaway_sent_once() {
+        let mut conn = Connection::server(Settings::default());
+        conn.state = ConnectionState::Open;
+
+        // First GOAWAY
+        conn.goaway(ErrorCode::NoError, Bytes::new());
+        assert!(conn.has_pending_frames());
+
+        // Second GOAWAY should be ignored
+        conn.goaway(ErrorCode::InternalError, Bytes::new());
+
+        // Should only have one GOAWAY frame
+        let frame1 = conn.next_frame().unwrap();
+        assert!(matches!(frame1, Frame::GoAway(_)));
+
+        // No second GOAWAY
+        assert!(!conn.has_pending_frames());
+    }
+
+    #[test]
+    fn goaway_refusal_boundary_stays_frozen_after_later_bookkeeping() {
+        let mut conn = Connection::server(Settings::default());
+        conn.state = ConnectionState::Open;
+
+        // Process stream 1 so the outbound GOAWAY advertises last_stream_id = 1.
+        let headers = Frame::Headers(HeadersFrame::new(
+            1,
+            test_request_headers("/one"),
+            false,
+            true,
+        ));
+        conn.process_frame(headers).unwrap();
+        conn.goaway(ErrorCode::NoError, Bytes::new());
+
+        let goaway = conn.next_frame().expect("expected GOAWAY frame");
+        match goaway {
+            Frame::GoAway(frame) => assert_eq!(frame.last_stream_id, 1),
+            other => panic!("expected GOAWAY frame, got {other:?}"),
+        }
+
+        // A higher-numbered HEADERS after GOAWAY is refused, but still creates
+        // the stream entry so later frames can target it.
+        let refused = Frame::Headers(HeadersFrame::new(
+            3,
+            test_request_headers("/refused"),
+            false,
+            true,
+        ));
+        assert!(conn.process_frame(refused).unwrap().is_none());
+
+        // Later bookkeeping on stream 3 can still bump the mutable tracker.
+        let reset = Frame::RstStream(RstStreamFrame::new(3, ErrorCode::Cancel));
+        conn.process_frame(reset).unwrap();
+        assert_eq!(conn.last_stream_id, 3);
+        assert_eq!(conn.sent_goaway_last_stream_id, Some(1));
+
+        // The refusal boundary must remain frozen at the value we advertised.
+        let refused_again = Frame::Headers(HeadersFrame::new(
+            5,
+            test_request_headers("/still-refused"),
+            false,
+            true,
+        ));
+        assert!(
+            conn.process_frame(refused_again).unwrap().is_none(),
+            "streams above the advertised GOAWAY boundary must stay refused"
+        );
+
+        let mut refused_streams = Vec::new();
+        while let Some(frame) = conn.next_frame() {
+            if let Frame::RstStream(rst) = frame {
+                refused_streams.push(rst.stream_id);
+            }
+        }
+        assert_eq!(refused_streams, vec![3, 5]);
+    }
+
+    #[test]
+    fn test_goaway_with_debug_data() {
+        let mut conn = Connection::server(Settings::default());
+        conn.state = ConnectionState::Open;
+
+        let debug_data = Bytes::from("server shutting down for maintenance");
+        conn.goaway(ErrorCode::NoError, debug_data.clone());
+
+        let frame = conn.next_frame().unwrap();
+        match frame {
+            Frame::GoAway(g) => {
+                assert_eq!(g.error_code, ErrorCode::NoError);
+                assert_eq!(g.debug_data, debug_data);
+            }
+            _ => panic!("expected GoAway"),
+        }
+    }
+
+    #[test]
+    fn test_goaway_received_with_error() {
+        let mut conn = Connection::client(Settings::client());
+        conn.state = ConnectionState::Open;
+
+        let goaway = Frame::GoAway(GoAwayFrame::new(0, ErrorCode::InternalError));
+        let result = conn.process_frame(goaway).unwrap().unwrap();
+
+        match result {
+            ReceivedFrame::GoAway {
+                error_code,
+                last_stream_id,
+                ..
+            } => {
+                assert_eq!(error_code, ErrorCode::InternalError);
+                assert_eq!(last_stream_id, 0);
+            }
+            _ => panic!("expected GoAway"),
+        }
+
+        assert!(conn.goaway_received());
+        assert_eq!(conn.state, ConnectionState::Closing);
+    }
+
+    // =========================================================================
+    // Shutdown Semantics Tests (bd-1oo7)
+    // =========================================================================
+
+    #[test]
+    fn test_graceful_shutdown_flow() {
+        let mut conn = Connection::server(Settings::default());
+        conn.state = ConnectionState::Open;
+
+        // Initiate graceful shutdown
+        conn.goaway(ErrorCode::NoError, Bytes::new());
+
+        // Connection should transition to Closing
+        assert_eq!(conn.state, ConnectionState::Closing);
+
+        // Should have GOAWAY frame pending
+        let frame = conn.next_frame().unwrap();
+        match frame {
+            Frame::GoAway(g) => {
+                assert_eq!(g.error_code, ErrorCode::NoError);
+            }
+            _ => panic!("expected GoAway"),
+        }
+    }
+
+    // =========================================================================
+    // PING Keepalive Tests (bd-1oo7)
+    // =========================================================================
+
+    #[test]
+    fn test_ping_ack_response() {
+        let mut conn = Connection::server(Settings::default());
+        conn.state = ConnectionState::Open;
+
+        let opaque_data = [0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08];
+        let ping = PingFrame::new(opaque_data);
+        conn.process_frame(Frame::Ping(ping)).unwrap();
+
+        // Should have PING ACK pending
+        let frame = conn.next_frame().unwrap();
+        match frame {
+            Frame::Ping(p) => {
+                assert!(p.ack);
+                assert_eq!(p.opaque_data, opaque_data);
+            }
+            _ => panic!("expected Ping ACK"),
+        }
+    }
+
+    #[test]
+    fn test_ping_ack_not_echoed() {
+        let mut conn = Connection::server(Settings::default());
+        conn.state = ConnectionState::Open;
+
+        // Receive PING ACK (should not trigger another ACK)
+        let ping_ack = PingFrame::ack([1, 2, 3, 4, 5, 6, 7, 8]);
+        conn.process_frame(Frame::Ping(ping_ack)).unwrap();
+
+        // No response should be queued
+        assert!(!conn.has_pending_frames());
+    }
+
+    #[test]
+    fn ping_ack_is_queued_after_existing_pending_frame() {
+        let mut conn = Connection::server(Settings::default());
+        conn.state = ConnectionState::Open;
+
+        conn.send_connection_window_update(1024)
+            .expect("queue pre-existing connection WINDOW_UPDATE");
+        conn.process_frame(Frame::Ping(PingFrame::new(*b"abcdefgh")))
+            .expect("non-ACK PING should be processed by the connection state machine");
+
+        match conn
+            .next_frame()
+            .expect("pre-existing pending frame should be emitted first")
+        {
+            Frame::WindowUpdate(frame) => {
+                assert_eq!(frame.stream_id, 0);
+                assert_eq!(frame.increment, 1024);
+            }
+            other => panic!("expected WINDOW_UPDATE before PING ACK, got {other:?}"),
+        }
+
+        match conn
+            .next_frame()
+            .expect("non-ACK PING should queue exactly one ACK response")
+        {
+            Frame::Ping(frame) => {
+                assert!(frame.ack);
+                assert_eq!(frame.opaque_data, *b"abcdefgh");
+            }
+            other => panic!("expected PING ACK after pre-existing frame, got {other:?}"),
+        }
+
+        assert!(!conn.has_pending_frames());
+        assert_eq!(conn.state, ConnectionState::Open);
+    }
+
+    #[test]
+    fn ping_ack_frame_preserves_existing_pending_queue_without_echo() {
+        let mut conn = Connection::server(Settings::default());
+        conn.state = ConnectionState::Open;
+
+        conn.send_connection_window_update(2048)
+            .expect("queue pre-existing connection WINDOW_UPDATE");
+        conn.process_frame(Frame::Ping(PingFrame::ack(*b"ack-data")))
+            .expect("ACK PING should be accepted without generating a response");
+
+        match conn
+            .next_frame()
+            .expect("pre-existing pending frame should remain queued")
+        {
+            Frame::WindowUpdate(frame) => {
+                assert_eq!(frame.stream_id, 0);
+                assert_eq!(frame.increment, 2048);
+            }
+            other => panic!("expected original WINDOW_UPDATE, got {other:?}"),
+        }
+
+        assert!(
+            conn.next_frame().is_none(),
+            "ACK PING must not append a second PING ACK"
+        );
+        assert_eq!(conn.state, ConnectionState::Open);
+    }
+
+    // =========================================================================
+    // Cancellation Race Tests (bd-1oo7)
+    // =========================================================================
+
+    /// RFC 7540 §5.1: RST_STREAM received on a stream in the idle state
+    /// MUST be treated as a connection error of type PROTOCOL_ERROR.
+    #[test]
+    fn test_rst_stream_on_idle_stream_is_connection_error() {
+        let mut conn = Connection::server(Settings::default());
+        conn.state = ConnectionState::Open;
+
+        // Stream 999 has never been opened — it is idle.
+        let rst = Frame::RstStream(RstStreamFrame::new(999, ErrorCode::Cancel));
+        let err = conn.process_frame(rst).unwrap_err();
+
+        assert_eq!(err.code, ErrorCode::ProtocolError);
+        assert!(
+            err.stream_id.is_none(),
+            "idle-stream RST_STREAM must be a connection error, not a stream error"
+        );
+    }
+
+    /// RST_STREAM on a known (non-idle) stream should still work normally.
+    #[test]
+    fn test_rst_stream_on_open_stream() {
+        let mut conn = Connection::server(Settings::default());
+        conn.state = ConnectionState::Open;
+
+        // Open stream 1 via HEADERS.
+        let headers = Frame::Headers(HeadersFrame::new(
+            1,
+            test_request_headers("/rst"),
+            false,
+            true,
+        ));
+        conn.process_frame(headers).unwrap();
+
+        // RST_STREAM on an open stream should succeed.
+        let rst = Frame::RstStream(RstStreamFrame::new(1, ErrorCode::Cancel));
+        let result = conn.process_frame(rst).unwrap().unwrap();
+
+        match result {
+            ReceivedFrame::Reset {
+                stream_id,
+                error_code,
+            } => {
+                assert_eq!(stream_id, 1);
+                assert_eq!(error_code, ErrorCode::Cancel);
+            }
+            _ => panic!("expected Reset"),
+        }
+    }
+
+    /// RST_STREAM with stream ID 0 is always a connection error (RFC 7540 §6.4).
+    #[test]
+    fn test_rst_stream_on_stream_zero_is_connection_error() {
+        let mut conn = Connection::server(Settings::default());
+        conn.state = ConnectionState::Open;
+
+        let rst = Frame::RstStream(RstStreamFrame::new(0, ErrorCode::Cancel));
+        let err = conn.process_frame(rst).unwrap_err();
+
+        assert_eq!(err.code, ErrorCode::ProtocolError);
+        assert!(err.stream_id.is_none());
+    }
+
+    #[test]
+    fn test_data_after_rst_ignored() {
+        let mut conn = Connection::server(Settings::default());
+        conn.state = ConnectionState::Open;
+
+        // Open stream via HEADERS
+        let headers = Frame::Headers(HeadersFrame::new(
+            1,
+            test_request_headers("/rst"),
+            false,
+            true,
+        ));
+        conn.process_frame(headers).unwrap();
+
+        // Reset the stream
+        let rst = Frame::RstStream(RstStreamFrame::new(1, ErrorCode::Cancel));
+        conn.process_frame(rst).unwrap();
+
+        // Stream should be closed
+        assert_eq!(conn.stream(1).unwrap().state(), StreamState::Closed);
+
+        // DATA on closed stream should return error
+        let data = Frame::Data(DataFrame::new(1, Bytes::from("test"), false));
+        let err = conn.process_frame(data).unwrap_err();
+        assert_eq!(err.code, ErrorCode::StreamClosed);
+    }
+
+    /// br-asupersync-8peajk — RFC 9113 §7 enumerates 14 HTTP/2 error
+    /// codes (0x0..=0xd). Connection::reset_stream(stream_id, code) MUST
+    /// emit exactly one RST_STREAM frame with that stream_id and that
+    /// error_code; the on-wire u32 mapping is part of the spec contract.
+    /// The pre-existing reset_stream test only covers Cancel; this
+    /// truth-table pins the remaining 13 codes so a future refactor in
+    /// PendingOp::RstStream cannot silently filter or remap them.
+    #[test]
+    fn reset_stream_emits_rfc_9113_section_7_error_codes() {
+        // Each row is (RFC §7 wire u32, ErrorCode variant, RFC name).
+        // Sourced from RFC 9113 §7 (Error Codes) and RFC 7540 §11.4.
+        let codes: &[(u32, ErrorCode, &str)] = &[
+            (0x0, ErrorCode::NoError, "NO_ERROR"),
+            (0x1, ErrorCode::ProtocolError, "PROTOCOL_ERROR"),
+            (0x2, ErrorCode::InternalError, "INTERNAL_ERROR"),
+            (0x3, ErrorCode::FlowControlError, "FLOW_CONTROL_ERROR"),
+            (0x4, ErrorCode::SettingsTimeout, "SETTINGS_TIMEOUT"),
+            (0x5, ErrorCode::StreamClosed, "STREAM_CLOSED"),
+            (0x6, ErrorCode::FrameSizeError, "FRAME_SIZE_ERROR"),
+            (0x7, ErrorCode::RefusedStream, "REFUSED_STREAM"),
+            (0x8, ErrorCode::Cancel, "CANCEL"),
+            (0x9, ErrorCode::CompressionError, "COMPRESSION_ERROR"),
+            (0xa, ErrorCode::ConnectError, "CONNECT_ERROR"),
+            (0xb, ErrorCode::EnhanceYourCalm, "ENHANCE_YOUR_CALM"),
+            (0xc, ErrorCode::InadequateSecurity, "INADEQUATE_SECURITY"),
+            (0xd, ErrorCode::Http11Required, "HTTP_1_1_REQUIRED"),
+        ];
+
+        for (wire_u32, code, name) in codes.iter().copied() {
+            // Wire-value invariant: ErrorCode → u32 must match RFC §7.
+            assert_eq!(
+                u32::from(code),
+                wire_u32,
+                "RFC 9113 §7: {name} on-wire value must be 0x{wire_u32:x}, got 0x{:x}",
+                u32::from(code),
+            );
+            // Round-trip through from_u32 — peers send the u32, we must
+            // recognise it.
+            assert_eq!(
+                ErrorCode::from_u32(wire_u32),
+                code,
+                "RFC 9113 §7: from_u32(0x{wire_u32:x}) must round-trip to {name}",
+            );
+
+            // Spin up a fresh client connection so reset_stream operates
+            // on a real (locally-initiated) open stream.
+            let mut conn = Connection::client(Settings::client());
+            conn.state = ConnectionState::Open;
+            let request_headers = vec![
+                Header::new(":method", "GET"),
+                Header::new(":path", "/"),
+                Header::new(":scheme", "https"),
+                Header::new(":authority", "example.com"),
+            ];
+            let stream_id = conn
+                .open_stream(request_headers, false)
+                .expect("open stream");
+            // Drain the queued HEADERS so next_frame returns the RST_STREAM.
+            match conn.next_frame().expect("expected request HEADERS") {
+                Frame::Headers(h) => assert_eq!(h.stream_id, stream_id),
+                other => panic!("expected HEADERS frame, got {other:?}"),
+            }
+
+            conn.reset_stream(stream_id, code);
+
+            match conn
+                .next_frame()
+                .expect("reset_stream must queue exactly one RST_STREAM")
+            {
+                Frame::RstStream(rst) => {
+                    assert_eq!(
+                        rst.stream_id, stream_id,
+                        "RST_STREAM stream_id must match the reset target ({name})",
+                    );
+                    assert_eq!(
+                        rst.error_code, code,
+                        "RST_STREAM error_code must round-trip {name} unchanged \
+                         (regression guard for PendingOp::RstStream)",
+                    );
+                }
+                other => panic!("{name}: expected RST_STREAM, got {other:?}"),
+            }
+            assert!(
+                conn.next_frame().is_none(),
+                "{name}: reset_stream must emit exactly one RST_STREAM",
+            );
+        }
+    }
+
+    #[test]
+    fn test_reset_stream_drops_queued_outbound_data() {
+        let mut conn = Connection::client(Settings::client());
+        conn.state = ConnectionState::Open;
+
+        let headers = vec![
+            Header::new(":method", "GET"),
+            Header::new(":path", "/"),
+            Header::new(":scheme", "https"),
+            Header::new(":authority", "example.com"),
+        ];
+        let stream_id = conn.open_stream(headers, false).unwrap();
+
+        // Pretend request headers were already sent.
+        let frame = conn.next_frame().expect("expected request HEADERS");
+        match frame {
+            Frame::Headers(h) => assert_eq!(h.stream_id, stream_id),
+            other => panic!("expected HEADERS frame, got {other:?}"),
+        }
+
+        conn.send_data(stream_id, Bytes::from("queued"), true)
+            .unwrap();
+        conn.reset_stream(stream_id, ErrorCode::Cancel);
+
+        // Once reset, queued DATA for the stream must be discarded.
+        let frame = conn.next_frame().expect("expected RST_STREAM frame");
+        match frame {
+            Frame::RstStream(rst) => {
+                assert_eq!(rst.stream_id, stream_id);
+                assert_eq!(rst.error_code, ErrorCode::Cancel);
+            }
+            other => panic!("expected RST_STREAM frame, got {other:?}"),
+        }
+        assert!(conn.next_frame().is_none());
+    }
+
+    #[test]
+    fn goaway_received_drops_queued_headers_for_refused_local_streams() {
+        let mut conn = Connection::client(Settings::client());
+        conn.state = ConnectionState::Open;
+
+        let headers = vec![
+            Header::new(":method", "GET"),
+            Header::new(":path", "/"),
+            Header::new(":scheme", "https"),
+            Header::new(":authority", "example.com"),
+        ];
+        let stream1 = conn.open_stream(headers.clone(), false).unwrap();
+        let stream3 = conn.open_stream(headers, false).unwrap();
+        assert_eq!(stream1, 1);
+        assert_eq!(stream3, 3);
+
+        let goaway = Frame::GoAway(GoAwayFrame::new(1, ErrorCode::NoError));
+        conn.process_frame(goaway).unwrap();
+        assert_eq!(
+            conn.stream(stream3).unwrap().error_code(),
+            Some(ErrorCode::RefusedStream)
+        );
+
+        let frame = conn
+            .next_frame()
+            .expect("stream 1 HEADERS should still be sent");
+        match frame {
+            Frame::Headers(frame) => assert_eq!(frame.stream_id, stream1),
+            other => panic!("expected HEADERS frame, got {other:?}"),
+        }
+
+        assert!(
+            conn.next_frame().is_none(),
+            "queued HEADERS for reset stream 3 must be discarded"
+        );
+    }
+
+    #[test]
+    fn test_window_update_after_goaway() {
+        let mut conn = Connection::client(Settings::client());
+        conn.state = ConnectionState::Open;
+
+        // Receive GOAWAY
+        let goaway = Frame::GoAway(GoAwayFrame::new(0, ErrorCode::NoError));
+        conn.process_frame(goaway).unwrap();
+
+        // Connection-level WINDOW_UPDATE should still work
+        let window_update = Frame::WindowUpdate(WindowUpdateFrame::new(0, 1024));
+        let result = conn.process_frame(window_update);
+        assert!(result.is_ok());
+    }
+
+    /// Regression: zero-increment WINDOW_UPDATE on a stream must be a stream
+    /// error (RST_STREAM), not a connection error (RFC 9113 §6.9.1).
+    #[test]
+    fn zero_increment_window_update_on_stream_is_stream_error() {
+        let mut conn = Connection::server(Settings::default());
+        conn.state = ConnectionState::Open;
+
+        // Open a stream.
+        let headers = Frame::Headers(HeadersFrame::new(
+            1,
+            test_request_headers("/window-update"),
+            false,
+            true,
+        ));
+        conn.process_frame(headers).unwrap();
+
+        // Zero increment on stream 1: must be a *stream* error, not connection.
+        let wu = Frame::WindowUpdate(WindowUpdateFrame::new(1, 0));
+        let err = conn.process_frame(wu).unwrap_err();
+        assert_eq!(err.code, ErrorCode::ProtocolError);
+        assert_eq!(
+            err.stream_id,
+            Some(1),
+            "zero increment on a stream must be a stream error, not connection"
+        );
+    }
+
+    /// Zero-increment WINDOW_UPDATE on stream 0 must be a connection error.
+    #[test]
+    fn zero_increment_window_update_on_connection_is_connection_error() {
+        let mut conn = Connection::server(Settings::default());
+        conn.state = ConnectionState::Open;
+
+        let wu = Frame::WindowUpdate(WindowUpdateFrame::new(0, 0));
+        let err = conn.process_frame(wu).unwrap_err();
+        assert_eq!(err.code, ErrorCode::ProtocolError);
+        assert!(
+            err.stream_id.is_none(),
+            "zero increment on connection must be a connection error"
+        );
+    }
+
+    #[test]
+    fn final_inbound_data_does_not_queue_stream_window_update() {
+        let mut conn = Connection::server(Settings::default());
+        conn.state = ConnectionState::Open;
+
+        let request = Frame::Headers(HeadersFrame::new(
+            1,
+            test_request_headers("/flow-control"),
+            false,
+            true,
+        ));
+        conn.process_frame(request).unwrap();
+
+        let response_headers = vec![Header::new(":status", "200")];
+        conn.send_headers(1, response_headers, true).unwrap();
+        let _ = conn
+            .next_frame()
+            .expect("response HEADERS should be pending");
+        assert_eq!(
+            conn.stream(1).unwrap().state(),
+            StreamState::HalfClosedLocal
+        );
+
+        let payload_len = (DEFAULT_CONNECTION_WINDOW_SIZE / 2) + 2;
+        let data = Bytes::from(vec![0_u8; payload_len as usize]);
+        let inbound = Frame::Data(DataFrame::new(1, data, true));
+        conn.process_frame(inbound).unwrap();
+        assert_eq!(conn.stream(1).unwrap().state(), StreamState::Closed);
+
+        while let Some(frame) = conn.next_frame() {
+            if let Frame::WindowUpdate(update) = frame {
+                assert_ne!(
+                    update.stream_id, 1,
+                    "closed streams must not emit stream-level WINDOW_UPDATE"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn prune_closed_streams_preserves_blocked_final_data() {
+        let mut conn = Connection::server(Settings::default());
+        conn.state = ConnectionState::Open;
+
+        let request = Frame::Headers(HeadersFrame::new(
+            1,
+            test_request_headers("/blocked-final-data"),
+            false,
+            true,
+        ));
+        conn.process_frame(request).unwrap();
+        conn.process_frame(Frame::Data(DataFrame::new(
+            1,
+            Bytes::from_static(b"request"),
+            true,
+        )))
+        .unwrap();
+        assert_eq!(
+            conn.stream(1).unwrap().state(),
+            StreamState::HalfClosedRemote
+        );
+
+        conn.send_headers(1, vec![Header::new(":status", "200")], false)
+            .unwrap();
+        conn.streams
+            .get_mut(1)
+            .unwrap()
+            .consume_send_window(DEFAULT_CONNECTION_WINDOW_SIZE as u32);
+        conn.send_data(1, Bytes::from_static(b"final"), true)
+            .unwrap();
+        assert_eq!(conn.stream(1).unwrap().state(), StreamState::Closed);
+
+        match conn
+            .next_frame()
+            .expect("response HEADERS should flush first")
+        {
+            Frame::Headers(frame) => assert_eq!(frame.stream_id, 1),
+            other => panic!("expected response HEADERS, got {other:?}"),
+        }
+        assert!(
+            conn.next_frame().is_none(),
+            "zero stream send window keeps final DATA queued"
+        );
+        assert!(conn.has_pending_frames_for_stream(1));
+
+        conn.prune_closed_streams();
+        assert!(
+            conn.stream(1).is_some(),
+            "closed stream with blocked final DATA must survive pruning"
+        );
+
+        conn.streams
+            .get_mut(1)
+            .unwrap()
+            .update_send_window(5)
+            .unwrap();
+        match conn.next_frame().expect("blocked final DATA should flush") {
+            Frame::Data(frame) => {
+                assert_eq!(frame.stream_id, 1);
+                assert_eq!(&frame.data[..], b"final");
+                assert!(frame.end_stream);
+            }
+            other => panic!("expected final DATA frame, got {other:?}"),
+        }
+
+        assert!(!conn.has_pending_frames_for_stream(1));
+        conn.prune_closed_streams();
+        assert!(
+            conn.stream(1).is_none(),
+            "closed stream is pruned after its queued frames flush"
+        );
+    }
+
+    #[test]
+    fn test_settings_during_continuation() {
+        let mut conn = Connection::server(Settings::default());
+        conn.state = ConnectionState::Open;
+
+        // Start a HEADERS sequence without END_HEADERS
+        let headers = Frame::Headers(HeadersFrame::new(1, Bytes::new(), false, false));
+        conn.process_frame(headers).unwrap();
+
+        // Connection is now expecting CONTINUATION
+        assert!(conn.is_awaiting_continuation());
+
+        // SETTINGS frame should cause protocol error (must get CONTINUATION)
+        let settings = Frame::Settings(SettingsFrame::new(vec![]));
+        let err = conn.process_frame(settings).unwrap_err();
+        assert_eq!(err.code, ErrorCode::ProtocolError);
+    }
+
+    #[test]
+    fn test_ping_during_continuation() {
+        let mut conn = Connection::server(Settings::default());
+        conn.state = ConnectionState::Open;
+
+        // Start a HEADERS sequence without END_HEADERS
+        let headers = Frame::Headers(HeadersFrame::new(1, Bytes::new(), false, false));
+        conn.process_frame(headers).unwrap();
+
+        // Connection is now expecting CONTINUATION
+        assert!(conn.is_awaiting_continuation());
+
+        // PING frame should cause protocol error (must get CONTINUATION)
+        let ping = Frame::Ping(PingFrame::new([0; 8]));
+        let err = conn.process_frame(ping).unwrap_err();
+        assert_eq!(err.code, ErrorCode::ProtocolError);
+    }
+
+    /// br-asupersync-pxb77u — RFC 9113 §6.10:
+    ///
+    /// > A CONTINUATION frame MUST be preceded by a HEADERS, PUSH_PROMISE
+    /// > or CONTINUATION frame without the END_HEADERS flag set. A
+    /// > recipient that observes violation of this rule MUST respond with
+    /// > a connection error (Section 5.4.1) of type PROTOCOL_ERROR.
+    ///
+    /// "Connection error" specifically means `stream_id == None` so the
+    /// peer GOAWAYs the whole connection rather than RST_STREAMing one
+    /// stream. The pre-fix recv_continuation path on a stream whose
+    /// headers were already complete returned a stream-level
+    /// `H2Error::stream(...PROTOCOL_ERROR)` which would only RST_STREAM
+    /// the offending stream — non-conformant with §6.10.
+    #[test]
+    fn unsolicited_continuation_after_end_headers_is_connection_error() {
+        let mut conn = Connection::server(Settings::default());
+        conn.state = ConnectionState::Open;
+
+        // Complete a HEADERS sequence with END_HEADERS so the stream exists
+        // in the map but the connection is NOT awaiting CONTINUATION.
+        let headers = Frame::Headers(HeadersFrame::new(
+            1,
+            test_request_headers("/done"),
+            false,
+            true,
+        ));
+        conn.process_frame(headers).expect("complete HEADERS");
+        assert!(
+            !conn.is_awaiting_continuation(),
+            "headers with END_HEADERS must clear continuation expectation"
+        );
+
+        // Unsolicited CONTINUATION on the now-complete stream.
+        let cont = Frame::Continuation(ContinuationFrame {
+            stream_id: 1,
+            header_block: Bytes::new(),
+            end_headers: true,
+        });
+        let err = conn
+            .process_frame(cont)
+            .expect_err("unsolicited CONTINUATION must error");
+        assert_eq!(
+            err.code,
+            ErrorCode::ProtocolError,
+            "RFC 9113 §6.10 requires PROTOCOL_ERROR"
+        );
+        assert_eq!(
+            err.stream_id, None,
+            "RFC 9113 §6.10 requires connection-level error (stream_id == None), \
+             got stream-level error scoped to {:?}: {}",
+            err.stream_id, err.message
+        );
+    }
+
+    /// Sister case: CONTINUATION arrives for a stream that has never seen
+    /// any HEADERS. RFC 9113 §6.10 still mandates a connection error.
+    #[test]
+    fn continuation_for_unknown_stream_is_connection_error() {
+        let mut conn = Connection::server(Settings::default());
+        conn.state = ConnectionState::Open;
+
+        let cont = Frame::Continuation(ContinuationFrame {
+            stream_id: 7,
+            header_block: Bytes::new(),
+            end_headers: true,
+        });
+        let err = conn
+            .process_frame(cont)
+            .expect_err("CONTINUATION on unknown stream must error");
+        assert_eq!(err.code, ErrorCode::ProtocolError);
+        assert_eq!(
+            err.stream_id, None,
+            "RFC 9113 §6.10 requires connection-level error, got stream {:?}",
+            err.stream_id
+        );
+    }
+
+    // =========================================================================
+    // last_stream_id Tracking Tests (bd-34krf)
+    // =========================================================================
+
+    #[test]
+    fn goaway_reflects_last_processed_stream() {
+        let mut conn = Connection::server(Settings::default());
+        conn.state = ConnectionState::Open;
+
+        // Process HEADERS on stream 1
+        let headers = Frame::Headers(HeadersFrame::new(
+            1,
+            test_request_headers("/one"),
+            false,
+            true,
+        ));
+        conn.process_frame(headers).unwrap();
+
+        // Process HEADERS on stream 3
+        let headers = Frame::Headers(HeadersFrame::new(
+            3,
+            test_request_headers("/three"),
+            false,
+            true,
+        ));
+        conn.process_frame(headers).unwrap();
+
+        // Send GOAWAY — should reflect last_stream_id=3
+        conn.goaway(ErrorCode::NoError, Bytes::new());
+        let frame = conn.next_frame().unwrap();
+        match frame {
+            Frame::GoAway(g) => {
+                assert_eq!(
+                    g.last_stream_id, 3,
+                    "GOAWAY should report highest processed stream ID"
+                );
+            }
+            _ => panic!("expected GoAway"),
+        }
+    }
+
+    #[test]
+    fn goaway_reflects_last_processed_data_stream() {
+        let mut conn = Connection::server(Settings::default());
+        conn.state = ConnectionState::Open;
+
+        // Open stream via HEADERS
+        let headers = Frame::Headers(HeadersFrame::new(
+            1,
+            test_request_headers("/one"),
+            false,
+            true,
+        ));
+        conn.process_frame(headers).unwrap();
+
+        // Process DATA on stream 1
+        let data = Frame::Data(DataFrame::new(1, Bytes::from("hello"), false));
+        conn.process_frame(data).unwrap();
+
+        // Open stream 3 via HEADERS
+        let headers = Frame::Headers(HeadersFrame::new(
+            3,
+            test_request_headers("/three"),
+            true,
+            true,
+        ));
+        conn.process_frame(headers).unwrap();
+
+        // GOAWAY should reflect stream 3 (highest seen)
+        conn.goaway(ErrorCode::NoError, Bytes::new());
+        // Drain pending ops (SettingsAck, WindowUpdates, etc.)
+        let mut goaway_frame = None;
+        while let Some(f) = conn.next_frame() {
+            if matches!(&f, Frame::GoAway(_)) {
+                goaway_frame = Some(f);
+                break;
+            }
+        }
+        match goaway_frame.unwrap() {
+            Frame::GoAway(g) => assert_eq!(g.last_stream_id, 3),
+            _ => panic!("expected GoAway"),
+        }
+    }
+
+    // =========================================================================
+    // CONTINUATION Ordering Tests (bd-34krf)
+    // =========================================================================
+
+    #[test]
+    fn continuation_frames_not_interleaved_with_pending_ops() {
+        let mut conn = Connection::client(Settings::client());
+        conn.state = ConnectionState::Open;
+        // Small max_frame_size to force CONTINUATION
+        conn.remote_settings.max_frame_size = 50;
+
+        // Queue a PING ACK first (simulating a received ping being processed)
+        conn.pending_ops
+            .push_back(PendingOp::PingAck([9, 8, 7, 6, 5, 4, 3, 2]));
+
+        // Open a stream with large headers that require CONTINUATION
+        let mut headers = vec![
+            Header::new(":method", "GET"),
+            Header::new(":path", "/some/very/long/path/that/exceeds/frame/size"),
+            Header::new(":scheme", "https"),
+            Header::new(":authority", "example.com"),
+        ];
+        for i in 0..10 {
+            headers.push(Header::new(
+                format!("x-custom-header-{i}"),
+                format!("value-{i}"),
+            ));
+        }
+        let _ = conn.open_stream(headers, true).unwrap();
+
+        // First frame: should be PingAck (it was queued first)
+        let frame1 = conn.next_frame().unwrap();
+        assert!(
+            matches!(frame1, Frame::Ping(_)),
+            "first frame should be the pre-existing PingAck"
+        );
+
+        // Second frame: should be HEADERS (not end_headers)
+        let frame2 = conn.next_frame().unwrap();
+        match &frame2 {
+            Frame::Headers(h) => {
+                assert!(
+                    !h.end_headers,
+                    "headers too large, should have CONTINUATION"
+                );
+            }
+            other => panic!("expected HEADERS, got {other:?}"),
+        }
+
+        // All subsequent frames until end_headers must be CONTINUATION
+        // (no interleaved PingAck, WindowUpdate, etc.)
+        loop {
+            let frame = conn.next_frame();
+            match frame {
+                Some(Frame::Continuation(c)) => {
+                    if c.end_headers {
+                        break;
+                    }
+                }
+                Some(other) => {
+                    panic!("expected CONTINUATION but got {other:?} — interleaving detected!")
+                }
+                None => panic!("ran out of frames before end_headers"),
+            }
+        }
+    }
+
+    // =========================================================================
+    // RFC 7540 §5.1 Idle Stream Enforcement Tests (bd-3n7hy)
+    // =========================================================================
+
+    /// Regression: DATA received on a stream in the idle state MUST be treated
+    /// as a connection error of type PROTOCOL_ERROR (RFC 7540 §5.1).
+    #[test]
+    fn data_on_idle_stream_is_connection_error() {
+        let mut conn = Connection::server(Settings::default());
+        conn.state = ConnectionState::Open;
+
+        // Stream 1 has never been opened (no prior HEADERS). get_or_create
+        // will create it in Idle state, then the idle-check must fire.
+        let data = Frame::Data(DataFrame::new(1, Bytes::from("hello"), false));
+        let err = conn.process_frame(data).unwrap_err();
+
+        assert_eq!(err.code, ErrorCode::ProtocolError);
+        assert!(
+            err.stream_id.is_none(),
+            "idle-stream DATA must be a connection error, not a stream error"
+        );
+    }
+
+    /// Regression: WINDOW_UPDATE received on a stream in the idle state MUST be
+    /// treated as a connection error of type PROTOCOL_ERROR (RFC 7540 §5.1).
+    #[test]
+    fn window_update_on_idle_stream_is_connection_error() {
+        let mut conn = Connection::server(Settings::default());
+        conn.state = ConnectionState::Open;
+
+        // Open stream 1 via HEADERS to advance next_client_stream_id, then
+        // send WINDOW_UPDATE on stream 3 which is idle (never opened).
+        let headers = Frame::Headers(HeadersFrame::new(
+            1,
+            test_request_headers("/window-update"),
+            false,
+            true,
+        ));
+        conn.process_frame(headers).unwrap();
+
+        // Stream 3 is idle — WINDOW_UPDATE must be a connection error.
+        let wu = Frame::WindowUpdate(WindowUpdateFrame::new(3, 1024));
+        let err = conn.process_frame(wu).unwrap_err();
+
+        assert_eq!(err.code, ErrorCode::ProtocolError);
+        assert!(
+            err.stream_id.is_none(),
+            "idle-stream WINDOW_UPDATE must be a connection error, not a stream error"
+        );
+    }
+
+    // =========================================================================
+    // last_stream_id Pollution Tests (asupersync-32jl1)
+    // =========================================================================
+
+    /// CVE-2023-44487: RST_STREAM flood beyond rate limit triggers ENHANCE_YOUR_CALM.
+    #[test]
+    fn rst_stream_flood_triggers_enhance_your_calm() {
+        let mut conn = Connection::server(Settings::default());
+        conn.state = ConnectionState::Open;
+
+        // Open and reset streams up to the rate limit.
+        for i in 0..DEFAULT_RST_STREAM_RATE_LIMIT {
+            let stream_id = i * 2 + 1;
+            let headers = Frame::Headers(HeadersFrame::new(
+                stream_id,
+                test_request_headers("/rst"),
+                false,
+                true,
+            ));
+            conn.process_frame(headers).unwrap();
+
+            let rst = Frame::RstStream(RstStreamFrame::new(stream_id, ErrorCode::Cancel));
+            conn.process_frame(rst).unwrap();
+        }
+
+        // One more RST_STREAM should trigger the rate limit.
+        let stream_id = DEFAULT_RST_STREAM_RATE_LIMIT * 2 + 1;
+        let headers = Frame::Headers(HeadersFrame::new(
+            stream_id,
+            test_request_headers("/rst"),
+            false,
+            true,
+        ));
+        conn.process_frame(headers).unwrap();
+
+        let rst = Frame::RstStream(RstStreamFrame::new(stream_id, ErrorCode::Cancel));
+        let err = conn.process_frame(rst).unwrap_err();
+
+        assert_eq!(err.code, ErrorCode::EnhanceYourCalm);
+        assert!(
+            err.stream_id.is_none(),
+            "RST_STREAM flood must be a connection error"
+        );
+    }
+
+    #[test]
+    fn rst_stream_rate_limit_window_uses_time_getter() {
+        let _clock = lock_test_clock();
+        set_test_time_offset(Duration::ZERO);
+        let mut conn = Connection::server_with_time_getter(Settings::default(), test_now);
+        conn.state = ConnectionState::Open;
+
+        for i in 0..DEFAULT_RST_STREAM_RATE_LIMIT {
+            let stream_id = i * 2 + 1;
+            let headers = Frame::Headers(HeadersFrame::new(
+                stream_id,
+                test_request_headers("/rst"),
+                false,
+                true,
+            ));
+            conn.process_frame(headers).unwrap();
+
+            let rst = Frame::RstStream(RstStreamFrame::new(stream_id, ErrorCode::Cancel));
+            conn.process_frame(rst).unwrap();
+        }
+
+        advance_test_time(Duration::from_millis(
+            u64::try_from(DEFAULT_RST_STREAM_RATE_WINDOW_MS).expect("window fits u64") + 1,
+        ));
+
+        let stream_id = DEFAULT_RST_STREAM_RATE_LIMIT * 2 + 1;
+        let headers = Frame::Headers(HeadersFrame::new(
+            stream_id,
+            test_request_headers("/rst"),
+            false,
+            true,
+        ));
+        conn.process_frame(headers).unwrap();
+
+        let rst = Frame::RstStream(RstStreamFrame::new(stream_id, ErrorCode::Cancel));
+        conn.process_frame(rst)
+            .expect("rate-limit window should reset");
+        assert_eq!(conn.rst_stream_count, 1);
+    }
+
+    #[test]
+    fn rst_stream_rate_limit_rejects_after_u32_max_without_wrapping() {
+        let mut conn =
+            Connection::server(Settings::default()).rst_stream_rate_limit(RstStreamRateLimit {
+                max_rst_streams: u32::MAX,
+                rst_window_ms: DEFAULT_RST_STREAM_RATE_WINDOW_MS,
+            });
+        conn.state = ConnectionState::Open;
+
+        for stream_id in [1, 3] {
+            let headers = Frame::Headers(HeadersFrame::new(
+                stream_id,
+                test_request_headers("/rst"),
+                false,
+                true,
+            ));
+            conn.process_frame(headers).unwrap();
+        }
+
+        conn.rst_stream_count = u32::MAX - 1;
+
+        let rst = Frame::RstStream(RstStreamFrame::new(1, ErrorCode::Cancel));
+        conn.process_frame(rst)
+            .expect("u32::MAXth RST_STREAM should still be allowed");
+        assert_eq!(conn.rst_stream_count, u32::MAX);
+
+        let overflow_attempt = Frame::RstStream(RstStreamFrame::new(3, ErrorCode::Cancel));
+        let err = conn.process_frame(overflow_attempt).unwrap_err();
+        assert_eq!(err.code, ErrorCode::EnhanceYourCalm);
+        assert_eq!(conn.rst_stream_count, u32::MAX);
+    }
+
+    /// Regression: HEADERS on a stream with invalid parity must NOT bump
+    /// last_stream_id. If it did, a subsequent GOAWAY would advertise a higher
+    /// last_stream_id than actually processed, violating RFC 7540 §6.8.
+    #[test]
+    fn headers_on_wrong_parity_stream_does_not_pollute_last_stream_id() {
+        let mut conn = Connection::server(Settings::default());
+        conn.state = ConnectionState::Open;
+
+        // Open stream 1 normally.
+        let headers = Frame::Headers(HeadersFrame::new(
+            1,
+            test_request_headers("/parity"),
+            false,
+            true,
+        ));
+        conn.process_frame(headers).unwrap();
+
+        // Send HEADERS on stream 2 (even = server-initiated, invalid from client).
+        let invalid = Frame::Headers(HeadersFrame::new(2, Bytes::new(), false, true));
+        let err = conn.process_frame(invalid).unwrap_err();
+        assert_eq!(err.code, ErrorCode::ProtocolError);
+
+        // GOAWAY should report last_stream_id=1, not 2.
+        conn.goaway(ErrorCode::NoError, Bytes::new());
+        let frame = conn.next_frame().unwrap();
+        match frame {
+            Frame::GoAway(g) => {
+                assert_eq!(
+                    g.last_stream_id, 1,
+                    "last_stream_id must not be bumped by rejected HEADERS"
+                );
+            }
+            _ => panic!("expected GoAway"),
+        }
+    }
+
+    #[test]
+    fn connection_window_update_rejects_zero_increment() {
+        let mut conn = Connection::server(Settings::default());
+        let err = conn.send_connection_window_update(0).unwrap_err();
+        assert_eq!(err.code, ErrorCode::FlowControlError);
+    }
+
+    #[test]
+    fn decoder_allowed_table_size_follows_local_settings() {
+        // Regression: the HPACK decoder's allowed dynamic-table size must track
+        // the SETTINGS_HEADER_TABLE_SIZE we advertise (RFC 7541 §6.3), not stay
+        // pinned at the 4096 default. Otherwise a peer that honors a larger
+        // advertised table and sends a matching dynamic-table-size update is
+        // killed with a COMPRESSION_ERROR.
+        let settings = Settings {
+            header_table_size: 8192,
+            ..Settings::default()
+        };
+        let server = Connection::server(settings.clone());
+        assert_eq!(server.hpack_decoder.allowed_table_size(), 8192);
+        let client = Connection::client(settings);
+        assert_eq!(client.hpack_decoder.allowed_table_size(), 8192);
+    }
+
+    #[test]
+    fn stream_window_update_rejects_zero_increment() {
+        let mut conn = Connection::server(Settings::default());
+        let err = conn.send_stream_window_update(1, 0).unwrap_err();
+        assert_eq!(err.code, ErrorCode::FlowControlError);
+    }
+
+    #[test]
+    fn connection_window_update_accepts_valid_increment() {
+        let mut conn = Connection::server(Settings::default());
+        assert!(conn.send_connection_window_update(1024).is_ok());
+        assert!(conn.has_pending_frames());
+    }
+
+    #[test]
+    fn stream_window_update_accepts_valid_increment() {
+        let mut conn = Connection::server(Settings::default());
+        conn.state = ConnectionState::Open;
+        // Open a stream first by processing a HEADERS frame.
+        let headers = Frame::Headers(HeadersFrame::new(
+            1,
+            test_request_headers("/window-update"),
+            false,
+            true,
+        ));
+        conn.process_frame(headers).unwrap();
+        assert!(conn.send_stream_window_update(1, 4096).is_ok());
+        assert!(conn.has_pending_frames());
+    }
+
+    // =====================================================================
+    // br-asupersync-vqpx88: RFC 9113 §8.3 / §8.3.1 / §8.3.2 / §8.5
+    // pseudo-header structural validation tests for `validate_h2_pseudo_headers`.
+    // =====================================================================
+
+    fn h(name: &str, value: &str) -> Header {
+        Header::new(name, value)
+    }
+
+    #[test]
+    fn vqpx88_request_minimum_valid_get() {
+        let headers = vec![
+            h(":method", "GET"),
+            h(":scheme", "https"),
+            h(":path", "/"),
+            h(":authority", "example.com"),
+            h("user-agent", "asupersync"),
+        ];
+        assert!(validate_h2_pseudo_headers(&headers, true, false).is_ok());
+    }
+
+    #[test]
+    fn vqpx88_response_minimum_valid_200() {
+        let headers = vec![h(":status", "200"), h("content-type", "text/plain")];
+        assert!(validate_h2_pseudo_headers(&headers, false, false).is_ok());
+    }
+
+    #[test]
+    fn vqpx88_pseudo_after_regular_rejected() {
+        let headers = vec![
+            h(":method", "GET"),
+            h(":scheme", "https"),
+            h("host", "example.com"),
+            h(":path", "/"),
+            h(":authority", "example.com"),
+        ];
+        let err = validate_h2_pseudo_headers(&headers, true, false).unwrap_err();
+        assert!(err.contains("after a regular header"), "unexpected: {err}");
+    }
+
+    #[test]
+    fn vqpx88_duplicate_method_rejected() {
+        let headers = vec![
+            h(":method", "GET"),
+            h(":method", "POST"),
+            h(":scheme", "https"),
+            h(":path", "/"),
+            h(":authority", "example.com"),
+        ];
+        let err = validate_h2_pseudo_headers(&headers, true, false).unwrap_err();
+        assert!(err.contains("duplicate :method"), "unexpected: {err}");
+    }
+
+    #[test]
+    fn vqpx88_duplicate_scheme_rejected() {
+        let headers = vec![
+            h(":method", "GET"),
+            h(":scheme", "https"),
+            h(":scheme", "http"),
+            h(":path", "/"),
+            h(":authority", "example.com"),
+        ];
+        let err = validate_h2_pseudo_headers(&headers, true, false).unwrap_err();
+        assert!(err.contains("duplicate :scheme"), "unexpected: {err}");
+    }
+
+    #[test]
+    fn vqpx88_duplicate_status_rejected() {
+        let headers = vec![h(":status", "200"), h(":status", "404")];
+        let err = validate_h2_pseudo_headers(&headers, false, false).unwrap_err();
+        assert!(err.contains("duplicate :status"), "unexpected: {err}");
+    }
+
+    #[test]
+    fn vqpx88_unknown_pseudo_rejected() {
+        let headers = vec![
+            h(":method", "GET"),
+            h(":weird", "value"),
+            h(":scheme", "https"),
+            h(":path", "/"),
+            h(":authority", "example.com"),
+        ];
+        let err = validate_h2_pseudo_headers(&headers, true, false).unwrap_err();
+        assert!(err.contains("unknown pseudo-header"), "unexpected: {err}");
+    }
+
+    #[test]
+    fn vqpx88_response_with_method_rejected() {
+        let headers = vec![h(":status", "200"), h(":method", "GET")];
+        let err = validate_h2_pseudo_headers(&headers, false, false).unwrap_err();
+        assert!(
+            err.contains("must not include request pseudo-headers"),
+            "unexpected: {err}"
+        );
+    }
+
+    #[test]
+    fn vqpx88_request_missing_method_rejected() {
+        let headers = vec![
+            h(":scheme", "https"),
+            h(":path", "/"),
+            h(":authority", "example.com"),
+        ];
+        let err = validate_h2_pseudo_headers(&headers, true, false).unwrap_err();
+        assert!(
+            err.contains("missing required :method"),
+            "unexpected: {err}"
+        );
+    }
+
+    #[test]
+    fn vqpx88_request_missing_scheme_rejected() {
+        let headers = vec![
+            h(":method", "GET"),
+            h(":path", "/"),
+            h(":authority", "example.com"),
+        ];
+        let err = validate_h2_pseudo_headers(&headers, true, false).unwrap_err();
+        assert!(
+            err.contains("missing required :scheme"),
+            "unexpected: {err}"
+        );
+    }
+
+    #[test]
+    fn vqpx88_request_missing_path_rejected() {
+        let headers = vec![
+            h(":method", "GET"),
+            h(":scheme", "https"),
+            h(":authority", "example.com"),
+        ];
+        let err = validate_h2_pseudo_headers(&headers, true, false).unwrap_err();
+        assert!(err.contains("missing required :path"), "unexpected: {err}");
+    }
+
+    #[test]
+    fn vqpx88_response_missing_status_rejected() {
+        let headers = vec![h("content-type", "text/plain")];
+        let err = validate_h2_pseudo_headers(&headers, false, false).unwrap_err();
+        assert!(
+            err.contains("missing required :status"),
+            "unexpected: {err}"
+        );
+    }
+
+    #[test]
+    fn vqpx88_request_with_status_rejected() {
+        let headers = vec![
+            h(":method", "GET"),
+            h(":status", "200"),
+            h(":scheme", "https"),
+            h(":path", "/"),
+            h(":authority", "example.com"),
+        ];
+        let err = validate_h2_pseudo_headers(&headers, true, false).unwrap_err();
+        assert!(
+            err.contains("must not include :status"),
+            "unexpected: {err}"
+        );
+    }
+
+    #[test]
+    fn vqpx88_connect_with_scheme_rejected() {
+        let headers = vec![
+            h(":method", "CONNECT"),
+            h(":scheme", "https"),
+            h(":authority", "example.com:443"),
+        ];
+        let err = validate_h2_pseudo_headers(&headers, true, false).unwrap_err();
+        assert!(
+            err.contains("CONNECT request must not include :scheme or :path"),
+            "unexpected: {err}"
+        );
+    }
+
+    #[test]
+    fn vqpx88_connect_with_path_rejected() {
+        let headers = vec![
+            h(":method", "CONNECT"),
+            h(":path", "/"),
+            h(":authority", "example.com:443"),
+        ];
+        let err = validate_h2_pseudo_headers(&headers, true, false).unwrap_err();
+        assert!(
+            err.contains("CONNECT request must not include :scheme or :path"),
+            "unexpected: {err}"
+        );
+    }
+
+    #[test]
+    fn vqpx88_connect_missing_authority_rejected() {
+        let headers = vec![h(":method", "CONNECT")];
+        let err = validate_h2_pseudo_headers(&headers, true, false).unwrap_err();
+        assert!(
+            err.contains("CONNECT request missing required :authority"),
+            "unexpected: {err}"
+        );
+    }
+
+    #[test]
+    fn vqpx88_connect_valid_minimum() {
+        let headers = vec![h(":method", "CONNECT"), h(":authority", "example.com:443")];
+        assert!(validate_h2_pseudo_headers(&headers, true, false).is_ok());
+    }
+
+    #[test]
+    fn vqpx88_uppercase_regular_header_rejected() {
+        let headers = vec![
+            h(":method", "GET"),
+            h(":scheme", "https"),
+            h(":path", "/"),
+            h(":authority", "example.com"),
+            h("X-Custom", "v"),
+        ];
+        let err = validate_h2_pseudo_headers(&headers, true, false).unwrap_err();
+        assert!(err.contains("uppercase ASCII"), "unexpected: {err}");
+    }
+
+    #[test]
+    fn vqpx88_protocol_on_non_connect_rejected() {
+        let headers = vec![
+            h(":method", "GET"),
+            h(":scheme", "https"),
+            h(":path", "/"),
+            h(":authority", "example.com"),
+            h(":protocol", "websocket"),
+        ];
+        let err = validate_h2_pseudo_headers(&headers, true, false).unwrap_err();
+        assert!(
+            err.contains(":protocol pseudo-header is only valid"),
+            "unexpected: {err}"
+        );
+    }
+
+    #[test]
+    fn vqpx88_extended_connect_with_protocol_ok() {
+        // RFC 8441 extended-CONNECT carries :protocol with :scheme/:path
+        // when SETTINGS_ENABLE_CONNECT_PROTOCOL has been negotiated. The
+        // structural validator tolerates this combination; the deeper
+        // settings-aware check lives in the follow-up parity pass.
+        let headers = vec![
+            h(":method", "CONNECT"),
+            h(":protocol", "websocket"),
+            h(":scheme", "https"),
+            h(":path", "/chat"),
+            h(":authority", "example.com"),
+        ];
+        assert!(validate_h2_pseudo_headers(&headers, true, false).is_ok());
+    }
+
+    #[test]
+    fn vqpx88_empty_header_name_rejected() {
+        let headers = vec![Header::new("", "value")];
+        let err = validate_h2_pseudo_headers(&headers, true, false).unwrap_err();
+        assert!(err.contains("empty"), "unexpected: {err}");
+    }
+
+    #[test]
+    fn vqpx88_response_with_authority_rejected() {
+        let headers = vec![h(":status", "200"), h(":authority", "example.com")];
+        let err = validate_h2_pseudo_headers(&headers, false, false).unwrap_err();
+        assert!(
+            err.contains("must not include request pseudo-headers"),
+            "unexpected: {err}"
+        );
+    }
+
+    /// br-asupersync-rmfjui — RFC 9113 §8.2.2: each connection-
+    /// specific header on the forbidden list (Connection,
+    /// Keep-Alive, Proxy-Connection, Transfer-Encoding, Upgrade)
+    /// must be rejected by validate_h2_pseudo_headers when present
+    /// in an otherwise-valid request. The validator returns Err
+    /// with a message tagged "RFC 9113 §8.2.2".
+    #[test]
+    fn rmfjui_each_forbidden_connection_header_rejected() {
+        for forbidden in [
+            "connection",
+            "keep-alive",
+            "proxy-connection",
+            "transfer-encoding",
+            "upgrade",
+        ] {
+            let headers = vec![
+                h(":method", "GET"),
+                h(":scheme", "https"),
+                h(":path", "/"),
+                h(":authority", "example.com"),
+                h(forbidden, "close"),
+            ];
+            let err = validate_h2_pseudo_headers(&headers, true, false).expect_err(forbidden);
+            assert!(
+                err.contains("RFC 9113 §8.2.2"),
+                "wrong reject reason for {forbidden}: {err}"
+            );
+        }
+    }
+
+    /// br-asupersync-rmfjui — `te` header NAME is permitted by the
+    /// spec but only with value "trailers"; any other value is
+    /// malformed.
+    #[test]
+    fn rmfjui_te_trailers_accepted_other_values_rejected() {
+        // te: trailers (allowed)
+        let ok = vec![
+            h(":method", "GET"),
+            h(":scheme", "https"),
+            h(":path", "/"),
+            h(":authority", "example.com"),
+            h("te", "trailers"),
+        ];
+        assert!(validate_h2_pseudo_headers(&ok, true, false).is_ok());
+
+        // te: gzip (forbidden value)
+        let bad = vec![
+            h(":method", "GET"),
+            h(":scheme", "https"),
+            h(":path", "/"),
+            h(":authority", "example.com"),
+            h("te", "gzip"),
+        ];
+        let err = validate_h2_pseudo_headers(&bad, true, false).unwrap_err();
+        assert!(
+            err.contains("RFC 9113 §8.2.2"),
+            "wrong reject reason: {err}"
+        );
+    }
+
+    /// br-asupersync-rmfjui — Regression guard: a valid request
+    /// without any forbidden header must still pass.
+    #[test]
+    fn rmfjui_request_without_forbidden_headers_accepted() {
+        let headers = vec![
+            h(":method", "GET"),
+            h(":scheme", "https"),
+            h(":path", "/"),
+            h(":authority", "example.com"),
+            h("content-type", "application/json"),
+            h("user-agent", "test"),
+        ];
+        assert!(validate_h2_pseudo_headers(&headers, true, false).is_ok());
+    }
+
+    /// br-asupersync-lcvdj0 — RFC 9113 §3.4 / §3.5 require the first
+    /// frame on a connection to be SETTINGS. A peer that sends any
+    /// other frame in the Handshaking state must elicit a
+    /// connection-level PROTOCOL_ERROR. Pre-fix the codec dispatched
+    /// through normal handlers without state-checking, so a malicious
+    /// first PING / WINDOW_UPDATE / RST_STREAM was processed silently.
+    #[test]
+    fn lcvdj0_first_frame_must_be_settings_ping_rejected() {
+        let mut conn = Connection::client(Settings::client());
+        // PING is otherwise valid in any state — but it must not be
+        // the FIRST frame. Pre-fix this would be processed and
+        // `pending_ops` would carry the corresponding ack.
+        let result = conn.process_frame(Frame::Ping(PingFrame::new([0xAA; 8])));
+        let err = result.expect_err("first frame PING must be rejected");
+        let msg = format!("{err}");
+        assert!(
+            msg.contains("first frame") && msg.contains("SETTINGS"),
+            "wrong error for non-SETTINGS first frame: {msg}"
+        );
+    }
+
+    /// br-asupersync-lcvdj0 — WINDOW_UPDATE on stream 0 is otherwise
+    /// valid mid-connection but is forbidden as the first frame.
+    #[test]
+    fn lcvdj0_first_frame_must_be_settings_window_update_rejected() {
+        let mut conn = Connection::client(Settings::client());
+        let result = conn.process_frame(Frame::WindowUpdate(WindowUpdateFrame::new(0, 1024)));
+        let err = result.expect_err("first frame WINDOW_UPDATE must be rejected");
+        let msg = format!("{err}");
+        assert!(
+            msg.contains("first frame") && msg.contains("SETTINGS"),
+            "wrong error for non-SETTINGS first frame: {msg}"
+        );
+    }
+
+    /// br-asupersync-lcvdj0 — Regression guard: a SETTINGS first
+    /// frame is accepted (handshake completes) and subsequent
+    /// non-SETTINGS frames flow through normally.
+    #[test]
+    fn lcvdj0_settings_first_frame_accepted_then_other_frames_ok() {
+        let mut conn = Connection::client(Settings::client());
+        // SETTINGS first — must succeed, transition Handshaking → Open.
+        conn.process_frame(Frame::Settings(SettingsFrame::new(vec![])))
+            .expect("SETTINGS as first frame must be accepted");
+        // Drain queued ACK.
+        let _ = conn.next_frame();
+        // After handshake, PING flows normally.
+        conn.process_frame(Frame::Ping(PingFrame::new([0xBB; 8])))
+            .expect("PING after handshake must be accepted");
+    }
+
+    #[test]
+    fn rfc9113_section6_8_goaway_frame_ordering_conformance() {
+        // RFC 9113 Section 6.8 conformance test - GOAWAY frame ordering and semantics
+        // Tests the MUST/SHOULD clauses for connection termination
+
+        let mut conn = Connection::server(Settings::default());
+        conn.process_frame(Frame::Settings(SettingsFrame::new(vec![])))
+            .expect("client SETTINGS first frame must be accepted");
+        let _ = conn.next_frame();
+
+        // Test Requirement 1: GOAWAY should include last successfully processed stream ID
+        // Open multiple streams to establish last_stream_id baseline
+
+        // Process stream 1 (successfully)
+        let headers1 = HeadersFrame::new(1, test_request_headers("/"), false, true);
+        conn.process_frame(Frame::Headers(headers1)).unwrap();
+
+        // Process stream 3 (successfully)
+        let headers3 = HeadersFrame::new(3, test_request_headers("/api"), false, true);
+        conn.process_frame(Frame::Headers(headers3)).unwrap();
+
+        // RFC 9113 §6.8: "the stream identifier of the last stream that it successfully received"
+        conn.goaway(ErrorCode::NoError, Bytes::from("graceful shutdown"));
+
+        let frame = conn.next_frame().expect("GOAWAY frame should be generated");
+        match frame {
+            Frame::GoAway(goaway) => {
+                assert_eq!(
+                    goaway.last_stream_id, 3,
+                    "RFC 9113 §6.8: GOAWAY must include last successfully processed stream ID"
+                );
+                assert_eq!(goaway.error_code, ErrorCode::NoError);
+                assert_eq!(goaway.debug_data, Bytes::from("graceful shutdown"));
+            }
+            _ => panic!("Expected GOAWAY frame, got {:?}", frame),
+        }
+
+        // Test Requirement 2: Connection state transition
+        // RFC 9113 §6.8: After sending GOAWAY, connection should be in closing state
+        assert_eq!(conn.state, ConnectionState::Closing);
+        assert!(conn.goaway_sent);
+
+        // Test Requirement 3: Multiple GOAWAY frames (narrowing semantics)
+        // Receive GOAWAY from peer with higher last_stream_id - should narrow down
+        let mut conn2 = Connection::client(Settings::default());
+        conn2
+            .process_frame(Frame::Settings(SettingsFrame::new(vec![])))
+            .expect("server SETTINGS first frame must be accepted");
+        let _ = conn2.next_frame();
+
+        // Receive first GOAWAY with last_stream_id = 5
+        let goaway1 = Frame::GoAway(GoAwayFrame::new(5, ErrorCode::NoError));
+        let result1 = conn2.process_frame(goaway1).unwrap().unwrap();
+        match result1 {
+            ReceivedFrame::GoAway { last_stream_id, .. } => {
+                assert_eq!(last_stream_id, 5);
+            }
+            _ => panic!("Expected GoAway received frame"),
+        }
+
+        // Receive second GOAWAY with lower last_stream_id = 1 (should narrow)
+        let goaway2 = Frame::GoAway(GoAwayFrame::new(1, ErrorCode::InternalError));
+        let result2 = conn2.process_frame(goaway2).unwrap().unwrap();
+        match result2 {
+            ReceivedFrame::GoAway { last_stream_id, .. } => {
+                assert_eq!(
+                    last_stream_id, 1,
+                    "RFC 9113 §6.8: Multiple GOAWAY frames should narrow last_stream_id"
+                );
+            }
+            _ => panic!("Expected GoAway received frame"),
+        }
+
+        // Test Requirement 4: GOAWAY only sent once per endpoint
+        // RFC 9113 §6.8: Multiple GOAWAY calls should not generate multiple frames
+        let mut conn3 = Connection::server(Settings::default());
+        conn3.goaway(ErrorCode::NoError, Bytes::new());
+        conn3.goaway(ErrorCode::InternalError, Bytes::new()); // Second call should be ignored
+
+        // Should only have one GOAWAY frame in queue
+        let frame1 = conn3.next_frame();
+        let frame2 = conn3.next_frame();
+
+        assert!(frame1.is_some());
+        assert!(matches!(frame1.unwrap(), Frame::GoAway(_)));
+        assert!(
+            frame2.is_none(),
+            "Second GOAWAY call should not generate additional frame"
+        );
+
+        // Test Requirement 5: Frame ordering preservation in pending operations
+        // GOAWAY should be processed in order relative to other pending frames
+        let mut conn4 = Connection::server(Settings::default());
+        conn4.state = ConnectionState::Open;
+
+        // Queue a PING ACK first by processing an inbound ping.
+        conn4
+            .process_frame(Frame::Ping(PingFrame::new(*b"testping")))
+            .expect("inbound ping should queue an ACK response");
+        // Then queue GOAWAY
+        conn4.goaway(ErrorCode::NoError, Bytes::new());
+
+        // Frames should come out in FIFO order: PING then GOAWAY
+        let frame1 = conn4.next_frame().expect("PING frame expected first");
+        let frame2 = conn4.next_frame().expect("GOAWAY frame expected second");
+
+        assert!(
+            matches!(frame1, Frame::Ping(_)),
+            "PING should come before GOAWAY"
+        );
+        assert!(
+            matches!(frame2, Frame::GoAway(_)),
+            "GOAWAY should preserve ordering"
+        );
+    }
+
+    // =====================================================================
+    // Metamorphic tests for HTTP/2 flow control window consistency
+    // =====================================================================
+
+    /// Metamorphic relation: sum of WINDOW_UPDATE deltas ≡ flow-window mutation; no underflow.
+    ///
+    /// Tests the property that window updates maintain consistency according to RFC 9113
+    /// flow control semantics. Addresses the oracle problem by verifying relationships
+    /// between inputs/outputs rather than exact output values.
+    mod flow_control_metamorphic_tests {
+        use super::*;
+        use proptest::prelude::*;
+
+        /// Maximum number of window updates in a sequence to prevent timeouts
+        const MAX_WINDOW_UPDATES: usize = 10;
+
+        /// Maximum increment value to prevent overflow in test arithmetic
+        const MAX_INCREMENT: u32 = 5_000;
+
+        /// Helper to create a connection in Open state
+        fn open_connection_client() -> Connection {
+            let mut conn = Connection::client(Settings::client());
+            conn.state = ConnectionState::Open;
+            conn
+        }
+
+        /// Helper to create a connection in Open state (server)
+        fn open_connection_server() -> Connection {
+            let mut conn = Connection::server(Settings::default());
+            conn.state = ConnectionState::Open;
+            conn
+        }
+
+        /// MR1: EQUIVALENCE - Window update sequences are commutative
+        /// Property: f(updates_A) = f(updates_B) where updates_B is permutation of updates_A
+        #[test]
+        fn mr_window_update_commutativity() {
+            proptest!(|(increments in prop::collection::vec(1u32..=MAX_INCREMENT, 1..=MAX_WINDOW_UPDATES))| {
+                let increments: Vec<u32> = increments.into_iter()
+                    .filter(|&i| i > 0 && i <= MAX_INCREMENT)
+                    .take(MAX_WINDOW_UPDATES)
+                    .collect();
+
+                if increments.is_empty() {
+                    return Ok(());
+                }
+
+                // Test connection-level window commutativity
+                let mut conn1 = open_connection_client();
+                let mut conn2 = open_connection_client();
+
+                let initial_window1 = conn1.send_window();
+                let initial_window2 = conn2.send_window();
+                prop_assert_eq!(initial_window1, initial_window2, "Initial windows must match");
+
+                // Apply increments in original order to conn1
+                for increment in &increments {
+                    let frame = Frame::WindowUpdate(WindowUpdateFrame::new(0, *increment));
+                    if conn1.process_frame(frame).is_err() {
+                        // Skip this test case if we hit an error (overflow, etc.)
+                        return Ok(());
+                    }
+                }
+
+                // Apply increments in reverse order to conn2
+                for increment in increments.iter().rev() {
+                    let frame = Frame::WindowUpdate(WindowUpdateFrame::new(0, *increment));
+                    if conn2.process_frame(frame).is_err() {
+                        // Skip this test case if we hit an error
+                        return Ok(());
+                    }
+                }
+
+                let final_window1 = conn1.send_window();
+                let final_window2 = conn2.send_window();
+
+                prop_assert_eq!(final_window1, final_window2,
+                    "Window after applying increments {:?} in different orders must be equal: {} vs {}",
+                    increments, final_window1, final_window2);
+            });
+        }
+
+        /// MR2: ADDITIVE - Sum of deltas equals total window change
+        /// Property: window_final = window_initial + sum(deltas)
+        #[test]
+        fn mr_window_update_additive_connection_level() {
+            proptest!(|(increments in prop::collection::vec(1u32..=MAX_INCREMENT, 1..=MAX_WINDOW_UPDATES))| {
+                let increments: Vec<u32> = increments.into_iter()
+                    .filter(|&i| i > 0 && i <= MAX_INCREMENT)
+                    .take(MAX_WINDOW_UPDATES)
+                    .collect();
+
+                if increments.is_empty() {
+                    return Ok(());
+                }
+
+                let mut conn = open_connection_client();
+                let initial_window = conn.send_window();
+                let expected_sum: i64 = increments.iter().map(|&i| i as i64).sum();
+
+                // Apply each window update
+                for increment in &increments {
+                    let frame = Frame::WindowUpdate(WindowUpdateFrame::new(0, *increment));
+                    if conn.process_frame(frame).is_err() {
+                        // Skip if overflow occurs
+                        return Ok(());
+                    }
+                }
+
+                let final_window = conn.send_window();
+                let actual_delta = i64::from(final_window) - i64::from(initial_window);
+
+                prop_assert_eq!(actual_delta, expected_sum,
+                    "Connection window delta {} must equal sum of increments {} for sequence {:?}",
+                    actual_delta, expected_sum, increments);
+            });
+        }
+
+        /// MR3: EQUIVALENCE - Batched vs Sequential updates
+        /// Property: f(a1, a2, ..., an) = f(sum(a1..an))
+        #[test]
+        fn mr_window_update_batch_equivalence() {
+            proptest!(|(increments in prop::collection::vec(1u32..=MAX_INCREMENT, 1..=MAX_WINDOW_UPDATES))| {
+                let increments: Vec<u32> = increments.into_iter()
+                    .filter(|&i| i > 0 && i <= MAX_INCREMENT)
+                    .take(MAX_WINDOW_UPDATES)
+                    .collect();
+
+                if increments.is_empty() {
+                    return Ok(());
+                }
+
+                let total_increment: u64 = increments.iter().map(|&i| i as u64).sum();
+
+                // Skip if total would overflow u32
+                if total_increment > u32::MAX as u64 {
+                    return Ok(());
+                }
+
+                let total_increment = total_increment as u32;
+
+                // Connection 1: Apply increments sequentially
+                let mut conn1 = open_connection_client();
+                let initial_window1 = conn1.send_window();
+
+                for increment in &increments {
+                    let frame = Frame::WindowUpdate(WindowUpdateFrame::new(0, *increment));
+                    if conn1.process_frame(frame).is_err() {
+                        return Ok(());
+                    }
+                }
+
+                let final_window1 = conn1.send_window();
+
+                // Connection 2: Apply total increment as single update
+                let mut conn2 = open_connection_client();
+                let initial_window2 = conn2.send_window();
+
+                prop_assert_eq!(initial_window1, initial_window2, "Initial windows must match");
+
+                let frame = Frame::WindowUpdate(WindowUpdateFrame::new(0, total_increment));
+                if conn2.process_frame(frame).is_err() {
+                    return Ok(());
+                }
+
+                let final_window2 = conn2.send_window();
+
+                prop_assert_eq!(final_window1, final_window2,
+                    "Sequential updates {:?} (total: {}) must equal batched update: {} vs {}",
+                    increments, total_increment, final_window1, final_window2);
+            });
+        }
+
+        /// MR4: INVARIANT - No underflow property for receive windows
+        /// Property: ∀ operations, recv_window ≥ reasonable_bound
+        #[test]
+        fn mr_window_no_underflow_invariant() {
+            proptest!(|(window_updates in prop::collection::vec(1u32..=MAX_INCREMENT, 1..=MAX_WINDOW_UPDATES))| {
+                let updates: Vec<u32> = window_updates.into_iter()
+                    .filter(|&val| val > 0 && val <= MAX_INCREMENT)
+                    .take(MAX_WINDOW_UPDATES)
+                    .collect();
+
+                if updates.is_empty() {
+                    return Ok(());
+                }
+
+                let mut conn = open_connection_server();
+                let mut conn_window_in_bounds = true;
+
+                // Apply WINDOW_UPDATEs and check bounds
+                for value in updates {
+                    let frame = Frame::WindowUpdate(WindowUpdateFrame::new(0, value));
+                    let _ = conn.process_frame(frame);
+
+                    // Check invariant: connection window stays reasonable
+                    if conn.recv_window() < -100_000 {
+                        conn_window_in_bounds = false;
+                        break;
+                    }
+                }
+
+                prop_assert!(conn_window_in_bounds,
+                    "Connection receive window must stay within reasonable bounds");
+            });
+        }
+
+        /// MR5: STREAM-LEVEL additive property
+        #[test]
+        fn mr_stream_window_additive() {
+            proptest!(|(increments in prop::collection::vec(1u32..=MAX_INCREMENT, 1..=MAX_WINDOW_UPDATES))| {
+                let increments: Vec<u32> = increments.into_iter()
+                    .filter(|&i| i > 0 && i <= MAX_INCREMENT)
+                    .take(MAX_WINDOW_UPDATES)
+                    .collect();
+
+                if increments.is_empty() {
+                    return Ok(());
+                }
+
+                let mut conn = open_connection_client();
+
+                // Create a stream using open_stream
+                let stream_id = match conn.open_stream(vec![], false) {
+                    Ok(id) => id,
+                    Err(_) => return Ok(()),
+                };
+
+                let initial_window = conn.stream(stream_id)
+                    .map(|s| s.send_window())
+                    .unwrap_or(0);
+
+                let expected_sum: i64 = increments.iter().map(|&i| i as i64).sum();
+
+                // Apply each window update to the stream
+                for increment in &increments {
+                    let frame = Frame::WindowUpdate(WindowUpdateFrame::new(stream_id, *increment));
+                    if conn.process_frame(frame).is_err() {
+                        // Skip if stream doesn't exist or overflow occurs
+                        return Ok(());
+                    }
+                }
+
+                let final_window = conn.stream(stream_id)
+                    .map(|s| s.send_window())
+                    .unwrap_or(initial_window);
+
+                let actual_delta = i64::from(final_window) - i64::from(initial_window);
+
+                prop_assert_eq!(actual_delta, expected_sum,
+                    "Stream {} window delta {} must equal sum of increments {} for sequence {:?}",
+                    stream_id, actual_delta, expected_sum, increments);
+            });
+        }
+
+        /// MR6: INVERTIVE - Window update/consumption round-trip
+        /// Property: f(T(T(x))) = f(x) where T = update then consume same amount
+        #[test]
+        fn mr_window_update_consumption_roundtrip() {
+            proptest!(|(increment in 1u32..=1000)| {
+                let mut conn = open_connection_client();
+                let headers = vec![
+                    Header::new(":method", "POST"),
+                    Header::new(":path", "/upload"),
+                    Header::new(":scheme", "https"),
+                    Header::new(":authority", "example.com"),
+                ];
+                let stream_id = conn.open_stream(headers, false).expect("stream opens");
+                let _ = conn.next_frame().expect("initial HEADERS frame");
+
+                let initial_window = conn.send_window();
+
+                // Step 1: Apply WINDOW_UPDATE
+                let update_frame = Frame::WindowUpdate(WindowUpdateFrame::new(0, increment));
+                if conn.process_frame(update_frame).is_err() {
+                    return Ok(());
+                }
+
+                let after_update = conn.send_window();
+                prop_assert_eq!(after_update, initial_window + increment as i32);
+
+                // Step 2: Send equivalent DATA bytes through the outbound flow-control path.
+                let data = Bytes::from(vec![0u8; increment as usize]);
+                prop_assert!(
+                    conn.send_data(stream_id, data, false).is_ok(),
+                    "DATA should queue on an open stream"
+                );
+                match conn.next_frame() {
+                    Some(Frame::Data(frame)) => {
+                        prop_assert_eq!(frame.data.len(), increment as usize);
+                    }
+                    other => prop_assert!(false, "expected DATA frame after queueing, got {other:?}"),
+                }
+                let final_window = conn.send_window();
+                prop_assert_eq!(final_window, initial_window,
+                    "Round-trip: update {} then consume {} must return to initial window {} (got {})",
+                    increment, increment, initial_window, final_window);
+            });
+        }
+
+        // =====================================================================
+        // Unit tests with known values for sanity checking
+        // =====================================================================
+
+        #[test]
+        fn unit_test_simple_window_update_sequence() {
+            let mut conn = open_connection_client();
+            let initial = conn.send_window();
+
+            // Apply sequence: [100, 200, 300]
+            let updates = [100, 200, 300];
+            for increment in updates {
+                let frame = Frame::WindowUpdate(WindowUpdateFrame::new(0, increment));
+                conn.process_frame(frame).unwrap();
+            }
+
+            let final_window = conn.send_window();
+            let expected = initial + 100 + 200 + 300;
+
+            assert_eq!(
+                final_window, expected,
+                "Simple sequence [100, 200, 300] failed additive property"
+            );
+        }
+
+        #[test]
+        fn unit_test_zero_increment_error() {
+            let mut conn = open_connection_client();
+
+            // Zero increments should be rejected per RFC 9113 §6.9
+            let frame = Frame::WindowUpdate(WindowUpdateFrame::new(0, 0));
+            let result = conn.process_frame(frame);
+
+            assert!(
+                result.is_err(),
+                "Zero increment WINDOW_UPDATE must be rejected"
+            );
+            if let Err(err) = result {
+                assert_eq!(err.code, ErrorCode::ProtocolError);
+            }
+        }
+
+        #[test]
+        fn unit_test_overflow_protection() {
+            let mut conn = open_connection_client();
+
+            // Try to overflow the window beyond i32::MAX
+            let large_increment = 0x7FFF_FFFF; // i32::MAX as u32
+            let frame = Frame::WindowUpdate(WindowUpdateFrame::new(0, large_increment));
+
+            // This should fail gracefully without mutating the flow-control window.
+            let err = conn
+                .process_frame(frame)
+                .expect_err("overflowing WINDOW_UPDATE must fail gracefully");
+            let default_window = i32::try_from(settings::DEFAULT_INITIAL_WINDOW_SIZE)
+                .expect("default window fits i32");
+            assert_eq!(err.code, ErrorCode::FlowControlError);
+            assert_eq!(conn.send_window(), default_window);
+        }
+    }
+}

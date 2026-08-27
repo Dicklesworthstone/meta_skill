@@ -1,0 +1,20 @@
+---
+source: crates/fsqlite-planner/tests/golden_query_plan_snapshots.rs
+expression: indexed_three_way_join
+---
+case: planner_indexed_three_way_join
+sql: SELECT users.id, orders.id, products.id FROM users, orders, products WHERE users.email = ?1 AND users.id = orders.user_id AND orders.product_id = products.id
+features: leapfrog_join=false dpccp_join=true
+join_order: users -> products -> orders
+total_cost: 151978.441
+access_paths:
+  table=users kind=IndexScanEquality index=idx_users_email rows=1.000 cost=13.927 probe=Some(Equality { column: "email", target: Placeholder(Numbered(1), 89..91) })
+  table=products kind=FullTableScan index=(none) rows=8000.000 cost=260.000 probe=None
+  table=orders kind=IndexScanEquality index=idx_orders_product rows=22000.000 cost=18.963 probe=Some(Equality { column: "product_id", target: Column(ColumnRef { table: Some("products"), column: "id" }, 146..157) })
+display:
+QUERY PLAN (est. cost 151978.4):
+  0: SCAN users USING INDEX idx_users_email (~1 rows, cost 13.9)
+  1: SCAN products (~8000 rows, cost 260.0)
+  2: SCAN orders USING INDEX idx_orders_product (~22000 rows, cost 19.0)
+JOIN OPERATORS:
+  HASH JOIN users JOIN products JOIN orders (est. 24240000.0) [leapfrog_join feature flag disabled]

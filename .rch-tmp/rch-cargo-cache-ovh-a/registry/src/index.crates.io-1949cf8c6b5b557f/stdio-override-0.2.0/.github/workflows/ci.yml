@@ -1,0 +1,33 @@
+name: Rust CI
+on: [push, pull_request]
+
+jobs:
+  build_and_test:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+        rust: ["stable 1 year ago", beta]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ matrix.rust }}
+
+      - name: Clippy and Fmt checks
+        if: matrix.rust == 'stable'
+        run: |
+          rustup component add rustfmt clippy
+          cargo fmt --all -- --check
+          cargo clippy -- -D clippy::all
+
+      - name: Cargo build
+        run: cargo build --verbose
+
+      - name: Cargo test
+        env:
+          RUST_TEST_THREADS: 1
+        run: cargo test --verbose --features test-readme -- --nocapture

@@ -1,0 +1,31 @@
+legacy_rich/
+legacy_rich/
+
+
+# Added by cargo
+
+/target
+
+# bv (beads viewer) local config and caches
+.bv/
+
+# Environment files with secrets
+.env
+.env.*
+a.out
+
+# Test output artifacts
+golden_outputs/
+*.snap.new
+*.snap.old
+
+# Python caches (conformance tooling)
+__pycache__/
+*.pyc
+
+# Profiling artifacts
+perf.data
+perf.data.*
+
+# macOS metadata
+.DS_Store

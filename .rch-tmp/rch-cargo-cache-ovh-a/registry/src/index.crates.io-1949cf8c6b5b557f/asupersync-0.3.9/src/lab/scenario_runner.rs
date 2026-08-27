@@ -1,0 +1,1777 @@
+//! Scenario runner for FrankenLab deterministic testing (bd-1hu19.2).
+//!
+//! Bridges [`Scenario`](super::scenario::Scenario) YAML specifications to
+//! [`LabRuntime`](super::runtime::LabRuntime) execution, providing:
+//!
+//! - Timed fault injection based on scenario fault events
+//! - Oracle filtering (only check oracles listed in the scenario)
+//! - Seed exploration (run the same scenario across multiple seeds)
+//! - Replay validation (run twice, verify identical trace certificates)
+//!
+//! # Quick Start
+//!
+//! ```ignore
+//! use asupersync::lab::scenario_runner::{ScenarioRunner, ScenarioRunResult};
+//! use asupersync::lab::scenario::Scenario;
+//!
+//! let yaml = std::fs::read_to_string("examples/scenarios/smoke_happy_path.yaml")?;
+//! let scenario: Scenario = serde_yaml::from_str(&yaml)?;
+//!
+//! let result = ScenarioRunner::run(&scenario)?;
+//! assert!(result.passed());
+//! ```
+
+use super::config::LabConfig;
+use super::dual_run::{DualRunScenarioIdentity, ReplayMetadata, SeedLineageRecord};
+use super::oracle::{OracleRegistry, OracleRegistryError, OracleReport};
+use super::runtime::{LabRunReport, LabRuntime};
+use super::scenario::{FaultAction, FaultEvent, Scenario, ValidationError};
+use crate::trace::replay::ReplayTrace;
+use crate::types::Time;
+use std::collections::{BTreeMap, HashSet};
+use std::fmt::Write as _;
+
+const REPLAY_DIVERGENCE_CODE: &str = "ASUP-E401";
+const LAB_SCENARIO_RUNNER_ADAPTER: &str = "lab.scenario_runner";
+
+// ---------------------------------------------------------------------------
+// Errors
+// ---------------------------------------------------------------------------
+
+/// Errors produced by the scenario runner.
+#[derive(Debug)]
+pub enum ScenarioRunnerError {
+    /// Scenario validation failed.
+    Validation {
+        /// Scenario identifier that failed validation.
+        scenario_id: String,
+        /// Validation errors emitted by the scenario contract.
+        errors: Vec<ValidationError>,
+    },
+    /// An oracle listed in the scenario is not recognized.
+    UnknownOracle(String),
+    /// Replay divergence: two runs with the same seed produced different traces.
+    ReplayDivergence {
+        /// The seed that diverged.
+        seed: u64,
+        /// Certificate from the first run.
+        first: TraceCertificateSnapshot,
+        /// Certificate from the second run.
+        second: TraceCertificateSnapshot,
+    },
+}
+
+impl std::fmt::Display for ScenarioRunnerError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Validation {
+                scenario_id,
+                errors,
+            } => {
+                write!(
+                    f,
+                    "scenario validation failed for {scenario_id} ({} issue(s)):",
+                    errors.len()
+                )?;
+                for e in errors {
+                    write!(f, " {e};")?;
+                }
+                Ok(())
+            }
+            Self::UnknownOracle(name) => {
+                let detail = match OracleRegistry::validate_reported_selection(
+                    std::slice::from_ref(name),
+                ) {
+                    Err(OracleRegistryError::UnknownOracle { .. }) => {
+                        let suggestion = OracleRegistry::suggestion_for(name)
+                            .map_or_else(String::new, |suggestion| {
+                                format!("; did you mean `{suggestion}`")
+                            });
+                        format!(
+                            "unknown oracle: {name}{suggestion}; valid names: {}",
+                            OracleRegistry::reported_names().join(", ")
+                        )
+                    }
+                    Err(OracleRegistryError::NotReportable { .. }) => format!(
+                        "oracle `{name}` is registered but is not emitted by OracleSuite::report yet; valid scenario names: {}",
+                        OracleRegistry::reported_names().join(", ")
+                    ),
+                    Err(OracleRegistryError::NotInstantiable { .. }) | Ok(()) => {
+                        format!("unknown oracle: {name}")
+                    }
+                };
+                f.write_str(&detail)
+            }
+            Self::ReplayDivergence {
+                seed,
+                first,
+                second,
+            } => write!(
+                f,
+                "[{REPLAY_DIVERGENCE_CODE}] replay divergence at seed {seed}: \
+                 first(event_hash={}, schedule_hash={}, steps={}) != \
+                 second(event_hash={}, schedule_hash={}, steps={})",
+                first.event_hash,
+                first.schedule_hash,
+                first.steps,
+                second.event_hash,
+                second.schedule_hash,
+                second.steps,
+            ),
+        }
+    }
+}
+
+impl std::error::Error for ScenarioRunnerError {}
+
+// ---------------------------------------------------------------------------
+// Certificate snapshot (for replay validation)
+// ---------------------------------------------------------------------------
+
+/// Lightweight copy of trace identity for comparison.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct TraceCertificateSnapshot {
+    /// Hash of all trace events.
+    pub event_hash: u64,
+    /// Hash of scheduling decisions.
+    pub schedule_hash: u64,
+    /// Total steps executed.
+    pub steps: u64,
+    /// Trace fingerprint (Foata equivalence class).
+    pub trace_fingerprint: u64,
+}
+
+/// Structured record for a scenario fault injection.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FaultInjectionLogEntry {
+    /// Virtual time in milliseconds when the fault fired.
+    pub at_ms: u64,
+    /// Stable fault action name.
+    pub action: String,
+    /// Canonical, sorted argument summary.
+    pub args_summary: String,
+    /// Redacted trace message emitted into the lab trace buffer.
+    pub trace_message: String,
+}
+
+impl FaultInjectionLogEntry {
+    /// Convert to JSON for artifact storage.
+    #[must_use]
+    pub fn to_json(&self) -> serde_json::Value {
+        use serde_json::json;
+        json!({
+            "at_ms": self.at_ms,
+            "action": self.action,
+            "args_summary": self.args_summary,
+            "trace_message": self.trace_message,
+        })
+    }
+}
+
+/// Deterministic effect accounting for scenario fault actions.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct FaultEffectSummary {
+    /// Active disk-pressure bytes after all scheduled faults have fired.
+    pub active_disk_pressure_bytes: u64,
+    /// Maximum active disk-pressure bytes observed during the run.
+    pub max_disk_pressure_bytes: u64,
+    /// Number of disk-pressure events applied.
+    pub disk_pressure_events: usize,
+    /// Active disk-pressure bytes by canonical path.
+    pub disk_pressure_by_path: BTreeMap<String, u64>,
+    /// Total cleanup delay requested by delayed-cleanup faults.
+    pub delayed_cleanup_total_ms: u64,
+    /// Cleanup delay requested by phase.
+    pub delayed_cleanup_phases: BTreeMap<String, u64>,
+    /// Total bounded process-stall duration requested by process-stall faults.
+    pub process_stall_total_ms: u64,
+    /// Participants still stalled after the scheduled fault stream.
+    pub stalled_participants_until_ms: BTreeMap<String, u64>,
+    /// Resource-cap breaches observed while applying fault effects.
+    pub resource_cap_breaches: Vec<String>,
+}
+
+impl FaultEffectSummary {
+    fn fault_string_arg<'a>(fault: &'a FaultEvent, key: &str) -> Option<&'a str> {
+        fault.args.get(key).and_then(serde_json::Value::as_str)
+    }
+
+    fn fault_u64_arg(fault: &FaultEvent, key: &str) -> Option<u64> {
+        fault.args.get(key).and_then(serde_json::Value::as_u64)
+    }
+
+    fn refresh_active_disk_pressure(&mut self, cap: Option<u64>) {
+        self.active_disk_pressure_bytes = self.disk_pressure_by_path.values().copied().sum();
+        self.max_disk_pressure_bytes = self
+            .max_disk_pressure_bytes
+            .max(self.active_disk_pressure_bytes);
+
+        if let Some(cap) = cap {
+            if self.active_disk_pressure_bytes > cap {
+                self.resource_cap_breaches.push(format!(
+                    "disk_pressure_bytes:{}>{cap}",
+                    self.active_disk_pressure_bytes
+                ));
+            }
+        }
+    }
+
+    fn expire_process_stalls(&mut self, now_ms: u64) {
+        self.stalled_participants_until_ms
+            .retain(|_, resume_at_ms| *resume_at_ms > now_ms);
+    }
+
+    fn apply_fault(&mut self, fault: &FaultEvent, max_artifact_bytes: Option<u64>) {
+        self.expire_process_stalls(fault.at_ms);
+
+        match fault.action {
+            FaultAction::DiskPressure => {
+                if let (Some(path), Some(bytes)) = (
+                    Self::fault_string_arg(fault, "path"),
+                    Self::fault_u64_arg(fault, "bytes"),
+                ) {
+                    self.disk_pressure_events += 1;
+                    self.disk_pressure_by_path.insert(path.to_string(), bytes);
+                    self.refresh_active_disk_pressure(max_artifact_bytes);
+                }
+            }
+            FaultAction::DiskRecovered => {
+                if let Some(path) = Self::fault_string_arg(fault, "path") {
+                    self.disk_pressure_by_path.remove(path);
+                    self.refresh_active_disk_pressure(max_artifact_bytes);
+                }
+            }
+            FaultAction::DelayedCleanup => {
+                if let (Some(phase), Some(delay_ms)) = (
+                    Self::fault_string_arg(fault, "phase"),
+                    Self::fault_u64_arg(fault, "delay_ms"),
+                ) {
+                    self.delayed_cleanup_total_ms =
+                        self.delayed_cleanup_total_ms.saturating_add(delay_ms);
+                    self.delayed_cleanup_phases
+                        .entry(phase.to_string())
+                        .and_modify(|total| *total = total.saturating_add(delay_ms))
+                        .or_insert(delay_ms);
+                }
+            }
+            FaultAction::ProcessStall => {
+                if let (Some(host), Some(duration_ms)) = (
+                    Self::fault_string_arg(fault, "host"),
+                    Self::fault_u64_arg(fault, "duration_ms"),
+                ) {
+                    self.process_stall_total_ms =
+                        self.process_stall_total_ms.saturating_add(duration_ms);
+                    self.stalled_participants_until_ms
+                        .insert(host.to_string(), fault.at_ms.saturating_add(duration_ms));
+                }
+            }
+            FaultAction::ProcessResume => {
+                if let Some(host) = Self::fault_string_arg(fault, "host") {
+                    self.stalled_participants_until_ms.remove(host);
+                }
+            }
+            FaultAction::Partition
+            | FaultAction::Heal
+            | FaultAction::HostCrash
+            | FaultAction::HostRestart
+            | FaultAction::ClockSkew
+            | FaultAction::ClockReset => {}
+        }
+    }
+
+    /// Convert to JSON for artifact storage.
+    #[must_use]
+    pub fn to_json(&self) -> serde_json::Value {
+        use serde_json::json;
+        let active_stalled_participants = self
+            .stalled_participants_until_ms
+            .keys()
+            .cloned()
+            .collect::<Vec<_>>();
+
+        json!({
+            "active_disk_pressure_bytes": self.active_disk_pressure_bytes,
+            "max_disk_pressure_bytes": self.max_disk_pressure_bytes,
+            "disk_pressure_events": self.disk_pressure_events,
+            "disk_pressure_by_path": self.disk_pressure_by_path,
+            "delayed_cleanup_total_ms": self.delayed_cleanup_total_ms,
+            "delayed_cleanup_phases": self.delayed_cleanup_phases,
+            "process_stall_total_ms": self.process_stall_total_ms,
+            "active_stalled_participants": active_stalled_participants,
+            "stalled_participants_until_ms": self.stalled_participants_until_ms,
+            "resource_cap_breaches": self.resource_cap_breaches,
+        })
+    }
+}
+
+/// Deterministic minimized counterexample packet for unresolved scenario faults.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MinimizedCounterexamplePacket {
+    /// Scenario identifier that produced the counterexample.
+    pub scenario_id: String,
+    /// Stable reason for the packet.
+    pub reason: String,
+    /// Number of fault-log entries retained in the minimized packet.
+    pub prefix_len: usize,
+    /// Total scheduled fault count from the original scenario run.
+    pub fault_count: usize,
+    /// Configured maximum counterexample events.
+    pub max_counterexample_events: usize,
+    /// Participants still stalled at the end of the scheduled fault stream.
+    pub active_stalled_participants: Vec<String>,
+    /// Redacted fault-log entries retained for replay/debugging.
+    pub fault_log_prefix: Vec<FaultInjectionLogEntry>,
+    /// Whether the source scenario requested redacted projection.
+    pub redacted: bool,
+}
+
+impl MinimizedCounterexamplePacket {
+    /// Convert to JSON for artifact storage.
+    #[must_use]
+    pub fn to_json(&self) -> serde_json::Value {
+        use serde_json::json;
+        json!({
+            "scenario_id": self.scenario_id,
+            "reason": self.reason,
+            "prefix_len": self.prefix_len,
+            "fault_count": self.fault_count,
+            "max_counterexample_events": self.max_counterexample_events,
+            "active_stalled_participants": self.active_stalled_participants,
+            "fault_log_prefix": self
+                .fault_log_prefix
+                .iter()
+                .map(FaultInjectionLogEntry::to_json)
+                .collect::<Vec<_>>(),
+            "redacted": self.redacted,
+        })
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Run result
+// ---------------------------------------------------------------------------
+
+/// Result of running a single scenario.
+#[derive(Debug, Clone)]
+pub struct ScenarioRunResult {
+    /// Scenario identifier.
+    pub scenario_id: String,
+    /// Seed used for this run.
+    pub seed: u64,
+    /// The underlying lab run report.
+    pub lab_report: LabRunReport,
+    /// Filtered oracle report (only oracles listed in the scenario).
+    pub oracle_report: FilteredOracleReport,
+    /// Number of fault events injected during the run.
+    pub faults_injected: usize,
+    /// Structured log of fault injections, in deterministic execution order.
+    pub fault_log: Vec<FaultInjectionLogEntry>,
+    /// Deterministic summary of effects applied by fault injection.
+    pub fault_effect_summary: FaultEffectSummary,
+    /// Minimized counterexample packet when bounded fault effects remain unresolved.
+    pub minimized_counterexample: Option<MinimizedCounterexamplePacket>,
+    /// Replay trace, if recording was enabled.
+    pub replay_trace: Option<ReplayTrace>,
+    /// Trace certificate snapshot for replay validation.
+    pub certificate: TraceCertificateSnapshot,
+    /// Adapter identity that produced this lab result.
+    pub adapter: String,
+    /// Shared dual-run replay metadata for this execution.
+    pub replay_metadata: ReplayMetadata,
+    /// Stable seed-lineage audit record for this execution.
+    pub seed_lineage: SeedLineageRecord,
+}
+
+impl ScenarioRunResult {
+    /// Returns true if all checked oracles passed and no invariant violations were found.
+    #[must_use]
+    pub fn passed(&self) -> bool {
+        self.lab_report.quiescent
+            && self.oracle_report.all_passed
+            && self.lab_report.invariant_violations.is_empty()
+    }
+
+    /// Convert to JSON for artifact storage.
+    #[must_use]
+    pub fn to_json(&self) -> serde_json::Value {
+        use serde_json::json;
+        json!({
+            "scenario_id": self.scenario_id,
+            "surface_id": self.replay_metadata.family.surface_id,
+            "surface_contract_version": self.replay_metadata.family.surface_contract_version,
+            "seed": self.seed,
+            "seed_lineage_id": self.seed_lineage.seed_lineage_id,
+            "adapter": self.adapter,
+            "execution_instance_id": self.replay_metadata.instance.key(),
+            "passed": self.passed(),
+            "steps": self.lab_report.steps_total,
+            "faults_injected": self.faults_injected,
+            "fault_log": self.fault_log.iter().map(FaultInjectionLogEntry::to_json).collect::<Vec<_>>(),
+            "fault_effect_summary": self.fault_effect_summary.to_json(),
+            "minimized_counterexample": self
+                .minimized_counterexample
+                .as_ref()
+                .map(MinimizedCounterexamplePacket::to_json),
+            "certificate": {
+                "event_hash": self.certificate.event_hash,
+                "schedule_hash": self.certificate.schedule_hash,
+                "trace_fingerprint": self.certificate.trace_fingerprint,
+            },
+            "oracle_report": self.oracle_report.to_json(),
+            "invariant_violations": self.lab_report.invariant_violations,
+            "replay_metadata": &self.replay_metadata,
+            "seed_lineage": &self.seed_lineage,
+        })
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Filtered oracle report
+// ---------------------------------------------------------------------------
+
+/// Oracle report filtered to only the oracles requested by the scenario.
+#[derive(Debug, Clone)]
+pub struct FilteredOracleReport {
+    /// The full oracle report from the runtime.
+    pub full_report: OracleReport,
+    /// Which oracle names were checked.
+    pub checked: Vec<String>,
+    /// Which checked oracles passed.
+    pub passed_count: usize,
+    /// Which checked oracles failed.
+    pub failed_count: usize,
+    /// Whether all checked oracles passed.
+    pub all_passed: bool,
+    /// Entries for only the checked oracles.
+    pub entries: Vec<super::oracle::OracleEntryReport>,
+}
+
+impl FilteredOracleReport {
+    /// Build the filtered report honoring BOTH the scenario's declared oracle
+    /// list AND (br-asupersync-7tcipb item 2) the operator's
+    /// `LabConfig::with_oracles` selection.
+    ///
+    /// The two selections INTERSECT: a config selection can only *narrow* the
+    /// scenario's set — a config must never make the lab report an oracle the
+    /// scenario never declared. An empty `config_selection` (the default,
+    /// produced for every scenario run since `Scenario::to_lab_config` does not
+    /// populate it) applies no narrowing, so scenario-only behavior is
+    /// unchanged. This is what wires the previously-inert `with_oracles` /
+    /// `LabConfig::selected_oracles` knob into the live filtering path.
+    fn from_full(
+        full_report: OracleReport,
+        scenario_oracles: &[String],
+        config_selection: &[String],
+    ) -> Self {
+        let scenario_filter = Self::resolve_filter(scenario_oracles);
+        // br-asupersync-7tcipb item 2: an empty selection means "no operator
+        // narrowing" (a no-op), which is distinct from an empty *scenario* list
+        // meaning "the scenario declares no oracles".
+        let config_filter = if config_selection.is_empty() {
+            None
+        } else {
+            Self::resolve_filter(config_selection)
+        };
+        Self::build(full_report, scenario_filter, config_filter)
+    }
+
+    /// br-asupersync-7tcipb item 2: build the report narrowed ONLY by the
+    /// operator's `LabConfig::with_oracles` selection (no scenario context).
+    ///
+    /// This is what makes `with_oracles` / `LabConfig::selected_oracles` a real
+    /// control instead of a parsed-and-ignored phantom: a `LabRuntime` built
+    /// from a config that selected a subset of oracles can produce a report
+    /// containing only those oracles, e.g.
+    ///
+    /// ```ignore
+    /// let report = runtime.report();
+    /// let selected = FilteredOracleReport::for_lab_config(report.oracle_report, runtime.config());
+    /// ```
+    ///
+    /// An empty selection (or `"all"`) applies no narrowing and returns the full
+    /// report. The selection was already validated by `with_oracles`, so
+    /// `LabConfig::selected_oracles` cannot fail here.
+    #[must_use]
+    pub fn for_lab_config(full_report: OracleReport, config: &LabConfig) -> Self {
+        let config_filter = if config.oracle_selection.is_empty()
+            || OracleRegistry::is_all_selection(&config.oracle_selection)
+        {
+            None
+        } else {
+            Some(
+                config
+                    .selected_oracles()
+                    .expect("LabConfig::with_oracles validated the oracle selection")
+                    .into_iter()
+                    .collect::<HashSet<_>>(),
+            )
+        };
+        Self::build(full_report, None, config_filter)
+    }
+
+    /// Resolve a name list into a concrete reported-oracle set, or `None` when
+    /// the list selects all reported oracles (so no filtering is applied).
+    fn resolve_filter(names: &[String]) -> Option<HashSet<&'static str>> {
+        if OracleRegistry::is_all_selection(names) {
+            None
+        } else {
+            Some(
+                OracleRegistry::select_reported(names)
+                    .expect("oracle names are validated before filtering")
+                    .into_iter()
+                    .collect(),
+            )
+        }
+    }
+
+    /// Filter `full_report` to the entries permitted by both dimensions, where
+    /// `None` means "no restriction from this dimension". Entry order from the
+    /// full report is preserved.
+    fn build(
+        full_report: OracleReport,
+        scenario_filter: Option<HashSet<&'static str>>,
+        config_filter: Option<HashSet<&'static str>>,
+    ) -> Self {
+        let entries: Vec<_> = full_report
+            .entries
+            .iter()
+            .filter(|e| {
+                let name = e.invariant.as_str();
+                scenario_filter.as_ref().is_none_or(|f| f.contains(name))
+                    && config_filter.as_ref().is_none_or(|f| f.contains(name))
+            })
+            .cloned()
+            .collect();
+
+        let checked: Vec<String> = entries.iter().map(|e| e.invariant.clone()).collect();
+        let passed_count = entries.iter().filter(|e| e.passed).count();
+        let failed_count = entries.len() - passed_count;
+        let all_passed = failed_count == 0;
+
+        Self {
+            full_report,
+            checked,
+            passed_count,
+            failed_count,
+            all_passed,
+            entries,
+        }
+    }
+
+    /// Convert to JSON.
+    #[must_use]
+    pub fn to_json(&self) -> serde_json::Value {
+        use serde_json::json;
+        json!({
+            "checked": self.checked,
+            "passed": self.passed_count,
+            "failed": self.failed_count,
+            "all_passed": self.all_passed,
+            "entries": self.entries.iter().map(|e| {
+                let mut v = serde_json::Map::new();
+                v.insert("invariant".into(), json!(e.invariant));
+                v.insert("passed".into(), json!(e.passed));
+                if let Some(ref violation) = e.violation {
+                    v.insert("violation".into(), json!(violation));
+                }
+                serde_json::Value::Object(v)
+            }).collect::<Vec<_>>(),
+        })
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Exploration result
+// ---------------------------------------------------------------------------
+
+/// Result of exploring a scenario across multiple seeds.
+#[derive(Debug, Clone)]
+pub struct ScenarioExplorationResult {
+    /// Scenario identifier.
+    pub scenario_id: String,
+    /// Number of seeds explored.
+    pub seeds_explored: usize,
+    /// Number of passing runs.
+    pub passed: usize,
+    /// Number of failing runs.
+    pub failed: usize,
+    /// Unique trace fingerprints observed.
+    pub unique_fingerprints: usize,
+    /// Per-seed results (seed → pass/fail + fingerprint).
+    pub runs: Vec<ExplorationRunSummary>,
+    /// First failing seed, if any.
+    pub first_failure_seed: Option<u64>,
+}
+
+impl ScenarioExplorationResult {
+    /// Returns true if all explored seeds passed.
+    #[must_use]
+    pub fn all_passed(&self) -> bool {
+        self.failed == 0
+    }
+
+    /// Convert to JSON.
+    #[must_use]
+    pub fn to_json(&self) -> serde_json::Value {
+        use serde_json::json;
+        json!({
+            "scenario_id": self.scenario_id,
+            "seeds_explored": self.seeds_explored,
+            "passed": self.passed,
+            "failed": self.failed,
+            "unique_fingerprints": self.unique_fingerprints,
+            "first_failure_seed": self.first_failure_seed,
+            "runs": self.runs.iter().map(ExplorationRunSummary::to_json).collect::<Vec<_>>(),
+        })
+    }
+}
+
+/// Summary of a single exploration run.
+#[derive(Debug, Clone)]
+pub struct ExplorationRunSummary {
+    /// Seed used.
+    pub seed: u64,
+    /// Whether the run passed.
+    pub passed: bool,
+    /// Steps executed.
+    pub steps: u64,
+    /// Trace fingerprint.
+    pub fingerprint: u64,
+    /// Failure descriptions, if any.
+    pub failures: Vec<String>,
+}
+
+impl ExplorationRunSummary {
+    /// Convert to JSON.
+    #[must_use]
+    pub fn to_json(&self) -> serde_json::Value {
+        use serde_json::json;
+        json!({
+            "seed": self.seed,
+            "passed": self.passed,
+            "steps": self.steps,
+            "fingerprint": self.fingerprint,
+            "failures": self.failures,
+        })
+    }
+}
+
+// ---------------------------------------------------------------------------
+// ScenarioRunner
+// ---------------------------------------------------------------------------
+
+/// Execution engine for FrankenLab scenarios.
+///
+/// Bridges [`Scenario`] YAML specifications to deterministic runtime execution.
+pub struct ScenarioRunner;
+
+impl ScenarioRunner {
+    fn scenario_surface_id(scenario: &Scenario) -> String {
+        scenario
+            .metadata
+            .get("surface_id")
+            .cloned()
+            .unwrap_or_else(|| scenario.id.clone())
+    }
+
+    fn scenario_surface_contract_version(scenario: &Scenario) -> String {
+        scenario
+            .metadata
+            .get("surface_contract_version")
+            .cloned()
+            .unwrap_or_else(|| format!("{}.v1", scenario.id))
+    }
+
+    fn scenario_seed_lineage_id(scenario: &Scenario) -> String {
+        scenario
+            .metadata
+            .get("seed_lineage_id")
+            .cloned()
+            .unwrap_or_else(|| format!("seed.{}.v1", scenario.id))
+    }
+
+    fn scenario_identity(
+        scenario: &Scenario,
+        seed_override: Option<u64>,
+    ) -> DualRunScenarioIdentity {
+        let description = if scenario.description.trim().is_empty() {
+            format!("Scenario {}", scenario.id)
+        } else {
+            scenario.description.clone()
+        };
+        let mut identity = DualRunScenarioIdentity::phase1(
+            &scenario.id,
+            Self::scenario_surface_id(scenario),
+            Self::scenario_surface_contract_version(scenario),
+            description,
+            scenario.lab.seed,
+        );
+        let mut seed_plan = identity.seed_plan.clone();
+        seed_plan.seed_lineage_id = Self::scenario_seed_lineage_id(scenario);
+        if let Some(seed) = seed_override {
+            seed_plan = seed_plan.with_lab_override(seed);
+        }
+        if let Some(entropy_seed) = scenario.lab.entropy_seed {
+            seed_plan = seed_plan.with_entropy_seed(entropy_seed);
+        }
+        identity = identity.with_seed_plan(seed_plan);
+        for (key, value) in &scenario.metadata {
+            identity = identity.with_metadata(key.clone(), value.clone());
+        }
+        identity
+    }
+
+    fn replay_metadata_for_run(
+        identity: &DualRunScenarioIdentity,
+        lab_report: &LabRunReport,
+    ) -> ReplayMetadata {
+        identity
+            .lab_replay_metadata()
+            .with_lab_report(
+                lab_report.trace_fingerprint,
+                lab_report.trace_certificate.event_hash,
+                lab_report.trace_certificate.event_count,
+                lab_report.trace_certificate.schedule_hash,
+                lab_report.steps_total,
+            )
+            .with_repro_command(format!(
+                "ASUPERSYNC_SEED=0x{:X} rch exec -- cargo test {} -- --nocapture",
+                lab_report.seed, identity.scenario_id
+            ))
+    }
+
+    fn validation_error(scenario: &Scenario, errors: Vec<ValidationError>) -> ScenarioRunnerError {
+        ScenarioRunnerError::Validation {
+            scenario_id: scenario.id.clone(),
+            errors,
+        }
+    }
+
+    /// Validate oracle names in a scenario against the known oracle registry.
+    fn validate_oracle_names(scenario: &Scenario) -> Result<(), ScenarioRunnerError> {
+        OracleRegistry::validate_reported_selection(&scenario.oracles)
+            .map_err(|err| ScenarioRunnerError::UnknownOracle(err.name().to_owned()))
+    }
+
+    /// Create a `LabConfig` from a scenario, always enabling replay recording.
+    fn lab_config_for(scenario: &Scenario, seed_override: Option<u64>) -> LabConfig {
+        let config = seed_override.map_or_else(
+            || scenario.to_lab_config(),
+            |seed| {
+                let mut modified = scenario.clone();
+                modified.lab.seed = seed;
+                modified.to_lab_config()
+            },
+        );
+        // Always enable replay recording so we get trace certificates
+        config.with_default_replay_recording()
+    }
+
+    /// Create a `LabConfig` from a scenario plus an explicit dual-run identity.
+    fn lab_config_for_identity(
+        scenario: &Scenario,
+        identity: &DualRunScenarioIdentity,
+    ) -> LabConfig {
+        let mut config = scenario.to_lab_config();
+        let effective_seed = identity.seed_plan.effective_lab_seed();
+        config.seed = effective_seed;
+        config.entropy_seed = identity.seed_plan.effective_entropy_seed(effective_seed);
+        config.with_default_replay_recording()
+    }
+
+    /// Inject timed fault events into the runtime.
+    ///
+    /// Processes faults in `at_ms` order, advancing virtual time and injecting
+    /// each fault action. Between faults, the runtime runs to idle.
+    fn inject_faults(
+        runtime: &mut LabRuntime,
+        scenario: &Scenario,
+    ) -> (Vec<FaultInjectionLogEntry>, FaultEffectSummary) {
+        let mut fault_log = Vec::with_capacity(scenario.faults.len());
+        let mut fault_effect_summary = FaultEffectSummary::default();
+
+        for fault in &scenario.faults {
+            // Advance time to the fault trigger point
+            let target_nanos = fault.at_ms.saturating_mul(1_000_000);
+            let target_time = Time::from_nanos(target_nanos);
+            if target_time > runtime.now() {
+                let delta_nanos = target_time.as_nanos() - runtime.now().as_nanos();
+                runtime.advance_time(delta_nanos);
+            }
+
+            // Run to idle so pending tasks respond to the current state
+            runtime.run_until_idle();
+
+            // Record the fault as a user_trace event
+            let action_name = match fault.action {
+                FaultAction::Partition => "partition",
+                FaultAction::Heal => "heal",
+                FaultAction::DiskPressure => "disk_pressure",
+                FaultAction::DiskRecovered => "disk_recovered",
+                FaultAction::DelayedCleanup => "delayed_cleanup",
+                FaultAction::ProcessStall => "process_stall",
+                FaultAction::ProcessResume => "process_resume",
+                FaultAction::HostCrash => "host_crash",
+                FaultAction::HostRestart => "host_restart",
+                FaultAction::ClockSkew => "clock_skew",
+                FaultAction::ClockReset => "clock_reset",
+            };
+            let args_summary = Self::fault_args_summary(&fault.args);
+            let trace_message = format!("fault:{action_name}:{args_summary}");
+            let now = runtime.now();
+            let trace_message_for_event = trace_message.clone();
+            runtime.state.record_trace_event(|seq| {
+                crate::trace::TraceEvent::user_trace(seq, now, trace_message_for_event)
+            });
+            fault_log.push(FaultInjectionLogEntry {
+                at_ms: fault.at_ms,
+                action: action_name.to_string(),
+                args_summary,
+                trace_message,
+            });
+            fault_effect_summary.apply_fault(fault, scenario.resource_caps.max_artifact_bytes);
+        }
+
+        (fault_log, fault_effect_summary)
+    }
+
+    /// Summarize fault args for trace events.
+    fn fault_args_summary(args: &BTreeMap<String, serde_json::Value>) -> String {
+        let mut summary = String::new();
+        for (index, (key, value)) in args.iter().enumerate() {
+            if index > 0 {
+                summary.push(',');
+            }
+            summary.push_str(key);
+            summary.push('=');
+            match value {
+                serde_json::Value::String(s) => summary.push_str(s),
+                other => {
+                    let _ = write!(&mut summary, "{other}");
+                }
+            }
+        }
+        summary
+    }
+
+    fn minimized_counterexample_for(
+        scenario: &Scenario,
+        fault_log: &[FaultInjectionLogEntry],
+        fault_effect_summary: &FaultEffectSummary,
+    ) -> Option<MinimizedCounterexamplePacket> {
+        if !scenario.minimization.enabled
+            || fault_effect_summary
+                .stalled_participants_until_ms
+                .is_empty()
+        {
+            return None;
+        }
+
+        let active_stalled_participants = fault_effect_summary
+            .stalled_participants_until_ms
+            .keys()
+            .cloned()
+            .collect::<Vec<_>>();
+        let first_stall_index = fault_log.iter().enumerate().find_map(|(index, entry)| {
+            if entry.action != "process_stall" {
+                return None;
+            }
+            let host_is_still_stalled = entry.args_summary.split(',').any(|arg| {
+                arg.strip_prefix("host=").is_some_and(|host| {
+                    fault_effect_summary
+                        .stalled_participants_until_ms
+                        .contains_key(host)
+                })
+            });
+            host_is_still_stalled.then_some(index)
+        })?;
+        let max_counterexample_events = scenario
+            .minimization
+            .max_counterexample_events
+            .or(scenario.resource_caps.max_counterexample_events)
+            .unwrap_or(fault_log.len())
+            .max(1);
+        let required_prefix_len = first_stall_index.saturating_add(1).min(fault_log.len());
+        let retained_len = required_prefix_len.min(max_counterexample_events);
+        let retained_start = required_prefix_len.saturating_sub(retained_len);
+        let fault_log_prefix = fault_log
+            .iter()
+            .skip(retained_start)
+            .take(retained_len)
+            .cloned()
+            .collect::<Vec<_>>();
+        let prefix_len = fault_log_prefix.len();
+
+        Some(MinimizedCounterexamplePacket {
+            scenario_id: scenario.id.clone(),
+            reason: "unresolved_process_stall".to_string(),
+            prefix_len,
+            fault_count: fault_log.len(),
+            max_counterexample_events,
+            active_stalled_participants,
+            fault_log_prefix,
+            redacted: scenario.golden_projection.redacted,
+        })
+    }
+
+    /// Build a certificate snapshot from a lab report.
+    fn certificate_snapshot(report: &LabRunReport) -> TraceCertificateSnapshot {
+        TraceCertificateSnapshot {
+            event_hash: report.trace_certificate.event_hash,
+            schedule_hash: report.trace_certificate.schedule_hash,
+            steps: report.steps_total,
+            trace_fingerprint: report.trace_fingerprint,
+        }
+    }
+
+    /// Run a scenario with the default seed.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the scenario fails validation or contains unknown oracle names.
+    pub fn run(scenario: &Scenario) -> Result<ScenarioRunResult, ScenarioRunnerError> {
+        Self::run_with_seed(scenario, None)
+    }
+
+    /// Run a scenario using an explicit dual-run identity and seed plan.
+    ///
+    /// This keeps scenario-family metadata stable while allowing the concrete
+    /// lab execution seed to vary via the identity's seed plan.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the scenario fails validation or contains unknown oracle names.
+    pub fn run_with_identity(
+        scenario: &Scenario,
+        identity: &DualRunScenarioIdentity,
+    ) -> Result<ScenarioRunResult, ScenarioRunnerError> {
+        let errors = scenario.validate();
+        if !errors.is_empty() {
+            return Err(Self::validation_error(scenario, errors));
+        }
+        Self::validate_oracle_names(scenario)?;
+
+        let effective_seed = identity.seed_plan.effective_lab_seed();
+        let config = Self::lab_config_for_identity(scenario, identity);
+        let mut runtime = LabRuntime::new(config);
+
+        let (fault_log, fault_effect_summary) = Self::inject_faults(&mut runtime, scenario);
+        let faults_injected = fault_log.len();
+        let minimized_counterexample =
+            Self::minimized_counterexample_for(scenario, &fault_log, &fault_effect_summary);
+        runtime.run_until_quiescent();
+
+        let lab_report = runtime.report();
+        let certificate = Self::certificate_snapshot(&lab_report);
+        let replay_metadata = Self::replay_metadata_for_run(identity, &lab_report);
+        let seed_lineage = identity.seed_lineage();
+        let oracle_report = FilteredOracleReport::from_full(
+            lab_report.oracle_report.clone(),
+            &scenario.oracles,
+            &runtime.config().oracle_selection,
+        );
+        let replay_trace = runtime.finish_replay_trace();
+
+        Ok(ScenarioRunResult {
+            scenario_id: scenario.id.clone(),
+            seed: effective_seed,
+            lab_report,
+            oracle_report,
+            faults_injected,
+            fault_log,
+            fault_effect_summary,
+            minimized_counterexample,
+            replay_trace,
+            certificate,
+            adapter: LAB_SCENARIO_RUNNER_ADAPTER.to_string(),
+            replay_metadata,
+            seed_lineage,
+        })
+    }
+
+    /// Run a scenario, optionally overriding the seed.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the scenario fails validation or contains unknown oracle names.
+    pub fn run_with_seed(
+        scenario: &Scenario,
+        seed_override: Option<u64>,
+    ) -> Result<ScenarioRunResult, ScenarioRunnerError> {
+        // 1. Validate
+        let errors = scenario.validate();
+        if !errors.is_empty() {
+            return Err(Self::validation_error(scenario, errors));
+        }
+        Self::validate_oracle_names(scenario)?;
+
+        // 2. Build runtime
+        let effective_seed = seed_override.unwrap_or(scenario.lab.seed);
+        let config = Self::lab_config_for(scenario, seed_override);
+        let mut runtime = LabRuntime::new(config);
+
+        // 3. Inject timed faults and run between them
+        let (fault_log, fault_effect_summary) = Self::inject_faults(&mut runtime, scenario);
+        let faults_injected = fault_log.len();
+        let minimized_counterexample =
+            Self::minimized_counterexample_for(scenario, &fault_log, &fault_effect_summary);
+
+        // 4. Run to quiescence after all faults
+        runtime.run_until_quiescent();
+
+        // 5. Collect report
+        let lab_report = runtime.report();
+        let certificate = Self::certificate_snapshot(&lab_report);
+        let identity = Self::scenario_identity(scenario, seed_override);
+        let replay_metadata = Self::replay_metadata_for_run(&identity, &lab_report);
+        let seed_lineage = identity.seed_lineage();
+
+        // 6. Filter oracle results
+        let oracle_report = FilteredOracleReport::from_full(
+            lab_report.oracle_report.clone(),
+            &scenario.oracles,
+            &runtime.config().oracle_selection,
+        );
+
+        // 7. Extract replay trace
+        let replay_trace = runtime.finish_replay_trace();
+
+        Ok(ScenarioRunResult {
+            scenario_id: scenario.id.clone(),
+            seed: effective_seed,
+            lab_report,
+            oracle_report,
+            faults_injected,
+            fault_log,
+            fault_effect_summary,
+            minimized_counterexample,
+            replay_trace,
+            certificate,
+            adapter: LAB_SCENARIO_RUNNER_ADAPTER.to_string(),
+            replay_metadata,
+            seed_lineage,
+        })
+    }
+
+    /// Explore a scenario across a range of seeds.
+    ///
+    /// Runs the scenario once per seed in `seed_start..seed_start+count` and
+    /// collects results. Useful for finding schedule-dependent bugs.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the scenario fails validation or contains unknown oracle names.
+    pub fn explore_seeds(
+        scenario: &Scenario,
+        seed_start: u64,
+        count: usize,
+    ) -> Result<ScenarioExplorationResult, ScenarioRunnerError> {
+        // Validate once up front
+        let errors = scenario.validate();
+        if !errors.is_empty() {
+            return Err(Self::validation_error(scenario, errors));
+        }
+        Self::validate_oracle_names(scenario)?;
+
+        let mut runs = Vec::with_capacity(count);
+        let mut fingerprint_set = std::collections::HashSet::new();
+        let mut first_failure_seed = None;
+
+        for i in 0..count {
+            let seed = seed_start.wrapping_add(i as u64);
+            // Run with this seed (skip validation since we already validated)
+            let result = Self::run_with_seed(scenario, Some(seed))?;
+
+            fingerprint_set.insert(result.certificate.trace_fingerprint);
+
+            let passed = result.passed();
+            let failures: Vec<String> = if passed {
+                Vec::new()
+            } else {
+                let mut f: Vec<String> = result
+                    .oracle_report
+                    .entries
+                    .iter()
+                    .filter(|e| !e.passed)
+                    .map(|e| {
+                        format!(
+                            "{}: {}",
+                            e.invariant,
+                            e.violation.as_deref().unwrap_or("failed")
+                        )
+                    })
+                    .collect();
+                f.extend(result.lab_report.invariant_violations.clone());
+                if !result.lab_report.quiescent {
+                    f.push("runtime not quiescent at report boundary".to_string());
+                }
+                f
+            };
+
+            if !passed && first_failure_seed.is_none() {
+                first_failure_seed = Some(seed);
+            }
+
+            runs.push(ExplorationRunSummary {
+                seed,
+                passed,
+                steps: result.lab_report.steps_total,
+                fingerprint: result.certificate.trace_fingerprint,
+                failures,
+            });
+        }
+
+        let passed = runs.iter().filter(|r| r.passed).count();
+        let failed = runs.len() - passed;
+
+        Ok(ScenarioExplorationResult {
+            scenario_id: scenario.id.clone(),
+            seeds_explored: count,
+            passed,
+            failed,
+            unique_fingerprints: fingerprint_set.len(),
+            runs,
+            first_failure_seed,
+        })
+    }
+
+    /// Validate replay determinism: run a scenario twice with the same seed
+    /// and verify identical trace certificates.
+    ///
+    /// # Errors
+    ///
+    /// Returns `ReplayDivergence` if the two runs produce different certificates.
+    pub fn validate_replay(scenario: &Scenario) -> Result<ScenarioRunResult, ScenarioRunnerError> {
+        let first = Self::run(scenario)?;
+        let second = Self::run(scenario)?;
+
+        if first.certificate != second.certificate {
+            return Err(ScenarioRunnerError::ReplayDivergence {
+                seed: first.seed,
+                first: first.certificate,
+                second: second.certificate,
+            });
+        }
+
+        Ok(first)
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Tests
+// ---------------------------------------------------------------------------
+
+#[cfg(test)]
+mod tests {
+    #![allow(
+        clippy::pedantic,
+        clippy::nursery,
+        clippy::expect_fun_call,
+        clippy::map_unwrap_or,
+        clippy::cast_possible_wrap,
+        clippy::future_not_send
+    )]
+    use super::*;
+    use crate::lab::scenario::{
+        ChaosSection, FaultAction, FaultEvent, LabSection, MinimizationSection, NetworkSection,
+        Scenario,
+    };
+    use std::collections::BTreeMap;
+
+    fn init_test(name: &str) {
+        crate::test_utils::init_test_logging();
+        crate::test_phase!(name);
+    }
+
+    fn minimal_scenario() -> Scenario {
+        Scenario {
+            schema_version: 1,
+            id: "test-minimal".to_string(),
+            description: "Minimal test scenario".to_string(),
+            lab: LabSection::default(),
+            chaos: ChaosSection::Off,
+            network: NetworkSection::default(),
+            ..Scenario::default()
+        }
+    }
+
+    #[test]
+    fn run_minimal_scenario() {
+        init_test("run_minimal_scenario");
+        let scenario = minimal_scenario();
+        let result = ScenarioRunner::run(&scenario).unwrap();
+        assert!(result.passed(), "minimal scenario should pass");
+        assert_eq!(result.scenario_id, "test-minimal");
+        assert_eq!(result.seed, 42);
+        assert_eq!(result.faults_injected, 0);
+        assert_eq!(result.adapter, LAB_SCENARIO_RUNNER_ADAPTER);
+        assert_eq!(result.replay_metadata.family.surface_id, "test-minimal");
+        assert_eq!(
+            result.replay_metadata.family.surface_contract_version,
+            "test-minimal.v1"
+        );
+        assert_eq!(result.seed_lineage.seed_lineage_id, "seed.test-minimal.v1");
+        crate::test_complete!("run_minimal_scenario");
+    }
+
+    #[test]
+    fn run_with_seed_preserves_family_and_tracks_execution_seed() {
+        init_test("run_with_seed_preserves_family_and_tracks_execution_seed");
+        let scenario = minimal_scenario();
+        let result = ScenarioRunner::run_with_seed(&scenario, Some(7)).unwrap();
+
+        assert_eq!(result.seed, 7);
+        assert_eq!(result.replay_metadata.family.id, "test-minimal");
+        assert_eq!(result.replay_metadata.effective_seed, 7);
+        assert_eq!(result.seed_lineage.canonical_seed, 42);
+        assert_eq!(result.seed_lineage.lab_effective_seed, 7);
+
+        crate::test_complete!("run_with_seed_preserves_family_and_tracks_execution_seed");
+    }
+
+    #[test]
+    fn passed_requires_quiescence() {
+        init_test("passed_requires_quiescence");
+        let scenario = minimal_scenario();
+        let result = ScenarioRunner::run(&scenario).unwrap();
+        assert!(result.passed());
+
+        let mut forced_non_quiescent = result;
+        forced_non_quiescent.lab_report.quiescent = false;
+        assert!(!forced_non_quiescent.passed());
+        crate::test_complete!("passed_requires_quiescence");
+    }
+
+    #[test]
+    fn run_with_seed_override() {
+        init_test("run_with_seed_override");
+        let scenario = minimal_scenario();
+        let result = ScenarioRunner::run_with_seed(&scenario, Some(123)).unwrap();
+        assert_eq!(result.seed, 123);
+        assert!(result.passed());
+        crate::test_complete!("run_with_seed_override");
+    }
+
+    #[test]
+    fn run_with_faults() {
+        init_test("run_with_faults");
+        let mut scenario = minimal_scenario();
+        scenario.faults = vec![
+            FaultEvent {
+                at_ms: 10,
+                action: FaultAction::Partition,
+                args: {
+                    let mut m = BTreeMap::new();
+                    m.insert("from".into(), serde_json::json!("alice"));
+                    m.insert("to".into(), serde_json::json!("bob"));
+                    m
+                },
+            },
+            FaultEvent {
+                at_ms: 50,
+                action: FaultAction::Heal,
+                args: {
+                    let mut m = BTreeMap::new();
+                    m.insert("from".into(), serde_json::json!("alice"));
+                    m.insert("to".into(), serde_json::json!("bob"));
+                    m
+                },
+            },
+        ];
+        let result = ScenarioRunner::run(&scenario).unwrap();
+        assert!(result.passed());
+        assert_eq!(result.faults_injected, 2);
+        crate::test_complete!("run_with_faults");
+    }
+
+    #[test]
+    fn run_with_all_fault_types() {
+        init_test("run_with_all_fault_types");
+        let mut scenario = minimal_scenario();
+        scenario.participants = vec![
+            crate::lab::scenario::Participant {
+                name: "alice".to_string(),
+                role: "sender".to_string(),
+                properties: BTreeMap::new(),
+            },
+            crate::lab::scenario::Participant {
+                name: "bob".to_string(),
+                role: "receiver".to_string(),
+                properties: BTreeMap::new(),
+            },
+        ];
+        scenario.faults = vec![
+            FaultEvent {
+                at_ms: 10,
+                action: FaultAction::Partition,
+                args: {
+                    let mut m = BTreeMap::new();
+                    m.insert("from".into(), serde_json::json!("alice"));
+                    m.insert("to".into(), serde_json::json!("bob"));
+                    m
+                },
+            },
+            FaultEvent {
+                at_ms: 20,
+                action: FaultAction::Heal,
+                args: {
+                    let mut m = BTreeMap::new();
+                    m.insert("from".into(), serde_json::json!("alice"));
+                    m.insert("to".into(), serde_json::json!("bob"));
+                    m
+                },
+            },
+            FaultEvent {
+                at_ms: 30,
+                action: FaultAction::DiskPressure,
+                args: {
+                    let mut m = BTreeMap::new();
+                    m.insert("path".into(), serde_json::json!("target/proof"));
+                    m.insert("bytes".into(), serde_json::json!(4096));
+                    m
+                },
+            },
+            FaultEvent {
+                at_ms: 40,
+                action: FaultAction::DiskRecovered,
+                args: {
+                    let mut m = BTreeMap::new();
+                    m.insert("path".into(), serde_json::json!("target/proof"));
+                    m
+                },
+            },
+            FaultEvent {
+                at_ms: 50,
+                action: FaultAction::DelayedCleanup,
+                args: {
+                    let mut m = BTreeMap::new();
+                    m.insert("phase".into(), serde_json::json!("finalizers"));
+                    m.insert("delay_ms".into(), serde_json::json!(25));
+                    m
+                },
+            },
+            FaultEvent {
+                at_ms: 60,
+                action: FaultAction::ProcessStall,
+                args: {
+                    let mut m = BTreeMap::new();
+                    m.insert("host".into(), serde_json::json!("alice"));
+                    m.insert("duration_ms".into(), serde_json::json!(40));
+                    m
+                },
+            },
+            FaultEvent {
+                at_ms: 70,
+                action: FaultAction::ProcessResume,
+                args: {
+                    let mut m = BTreeMap::new();
+                    m.insert("host".into(), serde_json::json!("alice"));
+                    m
+                },
+            },
+            FaultEvent {
+                at_ms: 80,
+                action: FaultAction::HostCrash,
+                args: {
+                    let mut m = BTreeMap::new();
+                    m.insert("host".into(), serde_json::json!("bob"));
+                    m
+                },
+            },
+            FaultEvent {
+                at_ms: 90,
+                action: FaultAction::HostRestart,
+                args: {
+                    let mut m = BTreeMap::new();
+                    m.insert("host".into(), serde_json::json!("bob"));
+                    m
+                },
+            },
+            FaultEvent {
+                at_ms: 100,
+                action: FaultAction::ClockSkew,
+                args: {
+                    let mut m = BTreeMap::new();
+                    m.insert("host".into(), serde_json::json!("alice"));
+                    m.insert("skew_ms".into(), serde_json::json!(5));
+                    m
+                },
+            },
+            FaultEvent {
+                at_ms: 110,
+                action: FaultAction::ClockReset,
+                args: {
+                    let mut m = BTreeMap::new();
+                    m.insert("host".into(), serde_json::json!("alice"));
+                    m
+                },
+            },
+        ];
+        let result = ScenarioRunner::run(&scenario).unwrap();
+        assert!(result.passed());
+        assert_eq!(result.faults_injected, 11);
+        crate::test_complete!("run_with_all_fault_types");
+    }
+
+    #[test]
+    fn process_stall_counterexample_keeps_causal_event_under_small_cap() {
+        init_test("process_stall_counterexample_keeps_causal_event_under_small_cap");
+        let mut scenario = minimal_scenario();
+        scenario.participants = vec![crate::lab::scenario::Participant {
+            name: "alice".to_string(),
+            role: "worker".to_string(),
+            properties: BTreeMap::new(),
+        }];
+        scenario.minimization = MinimizationSection {
+            enabled: true,
+            max_evaluations: Some(4),
+            max_counterexample_events: Some(1),
+        };
+        scenario.faults = vec![
+            FaultEvent {
+                at_ms: 10,
+                action: FaultAction::DiskPressure,
+                args: {
+                    let mut m = BTreeMap::new();
+                    m.insert("path".into(), serde_json::json!("target/proof"));
+                    m.insert("bytes".into(), serde_json::json!(4096));
+                    m
+                },
+            },
+            FaultEvent {
+                at_ms: 20,
+                action: FaultAction::DelayedCleanup,
+                args: {
+                    let mut m = BTreeMap::new();
+                    m.insert("phase".into(), serde_json::json!("finalizers"));
+                    m.insert("delay_ms".into(), serde_json::json!(25));
+                    m
+                },
+            },
+            FaultEvent {
+                at_ms: 30,
+                action: FaultAction::ProcessStall,
+                args: {
+                    let mut m = BTreeMap::new();
+                    m.insert("host".into(), serde_json::json!("alice"));
+                    m.insert("duration_ms".into(), serde_json::json!(1_000));
+                    m
+                },
+            },
+        ];
+
+        let result = ScenarioRunner::run(&scenario).unwrap();
+        let counterexample = result
+            .minimized_counterexample
+            .expect("active process stall should emit a counterexample");
+
+        assert_eq!(counterexample.max_counterexample_events, 1);
+        assert_eq!(counterexample.prefix_len, 1);
+        assert_eq!(counterexample.fault_log_prefix.len(), 1);
+        let retained = &counterexample.fault_log_prefix[0];
+        assert_eq!(retained.action, "process_stall");
+        assert!(
+            retained
+                .args_summary
+                .split(',')
+                .any(|arg| arg == "host=alice"),
+            "counterexample must retain the causal stalled host"
+        );
+        crate::test_complete!("process_stall_counterexample_keeps_causal_event_under_small_cap");
+    }
+
+    #[test]
+    fn validation_rejects_bad_scenario() {
+        init_test("validation_rejects_bad_scenario");
+        let mut scenario = minimal_scenario();
+        scenario.id = String::new(); // invalid
+        let result = ScenarioRunner::run(&scenario);
+        assert!(result.is_err());
+        assert!(matches!(
+            result.unwrap_err(),
+            ScenarioRunnerError::Validation { .. }
+        ));
+        crate::test_complete!("validation_rejects_bad_scenario");
+    }
+
+    #[test]
+    fn unknown_oracle_rejected() {
+        init_test("unknown_oracle_rejected");
+        let mut scenario = minimal_scenario();
+        scenario.oracles = vec!["nonexistent_oracle".to_string()];
+        let result = ScenarioRunner::run(&scenario);
+        assert!(result.is_err());
+        assert!(matches!(
+            result.unwrap_err(),
+            ScenarioRunnerError::UnknownOracle(_)
+        ));
+        crate::test_complete!("unknown_oracle_rejected");
+    }
+
+    #[test]
+    fn oracle_filtering_works() {
+        init_test("oracle_filtering_works");
+        let mut scenario = minimal_scenario();
+        scenario.oracles = vec!["task_leak".to_string(), "obligation_leak".to_string()];
+        let result = ScenarioRunner::run(&scenario).unwrap();
+        assert_eq!(result.oracle_report.checked.len(), 2);
+        assert!(
+            result
+                .oracle_report
+                .checked
+                .contains(&"task_leak".to_string())
+        );
+        assert!(
+            result
+                .oracle_report
+                .checked
+                .contains(&"obligation_leak".to_string())
+        );
+        crate::test_complete!("oracle_filtering_works");
+    }
+
+    #[test]
+    fn oracle_all_checks_everything() {
+        init_test("oracle_all_checks_everything");
+        let scenario = minimal_scenario();
+        let result = ScenarioRunner::run(&scenario).unwrap();
+        // "all" should check every oracle
+        assert_eq!(
+            result.oracle_report.checked.len(),
+            OracleRegistry::reported_names().len()
+        );
+        crate::test_complete!("oracle_all_checks_everything");
+    }
+
+    #[test]
+    fn replay_determinism() {
+        init_test("replay_determinism");
+        let scenario = minimal_scenario();
+        let result = ScenarioRunner::validate_replay(&scenario).unwrap();
+        assert!(result.passed());
+        crate::test_complete!("replay_determinism");
+    }
+
+    #[test]
+    fn explore_seeds_basic() {
+        init_test("explore_seeds_basic");
+        let scenario = minimal_scenario();
+        let result = ScenarioRunner::explore_seeds(&scenario, 0, 5).unwrap();
+        assert_eq!(result.seeds_explored, 5);
+        assert_eq!(result.passed, 5);
+        assert_eq!(result.failed, 0);
+        assert!(result.all_passed());
+        assert!(result.unique_fingerprints >= 1);
+        crate::test_complete!("explore_seeds_basic");
+    }
+
+    #[test]
+    fn explore_seeds_reports_each_run() {
+        init_test("explore_seeds_reports_each_run");
+        let scenario = minimal_scenario();
+        let result = ScenarioRunner::explore_seeds(&scenario, 100, 3).unwrap();
+        assert_eq!(result.runs.len(), 3);
+        assert_eq!(result.runs[0].seed, 100);
+        assert_eq!(result.runs[1].seed, 101);
+        assert_eq!(result.runs[2].seed, 102);
+        crate::test_complete!("explore_seeds_reports_each_run");
+    }
+
+    #[test]
+    fn result_to_json_roundtrip() {
+        init_test("result_to_json_roundtrip");
+        let scenario = minimal_scenario();
+        let result = ScenarioRunner::run(&scenario).unwrap();
+        let json = result.to_json();
+        assert_eq!(json["scenario_id"], "test-minimal");
+        assert_eq!(json["seed"], 42);
+        assert!(json["passed"].as_bool().unwrap());
+        assert!(json["certificate"]["event_hash"].is_u64());
+        crate::test_complete!("result_to_json_roundtrip");
+    }
+
+    #[test]
+    fn exploration_to_json() {
+        init_test("exploration_to_json");
+        let scenario = minimal_scenario();
+        let result = ScenarioRunner::explore_seeds(&scenario, 0, 2).unwrap();
+        let json = result.to_json();
+        assert_eq!(json["seeds_explored"], 2);
+        assert!(json["runs"].is_array());
+        assert_eq!(json["runs"].as_array().unwrap().len(), 2);
+        crate::test_complete!("exploration_to_json");
+    }
+
+    #[test]
+    fn replay_trace_available_when_enabled() {
+        init_test("replay_trace_available_when_enabled");
+        let mut scenario = minimal_scenario();
+        scenario.lab.replay_recording = true;
+        let result = ScenarioRunner::run(&scenario).unwrap();
+        // ScenarioRunner always enables replay recording
+        assert!(result.replay_trace.is_some());
+        crate::test_complete!("replay_trace_available_when_enabled");
+    }
+
+    #[test]
+    fn certificates_stable_across_runs() {
+        init_test("certificates_stable_across_runs");
+        let scenario = minimal_scenario();
+        let r1 = ScenarioRunner::run(&scenario).unwrap();
+        let r2 = ScenarioRunner::run(&scenario).unwrap();
+        assert_eq!(r1.certificate, r2.certificate);
+        crate::test_complete!("certificates_stable_across_runs");
+    }
+
+    #[test]
+    fn different_seeds_may_differ() {
+        init_test("different_seeds_may_differ");
+        let scenario = minimal_scenario();
+        let r1 = ScenarioRunner::run_with_seed(&scenario, Some(1)).unwrap();
+        let r2 = ScenarioRunner::run_with_seed(&scenario, Some(2)).unwrap();
+        // Seeds 1 and 2 should both pass (empty scenario)
+        assert!(r1.passed());
+        assert!(r2.passed());
+        // They may or may not have the same fingerprint (empty scenario probably same)
+        crate::test_complete!("different_seeds_may_differ");
+    }
+
+    #[test]
+    fn chaos_scenario_runs() {
+        init_test("chaos_scenario_runs");
+        let mut scenario = minimal_scenario();
+        scenario.chaos = ChaosSection::Light;
+        let result = ScenarioRunner::run(&scenario).unwrap();
+        // Light chaos with no tasks should still pass
+        assert!(result.passed());
+        crate::test_complete!("chaos_scenario_runs");
+    }
+
+    #[test]
+    fn fault_args_summary_formatting() {
+        init_test("fault_args_summary_formatting");
+        let mut args = BTreeMap::new();
+        args.insert("from".to_string(), serde_json::json!("alice"));
+        args.insert("to".to_string(), serde_json::json!("bob"));
+        let summary = ScenarioRunner::fault_args_summary(&args);
+        assert!(summary.contains("from=alice"));
+        assert!(summary.contains("to=bob"));
+        crate::test_complete!("fault_args_summary_formatting");
+    }
+
+    #[test]
+    fn error_display_validation() {
+        init_test("error_display_validation");
+        let err = ScenarioRunnerError::Validation {
+            scenario_id: "invalid-smoke".into(),
+            errors: vec![ValidationError {
+                field: "id".into(),
+                message: "empty".into(),
+            }],
+        };
+        let msg = err.to_string();
+        assert!(msg.contains("validation failed"));
+        assert!(msg.contains("invalid-smoke"));
+        assert!(msg.contains("1 issue(s)"));
+        assert!(msg.contains("id"));
+        crate::test_complete!("error_display_validation");
+    }
+
+    #[test]
+    fn error_display_unknown_oracle() {
+        init_test("error_display_unknown_oracle");
+        let err = ScenarioRunnerError::UnknownOracle("bad_oracle".into());
+        assert!(err.to_string().contains("bad_oracle"));
+        assert!(err.to_string().contains("valid names:"));
+        crate::test_complete!("error_display_unknown_oracle");
+    }
+
+    #[test]
+    fn error_display_divergence() {
+        init_test("error_display_divergence");
+        let err = ScenarioRunnerError::ReplayDivergence {
+            seed: 42,
+            first: TraceCertificateSnapshot {
+                event_hash: 1,
+                schedule_hash: 2,
+                steps: 100,
+                trace_fingerprint: 3,
+            },
+            second: TraceCertificateSnapshot {
+                event_hash: 4,
+                schedule_hash: 5,
+                steps: 100,
+                trace_fingerprint: 6,
+            },
+        };
+        let msg = err.to_string();
+        assert!(msg.starts_with("[ASUP-E401]"));
+        assert!(msg.contains("seed 42"));
+        assert!(msg.contains("divergence"));
+        crate::test_complete!("error_display_divergence");
+    }
+
+    // ── derive-trait coverage (wave 73) ──────────────────────────────────
+
+    #[test]
+    fn trace_certificate_snapshot_debug_clone_copy_eq() {
+        let cert = TraceCertificateSnapshot {
+            event_hash: 111,
+            schedule_hash: 222,
+            steps: 333,
+            trace_fingerprint: 444,
+        };
+        let cert2 = cert; // Copy
+        let cert3 = cert;
+        assert_eq!(cert, cert2);
+        assert_eq!(cert2, cert3);
+        let dbg = format!("{cert:?}");
+        assert!(dbg.contains("TraceCertificateSnapshot"));
+        assert!(dbg.contains("111"));
+    }
+
+    #[test]
+    fn exploration_run_summary_debug_clone() {
+        let s = ExplorationRunSummary {
+            seed: 42,
+            passed: true,
+            steps: 100,
+            fingerprint: 999,
+            failures: vec![],
+        };
+        let s2 = s;
+        assert_eq!(s2.seed, 42);
+        assert!(s2.passed);
+        assert_eq!(s2.steps, 100);
+        assert_eq!(s2.fingerprint, 999);
+        assert!(s2.failures.is_empty());
+        let dbg = format!("{s2:?}");
+        assert!(dbg.contains("ExplorationRunSummary"));
+    }
+
+    #[test]
+    fn scenario_exploration_result_debug_clone() {
+        let r = ScenarioExplorationResult {
+            scenario_id: "test-explore".to_string(),
+            seeds_explored: 10,
+            passed: 8,
+            failed: 2,
+            unique_fingerprints: 3,
+            runs: vec![ExplorationRunSummary {
+                seed: 0,
+                passed: true,
+                steps: 50,
+                fingerprint: 1,
+                failures: vec![],
+            }],
+            first_failure_seed: Some(5),
+        };
+        let r2 = r;
+        assert_eq!(r2.scenario_id, "test-explore");
+        assert_eq!(r2.seeds_explored, 10);
+        assert_eq!(r2.first_failure_seed, Some(5));
+        assert_eq!(r2.runs.len(), 1);
+        let dbg = format!("{r2:?}");
+        assert!(dbg.contains("ScenarioExplorationResult"));
+    }
+}

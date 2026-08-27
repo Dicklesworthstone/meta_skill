@@ -1,0 +1,35 @@
+---
+source: crates/fsqlite-vdbe/tests/golden_bytecode_snapshots.rs
+expression: rank_partition
+---
+case: window_rank_partition
+sql: SELECT category_id, RANK() OVER (PARTITION BY category_id ORDER BY score DESC) FROM events ORDER BY category_id, score DESC
+status: ok
+registers: 8
+bind_parameters: 0
+requires_attached_memdb: false
+requires_version_store: false
+
+addr  opcode           p1    p2    p3    p4                 p5
+----  ---------------  ----  ----  ----  -----------------  --
+0     Init             0     21    0                        0 
+1     Transaction      0     0     0                        0 
+2     SorterOpen       1     2     0     (str)+-            0 
+3     OpenRead         0     4     0     (tbl)events        0 
+4     Rewind           0     12    0                        0 
+5     Column           0     1     3                        0 
+6     Column           0     2     4                        0 
+7     Column           0     1     5                        0 
+8     PureFunc         0     7     6     (func)RANK         0 
+9     MakeRecord       3     4     7                        0 
+10    SorterInsert     1     7     0                        0 
+11    Next             0     5     0                        0 
+12    Close            0     0     0                        0 
+13    SorterSort       1     19    0                        0 
+14    SorterData       1     8     0                        0 
+15    Column           1     2     1                        0 
+16    Column           1     3     2                        0 
+17    ResultRow        1     2     0                        0 
+18    SorterNext       1     14    0                        0 
+19    Close            1     0     0                        0 
+20    Halt             0     0     0                        0

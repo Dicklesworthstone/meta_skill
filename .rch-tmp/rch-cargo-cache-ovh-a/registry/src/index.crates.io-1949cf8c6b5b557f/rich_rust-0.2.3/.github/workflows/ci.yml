@@ -1,0 +1,369 @@
+name: CI
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  RUSTFLAGS: -D warnings
+
+jobs:
+  check:
+    name: Check
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: nightly
+          components: rustfmt, clippy
+
+      - name: Cache cargo registry and build
+        uses: Swatinem/rust-cache@9d47c6ad4b02e050fd481d890b2ea34778fd09d6 # v2.7.8
+
+      - name: Check formatting
+        run: cargo fmt --all -- --check
+
+      - name: Run Clippy (no features)
+        run: cargo clippy --all-targets -- -D warnings
+
+      - name: Run Clippy (all features)
+        run: cargo clippy --all-targets --all-features -- -D warnings
+
+      - name: Build (no features)
+        run: cargo build --all-targets
+
+      - name: Build (all features)
+        run: cargo build --all-targets --all-features
+
+      - name: Run tests (no features)
+        run: cargo test -- --nocapture 2>&1 | tee test-output-default.log
+        continue-on-error: true
+
+      - name: Run tests (all features)
+        run: cargo test --all-features -- --nocapture 2>&1 | tee test-output-all-features.log
+        continue-on-error: true
+
+      - name: Check test results
+        run: |
+          cargo test 2>/dev/null
+          cargo test --all-features 2>/dev/null
+
+      - name: Upload test logs
+        if: always()
+        uses: actions/upload-artifact@b4b15b8c7c6ac21ea08fcf65892d2ee8f75cf882 # v4.4.3
+        with:
+          name: test-logs
+          path: |
+            test-output-*.log
+            **/snapshots/*.snap.new
+          retention-days: 30
+
+  conformance-fixtures:
+    name: Conformance (Python fixtures)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: nightly
+
+      - name: Cache cargo registry and build
+        uses: Swatinem/rust-cache@9d47c6ad4b02e050fd481d890b2ea34778fd09d6 # v2.7.8
+        with:
+          key: conformance-fixtures
+
+      - name: Run fixture-based conformance tests
+        run: cargo test --test conformance_python --features "conformance_test,syntax,markdown,json"
+
+  feature-matrix:
+    name: Test Features (${{ matrix.features || 'default' }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        features:
+          - ""
+          - "syntax"
+          - "markdown"
+          - "json"
+          - "full"
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: nightly
+
+      - name: Cache cargo registry and build
+        uses: Swatinem/rust-cache@9d47c6ad4b02e050fd481d890b2ea34778fd09d6 # v2.7.8
+        with:
+          key: features-${{ matrix.features }}
+
+      - name: Build with features
+        run: |
+          if [ -z "${{ matrix.features }}" ]; then
+            cargo build --all-targets
+          else
+            cargo build --all-targets --features "${{ matrix.features }}"
+          fi
+
+      - name: Test with features
+        run: |
+          FEATURE_SUFFIX="${{ matrix.features || 'default' }}"
+          if [ -z "${{ matrix.features }}" ]; then
+            cargo test -- --nocapture 2>&1 | tee "test-output-${FEATURE_SUFFIX}.log"
+          else
+            cargo test --features "${{ matrix.features }}" -- --nocapture 2>&1 | tee "test-output-${FEATURE_SUFFIX}.log"
+          fi
+
+      - name: Upload test logs on failure
+        if: failure()
+        uses: actions/upload-artifact@b4b15b8c7c6ac21ea08fcf65892d2ee8f75cf882 # v4.4.3
+        with:
+          name: test-logs-features-${{ matrix.features || 'default' }}
+          path: |
+            test-output-*.log
+            **/snapshots/*.snap.new
+          retention-days: 14
+
+  test-platform:
+    name: Test (${{ matrix.name }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: Linux x64
+            os: ubuntu-latest
+          - name: Linux ARM64
+            os: ubuntu-24.04-arm
+          - name: macOS ARM64
+            os: macos-14
+          - name: macOS x64
+            os: macos-15
+          - name: Windows x64
+            os: windows-latest
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: nightly
+
+      - name: Cache cargo registry and build
+        uses: Swatinem/rust-cache@9d47c6ad4b02e050fd481d890b2ea34778fd09d6 # v2.7.8
+        with:
+          key: ${{ matrix.os }}
+
+      - name: Run tests
+        shell: bash
+        run: cargo test --all-features -- --nocapture 2>&1 | tee test-output-${{ matrix.name }}.log
+
+      - name: Upload test logs on failure
+        if: failure()
+        uses: actions/upload-artifact@b4b15b8c7c6ac21ea08fcf65892d2ee8f75cf882 # v4.4.3
+        with:
+          name: test-logs-${{ matrix.name }}
+          path: |
+            test-output-*.log
+            **/snapshots/*.snap.new
+          retention-days: 14
+
+  # Minimal Supported Rust Version check
+  msrv:
+    name: MSRV Check
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+
+      # Note: Update this when MSRV changes. Edition 2024 requires nightly.
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: nightly
+
+      - name: Cache cargo registry and build
+        uses: Swatinem/rust-cache@9d47c6ad4b02e050fd481d890b2ea34778fd09d6 # v2.7.8
+        with:
+          key: msrv
+
+      - name: Check compilation
+        run: cargo check --all-features
+
+  # Security audit for known vulnerabilities
+  security:
+    name: Security Audit
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: nightly
+
+      - name: Install cargo-audit
+        uses: taiki-e/install-action@735e5933943122c5ac182670a935f54a949265c1 # v2.52.4
+        with:
+          tool: cargo-audit
+
+      - name: Run security audit
+        run: cargo audit
+        continue-on-error: true  # Advisory DB may contain CVSS 4.0 entries not yet supported by cargo-audit
+
+  # Documentation build check
+  docs:
+    name: Documentation
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: nightly
+
+      - name: Cache cargo registry and build
+        uses: Swatinem/rust-cache@9d47c6ad4b02e050fd481d890b2ea34778fd09d6 # v2.7.8
+        with:
+          key: docs
+
+      - name: Build documentation
+        run: cargo doc --all-features --no-deps
+        env:
+          RUSTDOCFLAGS: -D warnings
+
+      - name: Run doc tests
+        run: cargo test --doc --all-features
+
+  # Benchmark suite with artifact preservation
+  benchmarks:
+    name: Benchmarks
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    # Only run on push to master/main (benchmarks are noisy on PRs)
+    if: github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master')
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: nightly
+
+      - name: Cache cargo registry and build
+        uses: Swatinem/rust-cache@9d47c6ad4b02e050fd481d890b2ea34778fd09d6 # v2.7.8
+        with:
+          key: benchmarks
+
+      - name: Run benchmarks
+        run: cargo bench --all-features -- --noplot 2>&1 | tee bench-output.log
+
+      - name: Upload benchmark results
+        if: always()
+        uses: actions/upload-artifact@b4b15b8c7c6ac21ea08fcf65892d2ee8f75cf882 # v4.4.3
+        with:
+          name: benchmark-results
+          path: |
+            bench-output.log
+            target/criterion
+          retention-days: 90
+
+  # Code coverage with codecov integration
+  coverage:
+    name: Coverage
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: nightly
+          components: llvm-tools-preview
+
+      - name: Cache cargo registry and build
+        uses: Swatinem/rust-cache@9d47c6ad4b02e050fd481d890b2ea34778fd09d6 # v2.7.8
+        with:
+          key: coverage
+
+      - name: Install cargo-llvm-cov
+        uses: taiki-e/install-action@735e5933943122c5ac182670a935f54a949265c1 # v2.52.4
+        with:
+          tool: cargo-llvm-cov
+
+      - name: Generate coverage report
+        run: |
+          cargo llvm-cov --all-features --workspace --lcov --output-path lcov.info
+          cargo llvm-cov report --html --output-dir coverage-html
+
+      - name: Generate per-module coverage summary
+        run: |
+          echo "## Coverage Summary" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY
+          cargo llvm-cov report --all-features 2>/dev/null | head -50 >> $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY
+
+      - name: Check coverage threshold
+        id: coverage_check
+        run: |
+          COVERAGE=$(cargo llvm-cov report --all-features 2>/dev/null | grep -E "^TOTAL" | awk '{print $4}' | tr -d '%' || echo "0")
+          echo "coverage=${COVERAGE}" >> $GITHUB_OUTPUT
+          echo "Overall coverage: ${COVERAGE}%"
+
+          # Threshold check (informational, doesn't fail CI)
+          THRESHOLD=80
+          if (( $(echo "$COVERAGE < $THRESHOLD" | bc -l) )); then
+            echo "::warning::Coverage ${COVERAGE}% is below target ${THRESHOLD}%"
+          else
+            echo "✓ Coverage ${COVERAGE}% meets target ${THRESHOLD}%"
+          fi
+
+      - name: Upload coverage to Codecov
+        uses: codecov/codecov-action@v5
+        with:
+          files: lcov.info
+          fail_ci_if_error: false
+          verbose: true
+
+      - name: Upload coverage HTML report
+        if: always()
+        uses: actions/upload-artifact@b4b15b8c7c6ac21ea08fcf65892d2ee8f75cf882 # v4.4.3
+        with:
+          name: coverage-report
+          path: coverage-html
+          retention-days: 30
+
+      - name: Upload lcov for historical tracking
+        if: always()
+        uses: actions/upload-artifact@b4b15b8c7c6ac21ea08fcf65892d2ee8f75cf882 # v4.4.3
+        with:
+          name: lcov-info
+          path: lcov.info
+          retention-days: 90

@@ -1,0 +1,7 @@
+---
+source: tests/e2e_text.rs
+expression: output
+---
+|Left           |
+|    Center     |
+|          Right|

@@ -1,0 +1,50 @@
+[package]
+name = "fsqlite"
+version = "0.1.19"
+description = "Public API facade"
+edition.workspace = true
+license-file.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+asupersync = { workspace = true, optional = true }
+fsqlite-types = { workspace = true }
+fsqlite-error = { workspace = true }
+fsqlite-core = { version = "0.1.19", path = "../fsqlite-core", default-features = false }
+fsqlite-vfs = { version = "0.1.19", path = "../fsqlite-vfs", default-features = false }
+fsqlite-ext-json = { workspace = true, optional = true }
+fsqlite-ext-fts5 = { workspace = true, optional = true }
+fsqlite-ext-fts3 = { workspace = true, optional = true }
+fsqlite-ext-rtree = { workspace = true, optional = true }
+fsqlite-ext-session = { workspace = true, optional = true }
+fsqlite-ext-icu = { workspace = true, optional = true }
+fsqlite-ext-misc = { workspace = true, optional = true }
+fsqlite-parser = { workspace = true }
+
+[features]
+default = ["native", "linux-asupersync-uring", "json", "fts5", "rtree"]
+native = ["fsqlite-types/native", "fsqlite-core/native", "fsqlite-vfs/native"]
+wasm = ["fsqlite-types/wasm", "fsqlite-core/wasm", "fsqlite-vfs/wasm"]
+linux-asupersync-uring = ["native", "fsqlite-core/linux-asupersync-uring", "fsqlite-vfs/linux-asupersync-uring"]
+json = ["dep:fsqlite-ext-json"]
+fts5 = ["dep:fsqlite-ext-fts5"]
+fts3 = ["dep:fsqlite-ext-fts3"]
+rtree = ["dep:fsqlite-ext-rtree"]
+session = ["dep:fsqlite-ext-session"]
+icu = ["dep:fsqlite-ext-icu"]
+misc = ["dep:fsqlite-ext-misc"]
+async-api = ["dep:asupersync", "fsqlite-types/native"]
+raptorq = []
+mvcc = []
+
+[dev-dependencies]
+fsqlite-ast = { workspace = true }
+fsqlite-func = { workspace = true }
+fsqlite-pager = { workspace = true }
+rand = { workspace = true }
+rusqlite = { workspace = true, features = ["functions"] }
+tempfile = { workspace = true }
+
+[lints]
+workspace = true

@@ -1,0 +1,5 @@
+---
+source: tests/golden_test.rs
+expression: plain
+---
+Column 1            Column 2            Column 3

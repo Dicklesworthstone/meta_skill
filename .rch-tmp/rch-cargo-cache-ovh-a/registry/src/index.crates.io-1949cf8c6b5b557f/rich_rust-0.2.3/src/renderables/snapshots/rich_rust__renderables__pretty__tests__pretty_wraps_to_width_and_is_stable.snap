@@ -1,0 +1,20 @@
+---
+source: src/renderables/pretty.rs
+assertion_line: 939
+expression: plain
+---
+Outer {
+    id: 42,
+    inner: Inner {
+        name: 
+        "a-very-long-n
+        ame-to-wrap",
+        values: [
+            1,
+            2,
+            3,
+            4,
+            5,
+        ],
+    },
+}

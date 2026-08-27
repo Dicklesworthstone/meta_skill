@@ -1,0 +1,5 @@
+---
+source: tests/e2e_rendering.rs
+expression: plain
+---
+red green blue yellow magenta cyan

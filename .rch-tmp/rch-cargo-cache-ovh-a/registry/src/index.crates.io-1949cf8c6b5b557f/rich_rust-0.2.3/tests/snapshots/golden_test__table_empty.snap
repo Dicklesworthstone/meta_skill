@@ -1,0 +1,8 @@
+---
+source: tests/golden_test.rs
+expression: plain
+---
+┏━━━┳━━━┓
+┃ A ┃ B ┃
+┡━━━╇━━━┩
+└───┴───┘

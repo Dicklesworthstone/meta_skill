@@ -1,0 +1,15 @@
+[package]
+name = "async-object-pool"
+version = "0.2.0"
+authors = ["Alexander Liesenfeld <alexander.liesenfeld@outlook.com>"]
+edition = "2018"
+description = "A simple object pool implementation that uses asynchronous synchronization primitives only."
+readme = "README.md"
+keywords = ["object-pool", "async",  "pool", "asynchronous"]
+categories = ["asynchronous"]
+license = "MIT"
+repository = "https://github.com/alexliesenfeld/async-object-pool"
+
+[dependencies]
+async-lock = "3"
+event-listener = "5"

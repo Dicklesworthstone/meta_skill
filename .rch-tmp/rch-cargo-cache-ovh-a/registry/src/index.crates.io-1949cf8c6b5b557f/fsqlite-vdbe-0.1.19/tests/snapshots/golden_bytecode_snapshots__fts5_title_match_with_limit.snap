@@ -1,0 +1,41 @@
+---
+source: crates/fsqlite-vdbe/tests/golden_bytecode_snapshots.rs
+expression: title_match_with_limit
+---
+case: fts5_title_match_with_limit
+sql: SELECT id, title FROM docs WHERE title MATCH 'franken sqlite' ORDER BY id LIMIT 5
+status: ok
+registers: 11
+bind_parameters: 0
+requires_attached_memdb: false
+requires_version_store: false
+
+addr  opcode           p1    p2    p3    p4                 p5
+----  ---------------  ----  ----  ----  -----------------  --
+0     Init             0     27    0                        0 
+1     Transaction      0     0     0                        0 
+2     SorterOpen       1     1     5     (str)+             0 
+3     OpenRead         0     2     0     (tbl)docs          0 
+4     Rewind           0     15    0                        0 
+5     String8          0     4     0     (str)franken sqlite  0 
+6     Column           0     2     5                        0 
+7     PureFunc         0     4     3     (func)MATCH        2 
+8     IfNot            3     14    1                        0 
+9     Column           0     0     6                        0 
+10    Rowid            0     7     0                        0 
+11    Column           0     2     8                        0 
+12    MakeRecord       6     3     9                        0 
+13    SorterInsert     1     9     0                        0 
+14    Next             0     5     0                        0 
+15    Close            0     0     0                        0 
+16    Integer          5     10    0                        0 
+17    IfNot            10    25    1                        0 
+18    SorterSort       1     25    0                        0 
+19    SorterData       1     11    0                        0 
+20    Column           1     1     1                        0 
+21    Column           1     2     2                        0 
+22    ResultRow        1     2     0                        0 
+23    DecrJumpZero     10    25    0                        0 
+24    SorterNext       1     19    0                        0 
+25    Close            1     0     0                        0 
+26    Halt             0     0     0                        0

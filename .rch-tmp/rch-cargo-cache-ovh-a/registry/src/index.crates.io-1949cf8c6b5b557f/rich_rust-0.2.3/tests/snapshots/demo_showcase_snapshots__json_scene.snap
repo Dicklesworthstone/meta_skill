@@ -1,0 +1,82 @@
+---
+source: tests/demo_showcase_snapshots.rs
+assertion_line: 214
+expression: normalized
+---
+JSON: API Payload Visualization
+
+Json renderable provides pretty-printed, syntax-highlighted JSON output.
+
+API Request: Deploy Service
+
+POST /api/v1/deployments
+
+{
+  "action": "deploy",
+  "config": {
+    "cpu_limit": "500m",
+    "health_check": {
+      "interval_seconds": 30,
+      "path": "/health",
+      "timeout_seconds": 5
+    },
+    "memory_limit": "512Mi",
+    "replicas": 3
+  },
+  "dry_run": false,
+  "environment": "production",
+  "notify": [
+    "ops@example.com",
+    "dev@example.com"
+  ],
+  "rollout": {
+    "max_surge": 1,
+    "max_unavailable": 1,
+    "strategy": "rolling"
+  },
+  "service": "nebula-api",
+  "version": "2.4.1"
+}
+
+API Response: Deployment Status
+
+200 OK
+
+{
+  "deployment_id": "dep-7f3a9b2c",
+  "details": {
+    "endpoints": [
+      "https://nebula-api.prod.example.com",
+      "https://nebula-api-internal.prod.example.com"
+    ],
+    "health_status": "healthy",
+    "replicas_ready": 3,
+    "replicas_total": 3
+  },
+  "metrics": {
+    "deploy_duration_ms": 2847,
+    "health_check_passed": true,
+    "rollout_waves": 2
+  },
+  "previous_version": "2.4.0",
+  "rollback_available": true,
+  "service": "nebula-api",
+  "status": "success",
+  "timestamp": "2026-01-27T14:32:18Z",
+  "version": "2.4.1"
+}
+
+Custom Theme
+
+Customize colors for different JSON elements:
+
+{
+  "active": true,
+  "count": 42,
+  "error": null,
+  "name": "test"
+}
+
+Default theme: keys, strings, numbers, booleans, null
+
+Json automatically highlights keys, strings, numbers, booleans, and null values.

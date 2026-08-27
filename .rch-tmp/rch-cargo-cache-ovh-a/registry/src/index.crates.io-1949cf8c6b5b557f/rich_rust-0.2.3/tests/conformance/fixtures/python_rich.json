@@ -1,0 +1,1036 @@
+{
+  "rich_version": "13.9.4",
+  "generated_at": "2026-02-10T19:27:42.578442+00:00",
+  "defaults": {
+    "width": 40,
+    "color_system": "truecolor",
+    "force_terminal": true
+  },
+  "cases": [
+    {
+      "id": "text/plain",
+      "kind": "text",
+      "compare_ansi": true,
+      "render_options": null,
+      "env": null,
+      "theme": null,
+      "input": {
+        "markup": "Hello, World!"
+      },
+      "expected": {
+        "plain": "Hello, World!\n",
+        "ansi": "Hello, World!\n"
+      },
+      "notes": null
+    },
+    {
+      "id": "text/emoji_code",
+      "kind": "text",
+      "compare_ansi": true,
+      "render_options": null,
+      "env": null,
+      "theme": null,
+      "input": {
+        "markup": "hi :smile:"
+      },
+      "expected": {
+        "plain": "hi 😄\n",
+        "ansi": "hi 😄\n"
+      },
+      "notes": null
+    },
+    {
+      "id": "text/emoji_variant_text",
+      "kind": "text",
+      "compare_ansi": true,
+      "render_options": null,
+      "env": null,
+      "theme": null,
+      "input": {
+        "markup": "hi :smile-text:"
+      },
+      "expected": {
+        "plain": "hi 😄︎\n",
+        "ansi": "hi 😄︎\n"
+      },
+      "notes": null
+    },
+    {
+      "id": "text/theme_named_style",
+      "kind": "text",
+      "compare_ansi": true,
+      "render_options": null,
+      "env": null,
+      "theme": {
+        "styles": {
+          "warning": "bold red"
+        },
+        "inherit": true
+      },
+      "input": {
+        "markup": "[warning]Danger[/]"
+      },
+      "expected": {
+        "plain": "Danger\n",
+        "ansi": "\u001b[1;31mDanger\u001b[0m\n"
+      },
+      "notes": null
+    },
+    {
+      "id": "text/markup_bold",
+      "kind": "text",
+      "compare_ansi": true,
+      "render_options": null,
+      "env": null,
+      "theme": null,
+      "input": {
+        "markup": "[bold]Bold[/]"
+      },
+      "expected": {
+        "plain": "Bold\n",
+        "ansi": "\u001b[1mBold\u001b[0m\n"
+      },
+      "notes": null
+    },
+    {
+      "id": "text/highlighter_repr",
+      "kind": "text",
+      "compare_ansi": true,
+      "render_options": {
+        "width": 80
+      },
+      "env": null,
+      "theme": null,
+      "input": {
+        "markup": "True False None 123 0xFF 1+2j 'hi' \"dq\" (call()) ... https://example.com"
+      },
+      "expected": {
+        "plain": "True False None 123 0xFF 1+2j 'hi' \"dq\" (call()) ... https://example.com\n",
+        "ansi": "\u001b[3;92mTrue\u001b[0m \u001b[3;91mFalse\u001b[0m \u001b[3;35mNone\u001b[0m \u001b[1;36m123\u001b[0m \u001b[1;36m0xFF\u001b[0m \u001b[1;36m1+2j\u001b[0m \u001b[32m'hi'\u001b[0m \u001b[32m\"dq\"\u001b[0m \u001b[1m(\u001b[0m\u001b[1;35mcall\u001b[0m\u001b[1m(\u001b[0m\u001b[1m)\u001b[0m\u001b[1m)\u001b[0m \u001b[33m...\u001b[0m \u001b[4;94mhttps://example.com\u001b[0m\n"
+      },
+      "notes": "Exercise default ReprHighlighter (Console highlight=True) ANSI output."
+    },
+    {
+      "id": "text/from_ansi_basic",
+      "kind": "text_from_ansi",
+      "compare_ansi": true,
+      "render_options": {
+        "width": 80
+      },
+      "env": null,
+      "theme": null,
+      "input": {
+        "ansi": "\u001b[1;31mBoldRed\u001b[0m plain \u001b[38;2;10;20;30mRGB\u001b[0m"
+      },
+      "expected": {
+        "plain": "BoldRed plain RGB\n",
+        "ansi": "\u001b[1;31mBoldRed\u001b[0m plain \u001b[38;2;10;20;30mRGB\u001b[0m\n"
+      },
+      "notes": "Exercise Text.from_ansi + AnsiDecoder SGR parsing (attrs + 24-bit color)."
+    },
+    {
+      "id": "text/from_ansi_osc8_link",
+      "kind": "text_from_ansi",
+      "compare_ansi": true,
+      "render_options": {
+        "width": 80
+      },
+      "env": null,
+      "theme": null,
+      "input": {
+        "ansi": "\u001b]8;;https://example.com\u001b\\link\u001b]8;;\u001b\\"
+      },
+      "expected": {
+        "plain": "link\n",
+        "ansi": "\u001b]8;;https://example.com\u001b\\link\u001b]8;;\u001b\\\n"
+      },
+      "notes": "Exercise Text.from_ansi OSC 8 hyperlink set + clear."
+    },
+    {
+      "id": "control/clear",
+      "kind": "control",
+      "compare_ansi": true,
+      "render_options": null,
+      "env": null,
+      "theme": null,
+      "input": {
+        "operation": "clear"
+      },
+      "expected": {
+        "plain": "",
+        "ansi": "\u001b[2J"
+      },
+      "notes": "Exercise rich.control.Control.clear() ANSI emission."
+    },
+    {
+      "id": "control/move_to_column_offset",
+      "kind": "control",
+      "compare_ansi": true,
+      "render_options": null,
+      "env": null,
+      "theme": null,
+      "input": {
+        "operation": "move_to_column",
+        "x": 0,
+        "y": 2
+      },
+      "expected": {
+        "plain": "",
+        "ansi": "\u001b[1G\u001b[2B"
+      },
+      "notes": "Exercise 0-based column conversion (+1 in ANSI) plus vertical offset."
+    },
+    {
+      "id": "control/title",
+      "kind": "control",
+      "compare_ansi": true,
+      "render_options": null,
+      "env": null,
+      "theme": null,
+      "input": {
+        "operation": "title",
+        "title": "rich_rust"
+      },
+      "expected": {
+        "plain": "",
+        "ansi": "\u001b]0;rich_rust\u0007"
+      },
+      "notes": "Exercise OSC window title emission."
+    },
+    {
+      "id": "protocol/rich_cast",
+      "kind": "protocol_rich_cast",
+      "compare_ansi": true,
+      "render_options": {
+        "width": 80
+      },
+      "env": null,
+      "theme": null,
+      "input": {
+        "markup": "True False None 123 0xFF 1+2j"
+      },
+      "expected": {
+        "plain": "True False None 123 0xFF 1+2j\n",
+        "ansi": "\u001b[3;92mTrue\u001b[0m \u001b[3;91mFalse\u001b[0m \u001b[3;35mNone\u001b[0m \u001b[1;36m123\u001b[0m \u001b[1;36m0xFF\u001b[0m \u001b[1;36m1+2j\u001b[0m\n"
+      },
+      "notes": "Exercise Python Rich `__rich__` casting via rich.protocol.rich_cast inside Console.print."
+    },
+    {
+      "id": "protocol/measure",
+      "kind": "protocol_measure",
+      "compare_ansi": true,
+      "render_options": {
+        "width": 40
+      },
+      "env": null,
+      "theme": null,
+      "input": {
+        "minimum": 2,
+        "maximum": 10
+      },
+      "expected": {
+        "plain": "2:10\n",
+        "ansi": "\u001b[1;92m2:10\u001b[0m\n"
+      },
+      "notes": "Exercise Python Rich `__rich_measure__` and Console.measure; output is \"min:max\"."
+    },
+    {
+      "id": "text/colors",
+      "kind": "text",
+      "compare_ansi": true,
+      "render_options": null,
+      "env": null,
+      "theme": null,
+      "input": {
+        "markup": "[red]Red[/] and [green]Green[/]"
+      },
+      "expected": {
+        "plain": "Red and Green\n",
+        "ansi": "\u001b[31mRed\u001b[0m and \u001b[32mGreen\u001b[0m\n"
+      },
+      "notes": null
+    },
+    {
+      "id": "text/hyperlink",
+      "kind": "text",
+      "compare_ansi": true,
+      "render_options": null,
+      "env": null,
+      "theme": null,
+      "input": {
+        "markup": "[link=https://example.com]Example[/]"
+      },
+      "expected": {
+        "plain": "Example\n",
+        "ansi": "\u001b]8;;https://example.com\u001b\\Example\u001b]8;;\u001b\\\n"
+      },
+      "notes": null
+    },
+    {
+      "id": "text/unicode",
+      "kind": "text",
+      "compare_ansi": true,
+      "render_options": {
+        "width": 20
+      },
+      "env": null,
+      "theme": null,
+      "input": {
+        "markup": "Hello 世界 🌍"
+      },
+      "expected": {
+        "plain": "Hello 世界 🌍\n",
+        "ansi": "Hello 世界 🌍\n"
+      },
+      "notes": null
+    },
+    {
+      "id": "rule/basic",
+      "kind": "rule",
+      "compare_ansi": true,
+      "render_options": null,
+      "env": null,
+      "theme": null,
+      "input": {
+        "title": "",
+        "align": "center",
+        "character": "─"
+      },
+      "expected": {
+        "plain": "────────────────────────────────────────\n",
+        "ansi": "\u001b[92m────────────────────────────────────────\u001b[0m\n"
+      },
+      "notes": null
+    },
+    {
+      "id": "rule/title_left",
+      "kind": "rule",
+      "compare_ansi": true,
+      "render_options": {
+        "width": 30
+      },
+      "env": null,
+      "theme": null,
+      "input": {
+        "title": "Section",
+        "align": "left",
+        "character": "─"
+      },
+      "expected": {
+        "plain": "Section ──────────────────────\n",
+        "ansi": "Section \u001b[92m──────────────────────\u001b[0m\n"
+      },
+      "notes": null
+    },
+    {
+      "id": "panel/basic",
+      "kind": "panel",
+      "compare_ansi": true,
+      "render_options": null,
+      "env": null,
+      "theme": null,
+      "input": {
+        "text": "Hello, World!",
+        "title": "Greeting",
+        "subtitle": null,
+        "width": 30,
+        "box": "ROUNDED"
+      },
+      "expected": {
+        "plain": "╭───────── Greeting ─────────╮\n│ Hello, World!              │\n╰────────────────────────────╯\n",
+        "ansi": "╭───────── Greeting ─────────╮\n│ Hello, World!              │\n╰────────────────────────────╯\n"
+      },
+      "notes": null
+    },
+    {
+      "id": "panel/subtitle",
+      "kind": "panel",
+      "compare_ansi": true,
+      "render_options": null,
+      "env": null,
+      "theme": null,
+      "input": {
+        "text": "Content",
+        "title": "Title",
+        "subtitle": "v1",
+        "width": 30,
+        "box": "SQUARE"
+      },
+      "expected": {
+        "plain": "┌────────── Title ───────────┐\n│ Content                    │\n└──────────── v1 ────────────┘\n",
+        "ansi": "┌────────── Title ───────────┐\n│ Content                    │\n└──────────── v1 ────────────┘\n"
+      },
+      "notes": null
+    },
+    {
+      "id": "table/basic",
+      "kind": "table",
+      "compare_ansi": true,
+      "render_options": {
+        "width": 40
+      },
+      "env": null,
+      "theme": null,
+      "input": {
+        "columns": [
+          "Name",
+          "Age"
+        ],
+        "rows": [
+          [
+            "Alice",
+            "30"
+          ],
+          [
+            "Bob",
+            "25"
+          ]
+        ],
+        "show_header": true,
+        "show_lines": false,
+        "title": "Users",
+        "caption": null,
+        "column_justifies": [
+          "left",
+          "right"
+        ]
+      },
+      "expected": {
+        "plain": "     Users     \n┏━━━━━━━┳━━━━━┓\n┃ Name  ┃ Age ┃\n┡━━━━━━━╇━━━━━┩\n│ Alice │  30 │\n│ Bob   │  25 │\n└───────┴─────┘\n",
+        "ansi": "\u001b[3m     Users     \u001b[0m\n┏━━━━━━━┳━━━━━┓\n┃\u001b[1m \u001b[0m\u001b[1mName \u001b[0m\u001b[1m \u001b[0m┃\u001b[1m \u001b[0m\u001b[1mAge\u001b[0m\u001b[1m \u001b[0m┃\n┡━━━━━━━╇━━━━━┩\n│ Alice │  30 │\n│ Bob   │  25 │\n└───────┴─────┘\n"
+      },
+      "notes": null
+    },
+    {
+      "id": "table/lines",
+      "kind": "table",
+      "compare_ansi": true,
+      "render_options": {
+        "width": 40
+      },
+      "env": null,
+      "theme": null,
+      "input": {
+        "columns": [
+          "A",
+          "B"
+        ],
+        "rows": [
+          [
+            "1",
+            "2"
+          ],
+          [
+            "3",
+            "4"
+          ]
+        ],
+        "show_header": true,
+        "show_lines": true,
+        "title": null,
+        "caption": null,
+        "column_justifies": [
+          "left",
+          "left"
+        ]
+      },
+      "expected": {
+        "plain": "┏━━━┳━━━┓\n┃ A ┃ B ┃\n┡━━━╇━━━┩\n│ 1 │ 2 │\n├───┼───┤\n│ 3 │ 4 │\n└───┴───┘\n",
+        "ansi": "┏━━━┳━━━┓\n┃\u001b[1m \u001b[0m\u001b[1mA\u001b[0m\u001b[1m \u001b[0m┃\u001b[1m \u001b[0m\u001b[1mB\u001b[0m\u001b[1m \u001b[0m┃\n┡━━━╇━━━┩\n│ 1 │ 2 │\n├───┼───┤\n│ 3 │ 4 │\n└───┴───┘\n"
+      },
+      "notes": null
+    },
+    {
+      "id": "tree/basic",
+      "kind": "tree",
+      "compare_ansi": true,
+      "render_options": null,
+      "env": null,
+      "theme": null,
+      "input": {
+        "label": "Root",
+        "children": [
+          {
+            "label": "Child 1",
+            "children": []
+          },
+          {
+            "label": "Child 2",
+            "children": [
+              {
+                "label": "Leaf",
+                "children": []
+              }
+            ]
+          }
+        ]
+      },
+      "expected": {
+        "plain": "Root\n├── Child 1\n└── Child 2\n    └── Leaf\n",
+        "ansi": "Root\n├── Child 1\n└── Child 2\n    └── Leaf\n"
+      },
+      "notes": null
+    },
+    {
+      "id": "progress/basic",
+      "kind": "progress",
+      "compare_ansi": true,
+      "render_options": null,
+      "env": null,
+      "theme": null,
+      "input": {
+        "total": 100,
+        "completed": 50,
+        "width": 20
+      },
+      "expected": {
+        "plain": "━━━━━━━━━━╺━━━━━━━━━",
+        "ansi": "\u001b[38;2;249;38;114m━━━━━━━━━━\u001b[0m\u001b[38;5;237m╺\u001b[0m\u001b[38;5;237m━━━━━━━━━\u001b[0m"
+      },
+      "notes": null
+    },
+    {
+      "id": "columns/basic",
+      "kind": "columns",
+      "compare_ansi": true,
+      "render_options": null,
+      "env": null,
+      "theme": null,
+      "input": {
+        "items": [
+          "One",
+          "Two",
+          "Three",
+          "Four"
+        ]
+      },
+      "expected": {
+        "plain": "One Two Three Four\n",
+        "ansi": "One Two Three Four\n"
+      },
+      "notes": null
+    },
+    {
+      "id": "padding/basic",
+      "kind": "padding",
+      "compare_ansi": true,
+      "render_options": {
+        "width": 12
+      },
+      "env": null,
+      "theme": null,
+      "input": {
+        "text": "Padded",
+        "pad": [
+          1,
+          2,
+          1,
+          2
+        ]
+      },
+      "expected": {
+        "plain": "            \n  Padded    \n            \n",
+        "ansi": "            \n  Padded    \n            \n"
+      },
+      "notes": null
+    },
+    {
+      "id": "constrain/rule_width_10",
+      "kind": "constrain",
+      "compare_ansi": true,
+      "render_options": {
+        "width": 40
+      },
+      "env": null,
+      "theme": null,
+      "input": {
+        "child_kind": "rule",
+        "child_input": {
+          "title": "",
+          "align": "center",
+          "character": "─"
+        },
+        "width": 10
+      },
+      "expected": {
+        "plain": "──────────\n",
+        "ansi": "\u001b[92m──────────\u001b[0m\n"
+      },
+      "notes": "Constrain should cap Rule width to 10 even if console width is larger."
+    },
+    {
+      "id": "constrain/none_passthrough",
+      "kind": "constrain",
+      "compare_ansi": true,
+      "render_options": {
+        "width": 20
+      },
+      "env": null,
+      "theme": null,
+      "input": {
+        "child_kind": "rule",
+        "child_input": {
+          "title": "",
+          "align": "center",
+          "character": "─"
+        },
+        "width": null
+      },
+      "expected": {
+        "plain": "────────────────────\n",
+        "ansi": "\u001b[92m────────────────────\u001b[0m\n"
+      },
+      "notes": "width=None should be pass-through (Rule spans console width)."
+    },
+    {
+      "id": "align/center",
+      "kind": "align",
+      "compare_ansi": true,
+      "render_options": null,
+      "env": null,
+      "theme": null,
+      "input": {
+        "text": "Centered",
+        "width": 20,
+        "align": "center"
+      },
+      "expected": {
+        "plain": "                Centered                \n",
+        "ansi": "                Centered                \n"
+      },
+      "notes": null
+    },
+    {
+      "id": "markdown/plain",
+      "kind": "markdown",
+      "compare_ansi": true,
+      "render_options": null,
+      "env": null,
+      "theme": null,
+      "input": {
+        "text": "Just text"
+      },
+      "expected": {
+        "plain": "Just text                               \n",
+        "ansi": "Just text                               \n"
+      },
+      "notes": "No styling; ANSI output is identical to plain."
+    },
+    {
+      "id": "markdown/emphasis_no_terminal",
+      "kind": "markdown",
+      "compare_ansi": true,
+      "render_options": {
+        "color_system": "auto",
+        "force_terminal": false
+      },
+      "env": null,
+      "theme": null,
+      "input": {
+        "text": "This is **bold** and *italic*."
+      },
+      "expected": {
+        "plain": "This is bold and italic.                \n",
+        "ansi": "This is bold and italic.                \n"
+      },
+      "notes": "force_terminal=false disables ANSI; compare_ansi=true ensures no SGR leakage."
+    },
+    {
+      "id": "markdown/fenced_code_rust",
+      "kind": "markdown",
+      "compare_ansi": true,
+      "render_options": {
+        "width": 60
+      },
+      "env": null,
+      "theme": null,
+      "input": {
+        "text": "```rust\nfn main() { println!(\"hi\"); }\n```"
+      },
+      "expected": {
+        "plain": "                                                            \n fn main() { println!(\"hi\"); }                              \n                                                            \n",
+        "ansi": "\u001b[48;2;39;40;34m                                                            \u001b[0m\n\u001b[48;2;39;40;34m \u001b[0m\u001b[38;2;102;217;239;48;2;39;40;34mfn\u001b[0m\u001b[38;2;248;248;242;48;2;39;40;34m \u001b[0m\u001b[38;2;166;226;46;48;2;39;40;34mmain\u001b[0m\u001b[38;2;248;248;242;48;2;39;40;34m(\u001b[0m\u001b[38;2;248;248;242;48;2;39;40;34m)\u001b[0m\u001b[38;2;248;248;242;48;2;39;40;34m \u001b[0m\u001b[38;2;248;248;242;48;2;39;40;34m{\u001b[0m\u001b[38;2;248;248;242;48;2;39;40;34m \u001b[0m\u001b[38;2;166;226;46;48;2;39;40;34mprintln!\u001b[0m\u001b[38;2;248;248;242;48;2;39;40;34m(\u001b[0m\u001b[38;2;230;219;116;48;2;39;40;34m\"\u001b[0m\u001b[38;2;230;219;116;48;2;39;40;34mhi\u001b[0m\u001b[38;2;230;219;116;48;2;39;40;34m\"\u001b[0m\u001b[38;2;248;248;242;48;2;39;40;34m)\u001b[0m\u001b[38;2;248;248;242;48;2;39;40;34m;\u001b[0m\u001b[38;2;248;248;242;48;2;39;40;34m \u001b[0m\u001b[38;2;248;248;242;48;2;39;40;34m}\u001b[0m\u001b[48;2;39;40;34m                             \u001b[0m\u001b[48;2;39;40;34m \u001b[0m\n\u001b[48;2;39;40;34m                                                            \u001b[0m\n"
+      },
+      "notes": "Python Rich Markdown fenced-code ANSI now matches the Rust renderer for this fixture."
+    },
+    {
+      "id": "markdown/fenced_code_wrap",
+      "kind": "markdown",
+      "compare_ansi": true,
+      "render_options": {
+        "width": 20
+      },
+      "env": null,
+      "theme": null,
+      "input": {
+        "text": "```rust\nlet x = 1234567890; let y = 1234567890;\n```"
+      },
+      "expected": {
+        "plain": "                    \n let x = 1234567890 \n let y = 1234567890 \n                    \n",
+        "ansi": "\u001b[48;2;39;40;34m                    \u001b[0m\n\u001b[48;2;39;40;34m \u001b[0m\u001b[38;2;102;217;239;48;2;39;40;34mlet\u001b[0m\u001b[38;2;248;248;242;48;2;39;40;34m \u001b[0m\u001b[38;2;248;248;242;48;2;39;40;34mx\u001b[0m\u001b[38;2;248;248;242;48;2;39;40;34m \u001b[0m\u001b[38;2;255;70;137;48;2;39;40;34m=\u001b[0m\u001b[38;2;248;248;242;48;2;39;40;34m \u001b[0m\u001b[38;2;174;129;255;48;2;39;40;34m1234567890\u001b[0m\u001b[48;2;39;40;34m \u001b[0m\n\u001b[48;2;39;40;34m \u001b[0m\u001b[38;2;102;217;239;48;2;39;40;34mlet\u001b[0m\u001b[38;2;248;248;242;48;2;39;40;34m \u001b[0m\u001b[38;2;248;248;242;48;2;39;40;34my\u001b[0m\u001b[38;2;248;248;242;48;2;39;40;34m \u001b[0m\u001b[38;2;255;70;137;48;2;39;40;34m=\u001b[0m\u001b[38;2;248;248;242;48;2;39;40;34m \u001b[0m\u001b[38;2;174;129;255;48;2;39;40;34m1234567890\u001b[0m\u001b[48;2;39;40;34m \u001b[0m\n\u001b[48;2;39;40;34m                    \u001b[0m\n"
+      },
+      "notes": "Narrow width exercises Python Rich `Syntax(word_wrap=True, padding=1)` behavior in Markdown fenced code blocks, including ANSI parity."
+    },
+    {
+      "id": "markdown/link",
+      "kind": "markdown",
+      "compare_ansi": true,
+      "render_options": {
+        "width": 60
+      },
+      "env": null,
+      "theme": null,
+      "input": {
+        "text": "This is a [link](https://example.com)."
+      },
+      "expected": {
+        "plain": "This is a link.                                             \n",
+        "ansi": "This is a \u001b]8;;https://example.com\u001b\\\u001b[4;34mlink\u001b[0m\u001b]8;;\u001b\\.                                             \n"
+      },
+      "notes": "Default Markdown link behavior: OSC8 hyperlink with no URL suffix."
+    },
+    {
+      "id": "markdown/link_hyperlinks_false",
+      "kind": "markdown",
+      "compare_ansi": true,
+      "render_options": {
+        "width": 60
+      },
+      "env": null,
+      "theme": null,
+      "input": {
+        "text": "[link](https://example.com)",
+        "hyperlinks": false
+      },
+      "expected": {
+        "plain": "link (https://example.com)                                  \n",
+        "ansi": "\u001b[94mlink\u001b[0m (\u001b[4;34mhttps://example.com\u001b[0m)                                  \n"
+      },
+      "notes": "Markdown hyperlinks disabled: render `text (url)` with styled URL suffix (no OSC8)."
+    },
+    {
+      "id": "markdown/image",
+      "kind": "markdown",
+      "compare_ansi": true,
+      "render_options": {
+        "width": 60
+      },
+      "env": null,
+      "theme": null,
+      "input": {
+        "text": "![alt text](https://example.com/img.png)"
+      },
+      "expected": {
+        "plain": "🌆 alt text                                                 \n",
+        "ansi": "🌆 \u001b]8;;https://example.com/img.png\u001b\\alt text\u001b]8;;\u001b\\                                                 \n"
+      },
+      "notes": "Images render as an emoji + alt text; with hyperlinks enabled, the alt text is an OSC8 hyperlink."
+    },
+    {
+      "id": "json/basic",
+      "kind": "json",
+      "compare_ansi": true,
+      "render_options": null,
+      "env": null,
+      "theme": null,
+      "input": {
+        "json": "{\"age\": 30, \"name\": \"Alice\"}"
+      },
+      "expected": {
+        "plain": "{\n  \"age\": 30,\n  \"name\": \"Alice\"\n}\n",
+        "ansi": "\u001b[1m{\u001b[0m\n  \u001b[1;34m\"age\"\u001b[0m: \u001b[1;36m30\u001b[0m,\n  \u001b[1;34m\"name\"\u001b[0m: \u001b[32m\"Alice\"\u001b[0m\n\u001b[1m}\u001b[0m\n"
+      },
+      "notes": "Default JSON styling is intended to match Python Rich defaults."
+    },
+    {
+      "id": "json/nested",
+      "kind": "json",
+      "compare_ansi": true,
+      "render_options": null,
+      "env": null,
+      "theme": null,
+      "input": {
+        "json": "{\"items\": [{\"id\": 1, \"name\": \"A\"}, {\"id\": 2, \"name\": \"B\"}]}"
+      },
+      "expected": {
+        "plain": "{\n  \"items\": [\n    {\n      \"id\": 1,\n      \"name\": \"A\"\n    },\n    {\n      \"id\": 2,\n      \"name\": \"B\"\n    }\n  ]\n}\n",
+        "ansi": "\u001b[1m{\u001b[0m\n  \u001b[1;34m\"items\"\u001b[0m: \u001b[1m[\u001b[0m\n    \u001b[1m{\u001b[0m\n      \u001b[1;34m\"id\"\u001b[0m: \u001b[1;36m1\u001b[0m,\n      \u001b[1;34m\"name\"\u001b[0m: \u001b[32m\"A\"\u001b[0m\n    \u001b[1m}\u001b[0m,\n    \u001b[1m{\u001b[0m\n      \u001b[1;34m\"id\"\u001b[0m: \u001b[1;36m2\u001b[0m,\n      \u001b[1;34m\"name\"\u001b[0m: \u001b[32m\"B\"\u001b[0m\n    \u001b[1m}\u001b[0m\n  \u001b[1m]\u001b[0m\n\u001b[1m}\u001b[0m\n"
+      },
+      "notes": "Nested structures with default JSON styling."
+    },
+    {
+      "id": "json/compact_indent_none",
+      "kind": "json",
+      "compare_ansi": true,
+      "render_options": null,
+      "env": null,
+      "theme": null,
+      "input": {
+        "json": "{\"age\": 30, \"name\": \"Alice\"}",
+        "indent": null
+      },
+      "expected": {
+        "plain": "{\"age\": 30, \"name\": \"Alice\"}\n",
+        "ansi": "\u001b[1m{\u001b[0m\u001b[1;34m\"age\"\u001b[0m: \u001b[1;36m30\u001b[0m, \u001b[1;34m\"name\"\u001b[0m: \u001b[32m\"Alice\"\u001b[0m\u001b[1m}\u001b[0m\n"
+      },
+      "notes": "Python Rich JSON compact mode via indent=None."
+    },
+    {
+      "id": "json/indent_tab",
+      "kind": "json",
+      "compare_ansi": true,
+      "render_options": null,
+      "env": null,
+      "theme": null,
+      "input": {
+        "json": "{\"age\": 30, \"name\": \"Alice\"}",
+        "indent": "\t"
+      },
+      "expected": {
+        "plain": "{\n        \"age\": 30,\n        \"name\": \"Alice\"\n}\n",
+        "ansi": "\u001b[1m{\u001b[0m\n        \u001b[1;34m\"age\"\u001b[0m: \u001b[1;36m30\u001b[0m,\n        \u001b[1;34m\"name\"\u001b[0m: \u001b[32m\"Alice\"\u001b[0m\n\u001b[1m}\u001b[0m\n"
+      },
+      "notes": "Python Rich JSON supports string indents (tabs are expanded in Text)."
+    },
+    {
+      "id": "json/bools_null",
+      "kind": "json",
+      "compare_ansi": true,
+      "render_options": null,
+      "env": null,
+      "theme": null,
+      "input": {
+        "json": "{\"b\": true, \"f\": false, \"n\": null}"
+      },
+      "expected": {
+        "plain": "{\n  \"b\": true,\n  \"f\": false,\n  \"n\": null\n}\n",
+        "ansi": "\u001b[1m{\u001b[0m\n  \u001b[1;34m\"b\"\u001b[0m: \u001b[3;92mtrue\u001b[0m,\n  \u001b[1;34m\"f\"\u001b[0m: \u001b[3;91mfalse\u001b[0m,\n  \u001b[1;34m\"n\"\u001b[0m: \u001b[3;35mnull\u001b[0m\n\u001b[1m}\u001b[0m\n"
+      },
+      "notes": "Boolean and null styling parity (true/false distinct colors + italic, null italic magenta)."
+    },
+    {
+      "id": "json/ensure_ascii",
+      "kind": "json",
+      "compare_ansi": true,
+      "render_options": null,
+      "env": null,
+      "theme": null,
+      "input": {
+        "json": "{\"greeting\": \"こんにちは\"}",
+        "ensure_ascii": true
+      },
+      "expected": {
+        "plain": "{\n  \"greeting\": \n\"\\u3053\\u3093\\u306b\\u3061\\u306f\"\n}\n",
+        "ansi": "\u001b[1m{\u001b[0m\n  \u001b[1;34m\"greeting\"\u001b[0m: \n\u001b[32m\"\\u3053\\u3093\\u306b\\u3061\\u306f\"\u001b[0m\n\u001b[1m}\u001b[0m\n"
+      },
+      "notes": "Python Rich JSON passes ensure_ascii through to json.dumps."
+    },
+    {
+      "id": "syntax/basic",
+      "kind": "syntax",
+      "compare_ansi": true,
+      "render_options": null,
+      "env": null,
+      "theme": null,
+      "input": {
+        "code": "fn main() { println!(\"hi\"); }",
+        "language": "rust"
+      },
+      "expected": {
+        "plain": "fn main() { println!(\"hi\"); }           \n",
+        "ansi": "\u001b[38;2;102;217;239;48;2;39;40;34mfn\u001b[0m\u001b[38;2;248;248;242;48;2;39;40;34m \u001b[0m\u001b[38;2;166;226;46;48;2;39;40;34mmain\u001b[0m\u001b[38;2;248;248;242;48;2;39;40;34m(\u001b[0m\u001b[38;2;248;248;242;48;2;39;40;34m)\u001b[0m\u001b[38;2;248;248;242;48;2;39;40;34m \u001b[0m\u001b[38;2;248;248;242;48;2;39;40;34m{\u001b[0m\u001b[38;2;248;248;242;48;2;39;40;34m \u001b[0m\u001b[38;2;166;226;46;48;2;39;40;34mprintln!\u001b[0m\u001b[38;2;248;248;242;48;2;39;40;34m(\u001b[0m\u001b[38;2;230;219;116;48;2;39;40;34m\"\u001b[0m\u001b[38;2;230;219;116;48;2;39;40;34mhi\u001b[0m\u001b[38;2;230;219;116;48;2;39;40;34m\"\u001b[0m\u001b[38;2;248;248;242;48;2;39;40;34m)\u001b[0m\u001b[38;2;248;248;242;48;2;39;40;34m;\u001b[0m\u001b[38;2;248;248;242;48;2;39;40;34m \u001b[0m\u001b[38;2;248;248;242;48;2;39;40;34m}\u001b[0m\u001b[48;2;39;40;34m           \u001b[0m\n"
+      },
+      "notes": "Default Rust syntax ANSI now matches Python Rich for this conformance fixture."
+    },
+    {
+      "id": "syntax/python_assign",
+      "kind": "syntax",
+      "compare_ansi": true,
+      "render_options": null,
+      "env": null,
+      "theme": null,
+      "input": {
+        "code": "x = \"hi\"",
+        "language": "python"
+      },
+      "expected": {
+        "plain": "x = \"hi\"                                \n",
+        "ansi": "\u001b[38;2;248;248;242;48;2;39;40;34mx\u001b[0m\u001b[38;2;248;248;242;48;2;39;40;34m \u001b[0m\u001b[38;2;255;70;137;48;2;39;40;34m=\u001b[0m\u001b[38;2;248;248;242;48;2;39;40;34m \u001b[0m\u001b[38;2;230;219;116;48;2;39;40;34m\"\u001b[0m\u001b[38;2;230;219;116;48;2;39;40;34mhi\u001b[0m\u001b[38;2;230;219;116;48;2;39;40;34m\"\u001b[0m\u001b[48;2;39;40;34m                                \u001b[0m\n"
+      },
+      "notes": "Non-Rust syntax ANSI parity case using Python assignment and string tokens."
+    },
+    {
+      "id": "syntax/no_terminal",
+      "kind": "syntax",
+      "compare_ansi": true,
+      "render_options": {
+        "color_system": "auto",
+        "force_terminal": false
+      },
+      "env": null,
+      "theme": null,
+      "input": {
+        "code": "fn main() { println!(\"hi\"); }",
+        "language": "rust"
+      },
+      "expected": {
+        "plain": "fn main() { println!(\"hi\"); }           \n",
+        "ansi": "fn main() { println!(\"hi\"); }           \n"
+      },
+      "notes": "force_terminal=false disables ANSI; compare_ansi=true ensures no SGR leakage."
+    },
+    {
+      "id": "traceback/basic",
+      "kind": "traceback",
+      "compare_ansi": true,
+      "render_options": {
+        "width": 60
+      },
+      "env": null,
+      "theme": null,
+      "input": {
+        "frames": [
+          {
+            "name": "<module>",
+            "line": 14
+          },
+          {
+            "name": "level1",
+            "line": 11
+          },
+          {
+            "name": "level2",
+            "line": 8
+          },
+          {
+            "name": "level3",
+            "line": 5
+          }
+        ],
+        "exception_type": "ZeroDivisionError",
+        "exception_message": "division by zero",
+        "extra_lines": 0,
+        "word_wrap": false,
+        "show_locals": false,
+        "indent_guides": false
+      },
+      "expected": {
+        "plain": "╭─────────── Traceback (most recent call last) ────────────╮\n│ in <module>:14                                           │\n│ in level1:11                                             │\n│ in level2:8                                              │\n│ in level3:5                                              │\n╰──────────────────────────────────────────────────────────╯\nZeroDivisionError: division by zero\n",
+        "ansi": "\u001b[31m╭─\u001b[0m\u001b[31m──────────\u001b[0m\u001b[31m \u001b[0m\u001b[1;31mTraceback \u001b[0m\u001b[1;2;31m(most recent call last)\u001b[0m\u001b[31m \u001b[0m\u001b[31m───────────\u001b[0m\u001b[31m─╮\u001b[0m\n\u001b[31m│\u001b[0m in \u001b[92m<module>\u001b[0m:\u001b[94m14\u001b[0m                                           \u001b[31m│\u001b[0m\n\u001b[31m│\u001b[0m in \u001b[92mlevel1\u001b[0m:\u001b[94m11\u001b[0m                                             \u001b[31m│\u001b[0m\n\u001b[31m│\u001b[0m in \u001b[92mlevel2\u001b[0m:\u001b[94m8\u001b[0m                                              \u001b[31m│\u001b[0m\n\u001b[31m│\u001b[0m in \u001b[92mlevel3\u001b[0m:\u001b[94m5\u001b[0m                                              \u001b[31m│\u001b[0m\n\u001b[31m╰──────────────────────────────────────────────────────────╯\u001b[0m\n\u001b[1;91mZeroDivisionError: \u001b[0mdivision by zero\n"
+      },
+      "notes": "Deterministic traceback generated from explicit frames."
+    },
+    {
+      "id": "terminal/no_color",
+      "kind": "text",
+      "compare_ansi": true,
+      "render_options": {
+        "color_system": "auto",
+        "force_terminal": null
+      },
+      "env": {
+        "NO_COLOR": "1",
+        "FORCE_COLOR": "1",
+        "TERM": "xterm-256color"
+      },
+      "theme": null,
+      "input": {
+        "markup": "[#ff8800]No Color[/]"
+      },
+      "expected": {
+        "plain": "No Color\n",
+        "ansi": "No Color\n"
+      },
+      "notes": "NO_COLOR disables colors even when terminal supports them."
+    },
+    {
+      "id": "terminal/colorterm_truecolor",
+      "kind": "text",
+      "compare_ansi": true,
+      "render_options": {
+        "color_system": "auto",
+        "force_terminal": null
+      },
+      "env": {
+        "FORCE_COLOR": "1",
+        "COLORTERM": "truecolor",
+        "TERM": "xterm-256color"
+      },
+      "theme": null,
+      "input": {
+        "markup": "[#ff0000]TrueColor[/]"
+      },
+      "expected": {
+        "plain": "TrueColor\n",
+        "ansi": "\u001b[38;2;255;0;0mTrueColor\u001b[0m\n"
+      },
+      "notes": "COLORTERM truecolor should yield 24-bit ANSI."
+    },
+    {
+      "id": "terminal/term_256color",
+      "kind": "text",
+      "compare_ansi": true,
+      "render_options": {
+        "color_system": "auto",
+        "force_terminal": null
+      },
+      "env": {
+        "FORCE_COLOR": "1",
+        "TERM": "xterm-256color"
+      },
+      "theme": null,
+      "input": {
+        "markup": "[#00ff00]EightBit[/]"
+      },
+      "expected": {
+        "plain": "EightBit\n",
+        "ansi": "\u001b[38;5;46mEightBit\u001b[0m\n"
+      },
+      "notes": "TERM -256color should yield 256-color ANSI."
+    },
+    {
+      "id": "terminal/term_16color",
+      "kind": "text",
+      "compare_ansi": true,
+      "render_options": {
+        "color_system": "auto",
+        "force_terminal": null
+      },
+      "env": {
+        "FORCE_COLOR": "1",
+        "TERM": "xterm-16color"
+      },
+      "theme": null,
+      "input": {
+        "markup": "[#0000ff]Standard[/]"
+      },
+      "expected": {
+        "plain": "Standard\n",
+        "ansi": "\u001b[34mStandard\u001b[0m\n"
+      },
+      "notes": "TERM -16color should yield standard ANSI colors."
+    },
+    {
+      "id": "terminal/term_dumb",
+      "kind": "text",
+      "compare_ansi": true,
+      "render_options": {
+        "color_system": "auto",
+        "force_terminal": null
+      },
+      "env": {
+        "FORCE_COLOR": "1",
+        "TERM": "dumb"
+      },
+      "theme": null,
+      "input": {
+        "markup": "[#ff00ff]Dumb[/]"
+      },
+      "expected": {
+        "plain": "Dumb\n",
+        "ansi": "Dumb\n"
+      },
+      "notes": "TERM dumb should disable color output."
+    }
+  ]
+}

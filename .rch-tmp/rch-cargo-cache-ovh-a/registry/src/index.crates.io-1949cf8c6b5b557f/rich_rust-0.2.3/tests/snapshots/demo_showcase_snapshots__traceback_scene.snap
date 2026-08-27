@@ -1,0 +1,47 @@
+---
+source: tests/demo_showcase_snapshots.rs
+assertion_line: 135
+expression: normalized
+---
+Traceback: Error Visualization
+
+When things go wrong, rich_rust helps you see what happened.
+
+Log Escalation
+
+45.000s  INFO  Starting deployment validation...
+46.000s  INFO  Checking service dependencies...
+47.000s  WARN  Connection pool nearing capacity (8/10)
+48.000s  WARN  Query latency exceeding threshold: 450ms
+49.000s ERROR  Connection timeout after 30s - aborting
+Exception Traceback
+
+╭───────────────────── Traceback (most recent call last) ──────────────────────╮
+│ src/db/pool.rs:142 in nebula::db::pool::acquire                              │
+│                                                                              │
+│   140         // Function: acquire                                           │
+│   141         let result = operation()?;                                     │
+│ ❱ 142         process(result)?;                                              │
+│   143         Ok(())                                                         │
+│ src/db/connection.rs:87 in nebula::db::Connection::connect                   │
+│                                                                              │
+│   85         let pool = ConnectionPool::new(config)?;                        │
+│   86         pool.set_timeout(Duration::from_secs(30));                      │
+│ ❱ 87         pool.connect().await?;  // <-- timeout here                     │
+│   88         Ok(pool)                                                        │
+│ src/deploy/cleanup.rs:203 in nebula::deploy::cleanup::mark_complete          │
+│                                                                              │
+│   201         let conn = self.pool.get().await?;                             │
+│   202         conn.execute(UPDATE_QUERY, &[&deployment_id])?;                │
+│ ❱ 203         self.notify_completion(deployment_id)?;                        │
+│   204         Ok(())                                                         │
+│ src/pipeline/stage.rs:56 in nebula::pipeline::Stage::run                     │
+│                                                                              │
+│   54         info!("Starting stage: {}", self.name);                         │
+│   55         self.pre_checks()?;                                             │
+│ ❱ 56         self.execute_tasks().await?;                                    │
+│   57         self.post_checks()?;                                            │
+╰──────────────────────────────────────────────────────────────────────────────╯
+DatabaseConnectionError: Connection to database timed out after 30s (max_retries=3 exhausted)
+
+Tracebacks show the call stack with source context and the exception message.

@@ -1,0 +1,53 @@
+---
+source: tests/demo_showcase_snapshots.rs
+expression: normalized
+---
+Tables: Structured Data Display
+
+Tables organize data with headers, alignment, and styling.
+
+Service Status Table
+
+                       Services
+┏━━━━━━━━━━━━┳━━━━━━━━━━━┳━━━━━━━━━┳━━━━━━━━━┳━━━━━━━━┓
+┃ Service    ┃  Region   ┃ Version ┃ Latency ┃ Status ┃
+┡━━━━━━━━━━━━╇━━━━━━━━━━━╇━━━━━━━━━╇━━━━━━━━━╇━━━━━━━━┩
+│ api        │ us-west-2 │  2.4.1  │    12ms │   OK   │
+│ auth       │ us-west-2 │  1.9.0  │     8ms │   OK   │
+│ db         │ us-west-2 │  3.2.0  │    45ms │  WARN  │
+│ cache      │ us-west-2 │  1.0.5  │     2ms │   OK   │
+│ worker     │ us-west-2 │  2.1.3  │    23ms │   OK   │
+└────────────┴───────────┴─────────┴─────────┴────────┘
+
+Status badges use markup for semantic coloring.
+
+Metrics Table (Numeric Alignment)
+
+                           System Metrics
+┏━━━━━━━━━━━━━━━━━┳━━━━━━━━━━━━┳━━━━━━━━━━━━┳━━━━━━━━━━━━┳━━━━━━━━━━┓
+┃ Metric          ┃    Current ┃    Average ┃       Peak ┃  Status  ┃
+┡━━━━━━━━━━━━━━━━━╇━━━━━━━━━━━━╇━━━━━━━━━━━━╇━━━━━━━━━━━━╇━━━━━━━━━━┩
+│ CPU Usage       │        42% │        38% │        89% │  Normal  │
+│ Memory          │     6.2 GB │     5.8 GB │     7.9 GB │  Normal  │
+│ Disk I/O        │   145 MB/s │    98 MB/s │   312 MB/s │ Elevated │
+│ Network         │   1.2 Gbps │   0.8 Gbps │   2.1 Gbps │  Normal  │
+│ Connections     │        847 │        623 │      1,204 │  Normal  │
+└─────────────────┴────────────┴────────────┴────────────┴──────────┘
+
+Right-justified columns align numeric values for easy comparison.
+
+ASCII Fallback Mode
+
+For terminals without Unicode support:
+
+             Deployment History
++----------+----------+----------+----------+
+| ID       |   Time   | Duration |  Result  |
+|----------+----------+----------+----------|
+| d-7f3a2b | 14:32:05 |   2m 15s | Success  |
+| d-8e2c1a | 13:45:22 |   1m 48s | Success  |
+| d-6d4b9c | 12:18:41 |   3m 02s | Rollback |
+| d-5a3e8f | 11:05:33 |   2m 31s | Success  |
++----------+----------+----------+----------+
+
+ASCII mode uses +, -, and | for borders (works everywhere).

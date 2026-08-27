@@ -1,0 +1,38 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build:
+    name: Build project
+    runs-on: ubuntu-latest
+    if: "!contains(github.event.head_commit.message, '[ci skip]')"
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+
+      - name: Install rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Rust cache
+        if: github.ref == 'refs/heads/main' # pull requests can overflow cache storage
+        uses: Swatinem/rust-cache@v2
+
+      - name: Cargo build
+        run: cargo build --release
+
+      - name: Cargo test
+        run: cargo test --release
+
+      - name: Cargo clippy
+        run: cargo clippy --release --all-targets -- -D warnings
+
+      - name: Cargo fmt
+        run: cargo fmt -- --check

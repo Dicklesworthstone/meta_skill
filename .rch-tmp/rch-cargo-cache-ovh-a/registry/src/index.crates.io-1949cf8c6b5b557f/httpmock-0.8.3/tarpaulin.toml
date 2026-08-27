@@ -1,0 +1,10 @@
+[remote]
+features = "remote,proxy,http2,record,cookies"
+release = false
+
+[standalone]
+features = "standalone,color,cookies,proxy,record,http2"
+release = true
+
+[report]
+out = ["Html", "Xml", "Lcov"]

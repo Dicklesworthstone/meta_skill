@@ -1,0 +1,122 @@
+[package]
+name = "rich_rust"
+version = "0.2.3"
+edition = "2024"
+description = "A Rust port of Python's Rich library for beautiful terminal output"
+authors = ["Jeffrey Emanuel"]
+license = "MIT"
+repository = "https://github.com/Dicklesworthstone/rich_rust"
+homepage = "https://github.com/Dicklesworthstone/rich_rust"
+documentation = "https://docs.rs/rich_rust"
+readme = "README.md"
+keywords = ["terminal", "cli", "rich", "ansi", "formatting"]
+categories = ["command-line-interface", "text-processing"]
+
+[dependencies]
+# Text attributes as efficient bitflags
+bitflags = "2.11"
+
+# Regular expressions for markup parsing
+regex = "1.12"
+
+# Advanced regex features (look-around) for Rich parity highlighters
+fancy-regex = "0.18"
+
+# Terminal detection and raw terminal manipulation
+crossterm = "0.29"
+
+# Unicode character cell width calculation (>=0.2.0 for ratatui compatibility)
+unicode-width = ">=0.2.0, <0.3"
+
+# LRU cache for color parsing and style computation
+lru = "0.18"
+
+# Stack-allocated small vectors for performance
+smallvec = "1.13"
+
+# Cross-platform OS pipes (used for Live stdout/stderr redirection)
+os_pipe = "1.2.3"
+
+# Cross-platform stdin/stdout/stderr override guards (used by Live redirection)
+stdio-override = "0.2.0"
+
+# Logging integration (std feature required for set_boxed_logger)
+log = { version = "0.4", features = ["std"] }
+
+# Time formatting for logging.
+# History: this was pinned to `>=0.3.47, <0.3.48` because time 0.3.48's
+# modifier! macro emitted `impl From<$name> for <$name as ModifierValue>::Type`
+# (associated-type projection in the impl header), which made rustc's coherence
+# check reject this crate's blanket `impl<T: Into<...>> From<T>` impls (E0119).
+# See time-rs/time#783/#785 (fix PRs #784/#786). Those fixes have shipped: the
+# bound is relaxed as that comment instructed, and 0.3.54 compiles clean here
+# (verified with cargo check --all-targets, no E0119).
+time = { version = "0.3.54", features = ["local-offset", "formatting"] }
+
+# Optional tracing integration
+tracing = { version = "0.1", optional = true }
+tracing-subscriber = { version = "0.3", optional = true, features = ["fmt"] }
+
+# Exact fraction arithmetic for ratio distribution
+num-rational = "0.4.2"
+
+# Lazy static initialization
+once_cell = "1.21"
+
+# Syntax highlighting (Phase 3)
+syntect = { version = "5.3", optional = true }
+
+# Markdown rendering (Phase 3)
+pulldown-cmark = { version = "0.13", optional = true }
+
+# JSON rendering (Phase 4)
+serde_json = { version = "1.0", optional = true }
+serde = { version = "1.0", features = ["derive"], optional = true }
+
+# Backtrace capture for automatic traceback rendering
+backtrace = { version = "0.3", optional = true }
+
+[dev-dependencies]
+criterion = "0.8"
+serde_json = "1.0"
+
+# Property-based testing
+proptest = "1.10"
+
+# Snapshot testing for visual regression detection
+insta = { version = "1.46", features = ["glob", "filters"] }
+
+# Test serialization for env var tests
+serial_test = "3.2"
+
+# Test logging infrastructure
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt", "json"] }
+tracing-test = "0.2.6"
+test-log = { version = "0.2", features = ["trace"] }
+
+[features]
+default = []
+conformance_test = ["full"]
+syntax = ["syntect"]
+markdown = ["pulldown-cmark"]
+json = ["serde_json", "serde"]
+tracing = ["dep:tracing", "dep:tracing-subscriber"]
+backtrace = ["dep:backtrace"]
+full = ["syntax", "markdown", "json", "backtrace"]
+showcase = ["full", "tracing"]
+
+[profile.release]
+opt-level = "z"
+lto = true
+codegen-units = 1
+panic = "abort"
+strip = true
+
+[[example]]
+name = "basic"
+path = "examples/basic.rs"
+
+[[bench]]
+name = "render_bench"
+harness = false

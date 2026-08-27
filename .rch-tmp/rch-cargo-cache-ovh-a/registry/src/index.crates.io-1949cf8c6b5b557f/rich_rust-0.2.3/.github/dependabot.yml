@@ -1,0 +1,57 @@
+# Dependabot configuration for automated dependency updates
+# Docs: https://docs.github.com/en/code-security/dependabot/dependabot-version-updates/configuration-options-for-the-dependabot.yml-file
+
+version: 2
+updates:
+  # GitHub Actions - weekly updates grouped together
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+      time: "09:00"
+      timezone: "America/New_York"
+    open-pull-requests-limit: 5
+    groups:
+      actions:
+        patterns: ["*"]
+    labels:
+      - "dependencies"
+      - "github-actions"
+    commit-message:
+      prefix: "ci(deps)"
+
+  # Rust dependencies - weekly updates with smart grouping
+  - package-ecosystem: "cargo"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+      time: "09:00"
+      timezone: "America/New_York"
+    open-pull-requests-limit: 10
+    groups:
+      # Group minor/patch updates together (low risk)
+      rust-minor-patch:
+        patterns: ["*"]
+        update-types:
+          - "minor"
+          - "patch"
+        exclude-patterns:
+          - "syntect*"
+          - "pulldown-cmark*"
+      # Keep syntect separate (complex, may need review)
+      syntect:
+        patterns: ["syntect*"]
+      # Keep pulldown-cmark separate (may have breaking changes)
+      pulldown-cmark:
+        patterns: ["pulldown-cmark*"]
+    labels:
+      - "dependencies"
+      - "rust"
+    commit-message:
+      prefix: "deps(rust)"
+    # Ignore pre-release versions
+    ignore:
+      - dependency-name: "*"
+        update-types: ["version-update:semver-prerelease"]

@@ -1,0 +1,14 @@
+---
+source: crates/fsqlite-planner/tests/golden_query_plan_snapshots.rs
+expression: event_range_scan
+---
+case: planner_event_range_scan
+sql: SELECT tenant_id, count(*) FROM events WHERE tenant_id = ?1 AND event_ts >= ?2 AND event_ts < ?3 GROUP BY tenant_id
+features: leapfrog_join=false dpccp_join=false
+join_order: events
+total_cost: 1161.514
+access_paths:
+  table=events kind=IndexScanRange { selectivity: 0.033 } index=idx_events_tenant_ts rows=49500.000 cost=1161.514 probe=Some(Equality { column: "tenant_id", target: Placeholder(Numbered(1), 57..59) })
+display:
+QUERY PLAN (est. cost 1161.5):
+  0: SCAN events USING INDEX idx_events_tenant_ts (~49500 rows, cost 1161.5)

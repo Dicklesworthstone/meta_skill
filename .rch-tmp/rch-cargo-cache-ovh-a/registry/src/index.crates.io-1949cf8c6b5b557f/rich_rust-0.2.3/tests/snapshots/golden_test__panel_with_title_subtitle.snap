@@ -1,0 +1,9 @@
+---
+source: tests/golden_test.rs
+expression: plain
+---
+╭──────── Info Panel ────────╮
+│ Multi-line                 │
+│ Content                    │
+│ Here                       │
+╰─────────── v1.0 ───────────╯

@@ -1,0 +1,14 @@
+---
+source: crates/fsqlite-planner/tests/golden_differential_plan_snapshots.rs
+expression: rowset
+---
+case: differential_rowset_literal_filters
+sql: SELECT id, name FROM users WHERE status = 'paid' AND tenant_id = 7
+status: ok
+
+DIFFERENTIAL row_set
+SOURCE users AS users
+FILTER users.status = 'paid'
+FILTER users.tenant_id = 7
+EMIT users.id
+EMIT users.name

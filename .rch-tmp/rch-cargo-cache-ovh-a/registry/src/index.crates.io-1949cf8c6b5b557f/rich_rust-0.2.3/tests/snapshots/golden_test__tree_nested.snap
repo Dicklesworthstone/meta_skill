@@ -1,0 +1,12 @@
+---
+source: tests/golden_test.rs
+expression: plain
+---
+Project
+├── src
+│   ├── main.rs
+│   └── lib.rs
+├── tests
+│   ├── unit.rs
+│   └── integration.rs
+└── Cargo.toml

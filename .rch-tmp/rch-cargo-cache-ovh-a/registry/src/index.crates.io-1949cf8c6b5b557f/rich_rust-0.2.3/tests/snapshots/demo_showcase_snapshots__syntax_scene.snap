@@ -1,0 +1,98 @@
+---
+source: tests/demo_showcase_snapshots.rs
+assertion_line: 277
+expression: normalized
+---
+Syntax: Code Highlighting
+
+Syntax renderable provides highlighting for 100+ languages with configurable themes.
+
+Deployment Config (TOML)
+
+ 1 │ [deployment]
+ 2 │ name = "nebula-api"
+ 3 │ version = "2.4.1"
+ 4 │ environment = "production"
+ 5 │
+ 6 │ [deployment.resources]
+ 7 │ replicas = 3
+ 8 │ memory = "512Mi"
+ 9 │ cpu = "500m"
+10 │
+11 │ [deployment.health_check]
+12 │ path = "/health"
+13 │ interval = "30s"
+14 │ timeout = "5s"
+15 │
+16 │ [deployment.rollout]
+17 │ strategy = "rolling"
+18 │ max_unavailable = 1
+19 │ max_surge = 1
+
+CI/CD Pipeline (YAML)
+
+ 1 │ name: deploy-nebula
+ 2 │ on:
+ 3 │   push:
+ 4 │     branches: [main]
+ 5 │
+ 6 │ jobs:
+ 7 │   deploy:
+ 8 │     runs-on: ubuntu-latest
+ 9 │     steps:
+10 │       - uses: actions/checkout@v4
+11 │       - name: Build container
+12 │         run: docker build -t nebula-api .
+13 │       - name: Run tests
+14 │         run: cargo test --release
+15 │       - name: Deploy to production
+16 │         if: github.ref == 'refs/heads/main'
+17 │         run: |
+18 │           kubectl apply -f k8s/
+19 │           kubectl rollout status deployment/nebula-api
+
+Request Handler (Rust)
+
+42 │ /// Handle deployment requests
+43 │ async fn deploy_handler(
+44 │     State(ctx): State<AppContext>,
+45 │     Json(req): Json<DeployRequest>,
+46 │ ) -> Result<Json<DeployResponse>, ApiError> {
+47 │     // Validate the deployment config
+48 │     req.validate()?;
+49 │
+50 │     // Start the deployment
+51 │     let deployment = ctx.deployer
+52 │         .deploy(&req.service, &req.version)
+53 │         .await?;
+54 │
+55 │     // Return the deployment status
+56 │     Ok(Json(DeployResponse {
+57 │         status: "success".into(),
+58 │         deployment_id: deployment.id,
+59 │         timestamp: Utc::now(),
+60 │     }))
+61 │ }
+Lines 42-60 of src/handlers/deploy.rs
+
+Theme Comparison
+
+The same code with different themes:
+
+Base16 Ocean (Dark):
+fn greet(name: &str) -> String {
+    format!("Hello, {}!", name)
+}
+
+Solarized Dark:
+fn greet(name: &str) -> String {
+    format!("Hello, {}!", name)
+}
+
+Inspired GitHub:
+fn greet(name: &str) -> String {
+    format!("Hello, {}!", name)
+}
+
+
+Use .theme() to select from available themes, .line_numbers(true) to show line numbers.

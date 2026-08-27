@@ -1,0 +1,29 @@
+[package]
+name = "unty-next"
+version = "0.1.2"
+edition = "2024"
+description = "Explicitly types your generics"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/Apich-Organization/unty"
+authors = [
+    "Xinyu Yang <pana.yang@hotmail.com>",
+    "The bincode-next & bincode developers",
+]
+rust-version = "1.85.1"
+
+[profile.bench]
+codegen-units = 1
+debug = 1
+lto = true
+
+[profile.release]
+lto = true
+codegen-units = 1
+panic = "abort"
+opt-level = 3
+strip = true
+
+[profile.dev]
+lto = false
+opt-level = 0
+debug = true

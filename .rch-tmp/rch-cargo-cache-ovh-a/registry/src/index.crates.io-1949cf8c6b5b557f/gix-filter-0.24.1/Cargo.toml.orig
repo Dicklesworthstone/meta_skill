@@ -1,0 +1,39 @@
+lints.workspace = true
+
+[package]
+name = "gix-filter"
+version = "0.24.1"
+repository = "https://github.com/GitoxideLabs/gitoxide"
+license = "MIT OR Apache-2.0"
+description = "A crate of the gitoxide project implementing git filters"
+authors = ["Sebastian Thiel <sebastian.thiel@icloud.com>"]
+edition = "2021"
+rust-version = "1.82"
+include = ["src/**/*", "LICENSE-*"]
+
+[lib]
+doctest = false
+
+[dependencies]
+gix-hash = { version = "^0.21.2", path = "../gix-hash" }
+gix-trace = { version = "^0.1.17", path = "../gix-trace" }
+gix-object = { version = "^0.54.1", path = "../gix-object" }
+gix-command = { version = "^0.6.5", path = "../gix-command" }
+gix-quote = { version = "^0.6.1", path = "../gix-quote" }
+gix-utils = { version = "^0.3.1", path = "../gix-utils" }
+gix-path = { version = "^0.10.22", path = "../gix-path" }
+gix-packetline = { version = "^0.20.0", path = "../gix-packetline", features = ["blocking-io"] }
+gix-attributes = { version = "^0.29.0", path = "../gix-attributes" }
+
+encoding_rs = "0.8.32"
+bstr = { version = "1.12.0", default-features = false, features = ["std"] }
+thiserror = "2.0.17"
+smallvec = "1.15.1"
+
+
+[dev-dependencies]
+gix-quote = { path = "../gix-quote" }
+gix-testtools = { path = "../tests/tools" }
+gix-worktree = { path = "../gix-worktree", default-features = false, features = ["attributes"] }
+
+serial_test = { version = "3.1.0", default-features = false }

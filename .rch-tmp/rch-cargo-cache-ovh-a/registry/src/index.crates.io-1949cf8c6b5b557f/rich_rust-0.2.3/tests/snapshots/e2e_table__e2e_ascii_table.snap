@@ -1,0 +1,10 @@
+---
+source: tests/e2e_table.rs
+expression: output
+---
++----+--------+
+| ID | Status |
+|----+--------|
+| 1  | OK     |
+| 2  | FAIL   |
++----+--------+

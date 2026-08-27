@@ -1,0 +1,45 @@
+---
+source: crates/fsqlite-planner/tests/golden_decision_contract_snapshots.rs
+expression: single_table
+---
+{
+  "case": "decision_single_table_full_scan",
+  "query_text": "SELECT * FROM t",
+  "state": {
+    "tables": [
+      {
+        "name": "t",
+        "n_pages": 10,
+        "n_rows": 100,
+        "source": "heuristic"
+      }
+    ],
+    "indexes": [],
+    "where_term_count": 0,
+    "needed_column_count": null,
+    "cross_join_pairs": 0
+  },
+  "action": {
+    "join_order": [
+      "t"
+    ],
+    "access_paths": [
+      {
+        "table": "t",
+        "kind": "full_table_scan",
+        "index": null,
+        "estimated_cost": 11.0,
+        "estimated_rows": 100.0
+      }
+    ],
+    "total_estimated_cost": 11.0,
+    "beam_width": 1,
+    "star_query_detected": false
+  },
+  "loss": {
+    "estimated_cost": 11.0,
+    "estimated_rows": 100.0,
+    "actual_cost": null
+  },
+  "calibration": null
+}

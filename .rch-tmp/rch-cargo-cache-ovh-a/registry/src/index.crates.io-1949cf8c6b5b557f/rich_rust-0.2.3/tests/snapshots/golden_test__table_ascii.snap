@@ -1,0 +1,10 @@
+---
+source: tests/golden_test.rs
+expression: plain
+---
++---------+-------+
+| Key     | Value |
+|---------+-------|
+| version | 1.0.0 |
+| author  | Test  |
++---------+-------+

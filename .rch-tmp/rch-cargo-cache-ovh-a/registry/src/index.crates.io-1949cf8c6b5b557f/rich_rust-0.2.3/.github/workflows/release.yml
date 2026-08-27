@@ -1,0 +1,130 @@
+# Release workflow for rich_rust
+#
+# Triggers on version tags (v*) and publishes to crates.io
+# Also creates GitHub releases
+
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v[0-9]+.*'
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Release tag (e.g., v0.1.0)'
+        required: true
+        type: string
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+  id-token: write
+  attestations: write
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  plan:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      tag: ${{ steps.tag.outputs.tag }}
+      version: ${{ steps.tag.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Determine and validate tag
+        id: tag
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            TAG="${{ inputs.tag }}"
+          else
+            TAG="${GITHUB_REF#refs/tags/}"
+          fi
+          VERSION="${TAG#v}"
+
+          # Validate semver format
+          if ! echo "$VERSION" | grep -qE '^[0-9]+\.[0-9]+\.[0-9]+(-[a-zA-Z0-9.]+)?$'; then
+            echo "Error: Version '$VERSION' does not match semver format"
+            exit 1
+          fi
+
+          echo "tag=$TAG" >> $GITHUB_OUTPUT
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+          echo "Building release for tag: $TAG (version: $VERSION)"
+
+  # Publish to crates.io
+  publish-crates:
+    name: Publish to crates.io
+    needs: plan
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    # Skip pre-releases
+    if: ${{ !contains(needs.plan.outputs.tag, '-') }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@nightly
+
+      - name: Verify version matches tag
+        run: |
+          cargo_version=$(grep '^version' Cargo.toml | head -1 | cut -d'"' -f2)
+          tag_version="${{ needs.plan.outputs.version }}"
+          if [[ "$cargo_version" != "$tag_version" ]]; then
+            echo "Version mismatch: Cargo.toml=$cargo_version, tag=$tag_version"
+            exit 1
+          fi
+          echo "Version verified: $cargo_version"
+
+      - name: Dry run publish
+        run: cargo publish --dry-run
+
+      - name: Publish to crates.io
+        if: ${{ env.CARGO_REGISTRY_TOKEN != '' }}
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+        run: |
+          echo "Publishing rich_rust to crates.io..."
+          cargo publish || {
+            # Check if already published
+            if cargo search rich_rust | grep -q "^rich_rust"; then
+              echo "rich_rust already published"
+            else
+              exit 1
+            fi
+          }
+
+      - name: Summary
+        run: |
+          echo "## Crates.io Publish" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          if [[ -n "${{ secrets.CARGO_REGISTRY_TOKEN }}" ]]; then
+            echo "Published rich_rust v${{ needs.plan.outputs.version }} to crates.io" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "Skipped - CARGO_REGISTRY_TOKEN not configured" >> $GITHUB_STEP_SUMMARY
+          fi
+
+  # Create GitHub Release
+  create-release:
+    name: Create GitHub Release
+    needs: [plan, publish-crates]
+    if: always() && needs.plan.result == 'success'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ needs.plan.outputs.tag }}
+          name: rich_rust ${{ needs.plan.outputs.tag }}
+          draft: false
+          prerelease: ${{ contains(needs.plan.outputs.tag, '-') }}
+          generate_release_notes: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

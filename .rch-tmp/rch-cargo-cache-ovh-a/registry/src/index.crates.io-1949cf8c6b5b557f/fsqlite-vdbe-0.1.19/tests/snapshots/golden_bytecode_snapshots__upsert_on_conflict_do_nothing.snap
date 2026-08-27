@@ -1,0 +1,48 @@
+---
+source: crates/fsqlite-vdbe/tests/golden_bytecode_snapshots.rs
+expression: do_nothing
+---
+case: upsert_on_conflict_do_nothing
+sql: INSERT INTO docs (id, category_id, title, body, score) VALUES (1, 2, 'title', 'body', 10) ON CONFLICT (id) DO NOTHING
+status: ok
+registers: 18
+bind_parameters: 0
+requires_attached_memdb: false
+requires_version_store: false
+
+addr  opcode           p1    p2    p3    p4                 p5
+----  ---------------  ----  ----  ----  -----------------  --
+0     Init             0     34    0                        0 
+1     Transaction      0     1     0                        0 
+2     OpenWrite        0     2     0     (tbl)docs          0 
+3     OpenWrite        1     10    0     (tbl)idx_docs_category  0 
+4     OpenWrite        2     11    0     (tbl)idx_docs_title  0 
+5     Integer          1     2     0                        0 
+6     Integer          2     3     0                        0 
+7     String8          0     4     0     (str)title         0 
+8     String8          0     5     0     (str)body          0 
+9     Integer          10    6     0                        0 
+10    Copy             2     7     0                        0 
+11    Copy             3     8     0                        0 
+12    Copy             4     9     0                        0 
+13    Copy             5     10    0                        0 
+14    Copy             6     11    0                        0 
+15    IsNull           7     18    0                        0 
+16    Copy             7     1     0                        0 
+17    Goto             0     20    0                        0 
+18    NewRowid         0     1     1                        0 
+19    Copy             1     7     0                        0 
+20    Affinity         7     5     0     (aff)XDBBD         0 
+21    Insert           0     12    1     (blob)[17B]        4 
+22    Copy             8     13    0                        0 
+23    Copy             1     14    0                        0 
+24    MakeRecord       13    2     15                       0 
+25    IdxInsert        1     15    0     (tbl)idx_docs_category  0 
+26    Copy             9     16    0                        0 
+27    Copy             1     17    0                        0 
+28    MakeRecord       16    2     18                       0 
+29    IdxInsert        2     18    0     (tbl)idx_docs_title  0 
+30    Close            0     0     0                        0 
+31    Close            1     0     0                        0 
+32    Close            2     0     0                        0 
+33    Halt             0     0     0                        0

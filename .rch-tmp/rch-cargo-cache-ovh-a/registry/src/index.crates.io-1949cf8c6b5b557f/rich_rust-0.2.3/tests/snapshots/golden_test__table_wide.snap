@@ -1,0 +1,10 @@
+---
+source: tests/golden_test.rs
+expression: plain
+---
+┏━━━━━━━━━━━━━━━━━┳━━━━━━━━━━━━━━┳━━━━━━━━━━━━━━━━━━━━━━┓
+┃ Name            ┃ Department   ┃ Email                ┃
+┡━━━━━━━━━━━━━━━━━╇━━━━━━━━━━━━━━╇━━━━━━━━━━━━━━━━━━━━━━┩
+│ John Smith      │ Engineering  │ john@example.com     │
+│ Jane Doe        │ Marketing    │ jane@example.com     │
+└─────────────────┴──────────────┴──────────────────────┘

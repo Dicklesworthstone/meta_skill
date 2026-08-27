@@ -1,0 +1,68 @@
+# This CITATION.cff file was generated with cffinit.
+# Visit https://bit.ly/cffinit to generate yours today!
+
+cff-version: 1.2.0
+title: The Bincode-Next Project
+message: >-
+  If you use this software, please cite it using the
+  metadata from this file. This project is dual-licensed
+  under MIT and Apache-2.0. See LICENSE.md for more details.
+type: software
+authors:
+  - given-names: Xinyu
+    family-names: Yang
+    email: Xinyu.Yang@apich.org
+    affiliation: >-
+      Jinan Zhensheng Middle School, Jinan 250100, Shandong,
+      China
+    orcid: 'https://orcid.org/0009-0007-2600-0948'
+  - given-names: The bincode-next & bincode developers
+    family-names: The bincode-next & bincode developers
+identifiers:
+  - type: url
+    value: 'https://crates.io/crates/bincode-next'
+    description: Published on crates.io (Rust Package Registry)
+  - type: url
+    value: 'https://docs.rs/bincode-next/'
+    description: Published on docs.rs (Rust Package Docs Index)
+  - type: doi
+    value: 10.6084/m9.figshare.31410402
+    description: Published on Figshare
+repository-code: 'https://github.com/Apich-Organization/bincode'
+url: 'https://bincode-next.apich.org/'
+repository: 'https://codeberg.org/Apich-Organization/bincode'
+repository-artifact: 'https://github.com/Apich-Organization/bincode/releases'
+abstract: >-
+  Bincode-Next is a high-performance binary serialization
+  framework for the Rust programming language, established
+  as a community-driven restoration of the legacy Bincode
+  project. Following the abrupt cessation of original
+  maintenance and the subsequent loss of development history
+  and transparency (RUSTSEC-2025-0141), Bincode-Next was
+  forged to ensure the survival and modernization of this
+  critical infrastructure. This implementation introduces
+  significant architectural advancements, including nested
+  zero-copy support via relative pointers, bit-level packing
+  for extreme data density, and schema fingerprinting for
+  secure versioning. Bincode-Next stands as a resilient
+  successor, reclaiming a vital tool for the Rust ecosystem
+  through transparent, team-based governance and modern
+  safety standards.
+keywords:
+  - High performance computing systems
+  - software performance measures
+  - Physics computing
+  - Data Structures and Algorithms (cs.DS)
+  - Encoding algorithms
+  - Encoding Alignment
+  - Decoding algorithms
+license: Apache-2.0
+commit: 5d637552f22a2c0bb540b01b275913cf88b0e741
+version: v3.0.0-rc.2
+date-released: '2026-02-25'
+references:
+  - type: software
+    title: "Bincode"
+    notes: "Founded by Ty Overby, Zoey Riordan, Victor Koenders and the bincode development team. This fork continues their legacy while providing modern maintenance."
+    authors:
+      - name: "The original bincode developers"

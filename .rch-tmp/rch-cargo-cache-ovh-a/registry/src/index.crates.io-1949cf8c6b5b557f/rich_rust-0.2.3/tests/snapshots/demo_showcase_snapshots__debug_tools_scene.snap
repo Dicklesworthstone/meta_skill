@@ -1,0 +1,83 @@
+---
+source: tests/demo_showcase_snapshots.rs
+expression: normalized
+---
+Debug Tools: Pretty & Inspect
+
+rich_rust provides debugging tools for inspecting Rust values.
+
+Pretty: Styled Debug Output
+
+ServiceInfo struct:
+
+ServiceInfo {
+    name: "api",
+    health: Ok,
+    latency: 12ms,
+    version: "1.2.3",
+}
+Pretty uses the Debug trait to render values with optional wrapping.
+
+Inspect: Value + Type Information
+
+DemoStateSnapshot (partial):
+
+Type: demo_showcase::state::DemoStateSnapshot
+┏━━━━━━━━━━┳━━━━━━━━━━━━━━━━━━━━━━━━━━┓
+┃ Field    ┃ Value                    ┃
+┡━━━━━━━━━━╇━━━━━━━━━━━━━━━━━━━━━━━━━━┩
+│ run_id   │ 42                       │
+│ seed     │ 12345                    │
+│ headline │ "Booting Nebula Deploy…" │
+│ services │ [...]                    │
+│ pipeline │ [...]                    │
+│ logs     │ [...]                    │
+│ failure  │ None                     │
+└──────────┴──────────────────────────┘
+
+Inspect shows the Rust type name and extracts struct fields.
+
+Failure Context Inspection
+
+FailureEvent (database timeout):
+
+[
+    (
+        "host",
+        "db.nebula.internal:5432",
+    ),
+    (
+        "pool_size",
+        "10",
+    ),
+    (
+        "active_connections",
+        "0",
+    ),
+    (
+        "timeout_ms",
+        "30000",
+    ),
+    (
+        "retry_count",
+        "3",
+    ),
+    (
+        "last_error",
+        "ETIMEDOUT",
+    ),
+]
+Stack trace frames:
+
+  nebula::db::pool::acquire at src/db/pool.rs:142
+    timeout = Duration(30s)
+    attempts = 3
+  nebula::db::Connection::connect at src/db/connection.rs:87
+    host = "db.nebula.internal"
+    port = 5432
+  nebula::deploy::cleanup::mark_complete at src/deploy/cleanup.rs:203
+    deployment_id = "deploy-7f3a2b"
+  nebula::pipeline::Stage::run at src/pipeline/stage.rs:56
+    stage_name = "cleanup"
+
+Failure events capture context for debugging and display.

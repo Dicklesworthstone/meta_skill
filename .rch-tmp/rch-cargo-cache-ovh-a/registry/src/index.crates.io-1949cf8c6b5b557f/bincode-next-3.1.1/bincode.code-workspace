@@ -1,0 +1,16 @@
+{
+	"folders": [
+		{
+			"path": "."
+		},
+		{
+			"path": "../virtue"
+		},
+		{
+			"path": "../unty"
+		}
+	],
+	"settings": {
+		"rust-analyzer.checkOnSave": false
+	}
+}

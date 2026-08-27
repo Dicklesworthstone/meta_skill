@@ -1,0 +1,6 @@
+{
+  "git": {
+    "sha1": "9352c54c649de0bd517818bbe2792da42d07e1d5"
+  },
+  "path_in_vcs": "crates/fsqlite-parser"
+}
