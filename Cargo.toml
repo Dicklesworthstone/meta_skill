@@ -46,9 +46,13 @@ toon_rust = { package = "tru", git = "https://github.com/Dicklesworthstone/toon_
 # Database — migrated from rusqlite per project-wide policy
 # ("NEVER use rusqlite — frankensqlite ONLY", meta_skill#106).
 # `fsqlite` is the public facade crate published on crates.io.
-fsqlite = { version = "0.1.18", features = ["fts5"] }
-fsqlite-types = "0.1.18"
-fsqlite-error = "0.1.18"
+# 0.3 turned the whole `fsqlite::Connection` surface async (driven by
+# asupersync, not tokio). `ms` stays synchronous and goes through
+# `fsqlite::AsyncConnection`'s `*_sync` worker-thread surface instead — see
+# `src/storage/conn.rs` — which is what the `async-api` feature gates.
+fsqlite = { version = "0.3.16", features = ["fts5", "async-api"] }
+fsqlite-types = "0.3.16"
+fsqlite-error = "0.3.16"
 # (The `asupersync = "=0.3.1"` / `franken-decision = "=0.3.1"` transitive pins
 # that the 0.1.7 family required are no longer needed: frankensqlite 0.1.8
 # (#108) stops calling the test-internals-gated asupersync constructor, so it

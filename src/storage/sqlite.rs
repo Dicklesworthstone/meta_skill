@@ -7,9 +7,9 @@
 
 use std::path::Path;
 
-use fsqlite::Connection;
+use crate::storage::conn::{Connection, ConnectionExt};
 use fsqlite::Row;
-use fsqlite::compat::{ConnectionExt, RowExt};
+use fsqlite::compat::RowExt;
 use fsqlite_error::FrankenError;
 use half::f16;
 use serde_json::Value as JsonValue;
@@ -2041,8 +2041,8 @@ mod tests {
     fn test_to_param_edge_cases() {
         // INV3 audit: exercise `ms_params!` / `ToParam` edge cases against a
         // live fsqlite connection.
-        use fsqlite::Connection;
-        use fsqlite::compat::{ConnectionExt, RowExt};
+        use crate::storage::conn::{Connection, ConnectionExt};
+        use fsqlite::compat::RowExt;
         let dir = tempdir().unwrap();
         let path = dir.path().join("edge.db").to_string_lossy().into_owned();
         let conn = Connection::open(&path).unwrap();

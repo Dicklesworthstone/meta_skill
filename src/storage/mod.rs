@@ -2,6 +2,7 @@
 //!
 //! Implements dual persistence: `SQLite` for queries, Git for audit/versioning.
 
+pub mod conn;
 pub mod git;
 pub mod migrations;
 pub mod sqlite;
@@ -9,6 +10,7 @@ pub mod sqlite_compat;
 pub mod tombstone;
 pub mod tx;
 
+pub use conn::{Connection, ConnectionExt};
 pub use git::GitArchive;
 pub use sqlite::{Database, SkillOriginRecord, SkillRecord};
 pub use tombstone::{PurgeResult, RestoreResult, TombstoneManager, TombstoneRecord};

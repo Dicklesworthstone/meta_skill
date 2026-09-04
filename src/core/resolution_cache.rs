@@ -5,8 +5,8 @@
 
 use std::collections::{HashMap, HashSet, VecDeque};
 
-use fsqlite::Connection;
-use fsqlite::compat::{ConnectionExt, OptionalExtension, RowExt};
+use crate::storage::conn::{Connection, ConnectionExt};
+use fsqlite::compat::{OptionalExtension, RowExt};
 use parking_lot::RwLock;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};

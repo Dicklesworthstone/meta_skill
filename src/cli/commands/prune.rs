@@ -23,7 +23,8 @@ use crate::search::embeddings::VectorIndex;
 use crate::security::SafetyGate;
 use crate::storage::Database;
 use crate::storage::TombstoneManager;
-use fsqlite::compat::{ConnectionExt, RowExt};
+use crate::storage::conn::ConnectionExt;
+use fsqlite::compat::RowExt;
 
 use crate::ms_params as params;
 

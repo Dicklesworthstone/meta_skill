@@ -6,8 +6,8 @@
 use std::path::PathBuf;
 use std::process::Command;
 
-use fsqlite::Connection;
-use fsqlite::compat::{ConnectionExt, OptionalExtension, RowExt};
+use crate::storage::conn::{Connection, ConnectionExt};
+use fsqlite::compat::{OptionalExtension, RowExt};
 use serde::{Deserialize, Serialize};
 
 use crate::ms_params as params;

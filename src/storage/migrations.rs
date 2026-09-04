@@ -1,6 +1,6 @@
 //! Database migrations
 
-use fsqlite::Connection;
+use crate::storage::conn::Connection;
 
 use crate::error::{MsError, Result};
 
