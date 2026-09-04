@@ -1987,8 +1987,9 @@ mod tests {
         // takes effect on the live connection after fsqlite migration.
         //
         // fsqlite return-type quirks (vs rusqlite):
-        //   - `PRAGMA synchronous` returns the text label ("NORMAL"), not the
-        //     integer (1). rusqlite returns the integer. Verified 2026-05-30.
+        //   - `PRAGMA synchronous` returned the text label ("NORMAL") on the
+        //     fsqlite 0.1.x line; 0.3 returns the SQLite integer (1), matching
+        //     both SQLite and rusqlite. Re-verified 2026-09-04 on 0.3.16.
         //   - `PRAGMA busy_timeout` defaults to 5000ms in fsqlite (rusqlite
         //     defaults to 0). meta_skill does not set this explicitly, so the
         //     fsqlite default applies and is a behavioral upgrade.
@@ -2002,15 +2003,12 @@ mod tests {
             .unwrap();
         assert_eq!(jm.to_lowercase(), "wal", "journal_mode not WAL: got {jm}");
 
-        let sync_v: String = conn
+        // SQLITE_SYNCHRONOUS_NORMAL == 1.
+        let sync_v: i64 = conn
             .query_row("PRAGMA synchronous")
-            .and_then(|row| row.get_typed::<String>(0))
+            .and_then(|row| row.get_typed::<i64>(0))
             .unwrap();
-        assert_eq!(
-            sync_v.to_uppercase(),
-            "NORMAL",
-            "synchronous != NORMAL: got {sync_v}"
-        );
+        assert_eq!(sync_v, 1, "synchronous != NORMAL(1): got {sync_v}");
 
         let cs: i64 = conn
             .query_row("PRAGMA cache_size")
