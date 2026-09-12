@@ -1962,8 +1962,9 @@ mod tests {
 
     #[test]
     fn test_database_creation_and_schema_version() {
-        let dir = tempdir().unwrap();
-        let db_path = dir.path().join("test.db");
+        let dir = tempdir().unwrap().keep();
+        eprintln!("retained schema test database: {}", dir.display());
+        let db_path = dir.join("test.db");
         let db = Database::open(&db_path).unwrap();
         assert!(db_path.exists());
         assert_eq!(db.schema_version(), migrations::SCHEMA_VERSION);
@@ -1971,8 +1972,9 @@ mod tests {
 
     #[test]
     fn test_wal_mode_enabled() {
-        let dir = tempdir().unwrap();
-        let db = Database::open(dir.path().join("test.db")).unwrap();
+        let dir = tempdir().unwrap().keep();
+        eprintln!("retained WAL mode test database: {}", dir.display());
+        let db = Database::open(dir.join("test.db")).unwrap();
         let mode: String = db
             .conn()
             .query_row("PRAGMA journal_mode;")
@@ -1993,8 +1995,9 @@ mod tests {
         //   - `PRAGMA busy_timeout` defaults to 5000ms in fsqlite (rusqlite
         //     defaults to 0). meta_skill does not set this explicitly, so the
         //     fsqlite default applies and is a behavioral upgrade.
-        let dir = tempdir().unwrap();
-        let db = Database::open(dir.path().join("test.db")).unwrap();
+        let dir = tempdir().unwrap().keep();
+        eprintln!("retained critical PRAGMA test database: {}", dir.display());
+        let db = Database::open(dir.join("test.db")).unwrap();
         let conn = db.conn();
 
         let jm: String = conn
