@@ -174,8 +174,7 @@ impl ConnectionExt for Connection {
     }
 
     fn execute_compat(&self, sql: &str, params: &[ParamValue]) -> Result<usize, FrankenError> {
-        self.inner
-            .execute_with_params_sync(sql, &to_values(params))
+        self.inner.execute_with_params_sync(sql, &to_values(params))
     }
 }
 
@@ -195,7 +194,10 @@ mod tests {
     #[test]
     fn execute_and_query_row_round_trip() {
         let conn = open_memory();
-        assert_eq!(conn.execute("INSERT INTO t (name) VALUES ('a')").unwrap(), 1);
+        assert_eq!(
+            conn.execute("INSERT INTO t (name) VALUES ('a')").unwrap(),
+            1
+        );
         let n: i64 = conn
             .query_row("SELECT count(*) FROM t")
             .and_then(|row| row.get_typed(0))
@@ -209,9 +211,11 @@ mod tests {
         conn.execute_compat("INSERT INTO t (name) VALUES (?)", ms_params!["zed"])
             .unwrap();
         let name: String = conn
-            .query_row_map("SELECT name FROM t WHERE name = ?", ms_params!["zed"], |r| {
-                r.get_typed(0)
-            })
+            .query_row_map(
+                "SELECT name FROM t WHERE name = ?",
+                ms_params!["zed"],
+                |r| r.get_typed(0),
+            )
             .unwrap();
         assert_eq!(name, "zed");
     }
@@ -220,9 +224,11 @@ mod tests {
     fn query_row_map_missing_row_is_optional_none() {
         let conn = open_memory();
         let missing: Option<String> = conn
-            .query_row_map("SELECT name FROM t WHERE name = ?", ms_params!["nope"], |r| {
-                r.get_typed(0)
-            })
+            .query_row_map(
+                "SELECT name FROM t WHERE name = ?",
+                ms_params!["nope"],
+                |r| r.get_typed(0),
+            )
             .optional()
             .unwrap();
         assert!(missing.is_none());
