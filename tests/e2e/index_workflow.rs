@@ -526,3 +526,91 @@ fn test_index_readonly_index_reports_clear_error() -> Result<()> {
     fixture.generate_report();
     Ok(())
 }
+
+/// Regression test for issue #192: `ms index` must persist one embedding per
+/// indexed skill so semantic (and the semantic half of hybrid) search has
+/// something to rank. Before the fix nothing in the indexing path ever
+/// called `upsert_embedding`, so `--search-type semantic` returned zero
+/// results on every backend while `ms index` reported success.
+#[test]
+fn test_index_writes_embeddings_for_every_skill() -> Result<()> {
+    use ms::storage::Database;
+
+    let mut fixture = setup_index_fixture("index_writes_embeddings")?;
+
+    fixture.log_step("Index skills");
+    let output = fixture.run_ms(&["--robot", "index"]);
+    fixture.assert_success(&output, "index");
+
+    let db = Database::open(fixture.ms_root.join("ms.db"))?;
+    let skills = db.list_skills(100, 0)?;
+    assert_eq!(skills.len(), 3, "fixture indexes three skills");
+
+    let embeddings = db.get_all_embeddings()?;
+    assert_eq!(
+        embeddings.len(),
+        skills.len(),
+        "every indexed skill must have an embedding row"
+    );
+    for (skill_id, embedding) in &embeddings {
+        let record = db
+            .get_embedding(skill_id)?
+            .expect("embedding row readable by skill id");
+        assert_eq!(record.embedder_type, "hash", "default backend is hash");
+        assert_eq!(record.dims, 384, "default embedding width");
+        let norm: f32 = embedding.iter().map(|x| x * x).sum::<f32>().sqrt();
+        assert!(
+            (norm - 1.0).abs() < 1e-2,
+            "{skill_id}: stored embedding must be L2-normalized (norm {norm})"
+        );
+        let skill = skills
+            .iter()
+            .find(|s| &s.id == skill_id)
+            .expect("embedding belongs to an indexed skill");
+        assert_eq!(
+            record.content_hash.as_deref(),
+            Some(skill.content_hash.as_str()),
+            "{skill_id}: embedding must be tied to the indexed content hash"
+        );
+    }
+    drop(db);
+
+    fixture.log_step("Semantic-only search returns results without manual seeding");
+    let output = fixture.run_ms(&[
+        "--robot",
+        "search",
+        "pytest fixtures for python projects",
+        "--search-type",
+        "semantic",
+    ]);
+    fixture.assert_success(&output, "search semantic");
+    let json = output.json();
+    let results = json["results"].as_array().expect("results array");
+    assert!(
+        !results.is_empty(),
+        "semantic search must return results once embeddings are indexed"
+    );
+    assert_eq!(
+        results[0]["id"].as_str().unwrap_or_default(),
+        "python-testing",
+        "the python testing skill must rank first for a python testing query"
+    );
+
+    fixture.log_step("A plain re-index heals a database whose embeddings are missing");
+    {
+        let db = Database::open(fixture.ms_root.join("ms.db"))?;
+        db.conn().execute("DELETE FROM skill_embeddings")?;
+        assert!(db.get_all_embeddings()?.is_empty());
+    }
+    let output = fixture.run_ms(&["--robot", "index"]);
+    fixture.assert_success(&output, "re-index without --force");
+    let db = Database::open(fixture.ms_root.join("ms.db"))?;
+    assert_eq!(
+        db.get_all_embeddings()?.len(),
+        3,
+        "unchanged skills must get their missing embeddings backfilled"
+    );
+
+    fixture.generate_report();
+    Ok(())
+}

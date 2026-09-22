@@ -13,6 +13,8 @@ use crate::app::AppContext;
 use crate::cli::output::OutputFormat;
 use crate::core::{GitSkillRepository, ResolutionCache, SkillLayer, spec_lens::parse_markdown};
 use crate::error::{MsError, Result};
+use crate::search::{Embedder, build_embedder, l2_normalize, skill_embedding_text};
+use crate::storage::sqlite::EmbeddingRecord;
 use crate::storage::tx::GlobalLock;
 use crate::storage::{SkillRecord, TxManager};
 use crate::sync::ru::RuClient;
@@ -239,12 +241,98 @@ fn expand_path(input: &str) -> PathBuf {
     PathBuf::from(input)
 }
 
+/// What one `index_skill_file` call did, for progress accounting.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+struct SkillIndexOutcome {
+    /// An embedding row was written (or refreshed) for the skill.
+    embedded: bool,
+}
+
+/// Build the embedding backend once per index run.
+///
+/// Semantic search reads `skill_embeddings`, so indexing must populate it
+/// (issue #192). Returns `None` when embeddings are disabled by config, or
+/// when the configured backend cannot be constructed: a missing API key or
+/// an unimplemented backend must not stop lexical indexing, so the reason is
+/// reported on stderr once and the run continues without embeddings.
+fn build_index_embedder(ctx: &AppContext) -> Option<Box<dyn Embedder>> {
+    if !ctx.config.search.use_embeddings {
+        return None;
+    }
+    match build_embedder(&ctx.config.search) {
+        Ok(embedder) => Some(embedder),
+        Err(err) => {
+            eprintln!(
+                "warning: skipping embeddings for this index run: {err} \
+                 (semantic search will have nothing to rank until the backend is fixed)"
+            );
+            None
+        }
+    }
+}
+
+/// Whether the stored embedding for `skill_id` was computed by `embedder`
+/// from content with hash `content_hash`.
+fn embedding_is_current(
+    ctx: &AppContext,
+    skill_id: &str,
+    embedder: &dyn Embedder,
+    content_hash: &str,
+) -> bool {
+    match ctx.db.get_embedding(skill_id) {
+        Ok(Some(existing)) => {
+            existing.embedder_type == embedder.name()
+                && existing.dims == embedder.dims()
+                && existing.content_hash.as_deref() == Some(content_hash)
+        }
+        Ok(None) => false,
+        // An unreadable row is treated as missing so it gets rewritten.
+        Err(_) => false,
+    }
+}
+
+/// Embed the record the search index sees and persist it.
+///
+/// Returns `Ok(false)` without writing when the backend produced no usable
+/// vector (`ApiEmbedder` degrades to an all-zero vector on request failure):
+/// a zero vector can never rank, and leaving the row absent keeps the skill
+/// eligible for backfill on the next run.
+fn store_skill_embedding(
+    ctx: &AppContext,
+    embedder: &dyn Embedder,
+    record: &SkillRecord,
+    content_hash: &str,
+) -> Result<bool> {
+    let mut embedding = embedder.embed(&skill_embedding_text(record));
+    if embedding.len() != embedder.dims() || embedding.iter().all(|v| *v == 0.0) {
+        eprintln!(
+            "warning: {}: embedding backend `{}` returned no usable vector; skipping",
+            record.id,
+            embedder.name()
+        );
+        return Ok(false);
+    }
+    // `VectorIndex::search` ranks by dot product, which is cosine similarity
+    // only for unit vectors.
+    l2_normalize(&mut embedding);
+    ctx.db.upsert_embedding(&EmbeddingRecord {
+        skill_id: record.id.clone(),
+        dims: embedder.dims(),
+        embedding,
+        embedder_type: embedder.name().to_string(),
+        content_hash: Some(content_hash.to_string()),
+        computed_at: String::new(),
+    })?;
+    Ok(true)
+}
+
 fn index_human(ctx: &AppContext, roots: &[SkillRoot], args: &IndexArgs) -> Result<()> {
     println!("{}", "Indexing skills...".bold());
     println!();
 
     let start = Instant::now();
     let mut indexed = 0;
+    let mut embedded = 0;
     let mut errors = 0;
 
     // First pass: discover all SKILL.md files
@@ -254,6 +342,8 @@ fn index_human(ctx: &AppContext, roots: &[SkillRoot], args: &IndexArgs) -> Resul
         println!("{}", "No SKILL.md files found".yellow());
         return Ok(());
     }
+
+    let embedder = build_index_embedder(ctx);
 
     // Progress bar
     let pb = ProgressBar::new(skill_files.len() as u64);
@@ -286,10 +376,16 @@ fn index_human(ctx: &AppContext, roots: &[SkillRoot], args: &IndexArgs) -> Resul
             &tx_mgr,
             &resolution_cache,
             &repository,
+            embedder.as_deref(),
             skill,
             args.force,
         ) {
-            Ok(()) => indexed += 1,
+            Ok(outcome) => {
+                indexed += 1;
+                if outcome.embedded {
+                    embedded += 1;
+                }
+            }
             Err(e) => {
                 errors += 1;
                 pb.println(format!("{} {} - {}", "✗".red(), skill.path.display(), e));
@@ -314,6 +410,13 @@ fn index_human(ctx: &AppContext, roots: &[SkillRoot], args: &IndexArgs) -> Resul
         elapsed.as_secs_f64(),
         errors
     );
+    if let Some(embedder) = &embedder {
+        println!(
+            "  {} embeddings written via `{}` backend",
+            embedded,
+            embedder.name()
+        );
+    }
 
     if errors > 0 {
         println!();
@@ -326,10 +429,12 @@ fn index_human(ctx: &AppContext, roots: &[SkillRoot], args: &IndexArgs) -> Resul
 fn index_robot(ctx: &AppContext, roots: &[SkillRoot], args: &IndexArgs) -> Result<()> {
     let start = Instant::now();
     let mut indexed = 0;
+    let mut embedded = 0;
     let mut errors: Vec<serde_json::Value> = Vec::new();
 
     // Discover skill files
     let skill_files = discover_skill_files(roots);
+    let embedder = build_index_embedder(ctx);
 
     // Create transaction manager
     let tx_mgr = TxManager::new(
@@ -348,10 +453,16 @@ fn index_robot(ctx: &AppContext, roots: &[SkillRoot], args: &IndexArgs) -> Resul
             &tx_mgr,
             &resolution_cache,
             &repository,
+            embedder.as_deref(),
             skill,
             args.force,
         ) {
-            Ok(()) => indexed += 1,
+            Ok(outcome) => {
+                indexed += 1;
+                if outcome.embedded {
+                    embedded += 1;
+                }
+            }
             Err(e) => {
                 errors.push(serde_json::json!({
                     "path": skill.path.display().to_string(),
@@ -377,6 +488,10 @@ fn index_robot(ctx: &AppContext, roots: &[SkillRoot], args: &IndexArgs) -> Resul
             "indexed": indexed,
             "errors": errors,
             "elapsed_ms": elapsed.as_millis() as u64,
+            "embeddings": {
+                "backend": embedder.as_ref().map(|e| e.name().to_string()),
+                "written": embedded,
+            },
             "package_summary": {
                 "skills_discovered": skill_files.len(),
                 "skills_with_companions": skills_with_companions,
@@ -513,9 +628,10 @@ fn index_skill_file(
     tx_mgr: &TxManager,
     resolution_cache: &ResolutionCache,
     repository: &GitSkillRepository<'_>,
+    embedder: Option<&dyn Embedder>,
     skill: &DiscoveredSkill,
     force: bool,
-) -> Result<()> {
+) -> Result<SkillIndexOutcome> {
     // Read the file
     let content = std::fs::read_to_string(&skill.path)?;
 
@@ -542,7 +658,28 @@ fn index_skill_file(
                 // stale origin path would otherwise false-positive in
                 // `ms doctor` / `ms prune stale-sources`.
                 record_skill_origin(ctx, &spec.metadata.id, skill)?;
-                return Ok(()); // Skip unchanged
+
+                // Backfill a missing or stale embedding (databases indexed
+                // before embeddings were written, or after a backend switch)
+                // without rewriting the skill.
+                let mut outcome = SkillIndexOutcome::default();
+                if let Some(embedder) = embedder {
+                    if !embedding_is_current(ctx, &spec.metadata.id, embedder, &new_hash) {
+                        let record = search_record_for(
+                            ctx,
+                            resolution_cache,
+                            repository,
+                            &spec,
+                            skill,
+                            &new_hash,
+                        )?;
+                        if let Some(record) = record {
+                            outcome.embedded =
+                                store_skill_embedding(ctx, embedder, &record, &new_hash)?;
+                        }
+                    }
+                }
+                return Ok(outcome); // Skip unchanged
             }
         }
     }
@@ -565,44 +702,68 @@ fn index_skill_file(
     ctx.db
         .update_skill_quality(&spec.metadata.id, f64::from(quality.overall))?;
 
-    // Resolve the skill if it has inheritance or composition
-    let needs_resolution = spec.extends.is_some() || !spec.includes.is_empty();
-
-    if needs_resolution {
-        // Create a hash lookup function that reads skills from git archive and hashes them
-        let compute_hash = |skill_id: &str| -> Option<String> {
-            // For the current skill, use the already computed hash
-            if skill_id == spec.metadata.id {
-                return Some(new_hash.clone());
-            }
-            // For other skills, read from archive and compute hash
-            ctx.git
-                .read_skill(skill_id)
-                .ok()
-                .and_then(|dep_spec| compute_spec_hash(&dep_spec).ok())
-        };
-
-        // Get or compute the resolved skill
-        let db_conn = ctx.db.conn();
-        let resolved = resolution_cache.get_or_resolve(
-            db_conn,
-            &spec.metadata.id,
-            &spec,
-            repository,
-            compute_hash,
-        )?;
-
-        // Build a SkillRecord from the resolved spec for search indexing
-        let resolved_record = build_skill_record_from_resolved(&resolved.spec, skill, &new_hash);
-        ctx.search.index_skill(&resolved_record)?;
-    } else {
-        // No resolution needed - index the raw spec directly
-        if let Ok(Some(skill_record)) = ctx.db.get_skill(&spec.metadata.id) {
-            ctx.search.index_skill(&skill_record)?;
+    // Index the record the search layer should see (resolved when the skill
+    // inherits or composes), and embed that same record so lexical and
+    // semantic search agree on what a skill says.
+    let mut outcome = SkillIndexOutcome::default();
+    if let Some(record) =
+        search_record_for(ctx, resolution_cache, repository, &spec, skill, &new_hash)?
+    {
+        ctx.search.index_skill(&record)?;
+        if let Some(embedder) = embedder {
+            outcome.embedded = store_skill_embedding(ctx, embedder, &record, &new_hash)?;
         }
     }
 
-    Ok(())
+    Ok(outcome)
+}
+
+/// The record search indexes for `spec`: the resolved skill when it extends
+/// or includes other skills, otherwise the stored raw record.
+///
+/// Returns `None` only if the raw record is not readable from the database
+/// (it was just written, so this is not expected).
+fn search_record_for(
+    ctx: &AppContext,
+    resolution_cache: &ResolutionCache,
+    repository: &GitSkillRepository<'_>,
+    spec: &crate::core::SkillSpec,
+    skill: &DiscoveredSkill,
+    content_hash: &str,
+) -> Result<Option<SkillRecord>> {
+    let needs_resolution = spec.extends.is_some() || !spec.includes.is_empty();
+    if !needs_resolution {
+        return ctx.db.get_skill(&spec.metadata.id);
+    }
+
+    // Create a hash lookup function that reads skills from git archive and hashes them
+    let compute_hash = |skill_id: &str| -> Option<String> {
+        // For the current skill, use the already computed hash
+        if skill_id == spec.metadata.id {
+            return Some(content_hash.to_string());
+        }
+        // For other skills, read from archive and compute hash
+        ctx.git
+            .read_skill(skill_id)
+            .ok()
+            .and_then(|dep_spec| compute_spec_hash(&dep_spec).ok())
+    };
+
+    // Get or compute the resolved skill
+    let resolved = resolution_cache.get_or_resolve(
+        ctx.db.conn(),
+        &spec.metadata.id,
+        spec,
+        repository,
+        compute_hash,
+    )?;
+
+    // Build a SkillRecord from the resolved spec for search indexing
+    Ok(Some(build_skill_record_from_resolved(
+        &resolved.spec,
+        skill,
+        content_hash,
+    )))
 }
 
 /// Persist the discovered filesystem origin of a skill (issue #158).

@@ -19,6 +19,14 @@ pub struct AppContext {
     pub robot_mode: bool,
     pub output_format: OutputFormat,
     pub verbosity: u8,
+    /// Whether this context prefers a read-only search index.
+    ///
+    /// Set for the long-running `ms mcp serve`, which only ever reads the
+    /// index: taking the Tantivy writer lock for the server's whole lifetime
+    /// would block every `ms index` for as long as an agent session is open
+    /// (issue #193). Remembered so [`reopen_stores`](Self::reopen_stores)
+    /// applies the same policy after a rebuild.
+    pub search_readonly_preferred: bool,
 }
 
 /// Inode-level identity of a single filesystem path (device + inode on Unix).
@@ -89,6 +97,32 @@ fn path_inode(path: &Path) -> Option<InodeId> {
     std::fs::metadata(path).ok().map(|m| inode_of(&m))
 }
 
+/// Open the search index at `index_path` with the mode policy a context wants.
+///
+/// Writers (`ms index` and friends) try writable first and fall back to
+/// read-only when another process holds the Tantivy writer lock, so read-only
+/// commands keep working alongside a concurrent writer; `require_writable_search`
+/// turns the fallback into a clear error for commands that must write.
+///
+/// A read-only-preferring context (`ms mcp serve`) never keeps the writer
+/// lock. `open_readonly` cannot create an index, so when none exists yet
+/// (`ms mcp serve` before any `ms init`/`ms index`) it is created with a
+/// writable open that is dropped immediately, and the read-only handle is
+/// taken afterwards.
+fn open_search_index(index_path: &Path, prefer_readonly: bool) -> Result<SearchIndex> {
+    if prefer_readonly {
+        match SearchIndex::open_readonly(index_path) {
+            Ok(index) => Ok(index),
+            Err(_) => {
+                drop(SearchIndex::open(index_path)?);
+                SearchIndex::open_readonly(index_path)
+            }
+        }
+    } else {
+        SearchIndex::open(index_path).or_else(|_| SearchIndex::open_readonly(index_path))
+    }
+}
+
 impl AppContext {
     pub fn from_cli(cli: &crate::cli::Cli) -> Result<Self> {
         let ms_root = Self::find_ms_root()?;
@@ -98,23 +132,25 @@ impl AppContext {
             .unwrap_or_else(|| default_config_path(&ms_root));
         let config = Config::load(cli.config.as_deref(), &ms_root)?;
 
+        // The MCP server never writes to the search index (its `index` tool
+        // only reports configured paths and defers to the CLI), so it must
+        // not hold the writer lock for its lifetime (issue #193).
+        let search_readonly_preferred = matches!(cli.command, crate::cli::Commands::Mcp(_));
+
         Ok(Self {
             ms_root: ms_root.clone(),
             config_path,
             config,
             db: Arc::new(Database::open(ms_root.join("ms.db"))?),
             git: Arc::new(GitArchive::open(ms_root.join("archive"))?),
-            search: Arc::new({
-                let index_path = ms_root.join("index");
-                // Try writable first; if the write lock is busy (another process),
-                // fall back to read-only mode so concurrent MCP servers and CLI
-                // commands can coexist without "LockBusy" errors.
-                SearchIndex::open(&index_path)
-                    .or_else(|_| SearchIndex::open_readonly(&index_path))?
-            }),
+            search: Arc::new(open_search_index(
+                &ms_root.join("index"),
+                search_readonly_preferred,
+            )?),
             robot_mode: cli.robot,
             output_format: cli.output_format(),
             verbosity: cli.verbose,
+            search_readonly_preferred,
         })
     }
 
@@ -158,11 +194,12 @@ impl AppContext {
         let index_path = self.index_path();
         let db = Arc::new(Database::open(self.db_path())?);
         let git = Arc::new(GitArchive::open(self.ms_root.join("archive"))?);
-        // Match `from_cli`: prefer a writable index, fall back to read-only if
-        // the writer lock is held (e.g. by a concurrent rebuild still running).
-        let search = Arc::new(
-            SearchIndex::open(&index_path).or_else(|_| SearchIndex::open_readonly(&index_path))?,
-        );
+        // Match `from_cli`, including the read-only preference: a reopened MCP
+        // server must not start holding the writer lock it never held before.
+        let search = Arc::new(open_search_index(
+            &index_path,
+            self.search_readonly_preferred,
+        )?);
         self.db = db;
         self.git = git;
         self.search = search;
@@ -193,7 +230,10 @@ impl AppContext {
         }
     }
 
-    fn readonly_search_diagnostic(&self) -> String {
+    /// Why the search index could only be opened read-only, for callers that
+    /// report the condition (`ms doctor`) rather than fail on it.
+    #[must_use]
+    pub fn readonly_search_diagnostic(&self) -> String {
         let index_dir = self.ms_root.join("index");
         let writer_lock = index_dir.join(".tantivy-writer.lock");
 
@@ -342,6 +382,7 @@ mod tests {
             robot_mode: false,
             output_format: OutputFormat::default(),
             verbosity: 0,
+            search_readonly_preferred: false,
         }
     }
 

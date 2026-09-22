@@ -246,6 +246,13 @@ fn check_lock_status(ctx: &AppContext, verbose: bool) -> Result<usize> {
             say!(ctx, "  Lock is held by an active process");
         }
         Ok(0) // Active lock is not an issue
+    } else if ctx.search.is_readonly() {
+        // The transaction lock is free, but this process could not take the
+        // search-index writer lock, so `ms index` would fail right now
+        // (issue #193). Report it here instead of a false "all clear".
+        say!(ctx, "{} Search index is read-only for this process", "[!]");
+        say!(ctx, "  {}", ctx.readonly_search_diagnostic());
+        Ok(1)
     } else {
         say!(ctx, "{} No lock held", "[ok]");
         Ok(0)

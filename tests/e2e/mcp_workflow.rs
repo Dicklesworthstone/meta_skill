@@ -1026,3 +1026,41 @@ fn test_mcp_index_tool() -> Result<()> {
     client.kill();
     Ok(())
 }
+
+/// Regression test for issue #193: a long-lived `ms mcp serve` must not hold
+/// the Tantivy writer lock for its lifetime, otherwise `ms index` fails for
+/// as long as any agent session is open. The server only ever reads the
+/// search index, so it must open it read-only.
+#[test]
+fn test_index_succeeds_while_mcp_server_is_running() -> Result<()> {
+    let mut fixture = setup_mcp_fixture("mcp_index_while_serving")?;
+
+    fixture.log_step("Start MCP server and keep it alive");
+    let mut client = McpClient::spawn(&fixture, false)?;
+    let response = client.initialize()?;
+    assert!(response.is_success(), "Initialize should succeed");
+
+    fixture.log_step("Re-index the catalog while the server is running");
+    let output = fixture.run_ms(&["--robot", "index", "--force"]);
+    fixture.assert_success(&output, "index --force while mcp serve runs");
+    let json = output.json();
+    assert_eq!(json["status"].as_str(), Some("ok"));
+    assert_eq!(json["indexed"].as_u64(), Some(3));
+
+    fixture.log_step("Add a skill and index it incrementally");
+    fixture.create_skill_in_layer("rust-lifetimes", SKILL_RUST_TESTING, "project")?;
+    let output = fixture.run_ms(&["--robot", "index"]);
+    fixture.assert_success(&output, "incremental index while mcp serve runs");
+
+    fixture.log_step("The running server still answers searches");
+    let response = client.call_tool("search", json!({ "query": "rust", "limit": 5 }))?;
+    assert!(
+        response.is_success(),
+        "search tool should succeed: {}",
+        response.raw
+    );
+
+    client.kill();
+    fixture.generate_report();
+    Ok(())
+}

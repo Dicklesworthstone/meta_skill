@@ -892,6 +892,38 @@ impl Database {
         Ok(results)
     }
 
+    /// Embeddings produced by one embedder at one width.
+    ///
+    /// Query-time callers must only compare a query vector against vectors
+    /// from the same vector space: after switching `search.embedding_backend`
+    /// (or `embedding_dims`) rows from the previous backend linger until the
+    /// next index run rewrites them, and mixing them in would rank noise.
+    pub fn get_embeddings_for(
+        &self,
+        embedder_type: &str,
+        dims: usize,
+    ) -> Result<Vec<(String, Vec<f32>)>> {
+        let raw: Vec<(String, Vec<u8>, i64)> = self.conn.query_map_collect(
+            "SELECT skill_id, embedding, dims FROM skill_embeddings
+             WHERE embedder_type = ? AND dims = ?",
+            params![embedder_type, dims as i64],
+            |row| {
+                let skill_id: String = row.get_typed(0)?;
+                let blob: Vec<u8> = row.get_typed(1)?;
+                let dims: i64 = row.get_typed(2)?;
+                Ok((skill_id, blob, dims))
+            },
+        )?;
+
+        let mut results = Vec::with_capacity(raw.len());
+        for (skill_id, blob, dims) in raw {
+            let dims_usize = if dims <= 0 { 0 } else { dims as usize };
+            let embedding = decode_embedding_f16(&blob, dims_usize)?;
+            results.push((skill_id, embedding));
+        }
+        Ok(results)
+    }
+
     pub fn insert_quarantine_record(&self, record: &QuarantineRecord) -> Result<()> {
         let classification_json =
             serde_json::to_string(&record.acip_classification).map_err(|err| {
@@ -2919,6 +2951,46 @@ mod tests {
         assert_eq!(origins[0].skill_name, "origin-live name");
         assert_eq!(origins[0].origin_path, "/roots/a/origin-live/SKILL.md");
         assert_eq!(origins[0].origin_root, "/roots/a");
+    }
+
+    /// `get_embeddings_for` scopes query-time vectors to one embedder and
+    /// width, so rows left behind by a previous backend never share a vector
+    /// space with the current query embedding.
+    #[test]
+    fn test_get_embeddings_for_filters_by_embedder_and_dims() {
+        let dir = tempdir().unwrap();
+        let db = Database::open(dir.path().join("test.db")).unwrap();
+        db.upsert_skill(&origin_test_skill("emb-hash")).unwrap();
+        db.upsert_skill(&origin_test_skill("emb-api")).unwrap();
+        db.upsert_skill(&origin_test_skill("emb-narrow")).unwrap();
+
+        let row = |id: &str, embedder_type: &str, embedding: Vec<f32>| EmbeddingRecord {
+            skill_id: id.to_string(),
+            dims: embedding.len(),
+            embedding,
+            embedder_type: embedder_type.to_string(),
+            content_hash: Some("hash".to_string()),
+            computed_at: "2026-01-01T00:00:00Z".to_string(),
+        };
+        db.upsert_embedding(&row("emb-hash", "hash", vec![1.0, 0.0, 0.0]))
+            .unwrap();
+        db.upsert_embedding(&row("emb-api", "api", vec![0.0, 1.0, 0.0]))
+            .unwrap();
+        db.upsert_embedding(&row("emb-narrow", "hash", vec![0.0, 1.0]))
+            .unwrap();
+
+        let hash3 = db.get_embeddings_for("hash", 3).unwrap();
+        assert_eq!(hash3.len(), 1);
+        assert_eq!(hash3[0].0, "emb-hash");
+        assert_eq!(hash3[0].1, vec![1.0, 0.0, 0.0]);
+
+        let api3 = db.get_embeddings_for("api", 3).unwrap();
+        assert_eq!(api3.len(), 1);
+        assert_eq!(api3[0].0, "emb-api");
+
+        assert_eq!(db.get_embeddings_for("hash", 2).unwrap().len(), 1);
+        assert!(db.get_embeddings_for("local", 3).unwrap().is_empty());
+        assert_eq!(db.get_all_embeddings().unwrap().len(), 3);
     }
 
     #[test]
