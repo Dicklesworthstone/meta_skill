@@ -547,3 +547,27 @@ fn test_doctor_on_fresh_workspace() -> Result<()> {
     fixture.generate_report();
     Ok(())
 }
+
+/// Regression test for issue #194: every database connection `doctor` opens
+/// must be closed explicitly, so a clean comprehensive run emits no fsqlite
+/// `drop_close` warnings on stderr.
+#[test]
+fn test_doctor_comprehensive_closes_every_connection() -> Result<()> {
+    let mut fixture = setup_healthy_workspace("doctor_no_drop_close")?;
+
+    fixture.log_step("Run comprehensive doctor in machine mode");
+    let output = fixture.run_ms(&["-m", "doctor", "--comprehensive"]);
+    fixture.assert_success(&output, "doctor --comprehensive");
+
+    let json = output.json();
+    assert_eq!(json["status"].as_str(), Some("ok"));
+    assert_eq!(json["issues_found"].as_u64(), Some(0));
+    assert!(
+        !output.stderr.contains("drop_close"),
+        "doctor must close its connections explicitly; stderr was:\n{}",
+        output.stderr
+    );
+
+    fixture.generate_report();
+    Ok(())
+}

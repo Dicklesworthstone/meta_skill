@@ -160,9 +160,11 @@ fn search_hybrid(ctx: &AppContext, args: &SearchArgs, filters: &SearchFilters) -
     let embedder = build_embedder(&ctx.config.search)?;
     let query_embedding = embedder.embed(&args.query);
 
-    // Load embeddings from database
+    // Load the embeddings that live in the query vector's space
     let mut vector_index = VectorIndex::new(embedder.dims());
-    let all_embeddings = ctx.db.get_all_embeddings()?;
+    let all_embeddings = ctx
+        .db
+        .get_embeddings_for(embedder.name(), embedder.dims())?;
 
     for (id, embedding) in all_embeddings {
         let _ = vector_index.insert(id, embedding);
@@ -240,9 +242,11 @@ fn search_semantic(ctx: &AppContext, args: &SearchArgs, filters: &SearchFilters)
     let embedder = build_embedder(&ctx.config.search)?;
     let query_embedding = embedder.embed(&args.query);
 
-    // Load embeddings
+    // Load the embeddings that live in the query vector's space
     let mut vector_index = VectorIndex::new(embedder.dims());
-    let all_embeddings = ctx.db.get_all_embeddings()?;
+    let all_embeddings = ctx
+        .db
+        .get_embeddings_for(embedder.name(), embedder.dims())?;
 
     for (id, embedding) in all_embeddings {
         let _ = vector_index.insert(id, embedding);
