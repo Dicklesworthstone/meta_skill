@@ -42,7 +42,10 @@ pub mod tantivy_index;
 // Re-export main types
 pub use cache::{CacheLayer, CacheStats, CachedQueryResult, SessionFingerprint};
 pub use context::{FilterResult, SearchContext, SearchFilters, SearchLayer};
-pub use embeddings::{ApiEmbedder, Embedder, HashEmbedder, VectorIndex, build_embedder};
+pub use embeddings::{
+    ApiEmbedder, Embedder, HashEmbedder, VectorIndex, build_embedder, l2_normalize,
+    skill_embedding_text,
+};
 pub use embeddings_local::LocalEmbedder;
 pub use filters::{filter_hybrid_results, filter_skill_ids, matches_skill_record};
 pub use hybrid::{HybridResult, RrfConfig, fuse_results, fuse_simple, fuse_with_limit};

@@ -238,7 +238,13 @@ impl ApiEmbedder {
 impl Embedder for ApiEmbedder {
     fn embed(&self, text: &str) -> Vec<f32> {
         match self.call_api(text) {
-            Ok(embedding) => embedding,
+            Ok(mut embedding) => {
+                // `VectorIndex::search` ranks by raw dot product, so every
+                // embedder must hand back unit vectors; API providers do not
+                // all guarantee that.
+                l2_normalize(&mut embedding);
+                embedding
+            }
             Err(e) => {
                 eprintln!("API embedding error: {e}");
                 // Return zero vector on error (graceful degradation)
@@ -364,7 +370,17 @@ fn fnv1a_hash(data: &[u8]) -> u64 {
     hash
 }
 
-fn l2_normalize(vec: &mut [f32]) {
+/// The text a skill is embedded from: name, description, and body.
+///
+/// Shared by indexing and any tool that recomputes a skill's vector, so a
+/// query is always compared against vectors built from the same projection.
+#[must_use]
+pub fn skill_embedding_text(skill: &crate::storage::SkillRecord) -> String {
+    format!("{}\n{}\n{}", skill.name, skill.description, skill.body)
+}
+
+/// Scale `vec` to unit L2 length in place; an all-zero vector is left as is.
+pub fn l2_normalize(vec: &mut [f32]) {
     let norm = vec.iter().map(|x| x * x).sum::<f32>().sqrt();
     if norm > 0.0 {
         for value in vec.iter_mut() {
