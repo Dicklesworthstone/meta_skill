@@ -9,6 +9,33 @@ All notable changes to **ms** (Meta Skill CLI) are documented here.
 
 ---
 
+## [v0.2.3] -- 2026-10-02
+
+- Self-updates now require SHA256 metadata for the selected payload before
+  extraction or installation ([#217](https://github.com/Dicklesworthstone/meta_skill/issues/217)).
+  The updater prefers the payload's own sidecar, excludes signature files and
+  unrelated sidecars, accepts named SHA256 rows or a bare hash in the exact
+  sidecar, and rejects missing entries, malformed hashes and conflicting rows.
+- Refreshed the compatible dependency lock, including clap 4.6.7,
+  clap_complete 4.6.11, console 0.16.6, open 5.4.4 and FrankenSQLite 0.4.7.
+- Default hybrid search rejects non-positive semantic candidates; the lexical
+  hash embedder re-ranks lexical matches. Relevant indexed matches can receive
+  both RRF contributions, changing their displayed scores
+  ([#216](https://github.com/Dicklesworthstone/meta_skill/issues/216)).
+- Qualification limitation: the completed full test gate has 3,482 passes,
+  six failures and three ignored tests. Three unchanged filesystem tests have
+  invalid missing-path or permission premises in the test environment; two
+  search snapshots retain old RRF scores, and one list snapshot differs by
+  one floating-point ULP. The updater's separate 76-test gate passes. Existing
+  snapshots remain intact; this is not a clean full-suite claim ([#216](https://github.com/Dicklesworthstone/meta_skill/issues/216)).
+- Known limitation: the optional API embedder does not yet distinguish models
+  or endpoints when their vector dimensions match
+  ([#218](https://github.com/Dicklesworthstone/meta_skill/issues/218)). Changing
+  either requires rebuilding the embedding index. The default lexical embedder
+  is unaffected.
+
+---
+
 ## [v0.2.2] -- 2026-08-23
 
 ### cass integration: sessions scored 0% on modern cass exports (#171)

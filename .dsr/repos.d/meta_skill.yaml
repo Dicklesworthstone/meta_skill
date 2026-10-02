@@ -1,0 +1,112 @@
+# Portable native DSR release recipe. Fleet routing belongs in private overrides.
+# GitHub Actions must remain disabled; release gates run through RCH.
+tool_name: meta_skill
+repo: Dicklesworthstone/meta_skill
+local_path: /data/projects/meta_skill
+language: rust
+binary_name: ms
+build_cmd: cargo build --locked --release --bin ms && cp "$CARGO_TARGET_DIR/$CARGO_BUILD_TARGET/release/ms"
+  "$CARGO_TARGET_DIR/$CARGO_BUILD_TARGET/release/ms-0.2.3-$CARGO_BUILD_TARGET"
+build_profile: release
+targets:
+- linux/amd64
+- linux/arm64
+- darwin/arm64
+- darwin/amd64
+- windows/amd64
+act_job_map:
+  linux/amd64: null
+  linux/arm64: null
+  darwin/arm64: null
+  darwin/amd64: null
+  windows/amd64: null
+target_triples:
+  linux/amd64: x86_64-unknown-linux-gnu
+  linux/arm64: aarch64-unknown-linux-gnu
+  darwin/arm64: aarch64-apple-darwin
+  darwin/amd64: x86_64-apple-darwin
+  windows/amd64: x86_64-pc-windows-msvc
+cross_compile:
+  linux/amd64:
+    build_cmd: cargo build --locked --release --bin ms && cp "$CARGO_TARGET_DIR/$CARGO_BUILD_TARGET/release/ms"
+      "$CARGO_TARGET_DIR/$CARGO_BUILD_TARGET/release/ms-0.2.3-$CARGO_BUILD_TARGET"
+      && cp "$CARGO_TARGET_DIR/$CARGO_BUILD_TARGET/release/ms" "$CARGO_TARGET_DIR/$CARGO_BUILD_TARGET/release/ms-0.2.3-linux-x86_64"
+  linux/arm64: {}
+  darwin/arm64:
+    build_cmd: cargo build --locked --release --bin ms && cp "$CARGO_TARGET_DIR/$CARGO_BUILD_TARGET/release/ms"
+      "$CARGO_TARGET_DIR/$CARGO_BUILD_TARGET/release/ms-0.2.3-$CARGO_BUILD_TARGET"
+      && cp "$CARGO_TARGET_DIR/$CARGO_BUILD_TARGET/release/ms" "$CARGO_TARGET_DIR/$CARGO_BUILD_TARGET/release/ms-0.2.3-macos-aarch64"
+  darwin/amd64: {}
+  windows/amd64:
+    build_cmd: cargo xwin build --locked --release --bin ms --target x86_64-pc-windows-msvc
+      && cp "$CARGO_TARGET_DIR/$CARGO_BUILD_TARGET/release/ms.exe" "$CARGO_TARGET_DIR/$CARGO_BUILD_TARGET/release/ms-0.2.3-x86_64-pc-windows-msvc.exe.exe"
+    env:
+      CARGO_BUILD_TARGET: x86_64-pc-windows-msvc
+artifact_naming: ms-${version}-${target_triple}
+install_script_compat: ms-${version}-${target_triple}
+install_script_path: scripts/install.sh
+archive_format:
+  linux: tar.gz
+  darwin: tar.gz
+  windows: zip
+release_contract:
+  checksum_sidecar: sha256
+  exact_primary_assets:
+    linux/amd64: ms-0.2.3-x86_64-unknown-linux-gnu.tar.gz
+    linux/arm64: ms-0.2.3-aarch64-unknown-linux-gnu.tar.gz
+    darwin/arm64: ms-0.2.3-aarch64-apple-darwin.tar.gz
+    darwin/amd64: ms-0.2.3-x86_64-apple-darwin.tar.gz
+    windows/amd64: ms-0.2.3-x86_64-pc-windows-msvc.zip
+  exact_additional_assets:
+  - ms-0.2.3-x86_64-unknown-linux-gnu
+  - ms-0.2.3-x86_64-unknown-linux-gnu.sha256
+  - ms-0.2.3-x86_64-unknown-linux-gnu.minisig
+  - ms-0.2.3-linux-x86_64
+  - ms-0.2.3-linux-x86_64.sha256
+  - ms-0.2.3-linux-x86_64.minisig
+  - ms-0.2.3-aarch64-unknown-linux-gnu
+  - ms-0.2.3-aarch64-unknown-linux-gnu.sha256
+  - ms-0.2.3-aarch64-unknown-linux-gnu.minisig
+  - ms-0.2.3-aarch64-apple-darwin
+  - ms-0.2.3-aarch64-apple-darwin.sha256
+  - ms-0.2.3-aarch64-apple-darwin.minisig
+  - ms-0.2.3-macos-aarch64
+  - ms-0.2.3-macos-aarch64.sha256
+  - ms-0.2.3-macos-aarch64.minisig
+  - ms-0.2.3-x86_64-apple-darwin
+  - ms-0.2.3-x86_64-apple-darwin.sha256
+  - ms-0.2.3-x86_64-apple-darwin.minisig
+  - ms-0.2.3-x86_64-pc-windows-msvc.exe
+  - ms-0.2.3-x86_64-pc-windows-msvc.exe.sha256
+  - ms-0.2.3-x86_64-pc-windows-msvc.exe.minisig
+  - SHA256SUMS
+  - SHA256SUMS.minisig
+  - SHA256SUMS.txt
+  - SHA256SUMS.txt.minisig
+  minisign_public_key_file: minisign.pub
+include_files:
+- README.md
+- LICENSE
+- CHANGELOG.md
+env:
+  CARGO_INCREMENTAL: '0'
+workspace_additional_artifacts:
+  linux/amd64:
+  - ms-0.2.3-x86_64-unknown-linux-gnu
+  - ms-0.2.3-linux-x86_64
+  linux/arm64:
+  - ms-0.2.3-aarch64-unknown-linux-gnu
+  darwin/arm64:
+  - ms-0.2.3-aarch64-apple-darwin
+  - ms-0.2.3-macos-aarch64
+  darwin/amd64:
+  - ms-0.2.3-x86_64-apple-darwin
+  windows/amd64:
+  - ms-0.2.3-x86_64-pc-windows-msvc.exe
+linux_glibc_floor: '2.28'
+checks:
+- cargo fmt --check
+- RCH_REQUIRE_REMOTE=1 CARGO_BUILD_JOBS=2 rch exec -- cargo clippy --locked -j 2 --all-targets
+  -- -D warnings
+- RCH_REQUIRE_REMOTE=1 CARGO_BUILD_JOBS=2 rch exec -- cargo test --locked -j 2 --all-targets
+  --no-fail-fast

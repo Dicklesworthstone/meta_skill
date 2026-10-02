@@ -227,31 +227,29 @@ impl UpdateDownloader {
     /// ever handed a path.
     pub fn download_and_verify(&self, release: &ReleaseInfo) -> Result<PathBuf> {
         let binary_asset = self.find_binary_asset(release)?;
-        let checksum_asset = self.find_checksum_asset(release);
+        let checksum_asset = self
+            .find_checksum_asset(release, binary_asset)
+            .ok_or_else(|| {
+                MsError::ValidationFailed(format!(
+                    "no checksum metadata found for release asset {}",
+                    binary_asset.name
+                ))
+            })?;
 
         // Download the asset (usually an archive).
         let download_path = self.temp_dir.join(&binary_asset.name);
         self.download_asset(binary_asset, &download_path)?;
 
-        // Verify checksum if available. This proves the *download* is intact;
+        // Require a matching checksum before extraction. This proves the download is intact;
         // it says nothing about what the file contains.
-        if let Some(checksum_asset) = checksum_asset {
-            let checksums = self.download_checksums(checksum_asset)?;
-            if let Some(expected_hash) = checksums.get(&binary_asset.name) {
-                let actual_hash = compute_sha256(&download_path)?;
-                if !actual_hash.eq_ignore_ascii_case(expected_hash) {
-                    // Clean up failed download
-                    let _ = std::fs::remove_file(&download_path);
-                    return Err(MsError::ValidationFailed(format!(
-                        "checksum mismatch: expected {expected_hash}, got {actual_hash}"
-                    )));
-                }
-            } else {
-                tracing::warn!(
-                    asset = %binary_asset.name,
-                    "release checksum manifest has no entry for this asset; skipping checksum verification"
-                );
+        let checksums = self.download_checksums(checksum_asset, binary_asset)?;
+        let actual_hash = compute_sha256(&download_path)?;
+        if let Err(error) = verify_checksum_hash(&binary_asset.name, &actual_hash, &checksums) {
+            if checksums.contains_key(&binary_asset.name) {
+                // Preserve the existing cleanup for a checksum mismatch.
+                let _ = std::fs::remove_file(&download_path);
             }
+            return Err(error);
         }
 
         // Unpack the executable out of the archive.
@@ -289,10 +287,34 @@ impl UpdateDownloader {
         })
     }
 
-    fn find_checksum_asset<'a>(&self, release: &'a ReleaseInfo) -> Option<&'a ReleaseAsset> {
-        release.assets.iter().find(|a| {
-            let name = a.name.to_lowercase();
-            name.contains("checksum") || name.contains("sha256") || name.ends_with(".sha256")
+    /// Pick the checksum asset that covers `binary`: its own `<name>.sha256`
+    /// sidecar first, then an explicitly named aggregate manifest. Taking the
+    /// first sha256-looking asset chose another platform's sidecar on Linux
+    /// (assets list alphabetically), so verification was silently skipped.
+    fn find_checksum_asset<'a>(
+        &self,
+        release: &'a ReleaseInfo,
+        binary: &ReleaseAsset,
+    ) -> Option<&'a ReleaseAsset> {
+        let sidecar = format!("{}.sha256", binary.name.to_lowercase());
+        let named = |predicate: &dyn Fn(&str) -> bool| {
+            release
+                .assets
+                .iter()
+                .find(|asset| predicate(&asset.name.to_lowercase()))
+        };
+        named(&|name| name == sidecar).or_else(|| {
+            named(&|name| {
+                matches!(
+                    name,
+                    "sha256sums"
+                        | "sha256sums.txt"
+                        | "sha256sums.sha256"
+                        | "checksums"
+                        | "checksums.txt"
+                        | "checksums.sha256"
+                )
+            })
         })
     }
 
@@ -306,24 +328,14 @@ impl UpdateDownloader {
     fn download_checksums(
         &self,
         asset: &ReleaseAsset,
+        binary: &ReleaseAsset,
     ) -> Result<std::collections::HashMap<String, String>> {
         let client = GitHubClient::new(self.token.clone());
         let bytes = client.download_url(&asset.download_url)?;
         let content = String::from_utf8(bytes)
             .map_err(|e| MsError::ValidationFailed(format!("invalid checksum file: {e}")))?;
 
-        let mut checksums = std::collections::HashMap::new();
-        for line in content.lines() {
-            let parts: Vec<&str> = line.split_whitespace().collect();
-            if parts.len() >= 2 {
-                // Format: "hash  filename" or "hash filename"
-                let hash = parts[0].to_string();
-                let filename = parts[parts.len() - 1].trim_start_matches('*').to_string();
-                checksums.insert(filename, hash);
-            }
-        }
-
-        Ok(checksums)
+        parse_checksums(&content, &asset.name, &binary.name)
     }
 
     /// Clean up temporary files.
@@ -1019,6 +1031,70 @@ fn parse_repo(input: &str) -> Result<(String, String)> {
     ))
 }
 
+fn parse_checksums(
+    content: &str,
+    checksum_name: &str,
+    binary_name: &str,
+) -> Result<std::collections::HashMap<String, String>> {
+    let lines: Vec<_> = content
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty() && !line.starts_with('#'))
+        .collect();
+    let valid_hash =
+        |hash: &str| hash.len() == 64 && hash.bytes().all(|byte| byte.is_ascii_hexdigit());
+    let mut checksums = std::collections::HashMap::new();
+    if lines.len() == 1 && valid_hash(lines[0]) {
+        if !checksum_name.eq_ignore_ascii_case(&format!("{binary_name}.sha256")) {
+            return Err(MsError::ValidationFailed(
+                "a bare checksum must come from the selected asset's own sidecar".to_string(),
+            ));
+        }
+        checksums.insert(binary_name.to_string(), lines[0].to_string());
+        return Ok(checksums);
+    }
+    for line in lines {
+        let (hash, filename) = line.split_once(char::is_whitespace).ok_or_else(|| {
+            MsError::ValidationFailed("checksum row must contain a hash and filename".to_string())
+        })?;
+        let filename = filename
+            .trim_start()
+            .strip_prefix('*')
+            .unwrap_or(filename.trim_start());
+        if !valid_hash(hash) || filename.is_empty() {
+            return Err(MsError::ValidationFailed(
+                "checksum row must contain a 64-digit SHA256 and filename".to_string(),
+            ));
+        }
+        if let Some(previous) = checksums.insert(filename.to_string(), hash.to_string())
+            && !previous.eq_ignore_ascii_case(hash)
+        {
+            return Err(MsError::ValidationFailed(format!(
+                "conflicting checksums for asset {filename}"
+            )));
+        }
+    }
+    Ok(checksums)
+}
+
+fn verify_checksum_hash(
+    binary_name: &str,
+    actual_hash: &str,
+    checksums: &std::collections::HashMap<String, String>,
+) -> Result<()> {
+    let expected_hash = checksums.get(binary_name).ok_or_else(|| {
+        MsError::ValidationFailed(format!(
+            "release checksum manifest has no entry for asset {binary_name}"
+        ))
+    })?;
+    if !actual_hash.eq_ignore_ascii_case(expected_hash) {
+        return Err(MsError::ValidationFailed(format!(
+            "checksum mismatch: expected {expected_hash}, got {actual_hash}"
+        )));
+    }
+    Ok(())
+}
+
 fn compute_sha256(path: &Path) -> Result<String> {
     use std::io::Read;
     let mut file = std::fs::File::open(path)?;
@@ -1412,6 +1488,148 @@ mod tests {
             asset("ms-0.1.5-x86_64-unknown-linux-gnu.tar.gz"),
             asset("SHA256SUMS.txt"),
         ]
+    }
+
+    /// v0.2.2-shaped assets: the checksum asset must cover the chosen binary.
+    /// Taking the first sha256-looking asset picked the darwin sidecar on
+    /// Linux, so the Linux download was never verified.
+    #[test]
+    fn checksum_asset_covers_the_selected_binary() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let downloader =
+            UpdateDownloader::with_temp_dir(temp.path().to_path_buf()).expect("downloader");
+        let release = ReleaseInfo {
+            version: Version::new(0, 2, 2),
+            tag: "v0.2.2".to_string(),
+            prerelease: false,
+            assets: vec![
+                asset("ms-0.2.2-aarch64-apple-darwin.sha256"),
+                asset("ms-0.2.2-x86_64-unknown-linux-gnu"),
+                asset("ms-0.2.2-x86_64-unknown-linux-gnu.sha256"),
+                asset("SHA256SUMS.txt"),
+            ],
+            changelog: String::new(),
+            published_at: Utc::now(),
+            html_url: String::new(),
+        };
+        let chosen = |binary: &str| {
+            downloader
+                .find_checksum_asset(&release, &asset(binary))
+                .map(|found| found.name.clone())
+        };
+        assert_eq!(
+            chosen("ms-0.2.2-x86_64-unknown-linux-gnu").as_deref(),
+            Some("ms-0.2.2-x86_64-unknown-linux-gnu.sha256")
+        );
+        // No sidecar of its own: the aggregate manifest, never another
+        // platform's sidecar.
+        assert_eq!(
+            chosen("ms-0.2.2-aarch64-unknown-linux-gnu.tar.gz").as_deref(),
+            Some("SHA256SUMS.txt")
+        );
+    }
+
+    #[test]
+    fn checksum_selection_rejects_signatures_and_unrelated_sidecars() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let downloader = UpdateDownloader::with_temp_dir(temp.path().to_path_buf()).unwrap();
+        let binary = asset("ms-current-linux.tar.gz");
+        let mut release = ReleaseInfo {
+            version: Version::new(0, 2, 3),
+            tag: "v0.2.3".to_string(),
+            prerelease: false,
+            assets: vec![
+                binary.clone(),
+                asset("SHA256SUMS.txt.minisig"),
+                asset("checksums.txt.asc"),
+                asset("other-platform.sha256"),
+            ],
+            changelog: String::new(),
+            published_at: Utc::now(),
+            html_url: String::new(),
+        };
+        assert!(downloader.find_checksum_asset(&release, &binary).is_none());
+        release.assets.push(asset("SHA256SUMS.txt"));
+        assert_eq!(
+            downloader
+                .find_checksum_asset(&release, &binary)
+                .unwrap()
+                .name,
+            "SHA256SUMS.txt"
+        );
+        release.assets.push(asset("ms-current-linux.tar.gz.sha256"));
+        assert_eq!(
+            downloader
+                .find_checksum_asset(&release, &binary)
+                .unwrap()
+                .name,
+            "ms-current-linux.tar.gz.sha256"
+        );
+    }
+
+    #[test]
+    fn checksum_parser_binds_named_rows_and_bare_sidecars() {
+        let hash = "aB".repeat(32);
+        let named = parse_checksums(
+            &format!("{hash}  *payload with spaces.tar.gz\n"),
+            "SHA256SUMS.txt",
+            "payload with spaces.tar.gz",
+        )
+        .unwrap();
+        assert_eq!(named["payload with spaces.tar.gz"], hash);
+        let bare = parse_checksums(&hash, "payload.sha256", "payload").unwrap();
+        assert_eq!(bare["payload"], hash);
+        assert!(parse_checksums(&hash, "SHA256SUMS.txt", "payload").is_err());
+        assert!(parse_checksums("not-a-hash  payload", "SHA256SUMS", "payload").is_err());
+        assert!(
+            parse_checksums(
+                &format!("{hash}  payload\n{}  payload\n", "0".repeat(64)),
+                "SHA256SUMS",
+                "payload",
+            )
+            .is_err()
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn checksum_hash_requires_matching_row_and_detects_corruption() {
+        let temp = tempfile::tempdir().unwrap();
+        let archive = temp.path().join("payload.tar.gz");
+        build_release_tar_gz(&archive, &fake_executable_bytes(), true);
+        let bytes_before = std::fs::read(&archive).unwrap();
+        let hash = compute_sha256(&archive).unwrap();
+        let wrong = parse_checksums(
+            &format!("{hash}  other-platform.tar.gz\n"),
+            "SHA256SUMS",
+            "payload.tar.gz",
+        )
+        .unwrap();
+        let error = verify_checksum_hash("payload.tar.gz", &hash, &wrong).unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("no entry for asset payload.tar.gz")
+        );
+        let correct = parse_checksums(
+            &format!("{hash}  payload.tar.gz\n"),
+            "SHA256SUMS",
+            "payload.tar.gz",
+        )
+        .unwrap();
+        verify_checksum_hash("payload.tar.gz", &hash, &correct).unwrap();
+        std::fs::write(&archive, b"corrupted archive").unwrap();
+        assert!(
+            verify_checksum_hash(
+                "payload.tar.gz",
+                &compute_sha256(&archive).unwrap(),
+                &correct
+            )
+            .unwrap_err()
+            .to_string()
+            .contains("checksum mismatch")
+        );
+        assert!(!bytes_before.is_empty());
     }
 
     /// Every shipped platform must resolve its own asset from the real
