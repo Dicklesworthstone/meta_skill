@@ -11,7 +11,8 @@ use crate::cli::formatters::SearchResults;
 use crate::cli::output::{Formattable, OutputFormat};
 use crate::error::{MsError, Result};
 use crate::search::{
-    RrfConfig, SearchFilters, SearchLayer, VectorIndex, build_embedder, fuse_simple,
+    RrfConfig, SearchFilters, SearchLayer, VectorIndex, admit_semantic_candidates, build_embedder,
+    fuse_simple,
 };
 
 #[derive(Args, Debug)]
@@ -170,8 +171,13 @@ fn search_hybrid(ctx: &AppContext, args: &SearchArgs, filters: &SearchFilters) -
         let _ = vector_index.insert(id, embedding);
     }
 
-    // Semantic search
-    let semantic_results = vector_index.search(&query_embedding, fetch_limit);
+    // Semantic search. Only candidates with relevance evidence reach RRF; the
+    // feature-hash embedder is lexical, so it re-ranks but never adds hits.
+    let semantic_results = admit_semantic_candidates(
+        &bm25_results,
+        vector_index.search(&query_embedding, fetch_limit),
+        embedder.name() == "hash",
+    );
 
     // RRF fusion
     let config = RrfConfig::with_weights(

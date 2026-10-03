@@ -155,6 +155,35 @@ pub fn fuse_results(
     results
 }
 
+/// Keep only vector candidates that carry relevance evidence before fusion.
+///
+/// RRF scores by rank alone, so every candidate it sees gains a positive
+/// contribution however weak its similarity. Two rules keep noise out:
+///
+/// - a candidate with similarity <= 0 (or NaN) is unrelated by definition;
+/// - when the embedder is lexical (`lexical_vectors`, e.g. the feature-hash
+///   embedder), its similarity only restates token overlap plus hash
+///   collisions, so it may re-rank documents the lexical search already
+///   matched but never introduce new ones.
+///
+/// Semantic embedders keep surfacing semantic-only matches with positive
+/// similarity.
+#[must_use]
+pub fn admit_semantic_candidates(
+    bm25_results: &[(String, f32)],
+    semantic_results: Vec<(String, f32)>,
+    lexical_vectors: bool,
+) -> Vec<(String, f32)> {
+    let lexical: std::collections::HashSet<&str> =
+        bm25_results.iter().map(|(id, _)| id.as_str()).collect();
+    semantic_results
+        .into_iter()
+        .filter(|(id, similarity)| {
+            *similarity > 0.0 && (!lexical_vectors || lexical.contains(id.as_str()))
+        })
+        .collect()
+}
+
 /// Simple fusion returning only (`skill_id`, score) pairs
 #[must_use]
 pub fn fuse_simple(
@@ -184,6 +213,44 @@ pub fn fuse_with_limit(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn ids(results: &[(String, f32)]) -> Vec<&str> {
+        results.iter().map(|(id, _)| id.as_str()).collect()
+    }
+
+    #[test]
+    fn non_positive_similarity_never_reaches_fusion() {
+        let semantic = vec![
+            ("a".to_string(), 0.4),
+            ("b".to_string(), 0.0),
+            ("c".to_string(), -0.2),
+            ("d".to_string(), f32::NAN),
+        ];
+        let admitted = admit_semantic_candidates(&[], semantic, false);
+        assert_eq!(ids(&admitted), ["a"]);
+    }
+
+    #[test]
+    fn lexical_vectors_only_rerank_lexical_matches() {
+        let bm25 = vec![("rust".to_string(), 2.0), ("async".to_string(), 1.0)];
+        let semantic = vec![
+            ("git".to_string(), 0.3),
+            ("async".to_string(), 0.2),
+            ("rust".to_string(), 0.1),
+        ];
+        let admitted = admit_semantic_candidates(&bm25, semantic.clone(), true);
+        assert_eq!(ids(&admitted), ["async", "rust"]);
+        // A semantic embedder may still surface a semantic-only match.
+        let admitted = admit_semantic_candidates(&bm25, semantic, false);
+        assert_eq!(ids(&admitted), ["git", "async", "rust"]);
+    }
+
+    #[test]
+    fn unrelated_query_with_lexical_vectors_fuses_to_nothing() {
+        let semantic = vec![("python-basics".to_string(), 0.05)];
+        let admitted = admit_semantic_candidates(&[], semantic, true);
+        assert!(fuse_simple(&[], &admitted, &RrfConfig::default()).is_empty());
+    }
 
     #[test]
     fn test_rrf_config_default() {

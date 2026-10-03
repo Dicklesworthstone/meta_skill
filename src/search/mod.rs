@@ -48,6 +48,8 @@ pub use embeddings::{
 };
 pub use embeddings_local::LocalEmbedder;
 pub use filters::{filter_hybrid_results, filter_skill_ids, matches_skill_record};
-pub use hybrid::{HybridResult, RrfConfig, fuse_results, fuse_simple, fuse_with_limit};
+pub use hybrid::{
+    HybridResult, RrfConfig, admit_semantic_candidates, fuse_results, fuse_simple, fuse_with_limit,
+};
 pub use tantivy::{Bm25Index, Bm25Result};
 pub use tantivy_index::SearchIndex;

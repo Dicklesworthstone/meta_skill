@@ -13,7 +13,7 @@ expression: json
       "name": "Rust Error Handling",
       "description": "Use Result<T, E> for recoverable errors and panic! for unrecoverable ones.",
       "layer": "project",
-      "score": 0.008196721,
+      "score": 0.016393442,
       "quality": 0.48500001430511475,
       "is_deprecated": false
     }
