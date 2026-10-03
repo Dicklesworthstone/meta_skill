@@ -22,12 +22,15 @@ All notable changes to **ms** (Meta Skill CLI) are documented here.
   hash embedder re-ranks lexical matches. Relevant indexed matches can receive
   both RRF contributions, changing their displayed scores
   ([#216](https://github.com/Dicklesworthstone/meta_skill/issues/216)).
-- Qualification limitation: the completed full test gate has 3,482 passes,
+- Qualification limitation: the earlier full test gate had 3,482 passes,
   six failures and three ignored tests. Three unchanged filesystem tests have
-  invalid missing-path or permission premises in the test environment; two
-  search snapshots retain old RRF scores, and one list snapshot differs by
-  one floating-point ULP. The updater's separate 76-test gate passes. Existing
-  snapshots remain intact; this is not a clean full-suite claim ([#216](https://github.com/Dicklesworthstone/meta_skill/issues/216)).
+  invalid missing-path or permission premises in the test environment, and
+  one list snapshot differs by one floating-point ULP. The two search snapshots
+  were subsequently updated only for the corrected RRF scores; search unit
+  tests (132), E2E tests (23), integration tests (5, run serially) and search
+  snapshots pass. The updater's separate 76-test gate also passes. These
+  targeted results do not constitute a clean full-suite rerun
+  ([#216](https://github.com/Dicklesworthstone/meta_skill/issues/216)).
 - Known limitation: the optional API embedder does not yet distinguish models
   or endpoints when their vector dimensions match
   ([#218](https://github.com/Dicklesworthstone/meta_skill/issues/218)). Changing
