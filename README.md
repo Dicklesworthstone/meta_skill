@@ -28,6 +28,9 @@ cargo run -- <COMMAND>
 <p><em>Works on Linux, macOS, and Windows. Requires the pinned <code>nightly-2026-08-25</code> toolchain (Edition 2024; manifest API floor Rust 1.89).</em></p>
 </div>
 
+To verify signed published binaries and their version/help output, see
+[Published release consumer checks](docs/published-release-checks.md).
+
 ---
 
 ## What ms Actually Is
