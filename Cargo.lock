@@ -2061,9 +2061,9 @@ dependencies = [
 
 [[package]]
 name = "fsqlite-error"
-version = "0.4.7"
+version = "0.4.10"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "40c578d827c81e939497d94b0a104ab83c6a87f1f0dfe3874f29e6df5dd00eb9"
+checksum = "7e7bd15b6f6c3e1a2e0e9a0d302e20b9e3ddbee55692d2e3d4b40d784367c533"
 dependencies = [
  "thiserror 2.0.21",
 ]
@@ -2242,9 +2242,9 @@ dependencies = [
 
 [[package]]
 name = "fsqlite-types"
-version = "0.4.7"
+version = "0.4.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d094793e339f688aa41cc91b06bb5719d48b8548baae9905858341a73b6e1ec5"
+checksum = "86fa950e68574805a5ef10e53549794b3bdbaa17085b394da66e3e4e86646e27"
 dependencies = [
  "asupersync",
  "bitflags 2.13.2",
