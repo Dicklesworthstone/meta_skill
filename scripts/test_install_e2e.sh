@@ -92,7 +92,7 @@ test_github_releases_accessible() {
 
     if response=$(curl -sS "https://api.github.com/repos/Dicklesworthstone/meta_skill/releases/latest" 2>&1); then
         if [[ "$response" == *"tag_name"* ]]; then
-            version=$(echo "$response" | grep -o '"tag_name": "[^"]*"' | head -1 | cut -d'"' -f4)
+            version=$(echo "$response" | grep -o '"tag_name": *"[^"]*"' | head -1 | cut -d'"' -f4)
             pass "GitHub releases accessible, latest: $version"
             return 0
         elif [[ "$response" == *"Not Found"* ]]; then

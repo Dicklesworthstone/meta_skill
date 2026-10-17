@@ -137,7 +137,7 @@ predicates = "3.1.3"
 insta = { version = "1.46.0", features = ["json", "yaml"] }
 criterion = { version = "0.8.2", features = ["html_reports"] }
 proptest = "1.9.0"
-proptest-derive = "0.8.0"
+proptest-derive = "0.9.0"
 httpmock = "0.8.2"
 # rusqlite is retained as a dev-only dependency for the integration/e2e
 # fixtures in `tests/` that read meta_skill's on-disk SQLite files using the

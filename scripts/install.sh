@@ -183,7 +183,8 @@ fetch_latest_version() {
         die "Neither curl nor wget found. Please install one of them."
     fi
 
-    version=$(echo "$response" | grep -o '"tag_name": "[^"]*"' | head -1 | cut -d'"' -f4)
+    version=$(echo "$response" | grep -o '"tag_name": *"[^"]*"' | head -1 | cut -d'"' -f4)
+    [[ "$version" =~ ^v?[0-9] ]] || version=""
 
     if [[ -z "$version" ]]; then
         die "Could not determine latest version. The response was: $response"
