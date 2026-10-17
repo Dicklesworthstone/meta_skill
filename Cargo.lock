@@ -2116,9 +2116,9 @@ dependencies = [
 
 [[package]]
 name = "fsqlite-types"
-version = "0.4.9"
+version = "0.4.12"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "86fa950e68574805a5ef10e53549794b3bdbaa17085b394da66e3e4e86646e27"
+checksum = "22e86e28057560b1549a665bb590648ac1384627717636cd82979f8d9f1256ee"
 dependencies = [
  "asupersync",
  "bitflags 2.13.2",
