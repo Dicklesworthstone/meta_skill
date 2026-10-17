@@ -717,6 +717,288 @@ pub enum VersionOp {
     Ge,
 }
 
+impl VersionOp {
+    /// Parse a comparison operator from string (`==`, `=`, `!=`, `<`, `<=`, `>`, `>=`).
+    #[must_use]
+    pub fn parse(s: &str) -> Option<Self> {
+        match s.trim() {
+            "==" | "=" | "eq" => Some(Self::Eq),
+            "!=" | "ne" => Some(Self::Ne),
+            "<" | "lt" => Some(Self::Lt),
+            "<=" | "le" => Some(Self::Le),
+            ">" | "gt" => Some(Self::Gt),
+            ">=" | "ge" => Some(Self::Ge),
+            _ => None,
+        }
+    }
+
+    /// Compare two version or edition strings.
+    #[must_use]
+    pub fn compare(self, actual: &str, expected: &str) -> bool {
+        let actual_clean = actual.trim().trim_start_matches('v');
+        let expected_clean = expected.trim().trim_start_matches('v');
+        if let (Ok(a), Ok(b)) = (
+            semver::Version::parse(actual_clean),
+            semver::Version::parse(expected_clean),
+        ) {
+            return match self {
+                Self::Eq => a == b,
+                Self::Ne => a != b,
+                Self::Lt => a < b,
+                Self::Le => a <= b,
+                Self::Gt => a > b,
+                Self::Ge => a >= b,
+            };
+        }
+        // Fallback to numeric tuple comparison (e.g., "2024" vs "2021" or "1.2" vs "1.10")
+        let parse_parts = |s: &str| -> Vec<u64> {
+            s.split(|c: char| !c.is_ascii_digit())
+                .filter(|p| !p.is_empty())
+                .filter_map(|p| p.parse::<u64>().ok())
+                .collect()
+        };
+        let a_parts = parse_parts(actual_clean);
+        let b_parts = parse_parts(expected_clean);
+        if !a_parts.is_empty() && !b_parts.is_empty() {
+            return match self {
+                Self::Eq => a_parts == b_parts,
+                Self::Ne => a_parts != b_parts,
+                Self::Lt => a_parts < b_parts,
+                Self::Le => a_parts <= b_parts,
+                Self::Gt => a_parts > b_parts,
+                Self::Ge => a_parts >= b_parts,
+            };
+        }
+        match self {
+            Self::Eq => actual_clean == expected_clean,
+            Self::Ne => actual_clean != expected_clean,
+            Self::Lt => actual_clean < expected_clean,
+            Self::Le => actual_clean <= expected_clean,
+            Self::Gt => actual_clean > expected_clean,
+            Self::Ge => actual_clean >= expected_clean,
+        }
+    }
+}
+
+impl SlicePredicate {
+    /// Parse a predicate expression such as:
+    /// - `env:VAR` or `env:VAR=VAL`
+    /// - `file:Cargo.toml` or `exists:src/lib.rs`
+    /// - `rust:edition >= 2021` or `rust_edition >= 2024`
+    /// - `package:serde >= 1.0.0`
+    /// - `tool:git >= 2.30.0` or `tool:cargo`
+    #[must_use]
+    pub fn parse(raw: &str) -> Option<Self> {
+        let expr = raw.trim().to_string();
+        if expr.is_empty() {
+            return None;
+        }
+        if let Some(var) = expr.strip_prefix("env:") {
+            let var = var.trim();
+            if var.is_empty() {
+                return None;
+            }
+            return Some(Self {
+                expr: expr.clone(),
+                predicate_type: PredicateType::EnvVar {
+                    var: var.to_string(),
+                },
+            });
+        }
+        if let Some(pattern) = expr
+            .strip_prefix("file:")
+            .or_else(|| expr.strip_prefix("exists:"))
+        {
+            let pattern = pattern.trim();
+            if pattern.is_empty() {
+                return None;
+            }
+            return Some(Self {
+                expr: expr.clone(),
+                predicate_type: PredicateType::FileExists {
+                    pattern: pattern.to_string(),
+                },
+            });
+        }
+        if let Some(rest) = expr
+            .strip_prefix("rust:edition")
+            .or_else(|| expr.strip_prefix("rust_edition"))
+        {
+            let (op, edition) = parse_op_and_rhs(rest.trim())?;
+            return Some(Self {
+                expr: expr.clone(),
+                predicate_type: PredicateType::RustEdition { op, edition },
+            });
+        }
+        if let Some(rest) = expr.strip_prefix("package:") {
+            let (pkg, op, version) = parse_target_op_rhs(rest.trim())?;
+            return Some(Self {
+                expr: expr.clone(),
+                predicate_type: PredicateType::PackageVersion {
+                    package: pkg,
+                    op,
+                    version,
+                },
+            });
+        }
+        if let Some(rest) = expr.strip_prefix("tool:") {
+            let rest = rest.trim();
+            if let Some((tool, op, version)) = parse_target_op_rhs(rest) {
+                return Some(Self {
+                    expr: expr.clone(),
+                    predicate_type: PredicateType::ToolVersion { tool, op, version },
+                });
+            }
+            if !rest.is_empty() && !rest.contains(char::is_whitespace) {
+                return Some(Self {
+                    expr: expr.clone(),
+                    predicate_type: PredicateType::ToolVersion {
+                        tool: rest.to_string(),
+                        op: VersionOp::Ge,
+                        version: "0.0.0".to_string(),
+                    },
+                });
+            }
+        }
+        None
+    }
+
+    /// Evaluate this predicate against the active environment and working directory.
+    #[must_use]
+    pub fn evaluate(&self, working_dir: &std::path::Path) -> bool {
+        match &self.predicate_type {
+            PredicateType::EnvVar { var } => {
+                if let Some((key, expected)) = var.split_once('=') {
+                    std::env::var(key.trim()).ok().as_deref() == Some(expected.trim())
+                } else {
+                    std::env::var(var.trim()).is_ok_and(|v| !v.is_empty())
+                }
+            }
+            PredicateType::FileExists { pattern } => {
+                if working_dir.join(pattern).exists() {
+                    return true;
+                }
+                if let Ok(entries) = std::fs::read_dir(working_dir) {
+                    for entry in entries.flatten() {
+                        if let Some(name) = entry.file_name().to_str() {
+                            if pattern_matches(pattern, name) {
+                                return true;
+                            }
+                        }
+                    }
+                }
+                false
+            }
+            PredicateType::RustEdition { op, edition } => {
+                let cargo_toml = working_dir.join("Cargo.toml");
+                let Ok(content) = std::fs::read_to_string(cargo_toml) else {
+                    return false;
+                };
+                let Ok(parsed) = content.parse::<toml::Value>() else {
+                    return false;
+                };
+                let found_edition = parsed
+                    .get("package")
+                    .and_then(|p| p.get("edition"))
+                    .and_then(|e| e.as_str())
+                    .or_else(|| {
+                        parsed
+                            .get("workspace")
+                            .and_then(|w| w.get("package"))
+                            .and_then(|p| p.get("edition"))
+                            .and_then(|e| e.as_str())
+                    });
+                found_edition.is_some_and(|actual| op.compare(actual, edition))
+            }
+            PredicateType::PackageVersion {
+                package,
+                op,
+                version,
+            } => {
+                // Check Cargo.toml dependencies first, then package.json
+                let cargo_toml = working_dir.join("Cargo.toml");
+                if let Ok(content) = std::fs::read_to_string(cargo_toml) {
+                    if let Ok(parsed) = content.parse::<toml::Value>() {
+                        for section in ["dependencies", "dev-dependencies", "build-dependencies"] {
+                            if let Some(dep) = parsed.get(section).and_then(|d| d.get(package)) {
+                                let actual = dep
+                                    .as_str()
+                                    .or_else(|| dep.get("version").and_then(|v| v.as_str()));
+                                if let Some(actual) = actual {
+                                    return op.compare(actual, version);
+                                }
+                            }
+                        }
+                    }
+                }
+                let pkg_json = working_dir.join("package.json");
+                if let Ok(content) = std::fs::read_to_string(pkg_json) {
+                    if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(&content) {
+                        for section in ["dependencies", "devDependencies", "peerDependencies"] {
+                            if let Some(actual) = parsed
+                                .get(section)
+                                .and_then(|d| d.get(package))
+                                .and_then(|v| v.as_str())
+                            {
+                                let clean = actual.trim_start_matches(['^', '~', '=', ' ']);
+                                return op.compare(clean, version);
+                            }
+                        }
+                    }
+                }
+                false
+            }
+            PredicateType::ToolVersion { tool, op, version } => {
+                let Ok(bin_path) = which::which(tool) else {
+                    return false;
+                };
+                if version == "0.0.0" || version == "*" {
+                    return true;
+                }
+                let Ok(output) = std::process::Command::new(bin_path)
+                    .arg("--version")
+                    .output()
+                else {
+                    return false;
+                };
+                let stdout = String::from_utf8_lossy(&output.stdout);
+                let actual = stdout
+                    .split_whitespace()
+                    .find(|token| token.chars().any(|c| c.is_ascii_digit()))
+                    .unwrap_or(stdout.trim());
+                op.compare(actual, version)
+            }
+        }
+    }
+}
+
+fn parse_op_and_rhs(input: &str) -> Option<(VersionOp, String)> {
+    for op_str in ["==", "!=", "<=", ">=", "<", ">", "="] {
+        if let Some(rest) = input.strip_prefix(op_str) {
+            let op = VersionOp::parse(op_str)?;
+            let rhs = rest.trim().trim_matches(['"', '\'']).to_string();
+            if !rhs.is_empty() {
+                return Some((op, rhs));
+            }
+        }
+    }
+    None
+}
+
+fn parse_target_op_rhs(input: &str) -> Option<(String, VersionOp, String)> {
+    for op_str in ["==", "!=", "<=", ">=", "<", ">", "="] {
+        if let Some((lhs, rhs)) = input.split_once(op_str) {
+            let target = lhs.trim().to_string();
+            let op = VersionOp::parse(op_str)?;
+            let version = rhs.trim().trim_matches(['"', '\'']).to_string();
+            if !target.is_empty() && !version.is_empty() {
+                return Some((target, op, version));
+            }
+        }
+    }
+    None
+}
+
 // =============================================================================
 // EVIDENCE AND PROVENANCE
 // =============================================================================

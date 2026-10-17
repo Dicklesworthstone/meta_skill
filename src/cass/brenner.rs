@@ -361,10 +361,8 @@ pub struct BrennerWizard {
     /// Configuration
     config: BrennerConfig,
     /// Transformer for generalization (lazy initialized)
-    #[allow(dead_code)]
     transformer: Option<SpecificToGeneralTransformer>,
     /// Uncertainty queue for low-confidence items
-    #[allow(dead_code)]
     uncertainty_queue: Option<UncertaintyQueue>,
 }
 
@@ -408,7 +406,7 @@ impl BrennerWizard {
             checkpoint,
             config,
             transformer: None,
-            uncertainty_queue: None,
+            uncertainty_queue: Some(UncertaintyQueue::with_defaults()),
         }
     }
 
@@ -420,8 +418,34 @@ impl BrennerWizard {
             checkpoint,
             config,
             transformer: None,
-            uncertainty_queue: None,
+            uncertainty_queue: Some(UncertaintyQueue::with_defaults()),
         }
+    }
+
+    /// Attach a `SpecificToGeneralTransformer` to this wizard
+    #[must_use]
+    pub fn with_transformer(mut self, transformer: SpecificToGeneralTransformer) -> Self {
+        self.transformer = Some(transformer);
+        self
+    }
+
+    /// Attach a custom `UncertaintyQueue` to this wizard
+    #[must_use]
+    pub fn with_uncertainty_queue(mut self, queue: UncertaintyQueue) -> Self {
+        self.uncertainty_queue = Some(queue);
+        self
+    }
+
+    /// Access the configured `SpecificToGeneralTransformer`, if any
+    #[must_use]
+    pub const fn transformer(&self) -> Option<&SpecificToGeneralTransformer> {
+        self.transformer.as_ref()
+    }
+
+    /// Access the `UncertaintyQueue`, if any
+    #[must_use]
+    pub const fn uncertainty_queue(&self) -> Option<&UncertaintyQueue> {
+        self.uncertainty_queue.as_ref()
     }
 
     /// Get current checkpoint for saving
@@ -497,6 +521,18 @@ impl BrennerWizard {
         }
     }
 
+    /// Remove an extracted cognitive move by index
+    pub fn remove_move(&mut self, index: usize) -> Option<CognitiveMove> {
+        if let WizardState::MoveExtraction { ref mut moves, .. } = self.state {
+            if index < moves.len() {
+                let removed = moves.remove(index);
+                self.checkpoint.update(self.state.clone());
+                return Some(removed);
+            }
+        }
+        None
+    }
+
     /// Move to next session in extraction
     pub fn next_session(&mut self) -> bool {
         if let WizardState::MoveExtraction {
@@ -552,8 +588,53 @@ impl BrennerWizard {
         {
             if let Some(&move_idx) = flagged_indices.get(*current_idx) {
                 if let Some(mov) = moves.get_mut(move_idx) {
+                    let is_needs_evidence = matches!(decision, MoveDecision::NeedsEvidence);
                     mov.decision = Some(decision);
                     mov.reviewed = true;
+                    if is_needs_evidence {
+                        if let Some(ref queue) = self.uncertainty_queue {
+                            let pat = super::mining::ExtractedPattern {
+                                id: mov.id.clone(),
+                                pattern_type: super::mining::PatternType::CommandPattern {
+                                    commands: vec![mov.description.clone()],
+                                    frequency: 1,
+                                    contexts: Vec::new(),
+                                },
+                                evidence: vec![super::mining::EvidenceRef {
+                                    session_id: mov.evidence.session_id.clone(),
+                                    message_indices: mov.evidence.message_indices.clone(),
+                                    relevance: mov.confidence,
+                                    snippet: Some(mov.evidence.excerpt.clone()),
+                                }],
+                                confidence: mov.confidence,
+                                frequency: 1,
+                                tags: vec![format!("{:?}", mov.tag).to_lowercase()],
+                                description: Some(mov.description.clone()),
+                                taint_label: None,
+                            };
+                            let item = super::uncertainty::UncertaintyItem {
+                                id: format!("unc-{}", mov.id),
+                                pattern_candidate: pat,
+                                reason:
+                                    super::uncertainty::UncertaintyReason::InsufficientInstances {
+                                        have: 1,
+                                        need: 3,
+                                        variance: (1.0 - mov.confidence).clamp(0.0, 1.0),
+                                    },
+                                confidence: mov.confidence,
+                                threshold: self.config.min_confidence,
+                                suggested_queries: Vec::new(),
+                                status: super::uncertainty::UncertaintyStatus::Pending,
+                                created_at: Utc::now(),
+                                updated_at: Utc::now(),
+                                attempts: Vec::new(),
+                                critique: None,
+                                source_instance: None,
+                                cluster_info: None,
+                            };
+                            let _ = queue.enqueue(item);
+                        }
+                    }
                 }
             }
             self.checkpoint.update(self.state.clone());
@@ -778,7 +859,24 @@ pub fn run_interactive(
     let stdin = io::stdin();
     let mut stdout = io::stdout();
 
+    let mut searched_once = false;
+
     loop {
+        if !searched_once {
+            if let WizardState::SessionSelection { query, results, .. } = wizard.state() {
+                if results.is_empty() {
+                    let query_str = query.clone();
+                    let max_sessions = wizard.config.max_sessions;
+                    if let Ok(found) = client.search(&query_str, max_sessions) {
+                        if !found.is_empty() {
+                            wizard.set_session_results(found);
+                        }
+                    }
+                }
+            }
+            searched_once = true;
+        }
+
         match wizard.state() {
             WizardState::SessionSelection {
                 query,
@@ -792,8 +890,16 @@ pub fn run_interactive(
 
                 if results.is_empty() {
                     println!("\nSearching for sessions...");
-                    // In real impl, search via client
-                    println!("(Simulated: no sessions found - enter 'd' to use demo data)");
+                    println!("(No CASS sessions found - enter 'd' to use demo data)");
+                } else {
+                    println!("\nSessions:");
+                    for (idx, item) in results.iter().enumerate() {
+                        let mark = if selected.contains(&idx) { "x" } else { " " };
+                        println!(
+                            "  [{mark}] {idx}: {} (score: {:.2})",
+                            item.session_id, item.score
+                        );
+                    }
                 }
 
                 println!("\nSelected: {} sessions", selected.len());
@@ -1252,5 +1358,54 @@ mod tests {
         assert!(md.contains("Test Skill"));
         assert!(md.contains("rule-1"));
         assert!(md.contains("Avoid When"));
+    }
+
+    #[test]
+    fn test_review_move_needs_evidence_enqueues_uncertainty() {
+        let mut wizard = BrennerWizard::new("test", BrennerConfig::default());
+        let session = super::super::client::Session {
+            id: "s1".to_string(),
+            path: "/tmp/s1.jsonl".to_string(),
+            messages: Vec::new(),
+            metadata: Default::default(),
+            content_hash: "h1".to_string(),
+        };
+        let quality = super::super::quality::QualityScorer::with_defaults().score(&session);
+        wizard
+            .confirm_sessions(vec![SelectedSession {
+                match_data: super::super::client::SessionMatch {
+                    session_id: "s1".to_string(),
+                    path: "/tmp/s1.jsonl".to_string(),
+                    score: 0.9,
+                    snippet: None,
+                    content_hash: None,
+                    project: None,
+                    timestamp: None,
+                },
+                session,
+                quality,
+                confirmed: true,
+            }])
+            .unwrap();
+        wizard.add_move(CognitiveMove {
+            id: "move-low".to_string(),
+            tag: CognitiveMoveTag::InnerTruth,
+            description: "Check error context".to_string(),
+            evidence: MoveEvidence {
+                session_id: "s1".to_string(),
+                message_indices: vec![0],
+                excerpt: "context excerpt".to_string(),
+                notes: None,
+            },
+            confidence: 0.4,
+            reviewed: false,
+            decision: None,
+        });
+        wizard.finish_extraction().unwrap();
+        wizard.review_move(MoveDecision::NeedsEvidence).unwrap();
+
+        let queue = wizard.uncertainty_queue().expect("queue initialized");
+        assert_eq!(queue.len(), 1);
+        assert!(queue.get("unc-move-low").is_some());
     }
 }

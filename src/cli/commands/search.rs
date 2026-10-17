@@ -11,8 +11,8 @@ use crate::cli::formatters::SearchResults;
 use crate::cli::output::{Formattable, OutputFormat};
 use crate::error::{MsError, Result};
 use crate::search::{
-    RrfConfig, SearchFilters, SearchLayer, VectorIndex, admit_semantic_candidates, build_embedder,
-    fuse_simple,
+    FilterResult, HybridResult, RrfConfig, SearchContext, SearchFilters, SearchLayer, VectorIndex,
+    admit_semantic_candidates, build_embedder, fuse_results, matches_skill_record,
 };
 
 #[derive(Args, Debug)]
@@ -47,6 +47,10 @@ pub struct SearchArgs {
     /// Show snippets of matching content
     #[arg(long)]
     pub snippets: bool,
+
+    /// Show detailed ranking explanation (BM25 rank/score, semantic rank/score, RRF contribution)
+    #[arg(long)]
+    pub explain: bool,
 }
 
 pub fn run(ctx: &AppContext, args: &SearchArgs) -> Result<()> {
@@ -154,55 +158,79 @@ fn search_hybrid(ctx: &AppContext, args: &SearchArgs, filters: &SearchFilters) -
     // Increase limit to allow for filtering
     let fetch_limit = args.limit * 50;
 
-    // BM25 search (Tantivy, with substring-scan fallback)
-    let bm25_results = bm25_ranked(ctx, &args.query, fetch_limit)?;
-
-    // Build semantic search using embeddings
-    let embedder = build_embedder(&ctx.config.search)?;
-    let query_embedding = embedder.embed(&args.query);
-
-    // Load the embeddings that live in the query vector's space
-    let mut vector_index = VectorIndex::new(embedder.dims());
-    let all_embeddings = ctx
-        .db
-        .get_embeddings_for(embedder.name(), embedder.dims())?;
-
-    for (id, embedding) in all_embeddings {
-        let _ = vector_index.insert(id, embedding);
-    }
-
-    // Semantic search. Only candidates with relevance evidence reach RRF; the
-    // feature-hash embedder is lexical, so it re-ranks but never adds hits.
-    let semantic_results = admit_semantic_candidates(
-        &bm25_results,
-        vector_index.search(&query_embedding, fetch_limit),
-        embedder.name() == "hash",
-    );
-
-    // RRF fusion
     let config = RrfConfig::with_weights(
         ctx.config.search.bm25_weight,
         ctx.config.search.semantic_weight,
     );
-    let fused = fuse_simple(&bm25_results, &semantic_results, &config);
 
-    // Fetch full skill records and apply filters
+    let fused: Vec<HybridResult> =
+        if let Some(cached) = ctx.cache.get_query(&args.query, fetch_limit) {
+            cached
+        } else {
+            // BM25 search (Tantivy, with substring-scan fallback)
+            let bm25_results = bm25_ranked(ctx, &args.query, fetch_limit)?;
+
+            // Build semantic search using embeddings (with cache lookup)
+            let embedder = build_embedder(&ctx.config.search)?;
+            let query_cache_key = format!("__query__:{}", embedder.name());
+            let query_embedding = ctx
+                .cache
+                .get_embedding(&query_cache_key, &args.query)
+                .unwrap_or_else(|| {
+                    let emb = embedder.embed(&args.query);
+                    ctx.cache
+                        .put_embedding(&query_cache_key, &args.query, emb.clone());
+                    emb
+                });
+
+            // Load the embeddings that live in the query vector's space
+            let mut vector_index = VectorIndex::new(embedder.dims());
+            let all_embeddings = ctx
+                .db
+                .get_embeddings_for(embedder.name(), embedder.dims())?;
+
+            for (id, embedding) in all_embeddings {
+                let _ = vector_index.insert(id, embedding);
+            }
+
+            // Semantic search. Only candidates with relevance evidence reach RRF; the
+            // feature-hash embedder is lexical, so it re-ranks but never adds hits.
+            let semantic_results = admit_semantic_candidates(
+                &bm25_results,
+                vector_index.search(&query_embedding, fetch_limit),
+                embedder.name() == "hash",
+            );
+
+            let fused = fuse_results(&bm25_results, &semantic_results, &config);
+            ctx.cache.put_query(&args.query, fetch_limit, fused.clone());
+            fused
+        };
+
+    let search_ctx = build_search_context(ctx);
+    let mut filter_audit = FilterResult::new(fused.len(), filters);
+
+    // Fetch full skill records and apply filters + SearchContext tie-breaking boost
     let mut results = Vec::new();
-    for (skill_id, score) in fused {
+    let mut explanations = Vec::new();
+    for mut hit in fused {
         // Check lightweight metadata first; only load the full skill if it
         // passes the filters.
-        if let Some(candidate) = ctx.db.get_skill_candidate(&skill_id)? {
+        if let Some(candidate) = ctx.db.get_skill_candidate(&hit.skill_id)? {
             let skill_tags = parse_tags_from_metadata(&candidate.metadata_json);
 
-            // Apply filters on metadata
-            if filters.matches(
+            // Apply filters on metadata and record filter audit counts
+            if filter_audit.evaluate_candidate(
                 &skill_tags,
                 &candidate.source_layer,
                 candidate.quality_score as f32,
                 candidate.is_deprecated,
             ) {
-                if let Some(skill) = ctx.db.get_skill(&skill_id)? {
-                    results.push((skill, score));
+                if let Some(skill) = ctx.db.get_skill(&hit.skill_id)? {
+                    if matches_skill_record(filters, &skill) {
+                        hit.score += search_ctx.boost_for(&skill.id, &skill_tags);
+                        results.push((skill, hit.score));
+                        explanations.push(hit);
+                    }
                 }
             }
         }
@@ -210,6 +238,19 @@ fn search_hybrid(ctx: &AppContext, args: &SearchArgs, filters: &SearchFilters) -
         if results.len() >= args.limit {
             break;
         }
+    }
+
+    if args.explain {
+        return display_explained_results(
+            ctx,
+            &results,
+            &explanations,
+            &config,
+            &filter_audit,
+            &search_ctx,
+            args,
+            "hybrid",
+        );
     }
 
     display_results(ctx, &results, args, "hybrid")
@@ -218,20 +259,33 @@ fn search_hybrid(ctx: &AppContext, args: &SearchArgs, filters: &SearchFilters) -
 fn search_bm25(ctx: &AppContext, args: &SearchArgs, filters: &SearchFilters) -> Result<()> {
     // Increase limit to allow for filtering
     let ranked = bm25_ranked(ctx, &args.query, args.limit * 50)?;
+    let search_ctx = build_search_context(ctx);
+    let mut filter_audit = FilterResult::new(ranked.len(), filters);
 
     let mut results = Vec::new();
-    for (skill_id, score) in ranked {
+    let mut explanations = Vec::new();
+    for (idx, (skill_id, score)) in ranked.into_iter().enumerate() {
         if let Some(candidate) = ctx.db.get_skill_candidate(&skill_id)? {
             let skill_tags = parse_tags_from_metadata(&candidate.metadata_json);
 
-            if filters.matches(
+            if filter_audit.evaluate_candidate(
                 &skill_tags,
                 &candidate.source_layer,
                 candidate.quality_score as f32,
                 candidate.is_deprecated,
             ) {
                 if let Some(skill) = ctx.db.get_skill(&skill_id)? {
-                    results.push((skill, score));
+                    if matches_skill_record(filters, &skill) {
+                        results.push((skill, score));
+                        explanations.push(HybridResult {
+                            skill_id,
+                            score,
+                            bm25_rank: Some(idx + 1),
+                            semantic_rank: None,
+                            bm25_score: Some(score),
+                            semantic_score: None,
+                        });
+                    }
                 }
             }
         }
@@ -239,6 +293,20 @@ fn search_bm25(ctx: &AppContext, args: &SearchArgs, filters: &SearchFilters) -> 
         if results.len() >= args.limit {
             break;
         }
+    }
+
+    if args.explain {
+        let config = RrfConfig::with_weights(ctx.config.search.bm25_weight, 0.0);
+        return display_explained_results(
+            ctx,
+            &results,
+            &explanations,
+            &config,
+            &filter_audit,
+            &search_ctx,
+            args,
+            "bm25",
+        );
     }
 
     display_results(ctx, &results, args, "bm25")
@@ -260,21 +328,34 @@ fn search_semantic(ctx: &AppContext, args: &SearchArgs, filters: &SearchFilters)
 
     // Search more to allow filtering
     let search_results = vector_index.search(&query_embedding, args.limit * 50);
+    let search_ctx = build_search_context(ctx);
+    let mut filter_audit = FilterResult::new(search_results.len(), filters);
 
     let mut results = Vec::new();
-    for (skill_id, score) in search_results {
+    let mut explanations = Vec::new();
+    for (idx, (skill_id, score)) in search_results.into_iter().enumerate() {
         // Fetch metadata first
         if let Some(candidate) = ctx.db.get_skill_candidate(&skill_id)? {
             let skill_tags = parse_tags_from_metadata(&candidate.metadata_json);
 
-            if filters.matches(
+            if filter_audit.evaluate_candidate(
                 &skill_tags,
                 &candidate.source_layer,
                 candidate.quality_score as f32,
                 candidate.is_deprecated,
             ) {
                 if let Some(skill) = ctx.db.get_skill(&skill_id)? {
-                    results.push((skill, score));
+                    if matches_skill_record(filters, &skill) {
+                        results.push((skill, score));
+                        explanations.push(HybridResult {
+                            skill_id,
+                            score,
+                            bm25_rank: None,
+                            semantic_rank: Some(idx + 1),
+                            bm25_score: None,
+                            semantic_score: Some(score),
+                        });
+                    }
                 }
             }
         }
@@ -284,7 +365,148 @@ fn search_semantic(ctx: &AppContext, args: &SearchArgs, filters: &SearchFilters)
         }
     }
 
+    if args.explain {
+        let config = RrfConfig::with_weights(0.0, ctx.config.search.semantic_weight);
+        return display_explained_results(
+            ctx,
+            &results,
+            &explanations,
+            &config,
+            &filter_audit,
+            &search_ctx,
+            args,
+            "semantic",
+        );
+    }
+
     display_results(ctx, &results, args, "semantic")
+}
+
+fn build_search_context(ctx: &AppContext) -> SearchContext {
+    use crate::context::{DefaultDetector, ProjectDetector};
+    let cwd_path = std::env::current_dir().ok();
+    let tech_stack = cwd_path
+        .as_deref()
+        .map(|dir| {
+            let detector = DefaultDetector::new();
+            detector
+                .detect(dir)
+                .into_iter()
+                .map(|d| d.project_type.name().to_lowercase())
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+    let recent_skills = ctx
+        .db
+        .get_skill_usage_stats()
+        .map(|(_, counts, _)| {
+            let mut pairs: Vec<(String, u64)> =
+                counts.into_iter().filter(|(_, c)| *c > 0).collect();
+            pairs.sort_by(|a, b| b.1.cmp(&a.1));
+            pairs.into_iter().take(5).map(|(id, _)| id).collect()
+        })
+        .unwrap_or_default();
+    SearchContext {
+        cwd: cwd_path.map(|p| p.display().to_string()),
+        recent_skills,
+        tech_stack,
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn display_explained_results(
+    ctx: &AppContext,
+    results: &[(crate::storage::sqlite::SkillRecord, f32)],
+    explanations: &[HybridResult],
+    config: &RrfConfig,
+    filter_audit: &FilterResult,
+    search_ctx: &SearchContext,
+    args: &SearchArgs,
+    search_type: &str,
+) -> Result<()> {
+    if ctx.output_format != OutputFormat::Human {
+        let items: Vec<serde_json::Value> = results
+            .iter()
+            .zip(explanations.iter())
+            .map(|((skill, score), exp)| {
+                let bm25_rrf = exp
+                    .bm25_rank
+                    .map(|r| config.bm25_weight / (config.k + r as f32))
+                    .unwrap_or(0.0);
+                let semantic_rrf = exp
+                    .semantic_rank
+                    .map(|r| config.semantic_weight / (config.k + r as f32))
+                    .unwrap_or(0.0);
+                let skill_tags = parse_tags_from_metadata(&skill.metadata_json);
+                let context_boost = search_ctx.boost_for(&skill.id, &skill_tags);
+                serde_json::json!({
+                    "id": skill.id,
+                    "name": skill.name,
+                    "description": skill.description,
+                    "score": score,
+                    "layer": skill.source_layer,
+                    "quality_score": skill.quality_score,
+                    "explanation": {
+                        "bm25_rank": exp.bm25_rank,
+                        "bm25_score": exp.bm25_score,
+                        "bm25_rrf_contribution": bm25_rrf,
+                        "semantic_rank": exp.semantic_rank,
+                        "semantic_score": exp.semantic_score,
+                        "semantic_rrf_contribution": semantic_rrf,
+                        "context_boost": context_boost,
+                        "rrf_k": config.k,
+                        "bm25_weight": config.bm25_weight,
+                        "semantic_weight": config.semantic_weight,
+                    }
+                })
+            })
+            .collect();
+        let payload = serde_json::json!({
+            "status": "ok",
+            "query": args.query,
+            "search_type": search_type,
+            "count": items.len(),
+            "filter_audit": filter_audit,
+            "search_context": search_ctx,
+            "results": items,
+        });
+        return crate::cli::output::emit_json(&payload);
+    }
+
+    println!(
+        "Search Explain for '{}' (mode: {}, k={}, bm25_w={:.2}, sem_w={:.2}):",
+        args.query, search_type, config.k, config.bm25_weight, config.semantic_weight
+    );
+    println!(
+        "  Filter Audit: before={}, passed={}, filtered=(tags={}, layer={}, quality={}, deprecated={})",
+        filter_audit.total_before,
+        filter_audit.total_after,
+        filter_audit.filtered_by_tags,
+        filter_audit.filtered_by_layer,
+        filter_audit.filtered_by_quality,
+        filter_audit.filtered_by_deprecated
+    );
+    for ((skill, score), exp) in results.iter().zip(explanations.iter()) {
+        let bm25_rrf = exp
+            .bm25_rank
+            .map(|r| config.bm25_weight / (config.k + r as f32))
+            .unwrap_or(0.0);
+        let semantic_rrf = exp
+            .semantic_rank
+            .map(|r| config.semantic_weight / (config.k + r as f32))
+            .unwrap_or(0.0);
+        println!("  - {} ({}) [score: {:.4}]", skill.id, skill.name, score);
+        println!(
+            "    BM25: rank={:?}, raw={:?}, rrf={:.4} | Semantic: rank={:?}, raw={:?}, rrf={:.4}",
+            exp.bm25_rank,
+            exp.bm25_score,
+            bm25_rrf,
+            exp.semantic_rank,
+            exp.semantic_score,
+            semantic_rrf
+        );
+    }
+    Ok(())
 }
 
 fn display_results(

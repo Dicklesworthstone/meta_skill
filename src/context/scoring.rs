@@ -23,6 +23,8 @@ pub struct WorkingContext {
     pub detected_tools: HashSet<String>,
     /// Content snippets for signal matching (file content, command history, etc.).
     pub content_snippets: Vec<String>,
+    /// Historical affinity per skill ID (0.0 - 1.0) from prior usage/feedback.
+    pub historical_affinity: std::collections::HashMap<String, f32>,
 }
 
 impl WorkingContext {
@@ -56,6 +58,16 @@ impl WorkingContext {
     #[must_use]
     pub fn with_content(mut self, content: Vec<String>) -> Self {
         self.content_snippets = content;
+        self
+    }
+
+    /// Add historical affinity scores per skill ID.
+    #[must_use]
+    pub fn with_historical_affinity(
+        mut self,
+        affinity: std::collections::HashMap<String, f32>,
+    ) -> Self {
+        self.historical_affinity = affinity;
         self
     }
 
@@ -212,12 +224,18 @@ impl RelevanceScorer {
     /// Get the score breakdown for a skill.
     #[must_use]
     pub fn breakdown(&self, metadata: &SkillMetadata, context: &WorkingContext) -> ScoreBreakdown {
+        let historical = context
+            .historical_affinity
+            .get(&metadata.id)
+            .copied()
+            .unwrap_or(0.0)
+            .clamp(0.0, 1.0);
         ScoreBreakdown {
             project_type: self.project_type_match(&metadata.context, context),
             file_patterns: self.file_pattern_match(&metadata.context, context),
             tools: self.tool_match(&metadata.context, context),
             signals: self.signal_match(&metadata.context, context),
-            historical: 0.0, // TODO: Connect to recommendation engine
+            historical,
         }
     }
 
@@ -647,5 +665,21 @@ mod tests {
         assert!(breakdown.file_patterns > 0.0);
         assert!(breakdown.tools > 0.0);
         assert!(breakdown.signals > 0.0);
+    }
+
+    #[test]
+    fn test_historical_affinity_scoring() {
+        let weights = ScoringWeights::new(0.0, 0.0, 0.0, 0.0, 1.0);
+        let scorer = RelevanceScorer::new(weights);
+        let skill = sample_rust_skill();
+        let context = rust_context().with_historical_affinity(std::collections::HashMap::from([(
+            "rust-errors".to_string(),
+            0.85,
+        )]));
+
+        let breakdown = scorer.breakdown(&skill, &context);
+        assert!((breakdown.historical - 0.85).abs() < 1e-5);
+        let score = scorer.score(&skill, &context);
+        assert!((score - 0.85).abs() < 1e-5);
     }
 }

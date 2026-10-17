@@ -137,6 +137,8 @@ pub fn run(ctx: &AppContext, command: &Commands) -> Result<()> {
         Commands::Mcp(args) => mcp::run(ctx, args),
         Commands::Template(args) => template::run(ctx, args),
         Commands::Embed(args) => embed::run(ctx, args),
+        Commands::Coverage(args) => cross_project::run_coverage(ctx, args),
+        Commands::Mark(args) => cross_project::run_mark(ctx, args),
     }
 }
 

@@ -42,6 +42,10 @@ pub enum BundleCommand {
     List,
     /// Show details of a bundle
     Show(BundleShowArgs),
+    /// Verify bundle integrity, checksums, and signatures
+    Verify(BundleVerifyArgs),
+    /// Search installed and local bundles
+    Search(BundleSearchArgs),
     /// Check for local modifications and conflicts
     Conflicts(BundleConflictsArgs),
 }
@@ -56,7 +60,7 @@ pub struct BundleCreateArgs {
     pub skills: Vec<String>,
 
     /// Directory containing skills to discover and include
-    #[arg(long, conflicts_with = "skills")]
+    #[arg(long, visible_alias = "from", conflicts_with = "skills")]
     pub from_dir: Option<PathBuf>,
 
     /// Bundle id (defaults to slug of name)
@@ -122,6 +126,10 @@ pub struct BundleInstallArgs {
     /// Skills to install (defaults to all)
     #[arg(long)]
     pub skills: Vec<String>,
+
+    /// Target skill layer (system, global, project, local)
+    #[arg(long, default_value = "project")]
+    pub layer: String,
 
     /// GitHub token (overrides env)
     #[arg(long)]
@@ -203,6 +211,26 @@ pub struct BundleUpdateArgs {
 }
 
 #[derive(Args, Debug)]
+pub struct BundleVerifyArgs {
+    /// Bundle path (.msb)
+    pub path: PathBuf,
+
+    /// Optional public or private SSH/hex key file to trust for signature verification
+    #[arg(long)]
+    pub key: Option<PathBuf>,
+}
+
+#[derive(Args, Debug)]
+pub struct BundleSearchArgs {
+    /// Search query (matches bundle id, name, description, or skill names)
+    pub query: String,
+
+    /// Maximum number of results
+    #[arg(long, short, default_value = "20")]
+    pub limit: usize,
+}
+
+#[derive(Args, Debug)]
 pub struct BundleConflictsArgs {
     /// Skill to check (default: all installed skills)
     #[arg(long)]
@@ -233,6 +261,8 @@ pub fn run(_ctx: &AppContext, _args: &BundleArgs) -> Result<()> {
         BundleCommand::Update(update) => run_update(ctx, update),
         BundleCommand::List => run_list(ctx),
         BundleCommand::Show(show) => run_show(ctx, show),
+        BundleCommand::Verify(verify) => run_verify(ctx, verify),
+        BundleCommand::Search(search) => run_search(ctx, search),
         BundleCommand::Conflicts(conflicts) => run_conflicts(ctx, conflicts),
     }
 }
@@ -366,6 +396,15 @@ fn run_create(ctx: &AppContext, args: &BundleCreateArgs) -> Result<()> {
         let signature = signer.sign(checksum.as_bytes(), &signer_name);
         package.manifest.signatures.push(signature);
 
+        // Persist signer public key in <ms_root>/trusted_keys so locally signed
+        // bundles can be verified and installed without --no-verify.
+        let trusted_dir = ctx.ms_root.join("trusted_keys");
+        if std::fs::create_dir_all(&trusted_dir).is_ok() {
+            let safe_id = signer.key_id().replace(':', "_");
+            let pub_path = trusted_dir.join(format!("{safe_id}.pub"));
+            let _ = std::fs::write(&pub_path, hex::encode(signer.public_key()));
+        }
+
         if ctx.output_format == OutputFormat::Human {
             eprintln!("Signed bundle with key: {}", key_path.display());
         }
@@ -493,16 +532,6 @@ fn run_install(ctx: &AppContext, args: &BundleInstallArgs) -> Result<()> {
     let only = normalize_skill_list(&args.skills);
 
     // Install with verification
-    //
-    // Current behavior:
-    // - --no-verify: Skip all verification, allow unsigned bundles
-    // - Default (no flag): Allow unsigned bundles (with warning), but require valid
-    //   signatures for signed bundles when a verifier is configured
-    //
-    // Note: Trusted key configuration is not yet implemented. For now, signed bundles
-    // will fail verification unless --no-verify is used. This is intentional - we want
-    // to establish the signature verification pattern early, even if the full key
-    // management workflow isn't complete yet.
     let report = if args.no_verify {
         let options = crate::bundler::InstallOptions::<
             crate::bundler::manifest::NoopSignatureVerifier,
@@ -522,15 +551,47 @@ fn run_install(ctx: &AppContext, args: &BundleInstallArgs) -> Result<()> {
         >::allow_unsigned();
         crate::bundler::install_with_options(&package, ctx.git.root(), &only, &options)?
     } else {
-        // Signed bundle: require verification
-        // TODO: Load trusted keys from config when implemented
-        return Err(MsError::ValidationFailed(format!(
-            "Bundle '{}' is signed but trusted key configuration is not yet implemented. \
-             Use --no-verify to install (not recommended for production), \
-             or wait for trusted key support in a future release.",
-            package.manifest.bundle.id
-        )));
+        // Signed bundle: verify against trusted Ed25519 keys in <ms_root>/trusted_keys
+        use crate::bundler::manifest::SignatureVerifier;
+        let verifier = load_trusted_verifier(&ctx.ms_root, None)?;
+        let has_trusted = package
+            .manifest
+            .signatures
+            .iter()
+            .any(|sig| verifier.is_trusted(&sig.key_id));
+        if !has_trusted {
+            return Err(MsError::ValidationFailed(format!(
+                "Bundle '{}' is signed, but no matching trusted key was found in {}. \
+                 Use --no-verify to install unsigned/untrusted bundles, or add the signer's public key to trusted_keys.",
+                package.manifest.bundle.id,
+                ctx.ms_root.join("trusted_keys").display()
+            )));
+        }
+        let options = crate::bundler::InstallOptions::with_verifier(&verifier);
+        crate::bundler::install_with_options(&package, ctx.git.root(), &only, &options)?
     };
+
+    // Persist installed skills into SQLite, GitArchive, and Tantivy search index
+    let target_layer = match args.layer.to_ascii_lowercase().as_str() {
+        "system" | "base" => crate::core::SkillLayer::Base,
+        "global" | "org" => crate::core::SkillLayer::Org,
+        "local" | "user" | "session" => crate::core::SkillLayer::User,
+        _ => crate::core::SkillLayer::Project,
+    };
+    if !report.installed.is_empty() {
+        let tx_mgr =
+            crate::storage::TxManager::new(ctx.db.clone(), ctx.git.clone(), ctx.ms_root.clone())?;
+        let _ = tx_mgr.recover();
+        for skill_id in &report.installed {
+            if let Ok(skill_spec) = ctx.git.read_skill(skill_id) {
+                tx_mgr.write_skill_with_layer(&skill_spec, target_layer)?;
+                if let Ok(Some(record)) = ctx.db.get_skill(skill_id) {
+                    let _ = ctx.search.index_skill(&record);
+                }
+            }
+        }
+        let _ = ctx.search.commit();
+    }
 
     // Register the installation
     let installed = InstalledBundle {
@@ -592,18 +653,39 @@ fn run_remove(ctx: &AppContext, args: &BundleRemoveArgs) -> Result<()> {
         }
     }
 
-    // Remove skills if requested
+    // Remove skills if requested via 2PC TxManager + Tantivy index
     let mut removed_skills = Vec::new();
     if args.remove_skills {
         if let Some(ref inst) = installed {
+            let tx_mgr = crate::storage::TxManager::new(
+                ctx.db.clone(),
+                ctx.git.clone(),
+                ctx.ms_root.clone(),
+            )?;
+            let _ = tx_mgr.recover();
             for skill_id in &inst.skills {
-                if let Some(skill_path) = ctx.git.skill_path(skill_id) {
-                    if skill_path.exists() {
-                        std::fs::remove_dir_all(&skill_path)?;
-                        removed_skills.push(skill_id.clone());
+                let exists_on_disk = ctx.git.skill_exists(skill_id);
+                let exists_in_db = ctx.db.get_skill(skill_id).ok().flatten().is_some();
+                if exists_on_disk || exists_in_db {
+                    if exists_on_disk {
+                        if let Err(err) = tx_mgr.delete_skill_unlocked(skill_id) {
+                            // Fallback if skill was not tracked in Git index yet
+                            tracing::debug!(skill_id = %skill_id, error = %err, "fallback skill removal");
+                            if let Some(skill_path) = ctx.git.skill_path(skill_id) {
+                                if skill_path.exists() {
+                                    std::fs::remove_dir_all(&skill_path)?;
+                                }
+                            }
+                            let _ = ctx.db.delete_skill(skill_id);
+                        }
+                    } else {
+                        let _ = ctx.db.delete_skill(skill_id);
                     }
+                    let _ = ctx.search.delete_skill(skill_id);
+                    removed_skills.push(skill_id.clone());
                 }
             }
+            let _ = ctx.search.commit();
         }
     }
 
@@ -787,11 +869,8 @@ fn verify_bundle(ctx: &AppContext, args: &BundleUpdateArgs, package: &BundlePack
         return Ok(());
     }
 
-    Err(MsError::ValidationFailed(format!(
-        "Bundle '{}' is signed but trusted key configuration is not yet implemented. \
-         Use --no-verify to update (not recommended for production).",
-        package.manifest.bundle.id
-    )))
+    let verifier = load_trusted_verifier(&ctx.ms_root, None)?;
+    package.verify_signatures(&verifier)
 }
 
 fn build_update_item(
@@ -1160,8 +1239,248 @@ fn run_publish(ctx: &AppContext, args: &BundlePublishArgs) -> Result<()> {
     Ok(())
 }
 
+fn run_verify(ctx: &AppContext, args: &BundleVerifyArgs) -> Result<()> {
+    let path = expand_local_path(&args.path.to_string_lossy());
+    if !path.exists() {
+        return Err(MsError::ValidationFailed(format!(
+            "bundle file not found: {}",
+            path.display()
+        )));
+    }
+    let bytes = std::fs::read(&path)
+        .map_err(|err| MsError::Config(format!("read {}: {err}", path.display())))?;
+    let package = BundlePackage::from_bytes(&bytes)?;
+    package.verify()?;
+
+    let signed = !package.manifest.signatures.is_empty();
+    let mut signatures_verified = false;
+    if signed {
+        let verifier = load_trusted_verifier(&ctx.ms_root, args.key.as_deref())?;
+        package.verify_signatures(&verifier)?;
+        signatures_verified = true;
+    }
+
+    let mut cached_blobs_verified = 0usize;
+    if let Ok(store) = crate::bundler::blob::BlobStore::open(ctx.git.root().join("bundles")) {
+        for blob in &package.blobs {
+            if store.has_blob(&blob.hash) && store.verify_blob(&blob.hash).unwrap_or(false) {
+                cached_blobs_verified += 1;
+            }
+        }
+    }
+
+    if ctx.output_format != OutputFormat::Human {
+        return emit_json(&serde_json::json!({
+            "status": "ok",
+            "valid": true,
+            "bundle_id": package.manifest.bundle.id,
+            "version": package.manifest.bundle.version,
+            "checksum": package.manifest.checksum,
+            "signed": signed,
+            "signatures_verified": signatures_verified,
+            "signature_count": package.manifest.signatures.len(),
+            "skills": package.manifest.skills.len(),
+            "blobs": package.blobs.len(),
+            "cached_blobs_verified": cached_blobs_verified,
+        }));
+    }
+
+    println!(
+        "✓ Bundle '{}' v{} is valid (checksum: {}, blobs: {}, cached_verified: {})",
+        package.manifest.bundle.id,
+        package.manifest.bundle.version,
+        package.manifest.checksum.as_deref().unwrap_or("none"),
+        package.blobs.len(),
+        cached_blobs_verified
+    );
+    if signed {
+        println!(
+            "  ✓ {} Ed25519 signature(s) verified",
+            package.manifest.signatures.len()
+        );
+    } else {
+        println!("  ! Bundle is unsigned");
+    }
+    Ok(())
+}
+
+fn run_search(ctx: &AppContext, args: &BundleSearchArgs) -> Result<()> {
+    let q = args.query.to_lowercase();
+    let registry = BundleRegistry::open(ctx.git.root())?;
+
+    let mut matches: Vec<serde_json::Value> = Vec::new();
+    let mut seen_ids = HashSet::new();
+
+    for inst in registry.list() {
+        let id_match = inst.id.to_lowercase().contains(&q);
+        let skill_match = inst.skills.iter().any(|s| s.to_lowercase().contains(&q));
+        let source_match = inst.source.to_string().to_lowercase().contains(&q);
+        if q.is_empty() || id_match || skill_match || source_match {
+            seen_ids.insert(inst.id.clone());
+            matches.push(serde_json::json!({
+                "id": inst.id,
+                "version": inst.version,
+                "source": inst.source.to_string(),
+                "skills": inst.skills,
+                "installed": true,
+            }));
+        }
+    }
+
+    // Also scan <git_root>/bundles/*.msb if present
+    let bundles_dir = ctx.git.root().join("bundles");
+    if bundles_dir.is_dir() {
+        if let Ok(entries) = std::fs::read_dir(&bundles_dir) {
+            for entry in entries.flatten() {
+                let path = entry.path();
+                if path.extension().and_then(|e| e.to_str()) == Some("msb") {
+                    if let Ok(bytes) = std::fs::read(&path) {
+                        if let Ok(pkg) = BundlePackage::from_bytes(&bytes) {
+                            let b = &pkg.manifest.bundle;
+                            if seen_ids.contains(&b.id) {
+                                continue;
+                            }
+                            let skills: Vec<String> =
+                                pkg.manifest.skills.iter().map(|s| s.name.clone()).collect();
+                            let matched = q.is_empty()
+                                || b.id.to_lowercase().contains(&q)
+                                || b.name.to_lowercase().contains(&q)
+                                || b.description
+                                    .as_deref()
+                                    .unwrap_or("")
+                                    .to_lowercase()
+                                    .contains(&q)
+                                || skills.iter().any(|s| s.to_lowercase().contains(&q));
+                            if matched {
+                                seen_ids.insert(b.id.clone());
+                                matches.push(serde_json::json!({
+                                    "id": b.id,
+                                    "version": b.version,
+                                    "source": path.display().to_string(),
+                                    "skills": skills,
+                                    "installed": false,
+                                }));
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    matches.truncate(args.limit);
+
+    if ctx.output_format != OutputFormat::Human {
+        return emit_json(&serde_json::json!({
+            "status": "ok",
+            "query": args.query,
+            "count": matches.len(),
+            "bundles": matches,
+        }));
+    }
+
+    if matches.is_empty() {
+        println!("No bundles matching '{}' found.", args.query);
+    } else {
+        println!("Bundles matching '{}' ({}):", args.query, matches.len());
+        for m in &matches {
+            let id = m["id"].as_str().unwrap_or("");
+            let ver = m["version"].as_str().unwrap_or("");
+            let inst = if m["installed"].as_bool().unwrap_or(false) {
+                "installed"
+            } else {
+                "local"
+            };
+            println!("  - {id} v{ver} [{inst}]");
+        }
+    }
+    Ok(())
+}
+
+fn load_trusted_verifier(
+    ms_root: &Path,
+    extra_key: Option<&Path>,
+) -> Result<crate::bundler::Ed25519Verifier> {
+    let mut verifier = crate::bundler::Ed25519Verifier::new();
+    let trusted_dir = ms_root.join("trusted_keys");
+    if trusted_dir.is_dir() {
+        if let Ok(entries) = std::fs::read_dir(&trusted_dir) {
+            for entry in entries.flatten() {
+                let path = entry.path();
+                if path.is_file() {
+                    let _ = add_key_file_to_verifier(&mut verifier, &path);
+                }
+            }
+        }
+    }
+    if let Some(key_path) = extra_key {
+        add_key_file_to_verifier(&mut verifier, key_path)?;
+    }
+    Ok(verifier)
+}
+
+fn add_key_file_to_verifier(
+    verifier: &mut crate::bundler::Ed25519Verifier,
+    path: &Path,
+) -> Result<()> {
+    let raw = std::fs::read_to_string(path)
+        .map_err(|err| MsError::Config(format!("read key {}: {err}", path.display())))?;
+    let trimmed = raw.trim();
+
+    // Case 1: OpenSSH private key file
+    if trimmed.contains("BEGIN OPENSSH PRIVATE KEY") {
+        let signer = crate::bundler::Ed25519Signer::from_openssh_str(trimmed)?;
+        verifier.add_key(signer.key_id().to_string(), signer.public_key().to_vec());
+        return Ok(());
+    }
+
+    // Case 2: OpenSSH public key line: "ssh-ed25519 <base64> [comment]"
+    if trimmed.starts_with("ssh-ed25519 ") {
+        use base64::Engine;
+        let parts: Vec<&str> = trimmed.split_whitespace().collect();
+        if parts.len() >= 2 {
+            let decoded = base64::engine::general_purpose::STANDARD
+                .decode(parts[1])
+                .map_err(|e| {
+                    MsError::ValidationFailed(format!("invalid ssh-ed25519 base64: {e}"))
+                })?;
+            if decoded.len() >= 32 {
+                let pub_bytes = decoded[decoded.len() - 32..].to_vec();
+                let key_id = format!("ed25519:{}", hex::encode(&pub_bytes[..8]));
+                verifier.add_key(key_id, pub_bytes);
+                return Ok(());
+            }
+        }
+    }
+
+    // Case 3: 64-character hex-encoded 32-byte Ed25519 public key (optionally prefixed with "ed25519:")
+    let hex_str = trimmed.strip_prefix("ed25519:").unwrap_or(trimmed);
+    let pub_bytes = hex::decode(hex_str).map_err(|e| {
+        MsError::ValidationFailed(format!(
+            "unrecognized Ed25519 key format in {}: {e}",
+            path.display()
+        ))
+    })?;
+    if pub_bytes.len() != 32 {
+        return Err(MsError::ValidationFailed(format!(
+            "expected 32-byte Ed25519 public key in {}, got {} bytes",
+            path.display(),
+            pub_bytes.len()
+        )));
+    }
+    let key_id = format!("ed25519:{}", hex::encode(&pub_bytes[..8]));
+    verifier.add_key(key_id, pub_bytes);
+    Ok(())
+}
+
 fn run_conflicts(ctx: &AppContext, args: &BundleConflictsArgs) -> Result<()> {
-    let skills_dir = ctx.git.root().join("skills");
+    let by_id_dir = ctx.git.root().join("skills/by-id");
+    let legacy_dir = ctx.git.root().join("skills");
+    let skills_dir = if by_id_dir.exists() {
+        by_id_dir
+    } else {
+        legacy_dir
+    };
     if !skills_dir.exists() {
         if ctx.output_format != OutputFormat::Human {
             return emit_json(&ConflictsReport {
@@ -1176,9 +1495,15 @@ fn run_conflicts(ctx: &AppContext, args: &BundleConflictsArgs) -> Result<()> {
 
     let mut reports = Vec::new();
 
-    // If specific skill requested, check only that one
+    // Filter by --skill or --bundle if requested
     let skill_ids: Vec<String> = if let Some(ref skill) = args.skill {
         vec![skill.clone()]
+    } else if let Some(ref bundle_id) = args.bundle {
+        let registry = BundleRegistry::open(ctx.git.root())?;
+        let installed = registry
+            .get(bundle_id)
+            .ok_or_else(|| MsError::NotFound(format!("bundle '{bundle_id}' is not installed")))?;
+        installed.skills.clone()
     } else {
         // List all installed skills
         let mut ids = Vec::new();
@@ -1187,7 +1512,9 @@ fn run_conflicts(ctx: &AppContext, args: &BundleConflictsArgs) -> Result<()> {
                 let path = entry.path();
                 if path.is_dir() {
                     if let Some(name) = path.file_name().and_then(|s| s.to_str()) {
-                        ids.push(name.to_string());
+                        if name != "by-id" {
+                            ids.push(name.to_string());
+                        }
                     }
                 }
             }
@@ -1537,13 +1864,6 @@ struct BundleCreateReport {
     checksum: Option<String>,
 }
 
-#[allow(dead_code)]
-#[derive(serde::Serialize)]
-struct BundleListReport {
-    bundles: Vec<String>,
-    count: usize,
-}
-
 #[derive(serde::Serialize)]
 struct BundleListReportDetailed {
     bundles: Vec<BundleListEntry>,
@@ -1557,14 +1877,6 @@ struct BundleListEntry {
     source: String,
     skills: Vec<String>,
     installed_at: String,
-}
-
-#[allow(dead_code)]
-#[derive(serde::Serialize)]
-struct BundleRemoveReport {
-    bundle_id: String,
-    removed_skills: Vec<String>,
-    skills_kept: Vec<String>,
 }
 
 #[derive(serde::Serialize)]

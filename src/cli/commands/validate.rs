@@ -16,7 +16,11 @@ use crate::security::SafetyGate;
 #[derive(Args, Debug)]
 pub struct ValidateArgs {
     /// Skill ID or path to SKILL.md
-    pub skill: String,
+    pub skill: Option<String>,
+
+    /// Validate all discovered skills
+    #[arg(long)]
+    pub all: bool,
 
     /// Run UBS on code blocks
     #[arg(long)]
@@ -24,13 +28,103 @@ pub struct ValidateArgs {
 }
 
 pub fn run(ctx: &AppContext, args: &ValidateArgs) -> Result<()> {
-    let skill_md = resolve_skill_markdown(ctx, &args.skill)?;
+    if !args.all && args.skill.is_none() {
+        return Err(MsError::Config("missing skill (or use --all)".to_string()));
+    }
+
+    if args.all {
+        let skill_files = crate::cli::commands::discover_skill_markdowns(ctx)?;
+        let mut reports = Vec::new();
+        let mut ubs_failed = false;
+
+        for skill_md in skill_files {
+            let raw = std::fs::read_to_string(&skill_md).map_err(|err| {
+                crate::error::MsError::Config(format!("read {}: {err}", skill_md.display()))
+            })?;
+            let spec = parse_markdown(&raw)?;
+            let roundtrip_ok = crate::core::spec_lens::SpecLens
+                .verify_roundtrip(&spec)
+                .is_ok();
+            let mut warnings = validate(&spec)?;
+            if !roundtrip_ok {
+                warnings.push(ValidationWarning {
+                    field: "roundtrip".to_string(),
+                    message: "Markdown compilation roundtrip did not preserve spec semantics"
+                        .to_string(),
+                });
+            }
+            let ubs_result = if args.ubs {
+                let gate = SafetyGate::from_context(ctx);
+                let client = UbsClient::new(None).with_safety(gate);
+                let res = validate_with_ubs(&spec, &client)?;
+                if !res.is_clean() {
+                    ubs_failed = true;
+                }
+                Some(res)
+            } else {
+                None
+            };
+            reports.push(build_report(
+                &spec.metadata.id,
+                &skill_md,
+                &warnings,
+                ubs_result.as_ref(),
+                roundtrip_ok,
+            ));
+        }
+
+        if ctx.output_format != OutputFormat::Human {
+            let clean = reports.iter().all(|r| r.clean);
+            return emit_json(&serde_json::json!({
+                "status": if clean { "ok" } else { "warnings" },
+                "count": reports.len(),
+                "clean": clean,
+                "results": reports,
+            }));
+        }
+
+        let mut layout = HumanLayout::new();
+        layout.title("Validation (All Skills)");
+        layout.kv("Total Skills", &reports.len().to_string());
+        layout.kv(
+            "Clean",
+            &reports.iter().filter(|r| r.clean).count().to_string(),
+        );
+        for r in &reports {
+            layout.section(&r.skill);
+            layout.kv("Path", &r.path);
+            layout.kv("Clean", if r.clean { "yes" } else { "no" });
+            layout.kv("Roundtrip OK", if r.roundtrip_ok { "yes" } else { "no" });
+            for w in &r.warnings {
+                layout.bullet(&format!("{}: {}", w.field, w.message));
+            }
+        }
+        emit_human(layout);
+        if ubs_failed {
+            return Err(MsError::ValidationFailed(
+                "UBS findings detected".to_string(),
+            ));
+        }
+        return Ok(());
+    }
+
+    let skill_arg = args.skill.as_deref().unwrap_or_default();
+    let skill_md = resolve_skill_markdown(ctx, skill_arg)?;
     let raw = std::fs::read_to_string(&skill_md).map_err(|err| {
         crate::error::MsError::Config(format!("read {}: {err}", skill_md.display()))
     })?;
     let spec = parse_markdown(&raw)?;
+    let roundtrip_ok = crate::core::spec_lens::SpecLens
+        .verify_roundtrip(&spec)
+        .is_ok();
 
-    let warnings = validate(&spec)?;
+    let mut warnings = validate(&spec)?;
+    if !roundtrip_ok {
+        warnings.push(ValidationWarning {
+            field: "roundtrip".to_string(),
+            message: "Markdown compilation roundtrip did not preserve spec semantics".to_string(),
+        });
+    }
     let ubs_result = if args.ubs {
         let gate = SafetyGate::from_context(ctx);
         let client = UbsClient::new(None).with_safety(gate);
@@ -40,14 +134,21 @@ pub fn run(ctx: &AppContext, args: &ValidateArgs) -> Result<()> {
     };
 
     if ctx.output_format != OutputFormat::Human {
-        let report = build_report(&args.skill, &skill_md, &warnings, ubs_result.as_ref());
+        let report = build_report(
+            skill_arg,
+            &skill_md,
+            &warnings,
+            ubs_result.as_ref(),
+            roundtrip_ok,
+        );
         return emit_json(&report);
     }
 
     let mut layout = HumanLayout::new();
     layout.title("Validation");
-    layout.kv("Skill", &args.skill);
+    layout.kv("Skill", skill_arg);
     layout.kv("Path", &skill_md.display().to_string());
+    layout.kv("Roundtrip OK", if roundtrip_ok { "yes" } else { "no" });
 
     if !warnings.is_empty() {
         layout.section("Warnings");
@@ -103,6 +204,7 @@ struct ValidateReport {
     path: String,
     warnings: Vec<WarningOutput>,
     ubs: Option<UbsReport>,
+    roundtrip_ok: bool,
     clean: bool,
 }
 
@@ -138,6 +240,7 @@ fn build_report(
     skill_md: &std::path::Path,
     warnings: &[ValidationWarning],
     ubs_result: Option<&UbsResult>,
+    roundtrip_ok: bool,
 ) -> ValidateReport {
     let warning_items = warnings
         .iter()
@@ -154,14 +257,16 @@ fn build_report(
         stderr: result.stderr.clone(),
         items: result.findings.iter().map(map_finding).collect::<Vec<_>>(),
     });
-    let clean =
-        warning_items.is_empty() && ubs_result.is_none_or(crate::quality::ubs::UbsResult::is_clean);
+    let clean = roundtrip_ok
+        && warning_items.is_empty()
+        && ubs_result.is_none_or(crate::quality::ubs::UbsResult::is_clean);
 
     ValidateReport {
         skill: skill.to_string(),
         path: skill_md.display().to_string(),
         warnings: warning_items,
         ubs,
+        roundtrip_ok,
         clean,
     }
 }

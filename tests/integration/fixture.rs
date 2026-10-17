@@ -188,23 +188,34 @@ impl TestFixture {
         fixture
     }
 
-    /// Create fixture with mock CASS integration
+    /// Create fixture with CASS session and extraction fixtures from `tests/fixtures/cass/`
     pub fn with_mock_cass(test_name: &str) -> Self {
         let fixture = Self::new(test_name);
 
         let cass_dir = fixture.root.join("mock_cass");
-        std::fs::create_dir_all(&cass_dir).expect("Failed to create mock CASS dir");
+        std::fs::create_dir_all(&cass_dir).expect("Failed to create CASS fixture dir");
 
-        let extraction = r#"{
+        let repo_cass_fixtures =
+            std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/cass");
+        let extraction_fixture = repo_cass_fixtures.join("debugging-skill.json");
+        let extraction = std::fs::read_to_string(&extraction_fixture).unwrap_or_else(|_| {
+            r#"{
   "skill_name": "test-skill",
   "description": "A test skill for integration testing",
   "patterns": ["pattern1", "pattern2"],
   "confidence": 0.85
-}"#;
+}"#
+            .to_string()
+        });
         std::fs::write(cass_dir.join("extraction.json"), extraction)
-            .expect("Failed to write mock extraction");
+            .expect("Failed to write CASS extraction fixture");
 
-        println!("[FIXTURE] Mock CASS configured at: {cass_dir:?}");
+        let session_fixture = repo_cass_fixtures.join("session-001.jsonl");
+        if let Ok(session_data) = std::fs::read_to_string(&session_fixture) {
+            let _ = std::fs::write(cass_dir.join("session-001.jsonl"), session_data);
+        }
+
+        println!("[FIXTURE] CASS fixtures configured at: {cass_dir:?}");
 
         fixture
     }

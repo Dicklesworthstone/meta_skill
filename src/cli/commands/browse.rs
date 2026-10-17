@@ -8,7 +8,6 @@ use clap::Args;
 use crate::app::AppContext;
 use crate::cli::output::OutputFormat;
 use crate::error::{MsError, Result};
-use crate::tui::run_browse_tui;
 
 #[derive(Args, Debug)]
 pub struct BrowseArgs {
@@ -62,8 +61,14 @@ pub fn run(ctx: &AppContext, args: &BrowseArgs) -> Result<()> {
         initial_query_parts.push(format!("quality:>{}", min_quality));
     }
 
+    let initial_query = if initial_query_parts.is_empty() {
+        None
+    } else {
+        Some(initial_query_parts.join(" "))
+    };
+
     // Run the TUI and capture any loaded skill
-    let result = run_browse_tui(&ctx.db)?;
+    let result = crate::tui::browse::run_browse_tui_with_query(&ctx.db, initial_query)?;
 
     // If a skill was selected, output its content
     if let Some(skill_id) = result {

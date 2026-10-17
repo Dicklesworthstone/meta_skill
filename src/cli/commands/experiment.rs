@@ -467,6 +467,7 @@ fn run_load(ctx: &AppContext, args: &ExperimentLoadArgs) -> Result<()> {
         deps: args.deps,
         experiment_id: Some(record.id.clone()),
         variant_id: Some(selection.variant.id.clone()),
+        for_ntm: false,
     };
 
     let load_result = load_skill(ctx, &load_args, &record.skill_id)?;
@@ -694,6 +695,8 @@ struct VariantStats {
 #[derive(Debug, Serialize)]
 struct ExperimentAnalysis {
     p_value: Option<f64>,
+    msprt_p_value: Option<f64>,
+    msprt_lambda: Option<f64>,
     significance: Option<f64>,
     confidence_interval: Option<[f64; 2]>,
     recommendation: String,
@@ -970,6 +973,8 @@ fn compute_experiment_analysis(stats: &[VariantStats]) -> Option<ExperimentAnaly
     if candidates.len() < 2 {
         return Some(ExperimentAnalysis {
             p_value: None,
+            msprt_p_value: None,
+            msprt_lambda: None,
             significance: None,
             confidence_interval: None,
             recommendation: "Not enough outcome data yet.".to_string(),
@@ -986,6 +991,12 @@ fn compute_experiment_analysis(stats: &[VariantStats]) -> Option<ExperimentAnaly
     let best = candidates[0];
     let runner_up = candidates[1];
     let (p_value, ci) = two_proportion_test(
+        best.successes,
+        best.outcomes,
+        runner_up.successes,
+        runner_up.outcomes,
+    );
+    let (msprt_lambda, msprt_p_value) = msprt_sequential_test(
         best.successes,
         best.outcomes,
         runner_up.successes,
@@ -1010,10 +1021,39 @@ fn compute_experiment_analysis(stats: &[VariantStats]) -> Option<ExperimentAnaly
 
     Some(ExperimentAnalysis {
         p_value,
+        msprt_p_value,
+        msprt_lambda,
         significance,
         confidence_interval,
         recommendation,
     })
+}
+
+/// Anytime-valid Gaussian mixture Sequential Probability Ratio Test (mSPRT).
+fn msprt_sequential_test(
+    succ_a: u64,
+    total_a: u64,
+    succ_b: u64,
+    total_b: u64,
+) -> (Option<f64>, Option<f64>) {
+    if total_a == 0 || total_b == 0 {
+        return (None, None);
+    }
+    let n1 = total_a as f64;
+    let n2 = total_b as f64;
+    // Jeffreys-smoothed proportions so variance V > 0 even at 0% or 100%
+    let p1 = (succ_a as f64 + 0.5) / (n1 + 1.0);
+    let p2 = (succ_b as f64 + 0.5) / (n2 + 1.0);
+    let diff = (succ_a as f64 / n1) - (succ_b as f64 / n2);
+    let v = (p1 * (1.0 - p1) / n1) + (p2 * (1.0 - p2) / n2);
+    if v <= 0.0 {
+        return (None, None);
+    }
+    let tau_sq = 0.05 * 0.05;
+    let lambda =
+        (v / (v + tau_sq)).sqrt() * ((diff * diff * tau_sq) / (2.0 * v * (v + tau_sq))).exp();
+    let p_anytime = (1.0 / lambda).clamp(0.0, 1.0);
+    (Some(lambda), Some(p_anytime))
 }
 
 fn two_proportion_test(

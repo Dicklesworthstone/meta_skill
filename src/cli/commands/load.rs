@@ -167,6 +167,10 @@ pub struct LoadArgs {
     /// Variant id for experiment attribution
     #[arg(long)]
     pub variant_id: Option<String>,
+
+    /// Optimize auto-loading and packing for NTM multi-agent swarm sessions
+    #[arg(long)]
+    pub for_ntm: bool,
 }
 
 /// Result of loading a skill
@@ -296,7 +300,7 @@ fn run_auto_load(ctx: &AppContext, args: &LoadArgs) -> Result<()> {
 
     // Blend in bandit scores from historical learning
     let skill_ids: Vec<String> = candidates.iter().map(|c| c.skill_id.clone()).collect();
-    let bandit_scores = get_bandit_scores(&collected, &skill_ids);
+    let bandit_scores = get_bandit_scores(&ctx.ms_root, &collected, &skill_ids);
 
     // Apply bandit score boost (blend_factor from config, default 0.3)
     let blend_factor = ctx.config.auto_load.bandit_blend;
@@ -400,6 +404,7 @@ fn run_auto_load(ctx: &AppContext, args: &LoadArgs) -> Result<()> {
             .map(|c| (c.skill_id.clone(), c.score))
             .collect();
         record_auto_load_events(
+            &ctx.ms_root,
             &collected,
             &loaded_results,
             &scores,
@@ -449,9 +454,8 @@ fn convert_to_scoring_context(collected: &CollectedContext) -> WorkingContext {
 // =============================================================================
 
 /// Default path for the contextual bandit state file.
-fn default_bandit_path() -> PathBuf {
-    let base = dirs::data_dir().unwrap_or_else(|| PathBuf::from("."));
-    base.join("ms").join("contextual_bandit.json")
+fn default_bandit_path(ms_root: &std::path::Path) -> PathBuf {
+    ms_root.join("contextual_bandit.json")
 }
 
 /// Record auto-load events to the contextual bandit for learning.
@@ -459,6 +463,7 @@ fn default_bandit_path() -> PathBuf {
 /// This function records that skills were auto-loaded based on context,
 /// enabling the bandit to learn which skills are relevant in different contexts.
 fn record_auto_load_events(
+    ms_root: &std::path::Path,
     collected: &CollectedContext,
     loaded_skills: &[LoadResult],
     _scores: &[(String, f32)], // Reserved for future: weighted feedback based on relevance
@@ -491,7 +496,7 @@ fn record_auto_load_events(
     }
 
     // Load the bandit or create new with configured parameters
-    let bandit_path = default_bandit_path();
+    let bandit_path = default_bandit_path(ms_root);
     let mut bandit = match ContextualBandit::load(&bandit_path) {
         Ok(b) => b,
         Err(e) => {
@@ -530,12 +535,16 @@ fn record_auto_load_events(
 ///
 /// This function samples from the contextual bandit to boost scores for
 /// skills that have historically performed well in similar contexts.
-fn get_bandit_scores(collected: &CollectedContext, skill_ids: &[String]) -> HashMap<String, f32> {
+fn get_bandit_scores(
+    ms_root: &std::path::Path,
+    collected: &CollectedContext,
+    skill_ids: &[String],
+) -> HashMap<String, f32> {
     let extractor = DefaultFeatureExtractor::new();
     let history = UserHistory::load(&UserHistory::default_path());
     let features = extractor.extract_from_collected(collected, &history);
 
-    let bandit_path = default_bandit_path();
+    let bandit_path = default_bandit_path(ms_root);
     let mut bandit = match ContextualBandit::load(&bandit_path) {
         Ok(b) => b,
         Err(_) => return HashMap::new(),
@@ -871,10 +880,33 @@ pub(crate) fn load_skill(ctx: &AppContext, args: &LoadArgs, skill_ref: &str) -> 
     let mut spec = spec;
     spec.metadata = metadata;
 
-    // Resolve inheritance and composition
+    // Resolve inheritance and composition (using persistent SQLite ResolutionCache)
     let repo = DbSkillRepository::new(&ctx.db);
-    let resolved = resolve_full(&spec, &repo)?;
-    let spec = resolved.spec;
+    let resolved = if spec.extends.is_some() || !spec.includes.is_empty() {
+        let resolution_cache = crate::core::ResolutionCache::new();
+        let _ = resolution_cache.load_from_db(ctx.db.conn());
+        let mut res =
+            resolution_cache.get_or_resolve(ctx.db.conn(), &skill.id, &spec, &repo, |dep_id| {
+                if dep_id == skill.id {
+                    Some(skill.content_hash.clone())
+                } else {
+                    ctx.db
+                        .get_skill(dep_id)
+                        .ok()
+                        .flatten()
+                        .map(|r| r.content_hash)
+                }
+            })?;
+        res.spec.metadata = merge_metadata(&skill, &res.spec.metadata);
+        res
+    } else {
+        resolve_full(&spec, &repo)?
+    };
+    let mut spec = resolved.spec;
+
+    // Apply any matching runtime overlays from <ms_root>/overlays/
+    let overlay_ctx = crate::core::overlay::OverlayContext::from_env();
+    crate::core::overlay::apply_overlays_from_dir(&mut spec, &ctx.ms_root, &overlay_ctx);
 
     // Load assets from database
     let assets: SkillAssets = serde_json::from_str(&skill.assets_json).unwrap_or_default();
@@ -1243,6 +1275,37 @@ fn record_usage(
             eprintln!("warning: failed to record skill usage: {err}");
         }
     }
+
+    // Closed-loop implicit feedback: record skill load & mark pending suggestion as selected
+    let tracking_path = crate::suggestions::tracking::FeedbackCollector::default_path(&ctx.ms_root);
+    let mut collector = crate::suggestions::tracking::FeedbackCollector::load(&tracking_path);
+    let was_pending_suggestion = collector
+        .suggestions
+        .pending_suggestions()
+        .iter()
+        .any(|r| r.skill_id == skill_id);
+    collector.on_skill_load(skill_id);
+    collector.session.record_interaction(
+        skill_id,
+        crate::suggestions::tracking::InteractionType::LoadedAtLevel {
+            level: disclosure_level.to_string(),
+        },
+    );
+    if was_pending_suggestion {
+        let bandit_path = default_bandit_path(&ctx.ms_root);
+        let mut bandit =
+            ContextualBandit::load(&bandit_path).unwrap_or_else(|_| ContextualBandit::default());
+        bandit.register_skill(skill_id);
+        let features = crate::suggestions::bandit::features::ContextFeatures::default();
+        collector.update_bandit_for_skill(
+            &mut bandit,
+            skill_id,
+            &SkillFeedback::LoadedOnly,
+            &features,
+        );
+        let _ = bandit.save(&bandit_path);
+    }
+    let _ = collector.save(&tracking_path);
 }
 
 fn merge_metadata(skill: &SkillRecord, parsed_meta: &SkillMetadata) -> SkillMetadata {
@@ -1540,10 +1603,15 @@ pub(crate) fn output_human(_ctx: &AppContext, result: &LoadResult, _args: &LoadA
     }
 
     // Footer with stats
+    let sep_width = if should_use_rich_for_load() {
+        terminal_width().clamp(40, 100)
+    } else {
+        40
+    };
     println!();
     println!(
         "{} {} tokens | {} level",
-        "─".repeat(40),
+        "─".repeat(sep_width),
         disclosed.token_estimate,
         disclosed.level.name()
     );
@@ -1638,7 +1706,6 @@ pub(crate) fn build_robot_payload(result: &LoadResult, args: &LoadArgs) -> serde
 }
 
 /// Check whether the terminal supports rich output for load commands.
-#[allow(dead_code)]
 fn should_use_rich_for_load() -> bool {
     use std::io::IsTerminal;
 
@@ -1658,7 +1725,6 @@ fn should_use_rich_for_load() -> bool {
 }
 
 /// Get the terminal width, defaulting to 80 if detection fails.
-#[allow(dead_code)]
 fn terminal_width() -> usize {
     crossterm::terminal::size()
         .map(|(w, _)| w as usize)

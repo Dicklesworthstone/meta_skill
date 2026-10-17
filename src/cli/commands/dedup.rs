@@ -7,10 +7,14 @@ use colored::Colorize;
 
 use crate::app::AppContext;
 use crate::cli::output::OutputFormat;
-use crate::dedup::{DedupConfig, DeduplicationAction, DeduplicationEngine, DuplicatePair};
+use crate::core::SkillLayer;
+use crate::core::spec_lens::parse_markdown;
+use crate::dedup::{
+    DedupConfig, DeduplicationAction, DeduplicationEngine, DeduplicationSummary, DuplicatePair,
+};
 use crate::error::Result;
 use crate::search::embeddings::build_embedder;
-use crate::storage::Database;
+use crate::storage::{Database, TxManager};
 
 #[derive(Args, Debug)]
 pub struct DedupArgs {
@@ -108,7 +112,9 @@ fn run_scan_human(
     println!("{}", "Scanning for duplicate skills...".bold());
     println!();
 
+    let total_skills = db.list_skills(10000, 0).map_or(0, |s| s.len());
     let pairs = engine.scan_all(db)?;
+    let summary = DeduplicationSummary::from_pairs(total_skills, pairs.clone(), args.limit);
 
     if pairs.is_empty() {
         println!("{}", "No duplicates found.".green());
@@ -140,8 +146,9 @@ fn run_scan_human(
     let display_pairs: Vec<_> = filtered.into_iter().take(args.limit).collect();
 
     println!(
-        "Found {} potential duplicate pairs (showing {}):",
-        pairs.len(),
+        "Scanned {} skills — found {} potential duplicate pairs (showing {}):",
+        summary.total_skills,
+        summary.duplicate_pairs,
         display_pairs.len()
     );
     println!();
@@ -204,7 +211,9 @@ fn run_scan_robot(
     db: &Database,
     engine: &DeduplicationEngine,
 ) -> Result<()> {
+    let total_skills = db.list_skills(10000, 0).map_or(0, |s| s.len());
     let pairs = engine.scan_all(db)?;
+    let summary = DeduplicationSummary::from_pairs(total_skills, pairs.clone(), args.limit);
 
     // Filter by recommendation type if requested
     let filtered: Vec<&DuplicatePair> = if let Some(ref filter) = args.filter {
@@ -234,6 +243,7 @@ fn run_scan_robot(
         "status": "ok",
         "total_pairs": pairs.len(),
         "displayed_pairs": display_pairs.len(),
+        "summary": summary,
         "pairs": display_pairs,
     });
 
@@ -254,6 +264,11 @@ fn run_review(ctx: &AppContext, args: &ReviewArgs) -> Result<()> {
         crate::error::MsError::SkillNotFound(format!("skill not found: {}", args.skill_b))
     })?;
 
+    let embedder = build_embedder(&ctx.config.search)?;
+    let engine = DeduplicationEngine::new(DedupConfig::default(), embedder.as_ref());
+    let pair = engine.compare_pair(&skill_a, &skill_b);
+    let related_a = engine.find_duplicates(db, &skill_a).unwrap_or_default();
+
     if ctx.output_format != OutputFormat::Human {
         let output = serde_json::json!({
             "status": "ok",
@@ -271,6 +286,12 @@ fn run_review(ctx: &AppContext, args: &ReviewArgs) -> Result<()> {
                 "version": skill_b.version,
                 "source_path": skill_b.source_path,
             },
+            "similarity": pair.similarity,
+            "semantic_score": pair.semantic_score,
+            "structural_score": pair.structural_score,
+            "structural_details": pair.structural_details,
+            "recommendation": pair.recommendation,
+            "related_duplicates": related_a,
         });
         println!("{}", serde_json::to_string_pretty(&output)?);
     } else {
@@ -293,6 +314,24 @@ fn run_review(ctx: &AppContext, args: &ReviewArgs) -> Result<()> {
         println!("  Path: {}", skill_b.source_path);
         println!();
 
+        println!("{}", "Similarity Analysis:".bold().cyan());
+        println!(
+            "  Overall Similarity: {:.1}% (semantic: {:.2}, structural: {:.2})",
+            pair.similarity * 100.0,
+            pair.semantic_score,
+            pair.structural_score
+        );
+        println!(
+            "  Tag Overlap: {}/{} (Jaccard {:.2})",
+            pair.structural_details.tag_overlap,
+            pair.structural_details
+                .primary_tags
+                .max(pair.structural_details.candidate_tags),
+            pair.structural_details.tag_jaccard
+        );
+        println!("  Recommendation: {:?}", pair.recommendation);
+        println!();
+
         println!("{}", "Actions:".bold());
         println!(
             "  ms dedup merge {} {} - Merge B into A",
@@ -305,6 +344,18 @@ fn run_review(ctx: &AppContext, args: &ReviewArgs) -> Result<()> {
     }
 
     Ok(())
+}
+
+fn load_spec_for_merge(
+    ctx: &AppContext,
+    record: &crate::storage::sqlite::SkillRecord,
+) -> Option<crate::core::SkillSpec> {
+    if ctx.git.skill_exists(&record.id) {
+        if let Ok(spec) = ctx.git.read_skill(&record.id) {
+            return Some(spec);
+        }
+    }
+    parse_markdown(&record.body).ok()
 }
 
 fn run_merge(ctx: &AppContext, args: &MergeArgs) -> Result<()> {
@@ -324,6 +375,68 @@ fn run_merge(ctx: &AppContext, args: &MergeArgs) -> Result<()> {
         ))
     })?;
 
+    let mut sections_merged = 0usize;
+    let mut blocks_merged = 0usize;
+    let mut tags_merged = 0usize;
+
+    if let (Some(mut primary_spec), Some(secondary_spec)) = (
+        load_spec_for_merge(ctx, &primary),
+        load_spec_for_merge(ctx, &secondary),
+    ) {
+        for tag in &secondary_spec.metadata.tags {
+            if !primary_spec
+                .metadata
+                .tags
+                .iter()
+                .any(|t| t.eq_ignore_ascii_case(tag))
+            {
+                primary_spec.metadata.tags.push(tag.clone());
+                tags_merged += 1;
+            }
+        }
+
+        for sec in &secondary_spec.sections {
+            if let Some(existing_sec) = primary_spec
+                .sections
+                .iter_mut()
+                .find(|s| s.id == sec.id || s.title.eq_ignore_ascii_case(&sec.title))
+            {
+                for block in &sec.blocks {
+                    let already_present = existing_sec
+                        .blocks
+                        .iter()
+                        .any(|b| b.content.trim() == block.content.trim());
+                    if !already_present && !block.content.trim().is_empty() {
+                        let mut merged_block = block.clone();
+                        merged_block.id = format!(
+                            "{}-merged-{}",
+                            existing_sec.id,
+                            existing_sec.blocks.len() + 1
+                        );
+                        existing_sec.blocks.push(merged_block);
+                        blocks_merged += 1;
+                    }
+                }
+            } else if !sec.blocks.is_empty() {
+                primary_spec.sections.push(sec.clone());
+                sections_merged += 1;
+            }
+        }
+
+        if sections_merged > 0 || blocks_merged > 0 || tags_merged > 0 {
+            if let Ok(tx_mgr) = TxManager::new(ctx.db.clone(), ctx.git.clone(), ctx.ms_root.clone())
+            {
+                let layer = match primary.source_layer.to_ascii_lowercase().as_str() {
+                    "base" | "system" => SkillLayer::Base,
+                    "org" | "global" => SkillLayer::Org,
+                    "user" | "local" | "session" => SkillLayer::User,
+                    _ => SkillLayer::Project,
+                };
+                let _ = tx_mgr.write_skill_with_layer(&primary_spec, layer);
+            }
+        }
+    }
+
     // Deprecate the secondary skill
     let reason = args
         .reason
@@ -335,6 +448,9 @@ fn run_merge(ctx: &AppContext, args: &MergeArgs) -> Result<()> {
     let created_at = chrono::Utc::now().to_rfc3339();
     db.upsert_alias(&secondary.id, &primary.id, "deprecated", &created_at)?;
 
+    if let Some(record) = db.get_skill(&primary.id)? {
+        let _ = ctx.search.index_skill(&record);
+    }
     if let Some(record) = db.get_skill(&secondary.id)? {
         ctx.search.index_skill(&record)?;
         ctx.search.commit()?;
@@ -347,6 +463,9 @@ fn run_merge(ctx: &AppContext, args: &MergeArgs) -> Result<()> {
             "primary": {
                 "id": primary.id,
                 "name": primary.name,
+                "sections_merged": sections_merged,
+                "blocks_merged": blocks_merged,
+                "tags_merged": tags_merged,
             },
             "secondary": {
                 "id": secondary.id,
@@ -358,7 +477,10 @@ fn run_merge(ctx: &AppContext, args: &MergeArgs) -> Result<()> {
         println!("{}", serde_json::to_string_pretty(&output)?);
     } else {
         println!("{}", "Merge completed:".bold().green());
-        println!("  Primary: {} ({})", primary.name, primary.id);
+        println!(
+            "  Primary: {} ({}) [+{sections_merged} sections, +{blocks_merged} blocks, +{tags_merged} tags]",
+            primary.name, primary.id
+        );
         println!(
             "  Secondary: {} ({}) - {}",
             secondary.name,

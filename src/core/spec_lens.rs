@@ -35,12 +35,113 @@ impl SpecLens {
     }
 }
 
+#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
+struct FrontmatterSpec {
+    #[serde(flatten)]
+    metadata: SkillMetadata,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    extends: Option<String>,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    replace_rules: bool,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    replace_examples: bool,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    replace_pitfalls: bool,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    replace_checklist: bool,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    includes: Vec<super::skill::SkillInclude>,
+}
+
+fn classify_markdown_block(
+    section_id: &str,
+    section_title: &str,
+    content: &str,
+    is_fenced_code: bool,
+) -> BlockType {
+    let sec_id = section_id.to_ascii_lowercase();
+    let sec_title = section_title.to_ascii_lowercase();
+    let is_command_section = matches!(
+        sec_id.as_str(),
+        "commands" | "command" | "cli" | "cli-commands" | "quick-commands" | "command-reference"
+    ) || sec_title == "commands"
+        || sec_title == "cli";
+
+    if is_fenced_code {
+        if is_command_section {
+            return BlockType::Command;
+        }
+        return BlockType::Code;
+    }
+
+    // Check task list syntax first (`- [ ] `, `- [x] `, `* [ ] `, etc.)
+    let has_checkbox = content.lines().any(|line| {
+        let trimmed = line.trim_start();
+        trimmed.starts_with("- [ ] ")
+            || trimmed.starts_with("- [x] ")
+            || trimmed.starts_with("- [X] ")
+            || trimmed.starts_with("* [ ] ")
+            || trimmed.starts_with("* [x] ")
+            || trimmed.starts_with("* [X] ")
+    });
+    if has_checkbox
+        || sec_id.contains("checklist")
+        || sec_title.contains("checklist")
+        || matches!(sec_id.as_str(), "verification" | "pre-flight" | "preflight")
+    {
+        return BlockType::Checklist;
+    }
+
+    if sec_id.contains("pitfall")
+        || sec_id.contains("antipattern")
+        || sec_id.contains("anti-pattern")
+        || sec_id.contains("mistake")
+        || sec_id.contains("gotcha")
+        || sec_id.contains("caveat")
+        || sec_title.contains("pitfall")
+        || sec_title.contains("anti-pattern")
+        || sec_title.contains("mistake")
+        || sec_title.contains("gotcha")
+    {
+        return BlockType::Pitfall;
+    }
+
+    if sec_id.contains("rule")
+        || sec_id.contains("guideline")
+        || sec_id.contains("principle")
+        || sec_id.contains("invariant")
+        || sec_id.contains("policy")
+        || sec_id.contains("policies")
+        || sec_id.contains("best-practice")
+        || sec_id.contains("constraint")
+        || sec_title.contains("rule")
+        || sec_title.contains("guideline")
+        || sec_title.contains("principle")
+        || sec_title.contains("invariant")
+        || sec_title.contains("best practice")
+    {
+        return BlockType::Rule;
+    }
+
+    if is_command_section
+        || content
+            .lines()
+            .filter(|l| !l.trim().is_empty())
+            .all(|l| l.trim_start().starts_with("$ "))
+            && !content.trim().is_empty()
+    {
+        return BlockType::Command;
+    }
+
+    BlockType::Text
+}
+
 /// Parse a SKILL.md file into a `SkillSpec`.
 pub fn parse_markdown(content: &str) -> Result<SkillSpec> {
     let mut name = String::new();
     let mut description_lines = Vec::new();
     let mut sections: Vec<SkillSection> = Vec::new();
-    let mut metadata = SkillMetadata::default();
+    let mut frontmatter = FrontmatterSpec::default();
 
     let mut current_section: Option<SkillSection> = None;
     let mut in_description = false;
@@ -68,9 +169,10 @@ pub fn parse_markdown(content: &str) -> Result<SkillSpec> {
         if content.is_empty() {
             return;
         }
+        let block_type = classify_markdown_block(&section.id, &section.title, &content, false);
         section.blocks.push(SkillBlock {
             id: format!("{}-block-{}", section.id, section.blocks.len() + 1),
-            block_type: BlockType::Text,
+            block_type,
             content,
         });
     };
@@ -80,8 +182,8 @@ pub fn parse_markdown(content: &str) -> Result<SkillSpec> {
             if line.trim() == "---" {
                 in_frontmatter = false;
                 let yaml = frontmatter_lines.join("\n");
-                match serde_yaml::from_str::<SkillMetadata>(&yaml) {
-                    Ok(meta) => metadata = meta,
+                match serde_yaml::from_str::<FrontmatterSpec>(&yaml) {
+                    Ok(fm) => frontmatter = fm,
                     Err(e) => eprintln!("Failed to parse frontmatter: {e}\nYAML:\n{yaml}"),
                 }
                 continue;
@@ -154,9 +256,11 @@ pub fn parse_markdown(content: &str) -> Result<SkillSpec> {
                 code_lines.clear();
                 in_code_block = false;
                 flush_paragraph(section, &mut paragraph_lines);
+                let block_type =
+                    classify_markdown_block(&section.id, &section.title, &content, true);
                 section.blocks.push(SkillBlock {
                     id: format!("{}-block-{}", section.id, section.blocks.len() + 1),
-                    block_type: BlockType::Code,
+                    block_type,
                     content,
                 });
             } else {
@@ -184,10 +288,12 @@ pub fn parse_markdown(content: &str) -> Result<SkillSpec> {
     }
     if in_code_block && !code_lines.is_empty() {
         if let Some(section) = current_section.as_mut() {
+            let content = code_lines.join("\n");
+            let block_type = classify_markdown_block(&section.id, &section.title, &content, true);
             section.blocks.push(SkillBlock {
                 id: format!("{}-block-{}", section.id, section.blocks.len() + 1),
-                block_type: BlockType::Code,
-                content: code_lines.join("\n"),
+                block_type,
+                content,
             });
         }
     }
@@ -195,6 +301,8 @@ pub fn parse_markdown(content: &str) -> Result<SkillSpec> {
     if let Some(section) = current_section.take() {
         sections.push(section);
     }
+
+    let mut metadata = frontmatter.metadata;
 
     // Derive the skill id honoring the Anthropic SKILL.md contract where `name`
     // is the required identity field. Precedence: an explicit frontmatter `id:`,
@@ -267,14 +375,12 @@ pub fn parse_markdown(content: &str) -> Result<SkillSpec> {
         format_version: SkillSpec::FORMAT_VERSION.to_string(),
         metadata,
         sections,
-        // Inheritance fields - not parsed from markdown (use YAML frontmatter)
-        extends: None,
-        replace_rules: false,
-        replace_examples: false,
-        replace_pitfalls: false,
-        replace_checklist: false,
-        // Composition fields - not parsed from markdown (use YAML frontmatter)
-        includes: Vec::new(),
+        extends: frontmatter.extends,
+        replace_rules: frontmatter.replace_rules,
+        replace_examples: frontmatter.replace_examples,
+        replace_pitfalls: frontmatter.replace_pitfalls,
+        replace_checklist: frontmatter.replace_checklist,
+        includes: frontmatter.includes,
     })
 }
 
@@ -283,8 +389,17 @@ pub fn parse_markdown(content: &str) -> Result<SkillSpec> {
 pub fn compile_markdown(spec: &SkillSpec) -> String {
     let mut output = String::new();
 
-    // Serialize metadata to YAML frontmatter
-    if let Ok(yaml) = serde_yaml::to_string(&spec.metadata) {
+    // Serialize metadata and composition fields to YAML frontmatter
+    let frontmatter = FrontmatterSpec {
+        metadata: spec.metadata.clone(),
+        extends: spec.extends.clone(),
+        replace_rules: spec.replace_rules,
+        replace_examples: spec.replace_examples,
+        replace_pitfalls: spec.replace_pitfalls,
+        replace_checklist: spec.replace_checklist,
+        includes: spec.includes.clone(),
+    };
+    if let Ok(yaml) = serde_yaml::to_string(&frontmatter) {
         output.push_str("---\n");
         output.push_str(yaml.trim());
         output.push_str("\n---\n\n");
@@ -302,9 +417,9 @@ pub fn compile_markdown(spec: &SkillSpec) -> String {
             output.push_str(&format!("## {}\n\n", section.title));
         }
         for block in &section.blocks {
-            if block.block_type == BlockType::Code {
+            if matches!(block.block_type, BlockType::Code | BlockType::Command) {
                 let content = block.content.trim_end();
-                if content.starts_with("```") {
+                if content.starts_with("```") || content.starts_with("$ ") {
                     output.push_str(content);
                     output.push_str("\n\n");
                 } else {
@@ -513,5 +628,86 @@ mod tests {
         let md = "---\nid: custom-id\nname: A Different Name\n---\n\nBody text.\n\n## Section\n\nContent.\n";
         let parsed = parse_markdown(md).expect("parse");
         assert_eq!(parsed.metadata.id, "custom-id");
+    }
+
+    #[test]
+    fn classifies_semantic_block_types_and_roundtrips_composition_frontmatter() {
+        let md = r#"---
+id: child-skill
+name: Child Skill
+version: 0.2.0
+description: Extends base and includes helpers
+extends: base-skill
+replace_rules: true
+includes:
+  - skill: helper-skill
+    into: rules
+    prefix: "[Helper] "
+---
+
+# Child Skill
+
+Extends base and includes helpers
+
+## Overview
+
+General context prose.
+
+## Rules
+
+- Always validate inputs
+- Never ignore errors
+
+## Pitfalls
+
+- Swallowing errors silently
+
+## Checklist
+
+- [ ] Run unit tests
+- [x] Verify clippy
+
+## Commands
+
+```bash
+cargo test
+```
+
+## Examples
+
+```rust
+let x = 42;
+```
+"#;
+        let parsed = parse_markdown(md).expect("parse");
+        assert_eq!(parsed.extends.as_deref(), Some("base-skill"));
+        assert!(parsed.replace_rules);
+        assert!(!parsed.replace_examples);
+        assert_eq!(parsed.includes.len(), 1);
+        assert_eq!(parsed.includes[0].skill, "helper-skill");
+
+        let by_id = |id: &str| {
+            parsed
+                .sections
+                .iter()
+                .find(|s| s.id == id)
+                .expect("section")
+                .blocks[0]
+                .block_type
+                .clone()
+        };
+        assert_eq!(by_id("overview"), BlockType::Text);
+        assert_eq!(by_id("rules"), BlockType::Rule);
+        assert_eq!(by_id("pitfalls"), BlockType::Pitfall);
+        assert_eq!(by_id("checklist"), BlockType::Checklist);
+        assert_eq!(by_id("commands"), BlockType::Command);
+        assert_eq!(by_id("examples"), BlockType::Code);
+
+        let compiled = compile_markdown(&parsed);
+        let reparsed = parse_markdown(&compiled).expect("reparse");
+        assert_eq!(reparsed.extends.as_deref(), Some("base-skill"));
+        assert!(reparsed.replace_rules);
+        assert_eq!(reparsed.includes.len(), 1);
+        assert_eq!(reparsed.includes[0].skill, "helper-skill");
     }
 }

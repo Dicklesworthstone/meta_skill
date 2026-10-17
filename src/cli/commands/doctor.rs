@@ -1,6 +1,5 @@
 //! ms doctor - Health checks and repairs
 
-#[cfg(target_os = "linux")]
 use std::path::Path;
 use std::sync::Arc;
 
@@ -8,6 +7,7 @@ use clap::Args;
 use tracing::debug;
 
 use crate::app::AppContext;
+use crate::bundler::BlobStore;
 use crate::core::recovery::{RecoveryManager, RecoveryReport};
 use crate::error::Result;
 use crate::output::{
@@ -119,6 +119,11 @@ pub fn run(ctx: &AppContext, args: &DoctorArgs) -> Result<()> {
         issues_found += check_skill_origins(ctx, verbose)?;
     }
 
+    // Check bundle blob store integrity when blobs are present
+    if run_only.is_none() && ctx.git.root().join("bundles").join("blobs").exists() {
+        issues_found += check_bundle_blobs(ctx, verbose)?;
+    }
+
     // Check for incomplete transactions
     if run_only.is_none() {
         issues_found += check_transactions(ctx, args.fix, verbose, &mut issues_fixed)?;
@@ -138,11 +143,12 @@ pub fn run(ctx: &AppContext, args: &DoctorArgs) -> Result<()> {
             "perf" => check_perf(ctx, verbose)?,
             "output" | "output-mode" => check_output_mode(ctx, verbose)?,
             "origins" => check_skill_origins(ctx, verbose)?,
+            "blobs" => check_bundle_blobs(ctx, verbose)?,
             other => {
                 say!(ctx, "{} Unknown check: {}", "[!]", other);
                 say!(
                     ctx,
-                    "  Available checks: safety, security, recovery, perf, output, origins"
+                    "  Available checks: safety, security, recovery, perf, output, origins, blobs"
                 );
                 1
             }
@@ -187,6 +193,10 @@ pub fn run(ctx: &AppContext, args: &DoctorArgs) -> Result<()> {
         );
     } else {
         say!(ctx);
+        if should_use_rich_for_doctor() {
+            let width = terminal_width().clamp(40, 100);
+            say!(ctx, "{}", "─".repeat(width));
+        }
         if issues_found == 0 {
             say!(ctx, "{} All checks passed", "[ok]");
         } else if args.fix && issues_fixed == issues_found {
@@ -482,6 +492,88 @@ fn check_skill_origins(ctx: &AppContext, verbose: bool) -> Result<usize> {
     );
 
     Ok(stale.len())
+}
+
+/// Verify all blobs stored in `<store_root>/blobs` using `BlobStore::verify_blob`.
+/// Returns `(total_checked, corrupted_hashes)`.
+fn verify_blob_store(store_root: &Path) -> Result<(usize, Vec<String>)> {
+    let blobs_dir = store_root.join("blobs");
+    if !blobs_dir.exists() {
+        return Ok((0, Vec::new()));
+    }
+
+    let store = BlobStore::open(store_root)?;
+    let mut candidate_hashes = Vec::new();
+
+    let sha256_dir = blobs_dir.join("sha256");
+    if let Ok(entries) = std::fs::read_dir(&sha256_dir) {
+        for entry in entries.flatten() {
+            if entry.path().is_file() {
+                if let Some(name) = entry.file_name().to_str() {
+                    if name.len() == 64 && name.chars().all(|c| c.is_ascii_hexdigit()) {
+                        candidate_hashes.push(format!("sha256:{name}"));
+                    }
+                }
+            }
+        }
+    }
+
+    if let Ok(entries) = std::fs::read_dir(&blobs_dir) {
+        for entry in entries.flatten() {
+            if entry.path().is_file() {
+                if let Some(name) = entry.file_name().to_str() {
+                    if name.starts_with("sha256:") {
+                        candidate_hashes.push(name.to_string());
+                    }
+                }
+            }
+        }
+    }
+
+    candidate_hashes.sort();
+    candidate_hashes.dedup();
+
+    let mut corrupted = Vec::new();
+    for hash in &candidate_hashes {
+        let valid = store.has_blob(hash) && store.verify_blob(hash).unwrap_or(false);
+        if !valid {
+            corrupted.push(hash.clone());
+        }
+    }
+
+    Ok((candidate_hashes.len(), corrupted))
+}
+
+/// Check content-addressed bundle blobs integrity
+fn check_bundle_blobs(ctx: &AppContext, verbose: bool) -> Result<usize> {
+    say_inline!(ctx, "Checking bundle blobs... ");
+
+    let store_root = ctx.git.root().join("bundles");
+    if !store_root.join("blobs").exists() {
+        say!(ctx, "{} OK (no bundle blobs stored)", "[ok]");
+        return Ok(0);
+    }
+
+    let (total, corrupted) = verify_blob_store(&store_root)?;
+    if corrupted.is_empty() {
+        say!(ctx, "{} OK ({} verified)", "[ok]", total);
+        if verbose {
+            say!(ctx, "  Store: {}", store_root.display());
+        }
+        Ok(0)
+    } else {
+        say!(
+            ctx,
+            "{} {} corrupted blob(s) out of {}",
+            "[!]",
+            corrupted.len(),
+            total
+        );
+        for hash in &corrupted {
+            say!(ctx, "  corrupted: {}", hash);
+        }
+        Ok(corrupted.len())
+    }
 }
 
 /// Check command safety (DCG) availability
@@ -1118,7 +1210,6 @@ fn check_perf(ctx: &AppContext, verbose: bool) -> Result<usize> {
 }
 
 /// Check whether the terminal supports rich output for the doctor command.
-#[allow(dead_code)]
 fn should_use_rich_for_doctor() -> bool {
     use std::io::IsTerminal;
 
@@ -1137,7 +1228,6 @@ fn should_use_rich_for_doctor() -> bool {
 }
 
 /// Get the terminal width, defaulting to 80 if detection fails.
-#[allow(dead_code)]
 fn terminal_width() -> usize {
     crossterm::terminal::size()
         .map(|(w, _)| w as usize)
@@ -1311,12 +1401,40 @@ mod tests {
             "output",
             "output-mode",
             "origins",
+            "blobs",
         ];
 
         for check in &available_checks {
             let cli = TestCli::try_parse_from(["test", "--check", check]).unwrap();
             assert_eq!(cli.doctor.check, Some(check.to_string()));
         }
+    }
+
+    #[test]
+    fn verify_blob_store_healthy_and_corrupted() {
+        let temp = tempfile::tempdir().unwrap();
+        let store_root = temp.path().join("bundles");
+
+        // Absent store_root returns (0, empty)
+        let (total, corrupted) = verify_blob_store(&store_root).unwrap();
+        assert_eq!(total, 0);
+        assert!(corrupted.is_empty());
+
+        // Write a valid blob
+        let store = BlobStore::open(&store_root).unwrap();
+        let valid_hash = store.write_blob(b"valid bundle content").unwrap();
+        let (total, corrupted) = verify_blob_store(&store_root).unwrap();
+        assert_eq!(total, 1);
+        assert!(corrupted.is_empty());
+
+        // Corrupt the blob file in place
+        let hex_part = valid_hash.strip_prefix("sha256:").unwrap();
+        let blob_file = store_root.join("blobs").join("sha256").join(hex_part);
+        std::fs::write(&blob_file, b"tampered bundle content").unwrap();
+
+        let (total, corrupted) = verify_blob_store(&store_root).unwrap();
+        assert_eq!(total, 1);
+        assert_eq!(corrupted, vec![valid_hash]);
     }
 
     // =========================================================================

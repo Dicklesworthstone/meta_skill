@@ -1,0 +1,16 @@
+{
+  "skill_name": "rust-debugging",
+  "description": "Debugging memory issues in Rust applications",
+  "patterns": [
+    "Read source files to understand context before making changes",
+    "Use mutable bindings when ownership needs to transfer",
+    "Run tests after each significant change to verify correctness"
+  ],
+  "anti_patterns": [
+    "Making changes without understanding the codebase first",
+    "Ignoring test verification after fixes"
+  ],
+  "confidence": 0.85,
+  "source_sessions": ["session-001"],
+  "tags": ["rust", "debugging", "memory-safety"]
+}

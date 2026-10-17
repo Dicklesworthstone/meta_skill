@@ -575,13 +575,14 @@ pub fn skill_spec_to_payload(spec: &SkillSpec, device_id: &str) -> Result<JfpSki
     let spec_json = serde_json::to_value(spec)
         .map_err(|e| MsError::Config(format!("Failed to serialize spec: {e}")))?;
     let content_hash = hash_spec_json(&spec_json)?;
+    let skill_md = crate::core::spec_lens::compile_markdown(spec);
 
     Ok(JfpSkillPayload {
         ms_skill_id: spec.metadata.id.clone(),
         format_version: spec.format_version.clone(),
         content_hash,
         spec: spec_json,
-        skill_md: String::new(), // Would need to be read from SKILL.md file
+        skill_md,
         version: Some(spec.metadata.version.clone()),
         updated_at: Some(chrono::Utc::now().to_rfc3339()),
         source_device_id: Some(device_id.to_string()),
@@ -590,6 +591,21 @@ pub fn skill_spec_to_payload(spec: &SkillSpec, device_id: &str) -> Result<JfpSki
 
 /// Convert JfpSkillPayload to SkillSpec.
 pub fn payload_to_skill_spec(payload: &JfpSkillPayload) -> Result<SkillSpec> {
+    if !payload.spec.is_null() {
+        if let Ok(mut spec) = serde_json::from_value::<SkillSpec>(payload.spec.clone()) {
+            if spec.metadata.id.is_empty() {
+                spec.metadata.id = payload.ms_skill_id.clone();
+            }
+            return Ok(spec);
+        }
+    }
+    if !payload.skill_md.trim().is_empty() {
+        let mut spec = crate::core::spec_lens::parse_markdown(&payload.skill_md)?;
+        if spec.metadata.id.is_empty() {
+            spec.metadata.id = payload.ms_skill_id.clone();
+        }
+        return Ok(spec);
+    }
     serde_json::from_value(payload.spec.clone())
         .map_err(|e| MsError::Config(format!("Failed to deserialize spec: {e}")))
 }
@@ -612,13 +628,18 @@ pub fn create_push_item(
     let spec_json = serde_json::to_value(spec)
         .map_err(|e| MsError::Config(format!("Failed to serialize spec: {e}")))?;
     let content_hash = hash_spec_json(&spec_json)?;
+    let skill_md = if deleted {
+        None
+    } else {
+        Some(crate::core::spec_lens::compile_markdown(spec))
+    };
 
     Ok(JfpPushItem {
         ms_skill_id: spec.metadata.id.clone(),
         content_hash,
         base_revision_id,
         spec: if deleted { None } else { Some(spec_json) },
-        skill_md: None, // Would need to be read from SKILL.md file
+        skill_md,
         deleted: if deleted { Some(true) } else { None },
     })
 }

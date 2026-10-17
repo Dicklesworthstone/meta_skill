@@ -182,10 +182,13 @@ pub fn run(ctx: &AppContext, args: &LintArgs) -> Result<()> {
         });
     }
 
-    // Output based on format
+    // Output based on format (respecting global ctx.output_format when local --format is default)
     match args.format {
+        LintFormat::Human if ctx.output_format != OutputFormat::Human => {
+            output_json(&all_results)?;
+        }
         LintFormat::Human => {
-            output_human(ctx, &all_results, total_errors, total_warnings, total_fixed)
+            output_human(ctx, &all_results, total_errors, total_warnings, total_fixed);
         }
         LintFormat::Json => output_json(&all_results)?,
         LintFormat::Sarif => output_sarif(&all_results)?,

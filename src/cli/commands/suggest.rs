@@ -18,7 +18,7 @@ use crate::suggestions::bandit::contextual::ContextualBandit;
 use crate::suggestions::bandit::features::{
     DefaultFeatureExtractor, FEATURE_DIM, FeatureExtractor, UserHistory,
 };
-use crate::suggestions::tracking::SuggestionTracker;
+use crate::suggestions::tracking::FeedbackCollector;
 
 #[derive(Args, Debug)]
 pub struct SuggestArgs {
@@ -77,6 +77,10 @@ pub struct SuggestArgs {
     /// Reset bandit state before suggesting
     #[arg(long)]
     pub reset_bandit: bool,
+
+    /// Optimize and diversify suggestions for NTM multi-agent swarm planning
+    #[arg(long)]
+    pub for_ntm: bool,
 }
 
 /// A suggestion with score and metadata.
@@ -112,11 +116,11 @@ pub fn run(ctx: &AppContext, args: &SuggestArgs) -> Result<()> {
     let fingerprint = ContextFingerprint::capture(&capture);
 
     // 2. Load cooldown cache
-    let cache_path = cooldown_path();
+    let cache_path = ctx.ms_root.join("cooldowns.json");
     let mut cache = if args.reset_cooldowns {
         SuggestionCooldownCache::new()
     } else {
-        SuggestionCooldownCache::load(&cache_path).unwrap_or_else(|e| {
+        crate::suggestions::cooldown_storage::load_cache(&cache_path).unwrap_or_else(|e| {
             if !ctx.output_format.is_machine_readable() {
                 eprintln!("Warning: Failed to load cooldown cache: {e}. Starting fresh.");
             }
@@ -125,11 +129,11 @@ pub fn run(ctx: &AppContext, args: &SuggestArgs) -> Result<()> {
     };
 
     if args.reset_cooldowns {
-        cache.save(&cache_path)?;
+        crate::suggestions::cooldown_storage::save_cache(&cache_path, &cache)?;
     }
 
-    // 3. Load contextual bandit
-    let contextual_bandit_path = contextual_bandit_path();
+    // 3. Load contextual bandit & signal bandit
+    let contextual_bandit_path = ctx.ms_root.join("contextual_bandit.json");
     let mut contextual_bandit = if args.reset_bandit {
         let bandit = ContextualBandit::with_feature_dim(FEATURE_DIM);
         bandit.save(&contextual_bandit_path)?;
@@ -142,6 +146,21 @@ pub fn run(ctx: &AppContext, args: &SuggestArgs) -> Result<()> {
             ContextualBandit::with_feature_dim(FEATURE_DIM)
         })
     };
+
+    let signal_bandit_path = ctx.ms_root.join("bandit.json");
+    let mut signal_bandit = if args.reset_bandit {
+        let bandit = crate::suggestions::SignalBandit::new();
+        bandit.save(&signal_bandit_path)?;
+        bandit
+    } else {
+        crate::suggestions::SignalBandit::load(&signal_bandit_path)
+            .unwrap_or_else(|_| crate::suggestions::SignalBandit::new())
+    };
+
+    if let Some(factor) = args.bandit_exploration {
+        contextual_bandit.set_exploration_rate(factor);
+        signal_bandit.config.exploration_factor = factor.max(0.0);
+    }
 
     // 4. Collect context for feature extraction
     let collector_config = ContextCollectorConfig::default();
@@ -165,9 +184,25 @@ pub fn run(ctx: &AppContext, args: &SuggestArgs) -> Result<()> {
     let skill_ids: Vec<String> = all_skills.iter().map(|s| s.id.clone()).collect();
     contextual_bandit.register_skills(&skill_ids);
 
-    // 7. Get recommendations from bandit
-    let fetch_limit = args.limit * 2; // Fetch extra for filtering
-    let recommendations = contextual_bandit.recommend(&context_features, fetch_limit);
+    // 7. Get recommendations from bandit (or deterministic scoring if --no-bandit)
+    let fetch_limit = args.limit.saturating_mul(3).max(10); // Fetch extra for filtering
+    let (recommendations, signal_boost) = if args.no_bandit {
+        (
+            contextual_bandit.recommend_deterministic(&context_features, fetch_limit),
+            1.0f32,
+        )
+    } else {
+        let bandit_ctx = crate::suggestions::bandit::SuggestionContext::default();
+        let weights = signal_bandit.select_weights(&bandit_ctx);
+        let boost = (weights.get(crate::suggestions::bandit::SignalType::ProjectMatch)
+            + weights.get(crate::suggestions::bandit::SignalType::Bm25)
+            + weights.get(crate::suggestions::bandit::SignalType::Embedding))
+            as f32;
+        let recs = contextual_bandit.recommend(&context_features, fetch_limit);
+        let _ = contextual_bandit.save(&contextual_bandit_path);
+        let _ = signal_bandit.save(&signal_bandit_path);
+        (recs, (0.85 + 0.15 * boost).clamp(0.8, 1.2))
+    };
 
     // 8. Build suggestions with metadata
     let skill_map: HashMap<String, &SkillRecord> =
@@ -186,7 +221,7 @@ pub fn run(ctx: &AppContext, args: &SuggestArgs) -> Result<()> {
                 skill_id: rec.skill_id.clone(),
                 name: skill.name.clone(),
                 description: skill.description.clone(),
-                score: rec.score,
+                score: (rec.score * signal_boost).clamp(0.0, 1.0),
                 breakdown: ScoreBreakdown {
                     contextual_score: rec.components.contextual_score,
                     thompson_score: rec.components.thompson_score,
@@ -246,6 +281,24 @@ pub fn run(ctx: &AppContext, args: &SuggestArgs) -> Result<()> {
             suggestion.score = (suggestion.score + personal_boost).clamp(0.0, 1.0);
         }
         // Re-sort after personal boost
+        suggestions.sort_by(|a, b| {
+            b.score
+                .partial_cmp(&a.score)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
+    }
+
+    // 11b. Apply NTM swarm role diversification if --for-ntm is enabled
+    if args.for_ntm {
+        let mut seen_primary_tags = std::collections::HashSet::new();
+        for suggestion in &mut suggestions {
+            if let Some(primary) = suggestion.tags.first() {
+                if !seen_primary_tags.insert(primary.to_lowercase()) {
+                    // Penalize duplicate primary role tag so multi-agent swarm gets orthogonal skills
+                    suggestion.score = (suggestion.score * 0.85).clamp(0.0, 1.0);
+                }
+            }
+        }
         suggestions.sort_by(|a, b| {
             b.score
                 .partial_cmp(&a.score)
@@ -334,20 +387,35 @@ pub fn run(ctx: &AppContext, args: &SuggestArgs) -> Result<()> {
         discovery_suggestions = discovery_candidates.into_iter().take(3).collect();
     }
 
-    // 15. Record suggestions for learning
-    let mut suggestion_tracker = SuggestionTracker::new();
+    // 15. Record suggestions for closed-loop implicit bandit learning
+    let tracking_path = FeedbackCollector::default_path(&ctx.ms_root);
+    let mut feedback_collector = FeedbackCollector::load(&tracking_path);
+    let ignored_prior = feedback_collector.suggestions.end_tracking();
+    if !ignored_prior.is_empty() && !args.no_bandit {
+        for (ignored_id, fb) in &ignored_prior {
+            feedback_collector.update_bandit_for_skill(
+                &mut contextual_bandit,
+                ignored_id,
+                fb,
+                &context_features,
+            );
+        }
+        let _ = contextual_bandit.save(&contextual_bandit_path);
+    }
     let all_suggested_ids: Vec<String> = suggestions
         .iter()
         .chain(discovery_suggestions.iter())
         .map(|s| s.skill_id.clone())
         .collect();
-    suggestion_tracker.record_suggestions(&all_suggested_ids, Some(fingerprint.as_u64()));
+    feedback_collector.on_suggestions_shown(&all_suggested_ids, Some(fingerprint.as_u64()));
+    let _ = feedback_collector.save(&tracking_path);
 
-    // 15. Update cooldowns for shown suggestions (default 5 minute cooldown)
+    // 15b. Update cooldowns for shown suggestions (default 5 minute cooldown) and purge expired
     let cooldown_seconds = 300; // 5 minutes
     for suggestion in &suggestions {
         cache.record(fp, suggestion.skill_id.clone(), cooldown_seconds);
     }
+    cache.purge_expired();
     cache.save(&cache_path)?;
 
     // 16. Output results
@@ -468,6 +536,10 @@ fn output_suggestions(
     }
 
     debug!(target: "suggest", stage = "render_complete");
+    if !ctx.output_format.is_machine_readable() && should_use_rich_for_suggest() {
+        let width = terminal_width().clamp(40, 100);
+        println!("{}", "─".repeat(width));
+    }
     println!("{}", output.format(ctx.output_format));
     Ok(())
 }
@@ -522,18 +594,23 @@ fn load_user_history() -> UserHistory {
     UserHistory::load(&UserHistory::default_path())
 }
 
-fn cooldown_path() -> std::path::PathBuf {
-    let base = dirs::data_dir().unwrap_or_else(|| std::path::PathBuf::from("."));
-    base.join("ms").join("cooldowns.json")
+#[cfg(test)]
+fn cooldown_path() -> PathBuf {
+    dirs::data_dir()
+        .unwrap_or_else(|| PathBuf::from("."))
+        .join("ms")
+        .join("cooldowns.json")
 }
 
-fn contextual_bandit_path() -> std::path::PathBuf {
-    let base = dirs::data_dir().unwrap_or_else(|| std::path::PathBuf::from("."));
-    base.join("ms").join("contextual_bandit.json")
+#[cfg(test)]
+fn contextual_bandit_path() -> PathBuf {
+    dirs::data_dir()
+        .unwrap_or_else(|| PathBuf::from("."))
+        .join("ms")
+        .join("contextual_bandit.json")
 }
 
 /// Check whether the terminal supports rich output for suggest commands.
-#[allow(dead_code)]
 fn should_use_rich_for_suggest() -> bool {
     use std::io::IsTerminal;
 
@@ -553,7 +630,6 @@ fn should_use_rich_for_suggest() -> bool {
 }
 
 /// Get the terminal width, defaulting to 80 if detection fails.
-#[allow(dead_code)]
 fn terminal_width() -> usize {
     crossterm::terminal::size()
         .map(|(w, _)| w as usize)

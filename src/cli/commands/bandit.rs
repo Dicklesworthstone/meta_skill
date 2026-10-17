@@ -45,7 +45,10 @@ pub fn run(ctx: &AppContext, args: &BanditArgs) -> Result<()> {
 }
 
 fn stats(ctx: &AppContext, args: &StatsArgs) -> Result<()> {
-    let path = args.path.clone().unwrap_or_else(default_bandit_path);
+    let path = args
+        .path
+        .clone()
+        .unwrap_or_else(|| default_bandit_path(ctx));
     let bandit = SignalBandit::load(&path)?;
     let weights = bandit.estimated_weights(&SuggestionContext::default());
 
@@ -134,7 +137,10 @@ fn stats(ctx: &AppContext, args: &StatsArgs) -> Result<()> {
 }
 
 fn reset(ctx: &AppContext, args: &ResetArgs) -> Result<()> {
-    let path = args.path.clone().unwrap_or_else(default_bandit_path);
+    let path = args
+        .path
+        .clone()
+        .unwrap_or_else(|| default_bandit_path(ctx));
     let bandit = SignalBandit::new();
     bandit.save(&path)?;
 
@@ -156,7 +162,6 @@ fn reset(ctx: &AppContext, args: &ResetArgs) -> Result<()> {
     }
 }
 
-fn default_bandit_path() -> PathBuf {
-    let base = dirs::data_dir().unwrap_or_else(|| PathBuf::from("."));
-    base.join("ms").join("bandit.json")
+fn default_bandit_path(ctx: &AppContext) -> PathBuf {
+    ctx.ms_root.join("bandit.json")
 }

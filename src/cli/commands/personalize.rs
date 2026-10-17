@@ -166,12 +166,19 @@ fn run_extract(ctx: &AppContext, args: &ExtractArgs) -> Result<()> {
     let style = extract_style_from_sessions(&cass, &sessions)?;
 
     // Save or output the style profile
-    let output_path = args.output.clone().unwrap_or_else(|| {
-        let config_dir = dirs::config_dir()
-            .unwrap_or_else(|| std::path::PathBuf::from("."))
-            .join("ms");
-        config_dir.join("style.json").to_string_lossy().to_string()
-    });
+    let output_path = args
+        .output
+        .clone()
+        .unwrap_or_else(|| ctx.ms_root.join("style.json").to_string_lossy().to_string());
+
+    // Always persist the extracted style profile to disk
+    let json = serde_json::to_string_pretty(&style)?;
+    if let Some(parent) = std::path::Path::new(&output_path).parent() {
+        if !parent.as_os_str().is_empty() {
+            std::fs::create_dir_all(parent)?;
+        }
+    }
+    std::fs::write(&output_path, &json)?;
 
     if ctx.output_format != OutputFormat::Human {
         let output = serde_json::json!({
@@ -182,13 +189,6 @@ fn run_extract(ctx: &AppContext, args: &ExtractArgs) -> Result<()> {
         });
         println!("{}", serde_json::to_string_pretty(&output)?);
     } else {
-        // Save to file
-        let json = serde_json::to_string_pretty(&style)?;
-        if let Some(parent) = std::path::Path::new(&output_path).parent() {
-            std::fs::create_dir_all(parent)?;
-        }
-        std::fs::write(&output_path, &json)?;
-
         println!(
             "{} Style profile extracted from {} sessions",
             "✓".green(),
@@ -225,6 +225,18 @@ fn load_style_profile(ctx: &AppContext, path: Option<&str>) -> Result<StyleProfi
     if let Some(path) = path {
         // Load from specified path
         let content = std::fs::read_to_string(path).map_err(|e| {
+            crate::error::MsError::Config(format!("failed to read style profile: {e}"))
+        })?;
+        let style: StyleProfile = serde_json::from_str(&content).map_err(|e| {
+            crate::error::MsError::Config(format!("failed to parse style profile: {e}"))
+        })?;
+        return Ok(style);
+    }
+
+    // Try ms_root/style.json first, then fallback to config_dir/ms/style.json
+    let ms_root_style = ctx.ms_root.join("style.json");
+    if ms_root_style.exists() {
+        let content = std::fs::read_to_string(&ms_root_style).map_err(|e| {
             crate::error::MsError::Config(format!("failed to read style profile: {e}"))
         })?;
         let style: StyleProfile = serde_json::from_str(&content).map_err(|e| {

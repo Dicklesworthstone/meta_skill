@@ -1234,6 +1234,82 @@ impl Database {
         Ok(())
     }
 
+    /// Upsert pre-sliced content blocks for token packing (`skill_slices`).
+    pub fn upsert_skill_slices(
+        &self,
+        skill_id: &str,
+        slices_index: &crate::core::SkillSliceIndex,
+    ) -> Result<()> {
+        let slices_json = serde_json::to_string(slices_index)
+            .map_err(|err| MsError::Serialization(format!("encode skill_slices: {err}")))?;
+        let updated_at = chrono::Utc::now().to_rfc3339();
+        self.conn.execute_compat(
+            "INSERT INTO skill_slices (skill_id, slices_json, updated_at)
+             VALUES (?, ?, ?)
+             ON CONFLICT(skill_id) DO UPDATE SET
+                slices_json = excluded.slices_json,
+                updated_at = excluded.updated_at",
+            params![skill_id, slices_json, updated_at],
+        )?;
+        Ok(())
+    }
+
+    /// Fetch cached `SkillSliceIndex` for a skill if present.
+    pub fn get_skill_slices(&self, skill_id: &str) -> Result<Option<crate::core::SkillSliceIndex>> {
+        use fsqlite::compat::OptionalExtension;
+        let raw: Option<String> = self
+            .conn
+            .query_row_map(
+                "SELECT slices_json FROM skill_slices WHERE skill_id = ?",
+                params![skill_id],
+                |row| row.get_typed::<String>(0),
+            )
+            .optional()?;
+        match raw {
+            Some(json) => {
+                let index = serde_json::from_str(&json)
+                    .map_err(|err| MsError::Serialization(format!("decode skill_slices: {err}")))?;
+                Ok(Some(index))
+            }
+            None => Ok(None),
+        }
+    }
+
+    /// Upsert precompiled skillpack metadata (`skill_packs`).
+    pub fn upsert_skill_pack(
+        &self,
+        skill_id: &str,
+        pack_path: &str,
+        spec_hash: &str,
+        slices_hash: &str,
+        embedding_hash: &str,
+        predicate_index_hash: &str,
+    ) -> Result<()> {
+        let generated_at = chrono::Utc::now().to_rfc3339();
+        self.conn.execute_compat(
+            "INSERT INTO skill_packs (
+                skill_id, pack_path, spec_hash, slices_hash, embedding_hash, predicate_index_hash, generated_at
+             ) VALUES (?, ?, ?, ?, ?, ?, ?)
+             ON CONFLICT(skill_id) DO UPDATE SET
+                pack_path = excluded.pack_path,
+                spec_hash = excluded.spec_hash,
+                slices_hash = excluded.slices_hash,
+                embedding_hash = excluded.embedding_hash,
+                predicate_index_hash = excluded.predicate_index_hash,
+                generated_at = excluded.generated_at",
+            params![
+                skill_id,
+                pack_path,
+                spec_hash,
+                slices_hash,
+                embedding_hash,
+                predicate_index_hash,
+                generated_at,
+            ],
+        )?;
+        Ok(())
+    }
+
     /// Run `SQLite` integrity check
     pub fn integrity_check(&self) -> Result<bool> {
         let result: String =

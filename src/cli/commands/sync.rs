@@ -107,6 +107,7 @@ pub fn run(ctx: &AppContext, args: &SyncArgs) -> Result<()> {
         for report in &reports {
             layout
                 .section(&report.remote)
+                .kv("Summary", &report.summary_line())
                 .kv("Cloned", &report.cloned.len().to_string())
                 .kv("Pulled", &report.pulled.len().to_string())
                 .kv("Pushed", &report.pushed.len().to_string())

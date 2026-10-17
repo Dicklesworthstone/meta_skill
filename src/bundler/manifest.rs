@@ -298,6 +298,16 @@ impl Ed25519Signer {
         Ok(Self { keypair, key_id })
     }
 
+    /// Construct a signer directly from a 32-byte Ed25519 seed.
+    pub fn from_seed(seed: &[u8; 32]) -> Result<Self> {
+        use ring::signature::KeyPair;
+        let keypair = ring::signature::Ed25519KeyPair::from_seed_unchecked(seed)
+            .map_err(|_| MsError::ValidationFailed("invalid Ed25519 seed".to_string()))?;
+        let pub_bytes = keypair.public_key().as_ref();
+        let key_id = format!("ed25519:{}", hex::encode(&pub_bytes[..8]));
+        Ok(Self { keypair, key_id })
+    }
+
     /// Sign data and return a `BundleSignature`.
     #[must_use]
     pub fn sign(&self, payload: &[u8], signer_name: &str) -> BundleSignature {

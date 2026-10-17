@@ -738,16 +738,59 @@ fn setup_agent_config(
     config_path: &Path,
     args: &SetupArgs,
 ) -> Result<SetupAction> {
-    // For now, we just note that we would configure this agent
-    // Full MCP server integration would require modifying agent configs
-
+    let existed = config_path.exists();
     let status = if args.dry_run {
-        ActionStatus::WouldUpdate
+        if existed {
+            ActionStatus::WouldUpdate
+        } else {
+            ActionStatus::WouldCreate
+        }
     } else {
-        // In a full implementation, we would modify the config here
-        // For now, we mark it as skipped since we don't want to
-        // modify third-party config files without explicit consent
-        ActionStatus::Skipped
+        let is_json = config_path
+            .extension()
+            .and_then(|e| e.to_str())
+            .is_some_and(|ext| ext.eq_ignore_ascii_case("json"));
+        if is_json {
+            let mut root: serde_json::Value = if existed {
+                let raw = fs::read_to_string(config_path).unwrap_or_default();
+                serde_json::from_str(&raw).unwrap_or_else(|_| serde_json::json!({}))
+            } else {
+                serde_json::json!({})
+            };
+            if !root.is_object() {
+                root = serde_json::json!({});
+            }
+            let obj = root.as_object_mut().expect("object");
+            let servers = obj
+                .entry("mcpServers")
+                .or_insert_with(|| serde_json::json!({}));
+            if !servers.is_object() {
+                *servers = serde_json::json!({});
+            }
+            let servers_obj = servers.as_object_mut().expect("object");
+            if servers_obj.contains_key("ms") && !args.force {
+                ActionStatus::Skipped
+            } else {
+                servers_obj.insert(
+                    "ms".to_string(),
+                    serde_json::json!({
+                        "command": "ms",
+                        "args": ["mcp", "serve"]
+                    }),
+                );
+                if let Some(parent) = config_path.parent() {
+                    fs::create_dir_all(parent)?;
+                }
+                fs::write(config_path, serde_json::to_string_pretty(&root)?)?;
+                if existed {
+                    ActionStatus::Updated
+                } else {
+                    ActionStatus::Created
+                }
+            }
+        } else {
+            ActionStatus::Skipped
+        }
     };
 
     Ok(SetupAction::new(

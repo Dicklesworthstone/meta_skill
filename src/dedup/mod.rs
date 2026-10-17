@@ -220,6 +220,39 @@ impl<'a> DeduplicationEngine<'a> {
         Ok(matches)
     }
 
+    /// Compare two specific skills and compute semantic + structural similarity
+    #[must_use]
+    pub fn compare_pair(&self, skill_a: &SkillRecord, skill_b: &SkillRecord) -> DuplicatePair {
+        let text_a = self.skill_to_text(skill_a);
+        let text_b = self.skill_to_text(skill_b);
+        let emb_a = self.embedder.embed(&text_a);
+        let emb_b = self.embedder.embed(&text_b);
+        let semantic_score = cosine_similarity(&emb_a, &emb_b);
+        let (structural_score, structural_details) =
+            self.compute_structural_similarity(skill_a, skill_b);
+        let similarity = self
+            .config
+            .semantic_weight
+            .mul_add(
+                semantic_score,
+                self.config.structural_weight * structural_score,
+            )
+            .clamp(0.0, 1.0);
+        let recommendation = self.recommend_action(similarity, &structural_details);
+
+        DuplicatePair {
+            skill_a_id: skill_a.id.clone(),
+            skill_a_name: skill_a.name.clone(),
+            skill_b_id: skill_b.id.clone(),
+            skill_b_name: skill_b.name.clone(),
+            similarity,
+            semantic_score,
+            structural_score,
+            structural_details,
+            recommendation,
+        }
+    }
+
     /// Scan all skills for duplicates
     pub fn scan_all(&self, db: &Database) -> Result<Vec<DuplicatePair>> {
         let all_skills = db.list_skills(10000, 0)?;

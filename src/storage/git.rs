@@ -281,12 +281,20 @@ impl GitArchive {
         let slices_path = skill_dir.join("slices.json");
         let usage_log_path = skill_dir.join("usage-log.jsonl");
 
+        let compiled_markdown = render_skill_markdown(spec);
+        let lens_mapping = build_spec_lens_mapping(spec, &compiled_markdown);
+        let slice_index = crate::core::slicing::SkillSlicer::slice(spec);
+        let evidence_index = build_default_evidence_index(spec, &evidence_path);
+
         write_string(&metadata_path, &serde_yaml::to_string(&spec.metadata)?)?;
         write_string(&spec_path, &serde_json::to_string_pretty(spec)?)?;
-        write_string(&markdown_path, &render_skill_markdown(spec))?;
-        write_string(&lens_path, "{}")?;
-        write_string(&evidence_path, "{}")?;
-        write_string(&slices_path, "[]")?;
+        write_string(&markdown_path, &compiled_markdown)?;
+        write_string(&lens_path, &serde_json::to_string_pretty(&lens_mapping)?)?;
+        write_string(
+            &evidence_path,
+            &serde_json::to_string_pretty(&evidence_index)?,
+        )?;
+        write_string(&slices_path, &serde_json::to_string_pretty(&slice_index)?)?;
         ensure_file(&usage_log_path)?;
 
         let mut index = self.repo.index()?;
@@ -421,6 +429,74 @@ fn render_skill_markdown(spec: &SkillSpec) -> String {
         }
     }
     out
+}
+
+fn build_spec_lens_mapping(
+    spec: &SkillSpec,
+    compiled_markdown: &str,
+) -> crate::core::skill::SpecLensMapping {
+    let mut blocks = Vec::new();
+    let mut search_from = 0usize;
+
+    for section in &spec.sections {
+        for block in &section.blocks {
+            let needle = block.content.trim();
+            let (start, end) = if !needle.is_empty()
+                && let Some(rel) = compiled_markdown[search_from..].find(needle)
+            {
+                let start = search_from + rel;
+                let end = start + needle.len();
+                search_from = end;
+                (start as u32, end as u32)
+            } else {
+                (search_from as u32, search_from as u32)
+            };
+            let block_type_str = serde_json::to_value(&block.block_type)
+                .ok()
+                .and_then(|v| v.as_str().map(String::from))
+                .unwrap_or_else(|| "text".to_string());
+            blocks.push(crate::core::skill::BlockLens {
+                block_id: block.id.clone(),
+                section: section.title.clone(),
+                block_type: block_type_str,
+                byte_range: (start, end),
+            });
+        }
+    }
+
+    crate::core::skill::SpecLensMapping {
+        format_version: spec.format_version.clone(),
+        blocks,
+    }
+}
+
+fn build_default_evidence_index(
+    spec: &SkillSpec,
+    evidence_path: &Path,
+) -> crate::core::skill::SkillEvidenceIndex {
+    if let Ok(existing) = fs::read_to_string(evidence_path) {
+        if let Ok(parsed) =
+            serde_json::from_str::<crate::core::skill::SkillEvidenceIndex>(&existing)
+        {
+            if !parsed.rules.is_empty() || parsed.coverage.total_rules > 0 {
+                return parsed;
+            }
+        }
+    }
+    let total_rules = spec
+        .sections
+        .iter()
+        .flat_map(|s| s.blocks.iter())
+        .filter(|b| b.block_type == crate::core::BlockType::Rule)
+        .count();
+    crate::core::skill::SkillEvidenceIndex {
+        rules: std::collections::BTreeMap::new(),
+        coverage: crate::core::skill::EvidenceCoverage {
+            total_rules,
+            rules_with_evidence: 0,
+            avg_confidence: 0.0,
+        },
+    }
 }
 
 fn write_string(path: &Path, contents: &str) -> Result<()> {

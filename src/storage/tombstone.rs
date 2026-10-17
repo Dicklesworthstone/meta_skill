@@ -135,6 +135,74 @@ impl TombstoneManager {
         Ok(record)
     }
 
+    /// Record a tombstone copy of a file or directory without removing the original.
+    ///
+    /// Used before Git-managed deletion (`GitArchive::delete_skill`) so `git rm`
+    /// can commit the deletion while `TombstoneManager` still retains a restorable
+    /// tombstone in `<ms_root>/tombstones`.
+    pub fn record_copy(
+        &self,
+        path: &Path,
+        relative_override: Option<&str>,
+        reason: Option<&str>,
+        deleted_by: Option<&str>,
+    ) -> Result<TombstoneRecord> {
+        let canonical_path = path.canonicalize().map_err(|e| {
+            MsError::Io(std::io::Error::new(
+                std::io::ErrorKind::NotFound,
+                format!("cannot tombstone non-existent path: {e}"),
+            ))
+        })?;
+
+        let relative_path = if let Some(rel) = relative_override {
+            rel.to_string()
+        } else if let Ok(canonical_root) = self.ms_root.canonicalize() {
+            canonical_path
+                .strip_prefix(&canonical_root)
+                .map(|p| p.to_string_lossy().to_string())
+                .unwrap_or_else(|_| path.to_string_lossy().to_string())
+        } else {
+            path.to_string_lossy().to_string()
+        };
+
+        let metadata = fs::metadata(&canonical_path)?;
+        let is_directory = metadata.is_dir();
+        let size_bytes = if is_directory {
+            self.dir_size(&canonical_path)?
+        } else {
+            metadata.len()
+        };
+
+        let id = uuid::Uuid::new_v4().to_string();
+        let tombstoned_at = Utc::now();
+
+        let record = TombstoneRecord {
+            id: id.clone(),
+            original_path: relative_path,
+            reason: reason.map(std::string::ToString::to_string),
+            tombstoned_at,
+            size_bytes,
+            is_directory,
+            deleted_by: deleted_by.map(std::string::ToString::to_string),
+        };
+
+        self.ensure_tombstone_dir()?;
+
+        let tombstone_path = self.tombstone_dir.join(&id);
+        if is_directory {
+            fs::create_dir_all(&tombstone_path)?;
+            self.copy_dir_recursive(&canonical_path, &tombstone_path)?;
+        } else {
+            fs::copy(&canonical_path, &tombstone_path)?;
+        }
+
+        let meta_path = self.tombstone_dir.join(format!("{id}.json"));
+        let meta_json = serde_json::to_string_pretty(&record)?;
+        fs::write(&meta_path, meta_json)?;
+
+        Ok(record)
+    }
+
     /// List all tombstones.
     pub fn list(&self) -> Result<Vec<TombstoneRecord>> {
         if !self.tombstone_dir.exists() {

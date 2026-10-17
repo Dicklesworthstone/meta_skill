@@ -271,6 +271,48 @@ impl ContextualBandit {
         recommendations
     }
 
+    /// Get deterministic top-k recommendations without Thompson sampling or exploration bonus.
+    #[must_use]
+    pub fn recommend_deterministic(
+        &self,
+        features: &ContextFeatures,
+        k: usize,
+    ) -> Vec<Recommendation> {
+        let mut recommendations: Vec<Recommendation> = self
+            .arms
+            .keys()
+            .map(|skill_id| {
+                let arm = &self.arms[skill_id];
+                let contextual_score = sigmoid(features.dot(&arm.feature_weights));
+                let avg_reward = arm.avg_reward as f32;
+                let score = (contextual_score * 0.7 + avg_reward * 0.3).clamp(0.0, 1.0);
+                let components = RecommendationComponents {
+                    contextual_score,
+                    thompson_score: avg_reward,
+                    exploration_bonus: 0.0,
+                    pull_count: arm.pulls,
+                    avg_reward: arm.avg_reward,
+                };
+                let reason = self.explain_score(skill_id, &components);
+                Recommendation {
+                    skill_id: skill_id.clone(),
+                    score,
+                    reason,
+                    components,
+                }
+            })
+            .collect();
+
+        recommendations.sort_by(|a, b| {
+            b.score
+                .partial_cmp(&a.score)
+                .unwrap_or(std::cmp::Ordering::Equal)
+                .then_with(|| a.skill_id.cmp(&b.skill_id))
+        });
+        recommendations.truncate(k);
+        recommendations
+    }
+
     /// Register a skill so it can be recommended.
     pub fn register_skill(&mut self, skill_id: &str) {
         self.get_or_create_arm(skill_id);

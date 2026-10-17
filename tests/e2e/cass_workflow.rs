@@ -16,49 +16,24 @@ use std::path::PathBuf;
 use super::fixture::E2EFixture;
 use ms::error::Result;
 
-/// Create a mock CASS session file in JSONL format.
+/// Create a CASS session file in JSONL format from `tests/fixtures/cass/session-001.jsonl`.
 fn create_mock_session_file(path: &PathBuf, session_id: &str) {
-    let session_content = format!(
-        r#"{{"session_id":"{id}","created":"2026-01-14T10:00:00Z","model":"claude-3-opus","token_count":5000}}
-{{"role":"user","content":"I need help debugging a Rust memory issue","timestamp":"2026-01-14T10:00:01Z"}}
-{{"role":"assistant","content":"I'll help you debug the memory issue. Let me first look at your code to understand the context.","timestamp":"2026-01-14T10:00:05Z"}}
-{{"role":"tool_use","tool":"Read","parameters":{{"file":"src/main.rs"}},"timestamp":"2026-01-14T10:00:06Z"}}
-{{"role":"tool_result","content":"fn main() {{\n    let data: Vec<u8> = Vec::new();\n    // potential memory leak here\n}}","timestamp":"2026-01-14T10:00:07Z"}}
-{{"role":"assistant","content":"I found the issue. The Vec is created but ownership isn't properly handled. Here's the fix:","timestamp":"2026-01-14T10:00:10Z"}}
-{{"role":"tool_use","tool":"Edit","parameters":{{"file":"src/main.rs","old":"let data","new":"let mut data"}},"timestamp":"2026-01-14T10:00:11Z"}}
-{{"role":"tool_result","content":"Edit successful","timestamp":"2026-01-14T10:00:12Z"}}
-{{"role":"assistant","content":"I've fixed the memory issue. Now let's verify with tests.","timestamp":"2026-01-14T10:00:15Z"}}
-{{"role":"tool_use","tool":"Bash","parameters":{{"command":"cargo test"}},"timestamp":"2026-01-14T10:00:16Z"}}
-{{"role":"tool_result","content":"running 5 tests\ntest result: ok. 5 passed","timestamp":"2026-01-14T10:00:20Z"}}
-{{"role":"assistant","content":"All tests pass. The memory issue has been resolved.","timestamp":"2026-01-14T10:00:25Z"}}
-"#,
-        id = session_id
-    );
-    fs::write(path, session_content).expect("Failed to write mock session");
+    let fixture_path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/fixtures/cass/session-001.jsonl");
+    let template = fs::read_to_string(&fixture_path)
+        .expect("Failed to read tests/fixtures/cass/session-001.jsonl");
+    let session_content = template.replace("\"session-001\"", &format!("\"{session_id}\""));
+    fs::write(path, session_content).expect("Failed to write CASS session fixture");
 }
 
-/// Create a mock extraction result for CASS.
+/// Create a CASS extraction result from `tests/fixtures/cass/debugging-skill.json`.
 fn create_mock_extraction(path: &PathBuf, skill_name: &str) {
-    let extraction = format!(
-        r#"{{
-  "skill_name": "{}",
-  "description": "Debugging memory issues in Rust applications",
-  "patterns": [
-    "Read source files to understand context before making changes",
-    "Use mutable bindings when ownership needs to transfer",
-    "Run tests after each significant change to verify correctness"
-  ],
-  "anti_patterns": [
-    "Making changes without understanding the codebase first",
-    "Ignoring test verification after fixes"
-  ],
-  "confidence": 0.85,
-  "source_sessions": ["session-001"],
-  "tags": ["rust", "debugging", "memory-safety"]
-}}"#,
-        skill_name
-    );
-    fs::write(path, extraction).expect("Failed to write mock extraction");
+    let fixture_path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/fixtures/cass/debugging-skill.json");
+    let template = fs::read_to_string(&fixture_path)
+        .expect("Failed to read tests/fixtures/cass/debugging-skill.json");
+    let extraction = template.replace("\"rust-debugging\"", &format!("\"{skill_name}\""));
+    fs::write(path, extraction).expect("Failed to write CASS extraction fixture");
 }
 
 /// Test the full CASS integration workflow.

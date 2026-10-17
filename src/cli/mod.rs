@@ -75,14 +75,22 @@ pub enum ColorMode {
 }
 
 impl Cli {
-    /// Get the effective output format, considering flags for backward compatibility.
+    /// Check whether `MS_ROBOT` is enabled in the environment.
+    #[must_use]
+    pub fn env_robot_enabled() -> bool {
+        std::env::var("MS_ROBOT")
+            .is_ok_and(|v| matches!(v.trim().to_ascii_lowercase().as_str(), "1" | "true" | "yes"))
+    }
+
+    /// Get the effective output format, considering flags and environment variables.
     ///
     /// Priority order:
     /// 1. `--plain` → Plain format
-    /// 2. `--output-format` → Explicit format (highest explicit priority)
-    /// 3. `--machine` → JSON format (shorthand)
-    /// 4. `--robot` → JSON format (deprecated, backward compat)
-    /// 5. Default → Human format
+    /// 2. `--output-format` (`-O`) → Explicit format (highest explicit priority)
+    /// 3. `--machine` (`-m`) → JSON format (shorthand)
+    /// 4. `--robot` or `MS_ROBOT=1` → `MS_ROBOT_FORMAT` (if set) or JSON format
+    /// 5. `MS_OUTPUT_FORMAT` → Format from environment
+    /// 6. Default → Human format
     #[must_use]
     pub fn output_format(&self) -> OutputFormat {
         // --plain takes precedence
@@ -100,9 +108,21 @@ impl Cli {
             return OutputFormat::Json;
         }
 
-        // --robot (deprecated) maps to JSON for backward compat
-        if self.robot {
+        // --robot (deprecated) or MS_ROBOT=1 maps to MS_ROBOT_FORMAT or JSON
+        if self.robot || Self::env_robot_enabled() {
+            if let Ok(fmt_str) = std::env::var("MS_ROBOT_FORMAT") {
+                if let Some(fmt) = OutputFormat::from_str_loose(&fmt_str) {
+                    return fmt;
+                }
+            }
             return OutputFormat::Json;
+        }
+
+        // Check MS_OUTPUT_FORMAT env var
+        if let Ok(fmt_str) = std::env::var("MS_OUTPUT_FORMAT") {
+            if let Some(fmt) = OutputFormat::from_str_loose(&fmt_str) {
+                return fmt;
+            }
         }
 
         // Default
@@ -304,4 +324,10 @@ pub enum Commands {
 
     /// Test embedding backends
     Embed(commands::embed::EmbedArgs),
+
+    /// Analyze topic coverage across CASS sessions
+    Coverage(commands::cross_project::CoverageArgs),
+
+    /// Mark a CASS session as exemplary or anti-pattern for skill mining
+    Mark(commands::cross_project::MarkArgs),
 }

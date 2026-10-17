@@ -17,8 +17,9 @@ use crate::cli::output::{HumanLayout, emit_human, emit_json};
 use crate::core::spec_lens::compile_markdown;
 use crate::error::{MsError, Result};
 use crate::import::{
-    ContentBlock, ContentBlockType, ContentParser, GeneratedSkill, GeneratorConfig, ImportHints,
-    ImportStats, SkillGenerator, Suggestion, UnknownHandling, Warning,
+    ContentBlock, ContentBlockType, ContentParser, GeneratedSkill, GeneratorConfig,
+    ImportFormatHint, ImportHints, ImportStats, ParseStats, SkillGenerator, Suggestion,
+    UnknownHandling, Warning,
 };
 use crate::lint::ValidationEngine;
 use crate::lint::rules::all_rules;
@@ -41,6 +42,18 @@ pub enum InputFormat {
     AgentsMd,
     /// LLM system prompt
     SystemPrompt,
+}
+
+impl From<InputFormat> for ImportFormatHint {
+    fn from(fmt: InputFormat) -> Self {
+        match fmt {
+            InputFormat::Auto => Self::Auto,
+            InputFormat::Markdown => Self::Markdown,
+            InputFormat::Plaintext => Self::Plaintext,
+            InputFormat::AgentsMd => Self::AgentsMd,
+            InputFormat::SystemPrompt => Self::SystemPrompt,
+        }
+    }
 }
 
 /// Output skill format
@@ -88,6 +101,10 @@ pub struct ImportArgs {
     /// Auto-fix lint issues
     #[arg(long, requires = "lint")]
     pub fix: bool,
+
+    /// Persist and index the imported skill into the local .ms store
+    #[arg(long)]
+    pub index: bool,
 
     /// Minimum confidence for classification (0.0-1.0)
     #[arg(long, default_value = "0.3")]
@@ -143,22 +160,37 @@ fn run_single(ctx: &AppContext, args: &ImportArgs) -> Result<()> {
     let content = std::fs::read_to_string(&args.path)
         .map_err(|e| MsError::Config(format!("Failed to read {}: {e}", args.path.display())))?;
 
-    // Parse content into blocks
+    // Parse content into blocks using format hint
     let parser = ContentParser::new();
-    let blocks = parser.parse(&content);
+    let blocks = parser.parse_with_format(&content, args.format.into());
 
     // Build hints from args
     let hints = build_hints(args);
 
     // Run classification preview (always shown in human mode)
     if ctx.output_format == OutputFormat::Human {
-        show_classification_preview(&blocks);
+        show_classification_preview(&blocks, args.verbose_signals);
     }
+
+    // Collect classification signals for robot report if requested
+    let signal_summaries = if args.verbose_signals {
+        Some(
+            blocks
+                .iter()
+                .map(|b| BlockSignalSummary {
+                    block_type: b.block_type.as_str().to_string(),
+                    confidence: b.confidence,
+                    preview: b.preview(60),
+                    signals: b.signals.iter().map(|s| s.name.clone()).collect(),
+                })
+                .collect(),
+        )
+    } else {
+        None
+    };
 
     // In interactive mode, prompt for review
     if !args.non_interactive && ctx.output_format == OutputFormat::Human {
-        // For now, we skip true interactive mode since we can't do terminal prompts
-        // In a real implementation, this would use dialoguer or similar
         eprintln!(
             "{} Interactive mode not available in this environment. Using non-interactive.",
             style("Note:").yellow()
@@ -199,16 +231,40 @@ fn run_single(ctx: &AppContext, args: &ImportArgs) -> Result<()> {
         for rule in all_rules() {
             engine.register(rule);
         }
-        let result = engine.validate(&generated.skill);
+        let mut result = engine.validate(&generated.skill);
 
         if args.fix && !result.passed {
             let _fix_result = engine.auto_fix(&mut generated.skill)?;
+            result = engine.validate(&generated.skill);
         }
 
         Some(result)
     } else {
         None
     };
+
+    // Write output and optionally index unless dry run
+    let mut indexed = false;
+    if !args.dry_run {
+        let output_content = format_skill(&generated, args.skill_format);
+        std::fs::write(&output_path, &output_content).map_err(|e| {
+            MsError::Config(format!("Failed to write {}: {e}", output_path.display()))
+        })?;
+
+        if args.index {
+            let tx_mgr = crate::storage::TxManager::new(
+                ctx.db.clone(),
+                ctx.git.clone(),
+                ctx.ms_root.clone(),
+            )?;
+            tx_mgr.write_skill_with_layer(&generated.skill, crate::core::SkillLayer::Project)?;
+            if let Ok(Some(record)) = ctx.db.get_skill(&generated.skill.metadata.id) {
+                let _ = ctx.search.index_skill(&record);
+                let _ = ctx.search.commit();
+            }
+            indexed = true;
+        }
+    }
 
     // Output based on mode
     if ctx.output_format != OutputFormat::Human {
@@ -236,28 +292,22 @@ fn run_single(ctx: &AppContext, args: &ImportArgs) -> Result<()> {
             lint_passed: lint_result.as_ref().map(|r| r.passed),
             lint_errors: lint_result.as_ref().map(|r| r.error_count()),
             lint_warnings: lint_result.as_ref().map(|r| r.warning_count()),
+            indexed: if args.index { Some(indexed) } else { None },
+            classification_signals: signal_summaries,
         };
         emit_json(&report)?;
     } else {
         show_generation_stats(&generated.stats);
-    }
-
-    // Write output unless dry run
-    if !args.dry_run {
-        let output_content = format_skill(&generated, args.skill_format);
-        std::fs::write(&output_path, &output_content).map_err(|e| {
-            MsError::Config(format!("Failed to write {}: {e}", output_path.display()))
-        })?;
-
-        if ctx.output_format == OutputFormat::Human {
+        if !args.dry_run {
             println!(
-                "\n{} Created {}",
+                "\n{} Created {}{}",
                 style("✓").green(),
-                style(output_path.display()).bold()
+                style(output_path.display()).bold(),
+                if indexed { " (indexed into store)" } else { "" }
             );
+        } else {
+            println!("\n{} Dry run - no file written", style("ℹ").blue());
         }
-    } else if ctx.output_format == OutputFormat::Human {
-        println!("\n{} Dry run - no file written", style("ℹ").blue());
     }
 
     Ok(())
@@ -390,14 +440,11 @@ fn import_single_for_batch(
 
     // Parse
     let parser = ContentParser::new();
-    let blocks = parser.parse(&content);
+    let blocks = parser.parse_with_format(&content, args.format.into());
 
-    // Check if worth importing
-    let avg_confidence: f32 = if blocks.is_empty() {
-        0.0
-    } else {
-        blocks.iter().map(|b| b.confidence).sum::<f32>() / blocks.len() as f32
-    };
+    // Check if worth importing using ParseStats
+    let parse_stats = ParseStats::from_blocks(&blocks);
+    let avg_confidence = parse_stats.avg_confidence;
 
     if avg_confidence < args.min_confidence {
         return Err(MsError::Config(format!(
@@ -439,6 +486,19 @@ fn import_single_for_batch(
             MsError::Config(format!("Failed to write {}: {e}", output_path.display()))
         })?;
 
+        if args.index {
+            let tx_mgr = crate::storage::TxManager::new(
+                ctx.db.clone(),
+                ctx.git.clone(),
+                ctx.ms_root.clone(),
+            )?;
+            tx_mgr.write_skill_with_layer(&generated.skill, crate::core::SkillLayer::Project)?;
+            if let Ok(Some(record)) = ctx.db.get_skill(&generated.skill.metadata.id) {
+                let _ = ctx.search.index_skill(&record);
+                let _ = ctx.search.commit();
+            }
+        }
+
         if ctx.output_format == OutputFormat::Human {
             println!(
                 "  {} → {} ({} rules, {} examples)",
@@ -478,9 +538,18 @@ fn build_hints(args: &ImportArgs) -> ImportHints {
     }
 }
 
-fn show_classification_preview(blocks: &[ContentBlock]) {
+fn show_classification_preview(blocks: &[ContentBlock], verbose_signals: bool) {
     let mut layout = HumanLayout::new();
     layout.title("Classification Preview");
+
+    let parse_stats = ParseStats::from_blocks(blocks);
+    layout.kv(
+        "High-Confidence Blocks",
+        &format!(
+            "{}/{} (avg {:.2})",
+            parse_stats.high_confidence_count, parse_stats.total_blocks, parse_stats.avg_confidence
+        ),
+    );
 
     // Group by type
     let mut by_type: HashMap<ContentBlockType, Vec<&ContentBlock>> = HashMap::new();
@@ -511,6 +580,21 @@ fn show_classification_preview(blocks: &[ContentBlock]) {
                     avg_conf
                 ),
             );
+            if verbose_signals {
+                for b in type_blocks {
+                    let sigs: Vec<_> = b
+                        .signals
+                        .iter()
+                        .map(|s| format!("{} ({:.2})", s.name, s.weight))
+                        .collect();
+                    layout.bullet(&format!(
+                        "[conf {:.2}] \"{}\" -> signals: [{}]",
+                        b.confidence,
+                        b.preview(45),
+                        sigs.join(", ")
+                    ));
+                }
+            }
         }
     }
 
@@ -639,6 +723,14 @@ fn format_skill(generated: &GeneratedSkill, format: SkillFormat) -> String {
 // =============================================================================
 
 #[derive(Serialize)]
+struct BlockSignalSummary {
+    block_type: String,
+    confidence: f32,
+    preview: String,
+    signals: Vec<String>,
+}
+
+#[derive(Serialize)]
 struct ImportReport {
     source: String,
     output: String,
@@ -652,6 +744,10 @@ struct ImportReport {
     lint_errors: Option<usize>,
     #[serde(skip_serializing_if = "Option::is_none")]
     lint_warnings: Option<usize>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    indexed: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    classification_signals: Option<Vec<BlockSignalSummary>>,
 }
 
 #[derive(Serialize)]
@@ -736,6 +832,7 @@ mod tests {
             non_interactive: true,
             lint: false,
             fix: false,
+            index: false,
             min_confidence: 0.3,
             id: Some("my-skill".to_string()),
             name: Some("My Skill".to_string()),

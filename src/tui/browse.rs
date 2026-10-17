@@ -145,6 +145,12 @@ pub struct BrowseTui {
     show_help: bool,
     /// Status message to display
     status_message: Option<String>,
+    /// Favorited skill IDs
+    favorites: std::collections::HashSet<String>,
+    /// Hidden skill IDs
+    hidden: std::collections::HashSet<String>,
+    /// Whether hidden skills are currently shown
+    show_hidden: bool,
 }
 
 impl BrowseTui {
@@ -170,6 +176,9 @@ impl BrowseTui {
             detail_scroll: 0,
             show_help: false,
             status_message: None,
+            favorites: std::collections::HashSet::new(),
+            hidden: std::collections::HashSet::new(),
+            show_hidden: false,
         })
     }
 
@@ -193,6 +202,9 @@ impl BrowseTui {
             detail_scroll: 0,
             show_help: false,
             status_message: None,
+            favorites: std::collections::HashSet::new(),
+            hidden: std::collections::HashSet::new(),
+            show_hidden: false,
         }
     }
 
@@ -321,12 +333,18 @@ impl BrowseTui {
                     "user" => Color::Magenta,
                     _ => Color::White,
                 };
+                let fav_prefix = if self.favorites.contains(&s.id) {
+                    "* "
+                } else {
+                    ""
+                };
 
                 ListItem::new(Line::from(vec![
                     Span::styled(
                         format!("[{}] ", truncate(&s.layer, 4)),
                         Style::default().fg(layer_color),
                     ),
+                    Span::styled(fav_prefix, Style::default().fg(Color::Yellow)),
                     Span::raw(truncate(&s.name, 30)),
                 ]))
             })
@@ -417,8 +435,8 @@ impl BrowseTui {
             Line::from("Actions:"),
             Line::from("  /            Focus search box"),
             Line::from("  Enter / l    Load selected skill"),
-            Line::from("  f            Toggle favorite (not implemented)"),
-            Line::from("  h            Toggle hidden (not implemented)"),
+            Line::from("  f            Toggle favorite"),
+            Line::from("  h / H        Hide selected / toggle show hidden"),
             Line::from(""),
             Line::from("Search Filters:"),
             Line::from("  layer:base   Filter by layer"),
@@ -617,10 +635,44 @@ impl BrowseTui {
                 return self.load_selected();
             }
             KeyCode::Char('f') => {
-                self.status_message = Some("Favorite toggle not yet implemented".to_string());
+                if let Some(selected_idx) = self.list_state.selected() {
+                    if let Some(&skill_idx) = self.filtered.get(selected_idx) {
+                        if let Some(skill) = self.skills.get(skill_idx) {
+                            let id = skill.id.clone();
+                            if self.favorites.remove(&id) {
+                                self.status_message = Some(format!("Unfavorited: {id}"));
+                            } else {
+                                self.favorites.insert(id.clone());
+                                self.status_message = Some(format!("Favorited: {id}"));
+                            }
+                        }
+                    }
+                }
             }
             KeyCode::Char('h') => {
-                self.status_message = Some("Hide toggle not yet implemented".to_string());
+                if let Some(selected_idx) = self.list_state.selected() {
+                    if let Some(&skill_idx) = self.filtered.get(selected_idx) {
+                        if let Some(skill) = self.skills.get(skill_idx) {
+                            let id = skill.id.clone();
+                            if self.hidden.remove(&id) {
+                                self.status_message = Some(format!("Unhidden: {id}"));
+                            } else {
+                                self.hidden.insert(id.clone());
+                                self.status_message = Some(format!("Hidden: {id}"));
+                            }
+                            self.apply_filters();
+                        }
+                    }
+                }
+            }
+            KeyCode::Char('H') => {
+                self.show_hidden = !self.show_hidden;
+                self.apply_filters();
+                self.status_message = Some(if self.show_hidden {
+                    "Showing hidden skills".to_string()
+                } else {
+                    "Hiding hidden skills".to_string()
+                });
             }
             _ => {}
         }
@@ -710,6 +762,10 @@ impl BrowseTui {
             .iter()
             .enumerate()
             .filter(|(_, s)| {
+                if !self.show_hidden && self.hidden.contains(&s.id) {
+                    return false;
+                }
+
                 // Text search (case-insensitive)
                 if !text_query_lower.is_empty() {
                     let matches_name = s.name.to_lowercase().contains(&text_query_lower);
@@ -803,6 +859,14 @@ impl Drop for TerminalGuard {
 
 /// Run the browse TUI.
 pub fn run_browse_tui(db: &Database) -> Result<Option<String>> {
+    run_browse_tui_with_query(db, None)
+}
+
+/// Run the browse TUI with an optional initial search/filter query.
+pub fn run_browse_tui_with_query(
+    db: &Database,
+    initial_query: Option<String>,
+) -> Result<Option<String>> {
     // Check if stdout is a terminal
     if !io::stdout().is_terminal() {
         return Err(MsError::ValidationFailed(
@@ -813,7 +877,13 @@ pub fn run_browse_tui(db: &Database) -> Result<Option<String>> {
     let _guard = TerminalGuard::new()?;
     let mut terminal = Terminal::new(CrosstermBackend::new(io::stdout()))?;
 
-    let app = BrowseTui::new(db)?;
+    let mut app = BrowseTui::new(db)?;
+    if let Some(q) = initial_query {
+        if !q.trim().is_empty() {
+            app.search_query = q;
+            app.apply_filters();
+        }
+    }
     app.run(&mut terminal)
 }
 
@@ -1145,5 +1215,33 @@ mod tests {
     fn test_load_selected_returns_continue_when_empty() {
         let app = BrowseTui::with_test_skills(Vec::new());
         assert_eq!(app.load_selected(), Action::Continue);
+    }
+
+    #[test]
+    fn test_favorite_and_hide_toggles() {
+        let skills = vec![
+            make_test_skill("s1", "Skill 1", "base", 0.9, vec![]),
+            make_test_skill("s2", "Skill 2", "base", 0.85, vec![]),
+        ];
+        let mut app = BrowseTui::with_test_skills(skills);
+
+        // Toggle favorite on s1
+        app.handle_list_key(KeyCode::Char('f'));
+        assert!(app.favorites.contains("s1"));
+        assert_eq!(app.status_message.as_deref(), Some("Favorited: s1"));
+
+        app.handle_list_key(KeyCode::Char('f'));
+        assert!(!app.favorites.contains("s1"));
+        assert_eq!(app.status_message.as_deref(), Some("Unfavorited: s1"));
+
+        // Hide s1
+        app.handle_list_key(KeyCode::Char('h'));
+        assert!(app.hidden.contains("s1"));
+        assert_eq!(app.filtered_count(), 1);
+
+        // Show hidden with 'H'
+        app.handle_list_key(KeyCode::Char('H'));
+        assert!(app.show_hidden);
+        assert_eq!(app.filtered_count(), 2);
     }
 }

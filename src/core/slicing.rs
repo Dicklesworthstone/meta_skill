@@ -58,9 +58,11 @@ fn slice_section(
         }
 
         let slice_type = classify_block(block);
-        // Content is just the block content, cleaned.
-        // We do NOT prepend the header here; the renderer (disclosure) handles that.
-        let content = block.content.trim_end().to_string();
+        // Extract optional ::: if <expr> ::: / ::: requires <ids> ::: directives from block content
+        let (content, condition, requires) = extract_block_directives(block.content.trim_end());
+        if content.trim().is_empty() {
+            continue;
+        }
         let id = slice_id(block, slice_type, counters);
 
         // Calculate token estimate conservatively: includes header cost for the first slice.
@@ -83,14 +85,56 @@ fn slice_section(
             utility_score,
             coverage_group,
             tags,
-            requires: Vec::new(),
-            condition: None,
+            requires,
+            condition,
             section_title: Some(section.title.clone()),
             content,
         });
 
         first = false;
     }
+}
+
+/// Extract `::: if <expr> :::` / `::: endif :::` and `::: requires <id1, id2> :::` directives
+/// from a block's markdown text, returning `(cleaned_content, condition, requires)`.
+pub fn extract_block_directives(
+    raw: &str,
+) -> (String, Option<super::skill::SlicePredicate>, Vec<String>) {
+    let mut condition = None;
+    let mut requires = Vec::new();
+    let mut kept_lines = Vec::new();
+
+    for line in raw.lines() {
+        let trimmed = line.trim();
+        if let Some(inner) = trimmed
+            .strip_prefix(":::")
+            .and_then(|s| s.strip_suffix(":::"))
+            .map(str::trim)
+        {
+            if inner.eq_ignore_ascii_case("endif") || inner.eq_ignore_ascii_case("end") {
+                continue;
+            }
+            if let Some(expr) = inner.strip_prefix("if ") {
+                if let Some(pred) = super::skill::SlicePredicate::parse(expr.trim()) {
+                    condition = Some(pred);
+                    continue;
+                }
+            }
+            if let Some(reqs) = inner.strip_prefix("requires ") {
+                for req in reqs.split([',', ' ']) {
+                    let req = req.trim();
+                    if !req.is_empty() {
+                        requires.push(req.to_string());
+                    }
+                }
+                continue;
+            }
+        }
+        kept_lines.push(line);
+    }
+
+    let cleaned = kept_lines.join("\n").trim().to_string();
+    (cleaned, condition, requires)
 }
 
 fn classify_block(block: &SkillBlock) -> SliceType {
@@ -243,5 +287,45 @@ mod tests {
         assert_eq!(estimate, 1);
         let estimate = estimate_tokens("abcdefgh");
         assert_eq!(estimate, 2);
+    }
+
+    #[test]
+    fn test_conditional_block_predicate_and_requires_slicing() {
+        let spec = SkillSpec {
+            format_version: SkillSpec::FORMAT_VERSION.to_string(),
+            metadata: SkillMetadata {
+                id: "test".to_string(),
+                name: "Test".to_string(),
+                version: "0.1.0".to_string(),
+                ..Default::default()
+            },
+            sections: vec![SkillSection {
+                id: "rules".to_string(),
+                title: "Rules".to_string(),
+                blocks: vec![SkillBlock {
+                    id: "rules-1".to_string(),
+                    block_type: BlockType::Rule,
+                    content: "::: if file:Cargo.toml :::\n::: requires rules-0 :::\nUse Rust 2024 edition.\n::: endif :::".to_string(),
+                }],
+            }],
+            ..Default::default()
+        };
+
+        let index = SkillSlicer::slice(&spec);
+        assert_eq!(index.slices.len(), 1);
+        let slice = &index.slices[0];
+        assert_eq!(slice.content, "Use Rust 2024 edition.");
+        assert_eq!(slice.requires, vec!["rules-0".to_string()]);
+        let cond = slice.condition.as_ref().expect("condition parsed");
+        assert_eq!(cond.expr, "file:Cargo.toml");
+
+        let temp = tempfile::tempdir().unwrap();
+        assert!(!cond.evaluate(temp.path()));
+        std::fs::write(
+            temp.path().join("Cargo.toml"),
+            "[package]\nname = \"demo\"\nedition = \"2024\"\n",
+        )
+        .unwrap();
+        assert!(cond.evaluate(temp.path()));
     }
 }

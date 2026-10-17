@@ -219,21 +219,18 @@ fn test_error_json_output() {
 
     // Try to show a non-existent skill
     let output = fixture.run_ms(&["-O", "json", "show", "nonexistent-skill-xyz"]);
+    assert!(!output.success, "Showing nonexistent skill must fail");
 
-    // Should fail but with valid JSON error
-    if !output.success {
-        // Try to parse as JSON
-        let json: Result<Value, _> = serde_json::from_str(&output.stdout);
-        // Error output should still be structured if possible
-        // Some commands may output errors to stderr instead
-        if json.is_ok() {
-            let error_json = json.unwrap();
-            assert!(
-                error_json.get("status").is_some() || error_json.get("error").is_some(),
-                "Error JSON should have status or error field"
-            );
-        }
-    }
+    let error_json: Value = serde_json::from_str(&output.stdout).unwrap_or_else(|e| {
+        panic!(
+            "Expected JSON error on stdout, got '{}': {e}",
+            output.stdout
+        )
+    });
+    assert!(
+        error_json.get("status").is_some() || error_json.get("error").is_some(),
+        "Error JSON should have status or error field: {error_json}"
+    );
 }
 
 /// Test that suggest command produces valid JSON
@@ -271,5 +268,47 @@ fn test_config_json_output() {
         json.is_ok(),
         "config --list should produce valid JSON: {}",
         output.stdout
+    );
+}
+
+/// Test init with -O json and emit_json commands with toon/jsonl/plain/tsv
+#[test]
+fn test_init_and_universal_multi_format_output() {
+    let fixture = TestFixture::new("test_init_and_universal_multi_format_output");
+    let init_out = fixture.run_ms(&["-O", "json", "init"]);
+    assert!(init_out.success, "init -O json failed: {}", init_out.stderr);
+    let init_json: Value = serde_json::from_str(&init_out.stdout).unwrap_or_else(|e| {
+        panic!(
+            "init -O json should emit JSON, got '{}': {e}",
+            init_out.stdout
+        )
+    });
+    assert_eq!(init_json["status"], "ok");
+
+    let jsonl_out = fixture.run_ms(&["-O", "jsonl", "index"]);
+    assert!(jsonl_out.success);
+    assert_eq!(jsonl_out.stdout.trim().lines().count(), 1);
+    let _: Value = serde_json::from_str(jsonl_out.stdout.trim()).expect("valid single-line JSONL");
+
+    let tsv_out = fixture.run_ms(&["-O", "tsv", "index"]);
+    assert!(tsv_out.success);
+    assert!(
+        tsv_out.stdout.contains('\t'),
+        "TSV output should contain tabs"
+    );
+
+    let plain_out = fixture.run_ms(&["-O", "plain", "index"]);
+    assert!(plain_out.success);
+    assert!(
+        plain_out.stdout.contains("status: ok"),
+        "Plain output should contain key: value lines, got: {}",
+        plain_out.stdout
+    );
+
+    let toon_out = fixture.run_ms(&["-O", "toon", "index"]);
+    assert!(toon_out.success);
+    assert!(
+        !toon_out.stdout.trim().is_empty(),
+        "TOON output should be non-empty"
     );
 }

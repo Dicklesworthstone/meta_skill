@@ -65,7 +65,16 @@ impl BundlePackage {
         let mut blobs = Vec::new();
         for skill in &mut manifest.skills {
             let skill_path = root.join(&skill.path);
+            crate::security::path_policy::deny_symlink_escape(&skill_path, root)?;
             let bytes = build_blob_bytes(&skill_path)?;
+            if let Ok(text) = std::str::from_utf8(&bytes) {
+                if crate::security::secret_scanner::contains_secrets(text) {
+                    tracing::warn!(
+                        skill = %skill.name,
+                        "potential secret detected in bundled skill content"
+                    );
+                }
+            }
             let hash = hash_bytes(&bytes);
 
             if let Some(existing) = skill.hash.as_ref() {
@@ -210,6 +219,28 @@ impl BundlePackage {
         if self.manifest.signatures.is_empty() {
             return Ok(());
         }
+        // Try canonical checksum payload first (used by `ms bundle create --sign`)
+        if let Some(checksum) = self.manifest.checksum.as_ref() {
+            if self
+                .manifest
+                .verify_signatures(checksum.as_bytes(), verifier)
+                .is_ok()
+            {
+                return Ok(());
+            }
+        }
+        // Fallback: canonical unsigned package bytes
+        let mut unsigned = self.clone();
+        unsigned.manifest.signatures.clear();
+        if let Ok(unsigned_bytes) = unsigned.to_bytes() {
+            if self
+                .manifest
+                .verify_signatures(&unsigned_bytes, verifier)
+                .is_ok()
+            {
+                return Ok(());
+            }
+        }
         let payload = self.to_bytes()?;
         self.manifest.verify_signatures(&payload, verifier)
     }
@@ -270,6 +301,7 @@ fn build_blob_bytes(path: &Path) -> Result<Vec<u8>> {
 fn bundle_checksum(manifest: &BundleManifest, blobs: &[BundleBlob]) -> Result<String> {
     let mut manifest = manifest.clone();
     manifest.checksum = None;
+    manifest.signatures.clear();
     let toml = manifest.to_toml_string()?;
 
     let mut hasher = Sha256::new();
@@ -454,6 +486,56 @@ mod tests {
         let bytes = package.to_bytes().unwrap();
         let parsed = BundlePackage::from_bytes(&bytes).unwrap();
         parsed.verify().unwrap();
+    }
+
+    #[test]
+    fn signed_bundle_roundtrip_and_verification() {
+        use crate::bundler::manifest::{Ed25519Signer, Ed25519Verifier};
+
+        let dir = tempdir().unwrap();
+        let skill_dir = dir.path().join("skill");
+        std::fs::create_dir_all(&skill_dir).unwrap();
+        std::fs::write(skill_dir.join("SKILL.md"), "content").unwrap();
+
+        let manifest = BundleManifest {
+            bundle: BundleInfo {
+                id: "signed-bundle".to_string(),
+                name: "Signed Bundle".to_string(),
+                version: "1.0.0".to_string(),
+                description: None,
+                authors: vec![],
+                license: None,
+                repository: None,
+                keywords: vec![],
+                ms_version: None,
+            },
+            skills: vec![BundledSkill {
+                name: "skill".to_string(),
+                path: PathBuf::from("skill"),
+                version: Some("1.0.0".to_string()),
+                hash: None,
+                optional: false,
+            }],
+            dependencies: vec![],
+            checksum: None,
+            signatures: vec![],
+        };
+
+        let bundle = Bundle::new(manifest, dir.path());
+        let mut package = bundle.package().unwrap();
+
+        let signer = Ed25519Signer::from_seed(&[42u8; 32]).unwrap();
+        let checksum = package.manifest.checksum.as_deref().unwrap();
+        let sig = signer.sign(checksum.as_bytes(), "test-signer");
+        package.manifest.signatures.push(sig);
+
+        let bytes = package.to_bytes().unwrap();
+        let parsed = BundlePackage::from_bytes(&bytes).unwrap();
+        parsed.verify().unwrap();
+
+        let mut verifier = Ed25519Verifier::new();
+        verifier.add_key(signer.key_id(), signer.public_key().to_vec());
+        parsed.verify_signatures(&verifier).unwrap();
     }
 
     #[test]

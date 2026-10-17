@@ -1,9 +1,25 @@
+use std::sync::atomic::{AtomicU8, Ordering};
+
 use chrono::{DateTime, Utc};
 use clap::ValueEnum;
 use console::style;
 use serde::Serialize;
 
 use crate::error::{ErrorCode, MsError, Result, StructuredError};
+
+static ACTIVE_OUTPUT_FORMAT: AtomicU8 = AtomicU8::new(0);
+
+/// Set the process-wide active output format so helpers like [`emit_json`]
+/// automatically render `Toon`, `Jsonl`, `Tsv`, or `Plain` when requested.
+pub fn set_active_output_format(format: OutputFormat) {
+    ACTIVE_OUTPUT_FORMAT.store(format.to_u8(), Ordering::Relaxed);
+}
+
+/// Get the process-wide active output format.
+#[must_use]
+pub fn active_output_format() -> OutputFormat {
+    OutputFormat::from_u8(ACTIVE_OUTPUT_FORMAT.load(Ordering::Relaxed))
+}
 
 /// Legacy output mode (Human/Robot)
 #[derive(Debug, Clone, Copy)]
@@ -31,6 +47,42 @@ pub enum OutputFormat {
 }
 
 impl OutputFormat {
+    const fn to_u8(self) -> u8 {
+        match self {
+            Self::Human => 0,
+            Self::Json => 1,
+            Self::Jsonl => 2,
+            Self::Plain => 3,
+            Self::Tsv => 4,
+            Self::Toon => 5,
+        }
+    }
+
+    const fn from_u8(val: u8) -> Self {
+        match val {
+            1 => Self::Json,
+            2 => Self::Jsonl,
+            3 => Self::Plain,
+            4 => Self::Tsv,
+            5 => Self::Toon,
+            _ => Self::Human,
+        }
+    }
+
+    /// Parse a format string case-insensitively (e.g. from config or env vars).
+    #[must_use]
+    pub fn from_str_loose(s: &str) -> Option<Self> {
+        match s.trim().to_ascii_lowercase().as_str() {
+            "human" => Some(Self::Human),
+            "json" => Some(Self::Json),
+            "jsonl" | "ndjson" => Some(Self::Jsonl),
+            "plain" | "text" => Some(Self::Plain),
+            "tsv" => Some(Self::Tsv),
+            "toon" => Some(Self::Toon),
+            _ => None,
+        }
+    }
+
     /// Determine format from CLI args (robot flag overrides explicit format for backward compat)
     #[must_use]
     pub fn from_args(robot: bool, format: Option<OutputFormat>) -> Self {
@@ -228,10 +280,159 @@ pub fn emit_robot<T: Serialize>(response: &RobotResponse<T>) -> Result<()> {
 }
 
 pub fn emit_json<T: Serialize>(value: &T) -> Result<()> {
-    let payload = serde_json::to_string_pretty(value)
-        .map_err(|err| MsError::Config(format!("serialize output: {err}")))?;
-    println!("{payload}");
-    Ok(())
+    emit_json_for_format(value, active_output_format())
+}
+
+/// Emit a serializable value according to the specified [`OutputFormat`].
+pub fn emit_json_for_format<T: Serialize>(value: &T, format: OutputFormat) -> Result<()> {
+    match format {
+        OutputFormat::Human | OutputFormat::Json => {
+            let payload = serde_json::to_string_pretty(value)
+                .map_err(|err| MsError::Config(format!("serialize output: {err}")))?;
+            println!("{payload}");
+            Ok(())
+        }
+        OutputFormat::Jsonl => {
+            let val = serde_json::to_value(value)
+                .map_err(|err| MsError::Config(format!("serialize output: {err}")))?;
+            if let serde_json::Value::Array(items) = val {
+                for item in items {
+                    let line = serde_json::to_string(&item)
+                        .map_err(|err| MsError::Config(format!("serialize output: {err}")))?;
+                    println!("{line}");
+                }
+            } else {
+                let line = serde_json::to_string(&val)
+                    .map_err(|err| MsError::Config(format!("serialize output: {err}")))?;
+                println!("{line}");
+            }
+            Ok(())
+        }
+        OutputFormat::Toon => emit_toon(value),
+        OutputFormat::Plain => {
+            let val = serde_json::to_value(value)
+                .map_err(|err| MsError::Config(format!("serialize output: {err}")))?;
+            println!("{}", format_value_plain(&val));
+            Ok(())
+        }
+        OutputFormat::Tsv => {
+            let val = serde_json::to_value(value)
+                .map_err(|err| MsError::Config(format!("serialize output: {err}")))?;
+            println!("{}", format_value_tsv(&val));
+            Ok(())
+        }
+    }
+}
+
+fn scalar_to_plain(val: &serde_json::Value) -> String {
+    match val {
+        serde_json::Value::Null => "null".to_string(),
+        serde_json::Value::Bool(b) => b.to_string(),
+        serde_json::Value::Number(n) => n.to_string(),
+        serde_json::Value::String(s) => s.clone(),
+        other => serde_json::to_string(other).unwrap_or_default(),
+    }
+}
+
+fn format_value_plain(val: &serde_json::Value) -> String {
+    let mut lines = Vec::new();
+    match val {
+        serde_json::Value::Object(map) => {
+            for (k, v) in map {
+                match v {
+                    serde_json::Value::Object(sub) => {
+                        for (sk, sv) in sub {
+                            lines.push(format!("{k}.{sk}: {}", scalar_to_plain(sv)));
+                        }
+                    }
+                    serde_json::Value::Array(arr) => {
+                        lines.push(format!("{k}_count: {}", arr.len()));
+                        for (idx, item) in arr.iter().enumerate() {
+                            if let serde_json::Value::Object(obj) = item {
+                                let summary: Vec<String> = obj
+                                    .iter()
+                                    .map(|(ik, iv)| format!("{ik}={}", scalar_to_plain(iv)))
+                                    .collect();
+                                lines.push(format!("{k}[{idx}]: {}", summary.join(" ")));
+                            } else {
+                                lines.push(format!("{k}[{idx}]: {}", scalar_to_plain(item)));
+                            }
+                        }
+                    }
+                    _ => lines.push(format!("{k}: {}", scalar_to_plain(v))),
+                }
+            }
+        }
+        serde_json::Value::Array(arr) => {
+            for item in arr {
+                if let serde_json::Value::Object(obj) = item {
+                    let summary: Vec<String> = obj
+                        .iter()
+                        .map(|(ik, iv)| format!("{ik}={}", scalar_to_plain(iv)))
+                        .collect();
+                    lines.push(summary.join(" "));
+                } else {
+                    lines.push(scalar_to_plain(item));
+                }
+            }
+        }
+        _ => lines.push(scalar_to_plain(val)),
+    }
+    lines.join("\n")
+}
+
+fn format_value_tsv(val: &serde_json::Value) -> String {
+    // If top-level is an array of objects, or an object containing an array of objects, render table TSV
+    let array_opt = match val {
+        serde_json::Value::Array(arr) => Some(arr),
+        serde_json::Value::Object(map) => map.values().find_map(|v| {
+            if let serde_json::Value::Array(arr) = v {
+                if arr.first().is_some_and(serde_json::Value::is_object) {
+                    return Some(arr);
+                }
+            }
+            None
+        }),
+        _ => None,
+    };
+
+    if let Some(arr) = array_opt {
+        if let Some(serde_json::Value::Object(first)) = arr.first() {
+            let headers: Vec<&str> = first.keys().map(String::as_str).collect();
+            let mut rows = Vec::with_capacity(arr.len() + 1);
+            rows.push(headers.join("\t"));
+            for item in arr {
+                if let serde_json::Value::Object(obj) = item {
+                    let cols: Vec<String> = headers
+                        .iter()
+                        .map(|h| {
+                            obj.get(*h)
+                                .map(scalar_to_plain)
+                                .unwrap_or_default()
+                                .replace(['\t', '\n', '\r'], " ")
+                        })
+                        .collect();
+                    rows.push(cols.join("\t"));
+                }
+            }
+            return rows.join("\n");
+        }
+    }
+
+    if let serde_json::Value::Object(map) = val {
+        let mut rows = Vec::with_capacity(map.len() + 1);
+        rows.push("key\tvalue".to_string());
+        for (k, v) in map {
+            let clean = scalar_to_plain(v).replace(['\t', '\n', '\r'], " ");
+            rows.push(format!("{k}\t{clean}"));
+        }
+        return rows.join("\n");
+    }
+
+    format!(
+        "value\t{}",
+        scalar_to_plain(val).replace(['\t', '\n', '\r'], " ")
+    )
 }
 
 /// Emit a value in TOON format (Token-Optimized Object Notation).

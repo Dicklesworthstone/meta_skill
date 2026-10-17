@@ -312,8 +312,13 @@ fn list_evidence_human(records: &[crate::storage::sqlite::EvidenceRecord]) -> Re
         return Ok(());
     }
 
+    let sep_width = if should_use_rich_for_evidence() {
+        terminal_width().clamp(40, 100)
+    } else {
+        60
+    };
     println!("Evidence Records");
-    println!("{}", "═".repeat(60));
+    println!("{}", "═".repeat(sep_width));
     println!();
 
     let mut current_skill = String::new();
@@ -528,7 +533,6 @@ fn build_edges(records: &[crate::storage::sqlite::EvidenceRecord]) -> Vec<serde_
 }
 
 /// Check whether the terminal supports rich output for evidence commands.
-#[allow(dead_code)]
 fn should_use_rich_for_evidence() -> bool {
     use std::io::IsTerminal;
 
@@ -548,7 +552,6 @@ fn should_use_rich_for_evidence() -> bool {
 }
 
 /// Get the terminal width, defaulting to 80 if detection fails.
-#[allow(dead_code)]
 fn terminal_width() -> usize {
     crossterm::terminal::size()
         .map(|(w, _)| w as usize)

@@ -137,29 +137,29 @@ impl BuildTui {
             }
 
             // Check if wizard completed
-            if self.wizard.is_complete() {
-                return match self.wizard.state() {
-                    WizardState::Complete {
-                        skill_path,
-                        manifest_path,
-                        draft,
-                        ..
-                    } => {
-                        let manifest_json = self.wizard.generate_manifest()?;
-                        Ok(WizardOutput::Success {
-                            skill_path: skill_path.clone(),
-                            manifest_path: manifest_path.clone(),
-                            calibration_path: self.wizard.checkpoint().query.clone().into(),
-                            draft: draft.clone(),
-                            manifest_json,
-                        })
-                    }
-                    WizardState::Cancelled { reason } => Ok(WizardOutput::Cancelled {
+            match self.wizard.state() {
+                WizardState::Complete {
+                    skill_path,
+                    manifest_path,
+                    draft,
+                    ..
+                } => {
+                    let manifest_json = self.wizard.generate_manifest()?;
+                    return Ok(WizardOutput::Success {
+                        skill_path: skill_path.clone(),
+                        manifest_path: manifest_path.clone(),
+                        calibration_path: self.wizard.checkpoint().query.clone().into(),
+                        draft: draft.clone(),
+                        manifest_json,
+                    });
+                }
+                WizardState::Cancelled { reason } => {
+                    return Ok(WizardOutput::Cancelled {
                         reason: reason.clone(),
                         checkpoint_id: Some(self.wizard.checkpoint().id.clone()),
-                    }),
-                    _ => unreachable!(),
-                };
+                    });
+                }
+                _ => {}
             }
         }
     }
@@ -526,8 +526,30 @@ impl BuildTui {
                 let mut sessions = Vec::new();
                 for &idx in selected {
                     if let Some(match_data) = results.get(idx) {
-                        // Attempt to load full session
-                        match client.get_session(&match_data.path) {
+                        // Attempt to load full session (falling back to demo session for /demo/* paths)
+                        let session_res = client.get_session(&match_data.path).or_else(|e| {
+                            if match_data.path.starts_with("/demo/") {
+                                Ok(crate::cass::client::Session {
+                                    id: match_data.session_id.clone(),
+                                    path: match_data.path.clone(),
+                                    messages: vec![crate::cass::client::SessionMessage {
+                                        index: 0,
+                                        role: "assistant".to_string(),
+                                        content: match_data
+                                            .snippet
+                                            .clone()
+                                            .unwrap_or_else(|| "Demo session message".to_string()),
+                                        tool_calls: Vec::new(),
+                                        tool_results: Vec::new(),
+                                    }],
+                                    metadata: crate::cass::client::SessionMetadata::default(),
+                                    content_hash: format!("demo-hash-{}", match_data.session_id),
+                                })
+                            } else {
+                                Err(e)
+                            }
+                        });
+                        match session_res {
                             Ok(session) => {
                                 let quality = quality_scorer.score(&session);
                                 sessions.push(SelectedSession {
@@ -570,6 +592,62 @@ impl BuildTui {
                     let count = self.get_moves_count();
                     if i < count.saturating_sub(1) {
                         self.pattern_list_state.select(Some(i + 1));
+                    }
+                }
+            }
+            KeyCode::Char('a') => {
+                // Extract/add a cognitive move from the current session
+                if let WizardState::MoveExtraction {
+                    sessions,
+                    moves,
+                    current_session_idx,
+                } = self.wizard.state().clone()
+                {
+                    if let Some(sel) = sessions.get(current_session_idx) {
+                        let move_num = moves.len() + 1;
+                        let excerpt = sel
+                            .session
+                            .messages
+                            .first()
+                            .map(|m| m.content.clone())
+                            .or_else(|| sel.match_data.snippet.clone())
+                            .unwrap_or_else(|| "Extracted pattern evidence".to_string());
+                        let mov = crate::cass::CognitiveMove {
+                            id: format!("move-{move_num}"),
+                            tag: crate::cass::CognitiveMoveTag::InnerTruth,
+                            description: format!(
+                                "Extracted rule #{move_num} from {}",
+                                sel.session.id
+                            ),
+                            evidence: crate::cass::MoveEvidence {
+                                session_id: sel.session.id.clone(),
+                                message_indices: vec![0],
+                                excerpt,
+                                notes: None,
+                            },
+                            confidence: sel.quality.score.clamp(0.5, 0.95),
+                            reviewed: false,
+                            decision: None,
+                        };
+                        self.wizard.add_move(mov);
+                        let new_len = self.get_moves_count();
+                        self.pattern_list_state
+                            .select(Some(new_len.saturating_sub(1)));
+                        self.status_message = Some(format!("Added cognitive move #{move_num}"));
+                    }
+                }
+            }
+            KeyCode::Char('x') => {
+                // Remove selected cognitive move
+                if let Some(idx) = self.pattern_list_state.selected() {
+                    if let Some(removed) = self.wizard.remove_move(idx) {
+                        let count = self.get_moves_count();
+                        if count == 0 {
+                            self.pattern_list_state.select(Some(0));
+                        } else if idx >= count {
+                            self.pattern_list_state.select(Some(count - 1));
+                        }
+                        self.status_message = Some(format!("Removed move {}", removed.id));
                     }
                 }
             }
@@ -850,7 +928,12 @@ impl BuildTui {
                 ]);
             }
             WizardState::MoveExtraction { .. } => {
-                actions.extend(vec!["n: next session".to_string(), "f: finish".to_string()]);
+                actions.extend(vec![
+                    "a: add move".to_string(),
+                    "x: remove move".to_string(),
+                    "n: next session".to_string(),
+                    "f: finish".to_string(),
+                ]);
             }
             WizardState::ThirdAlternativeGuard { .. } => {
                 actions.extend(vec![
@@ -1217,5 +1300,38 @@ mod tests {
         let wizard = BrennerWizard::new("query", BrennerConfig::default());
         let tui = BuildTui::new(wizard);
         assert!((tui.get_quality_score() - 0.7).abs() < f32::EPSILON);
+    }
+
+    #[test]
+    fn test_demo_session_flow_and_move_extraction_keys() {
+        let wizard = BrennerWizard::new("rust-debugging", BrennerConfig::default());
+        let mut tui = BuildTui::new(wizard);
+        let client = CassClient::new();
+        let scorer = QualityScorer::with_defaults();
+
+        // Step 1: Load demo data ('d') and advance to Step 2 ('n')
+        tui.handle_key(KeyCode::Char('d'), KeyModifiers::empty(), &client, &scorer)
+            .unwrap();
+        tui.handle_key(KeyCode::Char('n'), KeyModifiers::empty(), &client, &scorer)
+            .unwrap();
+        assert_eq!(tui.get_phase_name(), "Pattern Extraction");
+
+        // Step 2: Add two moves ('a'), remove one ('x'), then finish extraction ('f')
+        tui.handle_key(KeyCode::Char('a'), KeyModifiers::empty(), &client, &scorer)
+            .unwrap();
+        tui.handle_key(KeyCode::Char('a'), KeyModifiers::empty(), &client, &scorer)
+            .unwrap();
+        assert_eq!(tui.get_moves_count(), 2);
+
+        tui.handle_key(KeyCode::Char('x'), KeyModifiers::empty(), &client, &scorer)
+            .unwrap();
+        assert_eq!(tui.get_moves_count(), 1);
+
+        tui.handle_key(KeyCode::Char('f'), KeyModifiers::empty(), &client, &scorer)
+            .unwrap();
+        assert!(matches!(
+            tui.wizard.state(),
+            WizardState::ThirdAlternativeGuard { .. } | WizardState::SkillFormalization { .. }
+        ));
     }
 }

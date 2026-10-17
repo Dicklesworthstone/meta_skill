@@ -7,7 +7,25 @@ use super::classifiers::{
     BlockClassifier, ChecklistClassifier, ContextClassifier, ExampleClassifier, MetadataClassifier,
     PitfallClassifier, RuleClassifier,
 };
-use super::types::{ClassificationResult, ContentBlock, ContentBlockType, SourceSpan};
+use super::types::{
+    ClassificationResult, ClassificationSignal, ContentBlock, ContentBlockType, SourceSpan,
+};
+
+/// Input format hint for parsing unstructured text.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum ImportFormatHint {
+    /// Auto-detect format from content heuristics
+    #[default]
+    Auto,
+    /// Standard Markdown document
+    Markdown,
+    /// Plain text document
+    Plaintext,
+    /// AGENTS.md / coding guidelines document
+    AgentsMd,
+    /// LLM system prompt (often containing XML tags or role instructions)
+    SystemPrompt,
+}
 
 // =============================================================================
 // CONTENT PARSER
@@ -69,15 +87,130 @@ impl ContentParser {
     /// 3. Returns a vector of classified `ContentBlock`s
     #[must_use]
     pub fn parse(&self, content: &str) -> Vec<ContentBlock> {
+        self.parse_with_format(content, ImportFormatHint::Auto)
+    }
+
+    /// Parse content into classified blocks using an explicit or auto-detected format hint.
+    #[must_use]
+    pub fn parse_with_format(&self, content: &str, format: ImportFormatHint) -> Vec<ContentBlock> {
+        let effective_format = match format {
+            ImportFormatHint::Auto => Self::detect_format(content),
+            other => other,
+        };
         let raw_blocks = self.split_into_blocks(content);
 
         raw_blocks
             .into_iter()
             .map(|(text, span)| {
-                let (block_type, confidence, signals) = self.classify_block(&text);
+                let (mut block_type, mut confidence, mut signals) = self.classify_block(&text);
+                Self::apply_format_boost(
+                    effective_format,
+                    &text,
+                    &mut block_type,
+                    &mut confidence,
+                    &mut signals,
+                );
                 ContentBlock::new(block_type, text, confidence, span, signals)
             })
             .collect()
+    }
+
+    fn detect_format(content: &str) -> ImportFormatHint {
+        let lower = content.to_ascii_lowercase();
+        if lower.contains("agents.md")
+            || content.contains("## RULE")
+            || content.contains("### FORBIDDEN")
+        {
+            ImportFormatHint::AgentsMd
+        } else if lower.contains("you are a ")
+            || lower.contains("you are an ")
+            || lower.contains("<instructions>")
+            || lower.contains("<system_prompt>")
+            || lower.contains("<guidelines>")
+        {
+            ImportFormatHint::SystemPrompt
+        } else if content.contains("\n# ") || content.contains("\n## ") || content.contains("```") {
+            ImportFormatHint::Markdown
+        } else {
+            ImportFormatHint::Plaintext
+        }
+    }
+
+    fn apply_format_boost(
+        format: ImportFormatHint,
+        text: &str,
+        block_type: &mut ContentBlockType,
+        confidence: &mut f32,
+        signals: &mut Vec<ClassificationSignal>,
+    ) {
+        let lower = text.to_ascii_lowercase();
+        match format {
+            ImportFormatHint::AgentsMd => {
+                if text.contains("RULE")
+                    || lower.contains("must ")
+                    || lower.contains("never ")
+                    || lower.contains("always ")
+                {
+                    if *block_type == ContentBlockType::Context
+                        || *block_type == ContentBlockType::Unknown
+                    {
+                        *block_type = ContentBlockType::Rule;
+                    }
+                    if *block_type == ContentBlockType::Rule {
+                        *confidence = (*confidence + 0.2).clamp(0.0, 1.0);
+                        signals.push(ClassificationSignal::new(
+                            "agents_md_rule_boost",
+                            "AGENTS.md rule/policy directive",
+                            0.2,
+                        ));
+                    }
+                } else if lower.contains("forbidden") || lower.contains("pitfall") {
+                    *block_type = ContentBlockType::Pitfall;
+                    *confidence = (*confidence + 0.25).clamp(0.5, 1.0);
+                    signals.push(ClassificationSignal::new(
+                        "agents_md_forbidden_boost",
+                        "AGENTS.md forbidden section",
+                        0.25,
+                    ));
+                }
+            }
+            ImportFormatHint::SystemPrompt => {
+                if lower.contains("<rules>")
+                    || lower.contains("<guidelines>")
+                    || lower.contains("<constraints>")
+                    || lower.starts_with("you must")
+                    || lower.starts_with("always ")
+                {
+                    *block_type = ContentBlockType::Rule;
+                    *confidence = (*confidence + 0.25).clamp(0.6, 1.0);
+                    signals.push(ClassificationSignal::new(
+                        "system_prompt_directive",
+                        "System prompt directive/tag",
+                        0.25,
+                    ));
+                } else if lower.contains("<example") {
+                    *block_type = ContentBlockType::Example;
+                    *confidence = (*confidence + 0.25).clamp(0.6, 1.0);
+                    signals.push(ClassificationSignal::new(
+                        "system_prompt_example",
+                        "<example> tag",
+                        0.25,
+                    ));
+                }
+            }
+            ImportFormatHint::Plaintext => {
+                if *block_type == ContentBlockType::Unknown && !text.trim().is_empty() {
+                    *block_type = ContentBlockType::Context;
+                    *confidence = confidence.max(0.45);
+                    signals.push(ClassificationSignal::new(
+                        "plaintext_context_fallback",
+                        "Plaintext paragraph",
+                        0.45,
+                    ));
+                }
+            }
+            ImportFormatHint::Markdown | ImportFormatHint::Auto => {}
+        }
     }
 
     /// Split content into logical blocks.

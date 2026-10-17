@@ -408,13 +408,24 @@ fn disclose_packed(
     }
 
     let slice_index = SkillSlicer::slice(spec);
+    let working_dir = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
+    let eligible_slices: Vec<_> = slice_index
+        .slices
+        .into_iter()
+        .filter(|slice| {
+            slice
+                .condition
+                .as_ref()
+                .is_none_or(|pred| pred.evaluate(&working_dir))
+        })
+        .collect();
     let mut constraints = PackConstraints::new(slice_budget, budget.max_per_group);
     constraints.contract = budget.contract.clone();
     constraints
         .mandatory_slices
         .push(MandatorySlice::ByPredicate(MandatoryPredicate::Always));
     let packer = ConstrainedPacker;
-    let packed = match packer.pack(&slice_index.slices, &constraints, budget.mode) {
+    let packed = match packer.pack(&eligible_slices, &constraints, budget.mode) {
         Ok(result) => result,
         Err(_) => {
             return DisclosedContent {
@@ -582,15 +593,30 @@ fn extract_headings(sections: &[SkillSection]) -> String {
     out
 }
 
-/// Render sections to markdown
+/// Render sections to markdown, evaluating any `::: if <expr> :::` conditional blocks.
 fn render_sections(sections: &[SkillSection]) -> String {
+    let working_dir = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
     let mut out = String::new();
     for section in sections {
+        let mut rendered_blocks = Vec::new();
+        for block in &section.blocks {
+            let (content, condition, _) = super::slicing::extract_block_directives(&block.content);
+            if condition
+                .as_ref()
+                .is_none_or(|pred| pred.evaluate(&working_dir))
+                && !content.is_empty()
+            {
+                rendered_blocks.push(content);
+            }
+        }
+        if rendered_blocks.is_empty() && !section.blocks.is_empty() {
+            continue;
+        }
         out.push_str("## ");
         out.push_str(&section.title);
         out.push_str("\n\n");
-        for block in &section.blocks {
-            out.push_str(&block.content);
+        for content in rendered_blocks {
+            out.push_str(&content);
             out.push_str("\n\n");
         }
     }

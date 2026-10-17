@@ -105,9 +105,7 @@ impl TxRecord {
 
 /// Advisory file lock for coordinating dual-persistence writes
 pub struct GlobalLock {
-    #[allow(dead_code)]
     lock_file: File,
-    #[allow(dead_code)]
     lock_path: PathBuf,
 }
 
@@ -550,13 +548,17 @@ impl TxManager {
         Ok(())
     }
 
-    /// Delete a skill with 2PC guarantees
+    /// Delete a skill with 2PC guarantees (acquiring the global lock).
     pub fn delete_skill_locked(&self, skill_id: &str) -> Result<()> {
         let _lock = GlobalLock::acquire_timeout(&self.ms_root, Duration::from_secs(30))?
             .ok_or_else(|| {
                 MsError::TransactionFailed("timeout waiting for global lock".to_string())
             })?;
+        self.delete_skill_unlocked(skill_id)
+    }
 
+    /// Delete a skill with 2PC guarantees when the caller already holds `GlobalLock`.
+    pub fn delete_skill_unlocked(&self, skill_id: &str) -> Result<()> {
         // Create delete transaction record
         let tx = TxRecord {
             id: Uuid::new_v4().to_string(),
@@ -574,6 +576,21 @@ impl TxManager {
         // Phase 1: Prepare - write intent
         self.write_tx_record(&tx)?;
 
+        // Record a tombstone copy in <ms_root>/tombstones before Git deletion
+        let skill_dir = self.git.root().join("skills/by-id").join(skill_id);
+        if skill_dir.exists() {
+            let rel_path = skill_dir
+                .strip_prefix(&self.ms_root)
+                .map(|p| p.to_string_lossy().to_string())
+                .unwrap_or_else(|_| format!("archive/skills/by-id/{skill_id}"));
+            let _ = super::tombstone::TombstoneManager::new(&self.ms_root).record_copy(
+                &skill_dir,
+                Some(&rel_path),
+                Some("delete_skill"),
+                Some("tx"),
+            );
+        }
+
         // Phase 2: Commit - delete from Git (creates commit)
         self.git.delete_skill(skill_id)?;
         let mut tx = tx;
@@ -585,6 +602,10 @@ impl TxManager {
         write_and_sync(&tx_path, &tx_json)?;
 
         // Phase 3: Complete - delete from SQLite
+        let res_cache = crate::core::ResolutionCache::new();
+        if res_cache.load_from_db(self.db.conn()).is_ok() {
+            let _ = res_cache.invalidate_from_db(self.db.conn(), skill_id);
+        }
         self.db.delete_skill(skill_id)?;
         tx.phase = TxPhase::Complete;
         self.db.update_tx_phase(&tx.id, TxPhase::Complete)?;
@@ -671,6 +692,8 @@ impl TxManager {
 
     /// Mark `SQLite` record as committed with final values
     fn db_mark_committed(&self, tx: &TxRecord) -> Result<TxRecord> {
+        use sha2::{Digest, Sha256};
+
         debug!("Phase: complete (tx={})", tx.id);
 
         let skill: SkillSpec = serde_json::from_str(&tx.payload_json)
@@ -690,6 +713,52 @@ impl TxManager {
 
         self.db
             .finalize_skill_commit(&skill.metadata.id, &git_path_str, &content_hash, &body)?;
+
+        // Invalidate any cached resolved specs that depend on this skill
+        let res_cache = crate::core::ResolutionCache::new();
+        if res_cache.load_from_db(self.db.conn()).is_ok() {
+            let _ = res_cache.invalidate_from_db(self.db.conn(), &skill.metadata.id);
+        }
+
+        // Populate pre-sliced content blocks and runtime skillpack cache
+        let slice_index = SkillSlicer::slice(&skill);
+        self.db
+            .upsert_skill_slices(&skill.metadata.id, &slice_index)?;
+
+        let slices_json = serde_json::to_string(&slice_index)
+            .map_err(|e| MsError::TransactionFailed(format!("serialize slices: {e}")))?;
+        let slices_hash = hex::encode(Sha256::digest(slices_json.as_bytes()));
+        let predicates: Vec<_> = slice_index
+            .slices
+            .iter()
+            .map(|s| s.condition.as_ref())
+            .collect();
+        let predicate_json = serde_json::to_string(&predicates).unwrap_or_default();
+        let predicate_index_hash = hex::encode(Sha256::digest(predicate_json.as_bytes()));
+        let embedding_hash = hex::encode(Sha256::digest(body.as_bytes()));
+
+        let packs_dir = self.ms_root.join("packs");
+        let _ = fs::create_dir_all(&packs_dir);
+        let pack_file = packs_dir.join(format!("{}.pack.json", skill.metadata.id));
+        let pack_payload = serde_json::json!({
+            "skill_id": skill.metadata.id,
+            "spec_hash": content_hash,
+            "slices_hash": slices_hash,
+            "embedding_hash": embedding_hash,
+            "predicate_index_hash": predicate_index_hash,
+            "slices": slice_index,
+        });
+        if let Ok(pack_str) = serde_json::to_string_pretty(&pack_payload) {
+            let _ = fs::write(&pack_file, pack_str);
+        }
+        self.db.upsert_skill_pack(
+            &skill.metadata.id,
+            &pack_file.to_string_lossy(),
+            &content_hash,
+            &slices_hash,
+            &embedding_hash,
+            &predicate_index_hash,
+        )?;
 
         // Update phase
         let mut tx = tx.clone();
@@ -928,11 +997,23 @@ impl RecoveryReport {
 // HELPERS
 // =============================================================================
 
-/// Compute content hash for a skill spec
-fn compute_content_hash(skill: &SkillSpec) -> Result<String> {
+/// Compute content hash for a skill spec (normalized by markdown content so
+/// semantic block classification refinements do not alter content hashes).
+pub(crate) fn compute_content_hash(skill: &SkillSpec) -> Result<String> {
     use sha2::{Digest, Sha256};
 
-    let json = serde_json::to_string(skill)
+    let mut normalized = skill.clone();
+    for section in &mut normalized.sections {
+        for block in &mut section.blocks {
+            block.block_type = if block.content.trim_start().starts_with("```") {
+                crate::core::BlockType::Code
+            } else {
+                crate::core::BlockType::Text
+            };
+        }
+    }
+
+    let json = serde_json::to_string(&normalized)
         .map_err(|e| MsError::TransactionFailed(format!("serialize skill for hash: {e}")))?;
 
     let mut hasher = Sha256::new();
@@ -1263,5 +1344,43 @@ mod tests {
         // Lock file should still exist but be empty (truncated)
         assert!(lock_path.exists());
         assert_eq!(fs::metadata(&lock_path).unwrap().len(), 0);
+    }
+
+    #[test]
+    fn test_2pc_populates_slices_packs_and_delete_creates_tombstone() {
+        let dir = tempdir().unwrap();
+        let db_path = dir.path().join("test.db");
+        let archive_path = dir.path().join("archive");
+        let ms_root = dir.path().to_path_buf();
+
+        let db = Arc::new(Database::open(&db_path).unwrap());
+        let git = Arc::new(GitArchive::open(&archive_path).unwrap());
+        let tx_mgr = TxManager::new(db.clone(), git.clone(), ms_root.clone()).unwrap();
+
+        let skill = sample_skill("2pc-full-artifacts");
+        tx_mgr.write_skill(&skill).unwrap();
+
+        // 1. Verify GitArchive artifacts are non-placeholder JSON
+        let skill_dir = archive_path.join("skills/by-id/2pc-full-artifacts");
+        let lens_str = fs::read_to_string(skill_dir.join("spec.lens.json")).unwrap();
+        let slices_str = fs::read_to_string(skill_dir.join("slices.json")).unwrap();
+        let evidence_str = fs::read_to_string(skill_dir.join("evidence.json")).unwrap();
+        assert_ne!(lens_str.trim(), "{}");
+        assert_ne!(slices_str.trim(), "[]");
+        assert_ne!(evidence_str.trim(), "{}");
+
+        // 2. Verify skill_slices and packs/<id>.pack.json are populated
+        let db_slices = db.get_skill_slices("2pc-full-artifacts").unwrap();
+        assert!(db_slices.is_some());
+        assert!(ms_root.join("packs/2pc-full-artifacts.pack.json").exists());
+
+        // 3. Delete skill and verify TombstoneManager lists it
+        tx_mgr.delete_skill_locked("2pc-full-artifacts").unwrap();
+        assert!(db.get_skill("2pc-full-artifacts").unwrap().is_none());
+        let tombstones = super::super::tombstone::TombstoneManager::new(&ms_root)
+            .list()
+            .unwrap();
+        assert_eq!(tombstones.len(), 1);
+        assert!(tombstones[0].original_path.contains("2pc-full-artifacts"));
     }
 }

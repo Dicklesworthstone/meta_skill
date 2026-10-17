@@ -95,6 +95,52 @@ impl SkillOverlay {
                     }
                     changes.push(format!("Set metadata {key}: {value}"));
                 }
+                OverlayModification::ReplaceBlock { block_id, content } => {
+                    let mut replaced = false;
+                    for section in &mut spec.sections {
+                        for block in &mut section.blocks {
+                            if block.id == *block_id {
+                                block.content.clone_from(content);
+                                replaced = true;
+                            }
+                        }
+                    }
+                    if replaced {
+                        changes.push(format!("Replaced block {block_id}"));
+                    }
+                }
+                OverlayModification::RemoveBlock { block_id } => {
+                    let mut removed = false;
+                    for section in &mut spec.sections {
+                        let before = section.blocks.len();
+                        section.blocks.retain(|b| b.id != *block_id);
+                        if section.blocks.len() < before {
+                            removed = true;
+                        }
+                    }
+                    if removed {
+                        changes.push(format!("Removed block {block_id}"));
+                    }
+                }
+                OverlayModification::AppendBlock { section_id, block } => {
+                    if let Some(section) = spec
+                        .sections
+                        .iter_mut()
+                        .find(|s| s.id == *section_id || s.title.eq_ignore_ascii_case(section_id))
+                    {
+                        section.blocks.push(block.clone());
+                    } else {
+                        spec.sections.push(super::skill::SkillSection {
+                            id: section_id.clone(),
+                            title: section_id.clone(),
+                            blocks: vec![block.clone()],
+                        });
+                    }
+                    changes.push(format!(
+                        "Appended block {} to section {section_id}",
+                        block.id
+                    ));
+                }
             }
         }
 
@@ -117,6 +163,67 @@ impl SkillOverlay {
     fn conditions_met(&self, context: &OverlayContext) -> bool {
         self.conditions.iter().all(|c| c.is_met(context))
     }
+}
+
+/// Load overlays for a given skill from `<ms_root>/overlays/<skill_id>/` and `<ms_root>/overlays/`,
+/// sorted by ascending `priority`.
+#[must_use]
+pub fn load_overlays_for_skill(ms_root: &std::path::Path, skill_id: &str) -> Vec<SkillOverlay> {
+    let mut overlays = Vec::new();
+    let overlays_root = ms_root.join("overlays");
+    let candidate_dirs = [overlays_root.join(skill_id), overlays_root];
+
+    for dir in candidate_dirs {
+        let Ok(entries) = std::fs::read_dir(&dir) else {
+            continue;
+        };
+        let mut paths: Vec<std::path::PathBuf> = entries
+            .flatten()
+            .map(|e| e.path())
+            .filter(|p| p.is_file())
+            .collect();
+        paths.sort();
+
+        for path in paths {
+            let Ok(content) = std::fs::read_to_string(&path) else {
+                continue;
+            };
+            let ext = path
+                .extension()
+                .and_then(|e| e.to_str())
+                .unwrap_or("")
+                .to_ascii_lowercase();
+            let parsed: Option<SkillOverlay> = match ext.as_str() {
+                "json" => serde_json::from_str(&content).ok(),
+                "toml" => toml::from_str(&content).ok(),
+                "yaml" | "yml" => serde_yaml::from_str(&content).ok(),
+                _ => None,
+            };
+            if let Some(overlay) = parsed {
+                if overlay.skill_id == skill_id || overlay.skill_id == "*" {
+                    if !overlays.contains(&overlay) {
+                        overlays.push(overlay);
+                    }
+                }
+            }
+        }
+    }
+
+    overlays.sort_by(|a, b| a.priority.cmp(&b.priority).then_with(|| a.id.cmp(&b.id)));
+    overlays
+}
+
+/// Load and apply all matching overlays from `<ms_root>/overlays` to `spec`.
+pub fn apply_overlays_from_dir(
+    spec: &mut SkillSpec,
+    ms_root: &std::path::Path,
+    context: &OverlayContext,
+) -> Vec<OverlayApplicationResult> {
+    let overlays = load_overlays_for_skill(ms_root, &spec.metadata.id);
+    overlays
+        .into_iter()
+        .map(|overlay| overlay.apply_to(spec, context))
+        .collect()
 }
 
 impl PartialEq for SkillOverlay {
@@ -162,6 +269,15 @@ pub enum OverlayModification {
     AddTag(String),
     /// Set arbitrary metadata
     SetMetadata { key: String, value: String },
+    /// Replace a block's content by block ID
+    ReplaceBlock { block_id: String, content: String },
+    /// Remove a block by block ID
+    RemoveBlock { block_id: String },
+    /// Append a block to a section by section ID or title
+    AppendBlock {
+        section_id: String,
+        block: super::skill::SkillBlock,
+    },
 }
 
 #[cfg(test)]
@@ -278,5 +394,66 @@ mod tests {
                 .iter()
                 .any(|c| c.contains("Set metadata unknown"))
         );
+    }
+
+    #[test]
+    fn test_overlay_block_modifications_and_load_from_dir() {
+        use crate::core::skill::{BlockType, SkillBlock, SkillSection};
+        let mut spec = SkillSpec::new("test-skill", "Test Skill");
+        spec.sections = vec![SkillSection {
+            id: "rules".into(),
+            title: "Rules".into(),
+            blocks: vec![
+                SkillBlock {
+                    id: "rules-1".into(),
+                    block_type: BlockType::Rule,
+                    content: "Original rule 1".into(),
+                },
+                SkillBlock {
+                    id: "rules-2".into(),
+                    block_type: BlockType::Rule,
+                    content: "Obsolete rule 2".into(),
+                },
+            ],
+        }];
+
+        let temp = tempfile::tempdir().unwrap();
+        let overlay_dir = temp.path().join("overlays").join("test-skill");
+        std::fs::create_dir_all(&overlay_dir).unwrap();
+
+        let overlay = SkillOverlay {
+            id: "block-mod".into(),
+            skill_id: "test-skill".into(),
+            priority: 10,
+            conditions: vec![OverlayCondition::Always],
+            modifications: vec![
+                OverlayModification::ReplaceBlock {
+                    block_id: "rules-1".into(),
+                    content: "Updated rule 1".into(),
+                },
+                OverlayModification::RemoveBlock {
+                    block_id: "rules-2".into(),
+                },
+                OverlayModification::AppendBlock {
+                    section_id: "rules".into(),
+                    block: SkillBlock {
+                        id: "rules-3".into(),
+                        block_type: BlockType::Rule,
+                        content: "Appended rule 3".into(),
+                    },
+                },
+            ],
+        };
+        let yaml = serde_yaml::to_string(&overlay).unwrap();
+        std::fs::write(overlay_dir.join("01-overlay.yaml"), yaml).unwrap();
+
+        let ctx = OverlayContext::default();
+        let results = apply_overlays_from_dir(&mut spec, temp.path(), &ctx);
+        assert_eq!(results.len(), 1);
+        assert!(results[0].applied);
+        assert_eq!(spec.sections[0].blocks.len(), 2);
+        assert_eq!(spec.sections[0].blocks[0].content, "Updated rule 1");
+        assert_eq!(spec.sections[0].blocks[1].id, "rules-3");
+        assert_eq!(spec.sections[0].blocks[1].content, "Appended rule 3");
     }
 }

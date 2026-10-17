@@ -78,6 +78,40 @@ impl AgentMailClient {
         let _ = unwrap_tool_result(value)?;
         Ok(())
     }
+
+    pub fn register_agent(&mut self, program: &str, model: &str) -> Result<Value> {
+        let args = serde_json::json!({
+            "project_key": self.project_key,
+            "agent_name": self.agent_name,
+            "program": program,
+            "model": model,
+        });
+        let value = self.mcp.call_tool("register_agent", args)?;
+        unwrap_tool_result(value)
+    }
+
+    pub fn send_message(
+        &mut self,
+        to: &[String],
+        subject: &str,
+        body_md: &str,
+        thread_id: Option<&str>,
+        ack_required: bool,
+    ) -> Result<Value> {
+        let mut args = serde_json::json!({
+            "project_key": self.project_key,
+            "sender_name": self.agent_name,
+            "to": to,
+            "subject": subject,
+            "body_md": body_md,
+            "ack_required": ack_required,
+        });
+        if let Some(tid) = thread_id {
+            args["thread_id"] = serde_json::Value::String(tid.to_string());
+        }
+        let value = self.mcp.call_tool("send_message", args)?;
+        unwrap_tool_result(value)
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -112,9 +146,7 @@ struct JsonRpcNotification {
 
 #[derive(Debug, Clone, Deserialize)]
 struct JsonRpcResponse {
-    #[allow(dead_code)]
     jsonrpc: String,
-    #[allow(dead_code)]
     id: Option<Value>,
     result: Option<Value>,
     error: Option<JsonRpcError>,
@@ -124,7 +156,6 @@ struct JsonRpcResponse {
 struct JsonRpcError {
     code: i64,
     message: String,
-    #[allow(dead_code)]
     data: Option<Value>,
 }
 
@@ -200,9 +231,10 @@ impl McpClient {
     }
 
     fn call_method(&mut self, method: &str, params: Value) -> Result<Value> {
+        let expected_id = self.next_id;
         let request = JsonRpcRequest {
             jsonrpc: "2.0".to_string(),
-            id: self.next_id,
+            id: expected_id,
             method: method.to_string(),
             params,
         };
@@ -226,9 +258,23 @@ impl McpClient {
             .json()
             .map_err(|err| MsError::Config(format!("agent mail response parse: {err}")))?;
 
+        if response.jsonrpc != "2.0" {
+            tracing::debug!(
+                jsonrpc = %response.jsonrpc,
+                id = ?response.id,
+                expected_id,
+                "Unexpected JSON-RPC version in Agent Mail response"
+            );
+        }
+
         if let Some(error) = response.error {
+            let detail = error
+                .data
+                .as_ref()
+                .map(|d| format!(" ({d})"))
+                .unwrap_or_default();
             return Err(MsError::Config(format!(
-                "agent mail error {}: {}",
+                "agent mail error {}: {}{detail}",
                 error.code, error.message
             )));
         }

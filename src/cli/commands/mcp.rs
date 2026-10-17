@@ -190,12 +190,12 @@ fn serialize_response_safe(response: &JsonRpcResponse) -> String {
             warn!("Failed to serialize JSON-RPC response: {}", e);
             let fallback = JsonRpcResponse::error(
                 None,
-                PARSE_ERROR,
+                INTERNAL_ERROR,
                 format!("Failed to serialize response: {e}"),
                 None,
             );
             serde_json::to_string(&fallback).unwrap_or_else(|_| {
-                r#"{"jsonrpc":"2.0","error":{"code":-32700,"message":"Serialization failed"}}"#
+                r#"{"jsonrpc":"2.0","error":{"code":-32603,"message":"Serialization failed"}}"#
                     .to_string()
             })
         }
@@ -288,7 +288,6 @@ const PARSE_ERROR: i32 = -32700;
 const INVALID_REQUEST: i32 = -32600;
 const METHOD_NOT_FOUND: i32 = -32601;
 const INVALID_PARAMS: i32 = -32602;
-#[allow(dead_code)]
 const INTERNAL_ERROR: i32 = -32603;
 
 // ============================================================================
@@ -692,11 +691,47 @@ fn run_serve(ctx: &AppContext, args: &ServeArgs) -> Result<()> {
         }
     }
 
+    if let Some(port) = args.tcp_port {
+        let listener = std::net::TcpListener::bind(("127.0.0.1", port)).map_err(|e| {
+            MsError::Config(format!(
+                "Failed to bind MCP TCP server on 127.0.0.1:{port}: {e}"
+            ))
+        })?;
+        if debug {
+            eprintln!("[ms-mcp] TCP transport listening on 127.0.0.1:{port}");
+        }
+        return run_tcp_server(ctx.clone(), listener, debug);
+    }
+
     // Own a mutable copy of the context so the server can reopen its backing
     // store if the on-disk state directory is rebuilt/replaced underneath it
     // while it runs (issue #135). The clone shares the same open `Arc` handles
     // until the first reopen swaps in fresh ones.
     run_stdio_server(ctx.clone(), debug)
+}
+
+fn run_tcp_server(mut ctx: AppContext, listener: std::net::TcpListener, debug: bool) -> Result<()> {
+    let mut opened = ctx.store_identity();
+    for stream in listener.incoming().flatten() {
+        let Ok(write_stream) = stream.try_clone() else {
+            continue;
+        };
+        let reader = io::BufReader::new(stream);
+        let mut writer = io::BufWriter::new(write_stream);
+        for line in reader.lines().map_while(std::result::Result::ok) {
+            if line.trim().is_empty() {
+                continue;
+            }
+            maybe_reopen_stores(&mut ctx, &mut opened, debug);
+            if let Some(response) = handle_request(&ctx, &line, debug) {
+                let response_json = serialize_response_safe(&response);
+                if writeln!(writer, "{response_json}").is_err() || writer.flush().is_err() {
+                    break;
+                }
+            }
+        }
+    }
+    Ok(())
 }
 
 fn run_stdio_server(mut ctx: AppContext, debug: bool) -> Result<()> {
@@ -992,10 +1027,20 @@ fn handle_tool_search(ctx: &AppContext, args: &Value) -> Result<ToolResult> {
         "query": query,
         "count": results.len(),
         "results": results.iter().map(|r| {
-            serde_json::json!({
-                "id": r.skill_id,
-                "score": r.score,
-            })
+            if let Ok(Some(skill)) = ctx.db.get_skill(&r.skill_id) {
+                serde_json::json!({
+                    "id": r.skill_id,
+                    "name": skill.name,
+                    "description": skill.description,
+                    "layer": skill.source_layer,
+                    "score": r.score,
+                })
+            } else {
+                serde_json::json!({
+                    "id": r.skill_id,
+                    "score": r.score,
+                })
+            }
         }).collect::<Vec<_>>()
     });
 
@@ -1297,7 +1342,7 @@ fn handle_tool_suggest(ctx: &AppContext, args: &Value) -> Result<ToolResult> {
         .and_then(serde_json::Value::as_u64)
         .unwrap_or(5) as usize;
 
-    let _explain = args
+    let explain = args
         .get("explain")
         .and_then(serde_json::Value::as_bool)
         .unwrap_or(false);
@@ -1305,9 +1350,28 @@ fn handle_tool_suggest(ctx: &AppContext, args: &Value) -> Result<ToolResult> {
     // Detect project context using available detector
     let detector = crate::context::DefaultDetector::new();
     let detected_projects = detector.detect(&cwd);
+    let project_tags: Vec<String> = detected_projects
+        .iter()
+        .map(|p| format!("{:?}", p.project_type).to_lowercase())
+        .collect();
 
-    // Get recent skills as suggestions (simple approach)
-    let skills = ctx.db.list_skills(limit, 0)?;
+    // Rank skills by context match + quality score
+    let all_skills = ctx.db.list_skills(200, 0)?;
+    let mut scored: Vec<_> = all_skills
+        .into_iter()
+        .map(|s| {
+            let text_lower = format!("{} {} {}", s.id, s.name, s.description).to_lowercase();
+            let mut score = 0.4 + (s.quality_score * 0.2);
+            for tag in &project_tags {
+                if text_lower.contains(tag) || s.metadata_json.to_lowercase().contains(tag) {
+                    score += 0.3;
+                }
+            }
+            (s, score.min(1.0))
+        })
+        .collect();
+    scored.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+    scored.truncate(limit);
 
     // Format detected contexts
     let contexts: Vec<_> = detected_projects
@@ -1325,13 +1389,22 @@ fn handle_tool_suggest(ctx: &AppContext, args: &Value) -> Result<ToolResult> {
     let output = serde_json::json!({
         "cwd": cwd.display().to_string(),
         "detected_contexts": contexts,
-        "count": skills.len(),
-        "suggestions": skills.iter().map(|s| {
-            serde_json::json!({
+        "count": scored.len(),
+        "suggestions": scored.iter().map(|(s, score)| {
+            let mut item = serde_json::json!({
                 "skill_id": s.id,
                 "name": s.name,
                 "description": s.description,
-            })
+                "score": score,
+            });
+            if explain {
+                item["explanation"] = serde_json::json!(format!(
+                    "Matched project context {:?} (quality {:.0}%)",
+                    project_tags,
+                    s.quality_score * 100.0
+                ));
+            }
+            item
         }).collect::<Vec<_>>()
     });
 
@@ -1360,6 +1433,9 @@ fn handle_tool_feedback(ctx: &AppContext, args: &Value) -> Result<ToolResult> {
     let rating = if helpful { Some(1) } else { Some(-1) };
     ctx.db
         .record_skill_feedback(skill_id, feedback_type, rating, comment)?;
+
+    // Also update SignalBandit and ContextualBandit under ms_root
+    let _ = super::feedback::update_bandits(ctx, skill_id, feedback_type, rating);
 
     let output = serde_json::json!({
         "recorded": true,
@@ -1482,7 +1558,7 @@ fn handle_tool_config(ctx: &AppContext, args: &Value) -> Result<ToolResult> {
         .unwrap_or("list");
 
     let key = args.get("key").and_then(|v| v.as_str());
-    let _value = args.get("value").and_then(|v| v.as_str());
+    let value = args.get("value").and_then(|v| v.as_str());
 
     match action {
         "list" => {
@@ -1544,11 +1620,20 @@ fn handle_tool_config(ctx: &AppContext, args: &Value) -> Result<ToolResult> {
             Ok(ToolResult::text(serde_json::to_string_pretty(&output)?))
         }
         "set" => {
-            // For now, config is read-only through MCP
-            Err(MsError::ValidationFailed(
-                "Config modification via MCP not yet supported. Use 'ms config set' CLI."
-                    .to_string(),
-            ))
+            let key = key.ok_or_else(|| {
+                MsError::ValidationFailed("'key' parameter required for set action".to_string())
+            })?;
+            let val = value.ok_or_else(|| {
+                MsError::ValidationFailed("'value' parameter required for set action".to_string())
+            })?;
+            super::config::set_config_key_value(&ctx.config_path, key, val)?;
+            let output = serde_json::json!({
+                "status": "ok",
+                "action": "set",
+                "key": key,
+                "value": val,
+            });
+            Ok(ToolResult::text(serde_json::to_string_pretty(&output)?))
         }
         _ => Err(MsError::ValidationFailed(format!(
             "Unknown action: {action}. Valid actions: list, get, set"

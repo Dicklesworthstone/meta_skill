@@ -352,8 +352,8 @@ fn test_search_finds_base_content_in_child() {
     // skill inherits the base content
     let output = fixture.run_ms(&["--robot", "search", "meaningful error messages"]);
     assert_command_success!(output, "search base content");
-    // At minimum, base should be found
     assert_stdout_contains!(output, "error-handling-base");
+    assert_stdout_contains!(output, "rust-error-handling");
 }
 
 #[test]
@@ -401,8 +401,9 @@ fn test_show_extended_skill() {
     // Show the extended skill
     let output = fixture.run_ms(&["--robot", "show", "rust-error-handling"]);
     assert_command_success!(output, "show extended skill");
-    // Should contain the extends field
+    // Should contain both the skill ID and the parent extends field
     assert_stdout_contains!(output, "rust-error-handling");
+    assert_stdout_contains!(output, "error-handling-base");
 }
 
 #[test]
@@ -426,6 +427,9 @@ fn test_show_composite_skill() {
     let output = fixture.run_ms(&["--robot", "show", "rust-complete"]);
     assert_command_success!(output, "show composite skill");
     assert_stdout_contains!(output, "rust-complete");
+    assert_stdout_contains!(output, "rust-error-handling");
+    assert_stdout_contains!(output, "testing-patterns");
+    assert_stdout_contains!(output, "logging-patterns");
 }
 
 #[test]

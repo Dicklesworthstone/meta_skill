@@ -83,12 +83,12 @@ impl RequirementCheck {
 }
 
 pub fn run(ctx: &AppContext, args: &RequirementsArgs) -> Result<()> {
-    if let Some(_skill) = &args.skill {
-        // TODO: Implement skill-specific requirements check (read from SKILL.md)
-        if ctx.output_format == OutputFormat::Human {
-            println!("Skill-specific requirements not yet implemented.");
-        }
-        return Ok(());
+    if let Some(skill_ref) = &args.skill {
+        return run_skill_requirements(ctx, args, skill_ref);
+    }
+
+    if args.all {
+        return run_all_skill_requirements(ctx, args);
     }
 
     let mut checks = vec![
@@ -104,8 +104,7 @@ pub fn run(ctx: &AppContext, args: &RequirementsArgs) -> Result<()> {
     }
 
     if ctx.output_format != OutputFormat::Human || args.format == "json" {
-        println!("{}", serde_json::to_string_pretty(&checks)?);
-        return Ok(());
+        return crate::cli::output::emit_json(&checks);
     }
 
     println!("{}", "System Requirements Check".bold());
@@ -151,6 +150,165 @@ pub fn run(ctx: &AppContext, args: &RequirementsArgs) -> Result<()> {
     }
 
     Ok(())
+}
+
+fn collect_available_skills_and_capabilities(
+    ctx: &AppContext,
+) -> Result<(
+    Vec<crate::storage::sqlite::SkillRecord>,
+    std::collections::HashSet<String>,
+)> {
+    let mut records = Vec::new();
+    let mut available = std::collections::HashSet::new();
+    let mut offset = 0usize;
+    let limit = 200usize;
+
+    loop {
+        let batch = ctx.db.list_skills(limit, offset)?;
+        if batch.is_empty() {
+            break;
+        }
+        offset += batch.len();
+        for record in batch {
+            available.insert(record.id.clone());
+            if let Ok(meta) = serde_json::from_str::<serde_json::Value>(&record.metadata_json) {
+                if let Some(provides) = meta.get("provides").and_then(|v| v.as_array()) {
+                    for cap in provides.iter().filter_map(|v| v.as_str()) {
+                        available.insert(cap.to_string());
+                    }
+                }
+            }
+            records.push(record);
+        }
+    }
+
+    Ok((records, available))
+}
+
+fn build_spec_from_record(
+    record: &crate::storage::sqlite::SkillRecord,
+) -> Result<crate::core::skill::SkillSpec> {
+    let mut spec = crate::core::spec_lens::parse_markdown(&record.body).map_err(|e| {
+        crate::error::MsError::ValidationFailed(format!(
+            "failed to parse skill '{}': {e}",
+            record.id
+        ))
+    })?;
+    if spec.metadata.id.is_empty() {
+        spec.metadata.id.clone_from(&record.id);
+    }
+    if spec.metadata.name.is_empty() {
+        spec.metadata.name.clone_from(&record.name);
+    }
+    if let Ok(meta) = serde_json::from_str::<serde_json::Value>(&record.metadata_json) {
+        if spec.metadata.requires.is_empty() {
+            if let Some(reqs) = meta.get("requires").and_then(|v| v.as_array()) {
+                spec.metadata.requires = reqs
+                    .iter()
+                    .filter_map(|v| v.as_str().map(String::from))
+                    .collect();
+            }
+        }
+        if spec.metadata.provides.is_empty() {
+            if let Some(provs) = meta.get("provides").and_then(|v| v.as_array()) {
+                spec.metadata.provides = provs
+                    .iter()
+                    .filter_map(|v| v.as_str().map(String::from))
+                    .collect();
+            }
+        }
+    }
+    Ok(spec)
+}
+
+fn run_skill_requirements(
+    ctx: &AppContext,
+    args: &RequirementsArgs,
+    skill_ref: &str,
+) -> Result<()> {
+    let record = if let Some(s) = ctx.db.get_skill(skill_ref)? {
+        s
+    } else if let Some(alias) = ctx.db.resolve_alias(skill_ref)? {
+        ctx.db.get_skill(&alias.canonical_id)?.ok_or_else(|| {
+            crate::error::MsError::SkillNotFound(format!("skill not found: {skill_ref}"))
+        })?
+    } else {
+        return Err(crate::error::MsError::SkillNotFound(format!(
+            "skill not found: {skill_ref}"
+        )));
+    };
+
+    let (_, available) = collect_available_skills_and_capabilities(ctx)?;
+    let spec = build_spec_from_record(&record)?;
+    let report = crate::core::requirements::check_skill_requirements(&spec, &available);
+
+    if ctx.output_format != OutputFormat::Human || args.format == "json" {
+        return crate::cli::output::emit_json(&report);
+    }
+
+    print_skill_report(&report);
+    Ok(())
+}
+
+fn run_all_skill_requirements(ctx: &AppContext, args: &RequirementsArgs) -> Result<()> {
+    let (records, available) = collect_available_skills_and_capabilities(ctx)?;
+    let mut reports = Vec::with_capacity(records.len());
+
+    for record in &records {
+        if let Ok(spec) = build_spec_from_record(record) {
+            reports.push(crate::core::requirements::check_skill_requirements(
+                &spec, &available,
+            ));
+        }
+    }
+
+    if ctx.output_format != OutputFormat::Human || args.format == "json" {
+        let all_satisfied = reports.iter().all(|r| r.satisfied);
+        return crate::cli::output::emit_json(&serde_json::json!({
+            "status": if all_satisfied { "ok" } else { "unsatisfied" },
+            "total_skills": reports.len(),
+            "satisfied_skills": reports.iter().filter(|r| r.satisfied).count(),
+            "skills": reports,
+        }));
+    }
+
+    println!("{}", "All Indexed Skills Requirements Check".bold());
+    println!("{}", "─".repeat(60));
+    println!();
+    for report in &reports {
+        print_skill_report(report);
+        println!();
+    }
+    Ok(())
+}
+
+fn print_skill_report(report: &crate::core::requirements::SkillRequirementReport) {
+    let status = if report.satisfied {
+        "✓".green()
+    } else {
+        "✗".red()
+    };
+    println!(
+        "{} {} ({})",
+        status,
+        report.skill_name.bold(),
+        report.skill_id.cyan()
+    );
+    if report.checks.is_empty() {
+        println!("    No explicit requirements declared.");
+        return;
+    }
+    for check in &report.checks {
+        let icon = if check.satisfied {
+            "✓".green()
+        } else if check.required {
+            "✗".red()
+        } else {
+            "-".yellow()
+        };
+        let msg = check.message.as_deref().unwrap_or("");
+        println!("    {icon} [{}] {}: {msg}", check.category, check.name);
+    }
 }
 
 #[cfg(test)]

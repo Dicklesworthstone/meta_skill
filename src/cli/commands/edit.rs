@@ -80,6 +80,24 @@ pub fn run(ctx: &AppContext, args: &EditArgs) -> Result<()> {
         crate::error::MsError::Config(format!("write {}: {err}", skill_md.display()))
     })?;
     record_field_history(skill_dir, &spec, &updated_spec)?;
+
+    if let Ok(Some(existing)) = ctx.db.get_skill(&updated_spec.metadata.id) {
+        if let Ok(tx_mgr) =
+            crate::storage::TxManager::new(ctx.db.clone(), ctx.git.clone(), ctx.ms_root.clone())
+        {
+            let layer = match existing.source_layer.to_ascii_lowercase().as_str() {
+                "base" | "system" => crate::core::SkillLayer::Base,
+                "org" | "global" => crate::core::SkillLayer::Org,
+                "user" | "local" | "session" => crate::core::SkillLayer::User,
+                _ => crate::core::SkillLayer::Project,
+            };
+            let _ = tx_mgr.write_skill_with_layer(&updated_spec, layer);
+            if let Ok(Some(updated_record)) = ctx.db.get_skill(&updated_spec.metadata.id) {
+                let _ = ctx.search.index_skill(&updated_record);
+                let _ = ctx.search.commit();
+            }
+        }
+    }
     Ok(())
 }
 

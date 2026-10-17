@@ -373,6 +373,10 @@ pub struct BuildArgs {
     #[arg(long)]
     pub from_cass: Option<String>,
 
+    /// Filter CASS sessions since a relative time or date (e.g., "7 days")
+    #[arg(long)]
+    pub since: Option<String>,
+
     /// Track build progress against a beads issue
     #[arg(long)]
     pub bead_id: Option<String>,
@@ -596,7 +600,7 @@ impl BeadsTracker {
         let client = BeadsClient::new();
         if !client.is_available() {
             eprintln!(
-                "{} beads (bd) not available, skipping bead tracking",
+                "{} beads (br/bd) not available, skipping bead tracking",
                 "Warning:"
             );
             return None;
@@ -1032,11 +1036,16 @@ fn run_auto(
     }
 
     // Create CASS client and quality scorer
-    let cass_client = if let Some(ref cass_path) = ctx.config.cass.cass_path {
+    let mut cass_client = if let Some(ref cass_path) = ctx.config.cass.cass_path {
         CassClient::with_binary(cass_path)
     } else {
         CassClient::new()
     };
+    if let Ok(fp_cache) =
+        crate::cass::FingerprintCache::open(ctx.ms_root.join("cass_fingerprints.db"))
+    {
+        cass_client = cass_client.with_fingerprint_cache(fp_cache);
+    }
 
     let quality_config = QualityConfig {
         min_score: args.min_session_quality,
@@ -1108,6 +1117,7 @@ fn run_auto(
     // gate one session enters the build twice, double-weighting its patterns
     // against --min-patterns and in the extracted set (issue #171).
     let mut seen_session_ids = std::collections::HashSet::new();
+    let session_marks = super::cross_project::load_session_marks(&ctx.ms_root);
 
     for (i, session_match) in session_matches.into_iter().take(search_limit).enumerate() {
         // Update phase progress
@@ -1117,10 +1127,26 @@ fn run_auto(
             continue;
         }
 
+        let mark = session_marks.iter().find(|m| {
+            [
+                session_match.session_id.as_str(),
+                session_match.path.as_str(),
+            ]
+            .contains(&m.session_id.as_str())
+        });
+        if mark.is_some_and(|m| m.mark_type == "anti_pattern") {
+            skipped_sessions.push((session_match.session_id, 0.0));
+            continue;
+        }
+        let is_exemplary = mark.is_some_and(|m| m.mark_type == "exemplary");
+
         match cass_client.get_session(&session_match.path) {
             Ok(cass_session) => {
-                let quality = quality_scorer.score(&cass_session);
-                if quality.passes_threshold(&quality_config) {
+                let mut quality = quality_scorer.score(&cass_session);
+                if is_exemplary {
+                    quality.score = (quality.score + 0.25).min(1.0);
+                }
+                if is_exemplary || quality.passes_threshold(&quality_config) {
                     quality_sessions.push((cass_session, quality));
                     session
                         .state
@@ -1203,15 +1229,31 @@ fn run_auto(
     }
 
     let mut all_patterns: Vec<ExtractedPattern> = Vec::new();
+    let mut session_phase_summaries = Vec::new();
     let total_sessions = quality_sessions.len();
 
     for (i, (cass_session, _quality)) in quality_sessions.iter().enumerate() {
         session.phase_progress = (i + 1) as f64 / total_sessions as f64;
 
+        let segmented = crate::cass::mining::segment_session(cass_session);
+        let dominant_phase = segmented.dominant_phase().map(|p| format!("{p:?}"));
+        session_phase_summaries.push(json!({
+            "session_id": cass_session.id,
+            "dominant_phase": dominant_phase,
+            "segments": segmented.segments.len(),
+        }));
+
         match extract_from_session(cass_session) {
             Ok(patterns) => {
+                let _ = cass_client
+                    .mark_session_processed(&cass_session.id, &cass_session.content_hash);
                 if ctx.output_format == OutputFormat::Human && !patterns.is_empty() {
-                    println!("  {} patterns from {}", patterns.len(), cass_session.id);
+                    println!(
+                        "  {} patterns from {} (dominant phase: {})",
+                        patterns.len(),
+                        cass_session.id,
+                        dominant_phase.as_deref().unwrap_or("Unknown")
+                    );
                 }
                 session.state.patterns_extracted += patterns.len();
                 all_patterns.extend(patterns);
@@ -1263,10 +1305,47 @@ fn run_auto(
         return output_timeout(ctx, &mut session, &output_dir);
     }
 
-    let high_confidence_patterns: Vec<_> = all_patterns
-        .into_iter()
-        .filter(|p| p.confidence >= args.min_confidence)
-        .collect();
+    let mut high_confidence_patterns = Vec::new();
+    let mut uncertain_patterns = Vec::new();
+    for p in all_patterns {
+        if p.confidence >= args.min_confidence {
+            high_confidence_patterns.push(p);
+        } else if p.confidence >= 0.3 && (args.no_injection_filter || p.taint_label.is_none()) {
+            uncertain_patterns.push(p);
+        }
+    }
+
+    if !uncertain_patterns.is_empty() {
+        let uncertainties_path = ctx.ms_root.join(".ms").join("uncertainties.json");
+        if let Ok((queue, mut existing_items)) = load_uncertainties(&uncertainties_path) {
+            for pat in uncertain_patterns {
+                let item = crate::cass::UncertaintyItem {
+                    id: uuid::Uuid::new_v4().to_string(),
+                    confidence: pat.confidence,
+                    threshold: args.min_confidence,
+                    reason: crate::cass::UncertaintyReason::InsufficientInstances {
+                        have: pat.frequency.max(1) as u32,
+                        need: 5,
+                        variance: (1.0 - pat.confidence).clamp(0.0, 1.0),
+                    },
+                    pattern_candidate: pat,
+                    suggested_queries: Vec::new(),
+                    status: crate::cass::UncertaintyStatus::Pending,
+                    created_at: chrono::Utc::now(),
+                    updated_at: chrono::Utc::now(),
+                    attempts: Vec::new(),
+                    critique: None,
+                    source_instance: None,
+                    cluster_info: None,
+                };
+                let id = queue.enqueue(item);
+                if let Some(enqueued) = queue.get(&id) {
+                    existing_items.push(enqueued);
+                }
+            }
+            let _ = save_uncertainties(&uncertainties_path, &existing_items);
+        }
+    }
 
     session.phase_progress = 0.5;
 
@@ -1328,10 +1407,101 @@ fn run_auto(
     let patterns_json = serde_json::to_string_pretty(&filtered_patterns)?;
     fs::write(&patterns_path, &patterns_json)?;
 
+    // Synthesize SKILL.md from filtered patterns
+    let simple_patterns: Vec<crate::cass::Pattern> = filtered_patterns
+        .iter()
+        .map(crate::cass::Pattern::from_extracted)
+        .collect();
+    let mut draft = crate::cass::synthesis::synthesize_skill(&simple_patterns)?;
+    if let Some(top_pat) = simple_patterns.first() {
+        let transformer = crate::cass::SpecificToGeneralTransformer::new(cass_client);
+        let instance = crate::cass::SpecificInstance {
+            id: top_pat.id.clone(),
+            content: top_pat.content.clone(),
+            context: crate::cass::transformation::InstanceContext {
+                file_type: None,
+                project_type: None,
+                tags: draft.tags.clone(),
+                description: Some(query.clone()),
+            },
+            source: crate::cass::transformation::InstanceSource {
+                session_id: session
+                    .state
+                    .qualified_session_ids
+                    .first()
+                    .cloned()
+                    .unwrap_or_default(),
+                message_indices: vec![0],
+                observed_at: None,
+            },
+            is_counter_example: false,
+        };
+        if let Ok(generalized) = transformer.transform(&instance) {
+            let _ = crate::cass::refinement::refine_skill(&mut draft, &generalized.principle);
+        }
+    }
+    if let Some(name) = &args.name {
+        let _ = crate::cass::refinement::refine_skill(&mut draft, &format!("name:{name}"));
+    }
+    let _ = crate::cass::refinement::refine_skill(&mut draft, "+tag:cass-mined");
+    let skill_id: String = args
+        .name
+        .as_deref()
+        .unwrap_or(&query)
+        .chars()
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || c == '-' || c == '_' {
+                c.to_ascii_lowercase()
+            } else {
+                '-'
+            }
+        })
+        .collect::<String>()
+        .trim_matches('-')
+        .to_string();
+    let skill_id = if skill_id.is_empty() {
+        "auto-synthesized-skill".to_string()
+    } else {
+        skill_id
+    };
+    let skill_name = args.name.clone().unwrap_or_else(|| {
+        if draft.name.is_empty() {
+            query.clone()
+        } else {
+            draft.name.clone()
+        }
+    });
+    let skill_desc = if draft.description.is_empty() {
+        format!("Auto-synthesized skill for {query}")
+    } else {
+        draft.description.clone()
+    };
+    let mut skill_md = format!(
+        "---\nid: {skill_id}\nname: {skill_name}\ndescription: \"{skill_desc}\"\nversion: \"0.1.0\"\ntags: {:?}\n---\n\n# {skill_name}\n\n{skill_desc}\n\n{}\n",
+        draft.tags, draft.content
+    );
+
+    if !args.no_antipatterns {
+        let raw_sessions: Vec<_> = quality_sessions.iter().map(|(s, _)| s.clone()).collect();
+        let detector = crate::antipatterns::DefaultDetector::default();
+        if let Ok(antipatterns) = crate::antipatterns::mine_anti_patterns(&raw_sessions, &detector)
+        {
+            let section = crate::antipatterns::format_anti_patterns(&antipatterns);
+            if !section.is_empty() {
+                skill_md.push('\n');
+                skill_md.push_str(&section.to_markdown());
+            }
+        }
+    }
+
+    let skill_md_path = output_dir.join("SKILL.md");
+    fs::write(&skill_md_path, &skill_md)?;
+
     session.phase_progress = 0.5;
 
     if ctx.output_format == OutputFormat::Human {
         println!("  Patterns: {}", patterns_path.display());
+        println!("  Skill: {}", skill_md_path.display());
     }
 
     // Write build manifest
@@ -1344,7 +1514,9 @@ fn run_auto(
             "id": s.id,
             "quality_score": q.score,
         })).collect::<Vec<_>>(),
+        "session_phases": session_phase_summaries,
         "patterns_extracted": filtered_patterns.len(),
+        "skill_path": skill_md_path.display().to_string(),
         "quality_gates": {
             "min_confidence": args.min_confidence,
             "min_session_quality": args.min_session_quality,
@@ -1393,16 +1565,23 @@ fn run_auto(
             "patterns_extracted": filtered_patterns.len(),
             "progress": session.overall_progress(),
             "elapsed_ms": session.started_at.elapsed().as_millis(),
+            "remaining_ms": session.remaining_time().map(|d| d.as_millis()),
             "output_dir": output_dir.display().to_string(),
+            "skill_path": skill_md_path.display().to_string(),
             "patterns_path": patterns_path.display().to_string(),
             "manifest_path": manifest_path.display().to_string(),
         });
         println!("{}", serde_json::to_string_pretty(&output)?);
     } else {
+        if should_use_rich_for_build() {
+            let width = terminal_width().clamp(40, 100);
+            println!("\n{}", "─".repeat(width));
+        }
         println!("\n{} Auto build complete!", "Success:");
         println!("  Session: {}", session.session_id);
         println!("  Sessions processed: {}", quality_sessions.len());
         println!("  Patterns extracted: {}", filtered_patterns.len());
+        println!("  Skill: {}", skill_md_path.display());
         println!("  Output directory: {}", output_dir.display());
     }
 
@@ -1429,6 +1608,7 @@ fn output_timeout(
             "phase": session.phase.to_string(),
             "progress": session.overall_progress(),
             "elapsed_ms": session.started_at.elapsed().as_millis(),
+            "remaining_ms": session.remaining_time().map(|d| d.as_millis()),
             "checkpoint_saved": true,
             "resume_command": format!("ms build --resume {}", session.session_id),
         });
@@ -2168,7 +2348,6 @@ fn format_uncertainty_reason(reason: &crate::cass::UncertaintyReason) -> String 
 }
 
 /// Check whether the terminal supports rich output for the build command.
-#[allow(dead_code)]
 fn should_use_rich_for_build() -> bool {
     use std::io::IsTerminal;
 
@@ -2188,7 +2367,6 @@ fn should_use_rich_for_build() -> bool {
 }
 
 /// Get the terminal width, defaulting to 80 if detection fails.
-#[allow(dead_code)]
 fn terminal_width() -> usize {
     crossterm::terminal::size()
         .map(|(w, _)| w as usize)

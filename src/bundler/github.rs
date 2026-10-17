@@ -47,7 +47,6 @@ struct RepoRef {
 }
 
 #[derive(Debug, Deserialize, Clone)]
-#[allow(dead_code)] // Fields from GitHub API response
 struct Release {
     id: u64,
     tag_name: String,
@@ -57,7 +56,6 @@ struct Release {
 }
 
 #[derive(Debug, Deserialize, Clone)]
-#[allow(dead_code)] // Fields from GitHub API response
 struct ReleaseAsset {
     id: u64,
     name: String,
@@ -121,6 +119,11 @@ pub fn publish_bundle(path: &Path, config: &GitHubConfig) -> Result<PublishResul
             },
         )?,
     };
+    tracing::debug!(
+        release_id = release.id,
+        tag = %release.tag_name,
+        "publishing bundle asset to github release"
+    );
 
     if let Some(existing) = release.assets.iter().find(|asset| asset.name == asset_name) {
         client.delete_release_asset(&owner, &repo_name, existing.id)?;
@@ -157,6 +160,11 @@ pub fn download_bundle(
     };
 
     let asset = select_asset(&release.assets, asset_name)?;
+    tracing::debug!(
+        asset_id = asset.id,
+        download_url = %asset.browser_download_url,
+        "downloading bundle asset from github release"
+    );
     let bytes = client.download_release_asset(&owner, &repo_name, asset.id)?;
 
     Ok(DownloadResult {

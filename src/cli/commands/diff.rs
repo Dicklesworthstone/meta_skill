@@ -93,6 +93,25 @@ fn diff_specs(a: &SkillSpec, b: &SkillSpec, structure_only: bool) -> Vec<String>
     if a.metadata.tags != b.metadata.tags {
         diffs.push("metadata.tags differ".to_string());
     }
+    if a.metadata.requires != b.metadata.requires {
+        diffs.push("metadata.requires differ".to_string());
+    }
+    if a.metadata.provides != b.metadata.provides {
+        diffs.push("metadata.provides differ".to_string());
+    }
+    if a.metadata.platforms != b.metadata.platforms {
+        diffs.push("metadata.platforms differ".to_string());
+    }
+    if a.extends != b.extends {
+        diffs.push(format!("extends: {:?} != {:?}", a.extends, b.extends));
+    }
+    if a.includes.len() != b.includes.len() {
+        diffs.push(format!(
+            "includes.count: {} != {}",
+            a.includes.len(),
+            b.includes.len()
+        ));
+    }
 
     if a.sections.len() != b.sections.len() {
         diffs.push(format!(
@@ -100,6 +119,17 @@ fn diff_specs(a: &SkillSpec, b: &SkillSpec, structure_only: bool) -> Vec<String>
             a.sections.len(),
             b.sections.len()
         ));
+    }
+
+    let a_sec_ids: std::collections::HashSet<&str> =
+        a.sections.iter().map(|s| s.id.as_str()).collect();
+    let b_sec_ids: std::collections::HashSet<&str> =
+        b.sections.iter().map(|s| s.id.as_str()).collect();
+    for removed in a_sec_ids.difference(&b_sec_ids) {
+        diffs.push(format!("section removed: '{removed}'"));
+    }
+    for added in b_sec_ids.difference(&a_sec_ids) {
+        diffs.push(format!("section added: '{added}'"));
     }
 
     for (idx, (section_a, section_b)) in a.sections.iter().zip(b.sections.iter()).enumerate() {

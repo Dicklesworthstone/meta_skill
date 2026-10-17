@@ -294,8 +294,16 @@ fn parse_update_args() {
 fn parse_validate_args() {
     match parse(&["validate", "skill-a", "--ubs"]) {
         Commands::Validate(args) => {
-            assert_eq!(args.skill, "skill-a");
+            assert_eq!(args.skill.as_deref(), Some("skill-a"));
             assert!(args.ubs);
+            assert!(!args.all);
+        }
+        other => panic!("unexpected command: {other:?}"),
+    }
+    match parse(&["validate", "--all"]) {
+        Commands::Validate(args) => {
+            assert!(args.skill.is_none());
+            assert!(args.all);
         }
         other => panic!("unexpected command: {other:?}"),
     }

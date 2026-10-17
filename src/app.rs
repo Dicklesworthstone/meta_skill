@@ -4,7 +4,7 @@ use std::sync::Arc;
 use crate::cli::OutputFormat;
 use crate::config::Config;
 use crate::error::{MsError, Result};
-use crate::search::SearchIndex;
+use crate::search::{CacheLayer, SearchIndex};
 use crate::storage::{Database, GitArchive};
 
 #[derive(Clone)]
@@ -15,6 +15,7 @@ pub struct AppContext {
     pub db: Arc<Database>,
     pub git: Arc<GitArchive>,
     pub search: Arc<SearchIndex>,
+    pub cache: Arc<CacheLayer>,
     /// Deprecated: use output_format instead
     pub robot_mode: bool,
     pub output_format: OutputFormat,
@@ -129,8 +130,22 @@ impl AppContext {
         let config_path = cli
             .config
             .clone()
+            .or_else(|| std::env::var("MS_CONFIG").ok().map(PathBuf::from))
             .unwrap_or_else(|| default_config_path(&ms_root));
         let config = Config::load(cli.config.as_deref(), &ms_root)?;
+
+        let mut output_format = cli.output_format();
+        if (cli.robot || crate::cli::Cli::env_robot_enabled())
+            && cli.output_format.is_none()
+            && !cli.plain
+            && !cli.machine
+        {
+            if let Some(cfg_fmt) = OutputFormat::from_str_loose(&config.robot.format) {
+                output_format = cfg_fmt;
+            }
+        }
+        crate::cli::output::set_active_output_format(output_format);
+        let robot_mode = output_format != OutputFormat::Human;
 
         // The MCP server never writes to the search index (its `index` tool
         // only reports configured paths and defers to the CLI), so it must
@@ -147,8 +162,9 @@ impl AppContext {
                 &ms_root.join("index"),
                 search_readonly_preferred,
             )?),
-            robot_mode: cli.robot,
-            output_format: cli.output_format(),
+            cache: Arc::new(CacheLayer::new()),
+            robot_mode,
+            output_format,
             verbosity: cli.verbose,
             search_readonly_preferred,
         })
@@ -203,6 +219,7 @@ impl AppContext {
         self.db = db;
         self.git = git;
         self.search = search;
+        self.cache.clear();
         Ok(())
     }
 
@@ -379,6 +396,7 @@ mod tests {
                     .or_else(|_| SearchIndex::open_readonly(&index_path))
                     .unwrap(),
             ),
+            cache: Arc::new(CacheLayer::new()),
             robot_mode: false,
             output_format: OutputFormat::default(),
             verbosity: 0,

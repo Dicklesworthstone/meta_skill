@@ -434,6 +434,31 @@ impl FeedbackCollector {
         }
     }
 
+    /// Default persistence path under `ms_root`.
+    #[must_use]
+    pub fn default_path(ms_root: &std::path::Path) -> std::path::PathBuf {
+        ms_root.join("suggestion_tracking.json")
+    }
+
+    /// Load a `FeedbackCollector` from disk, falling back to a new instance.
+    #[must_use]
+    pub fn load(path: &std::path::Path) -> Self {
+        std::fs::read_to_string(path)
+            .ok()
+            .and_then(|raw| serde_json::from_str(&raw).ok())
+            .unwrap_or_else(Self::new)
+    }
+
+    /// Save the `FeedbackCollector` to disk.
+    pub fn save(&self, path: &std::path::Path) -> crate::error::Result<()> {
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+        let json = serde_json::to_string_pretty(self)?;
+        std::fs::write(path, json)?;
+        Ok(())
+    }
+
     /// Record skill load event.
     pub fn on_skill_load(&mut self, skill_id: &str) {
         self.session.on_skill_load(skill_id);
@@ -655,5 +680,22 @@ mod tests {
         let duration = tracker.skill_load_duration_minutes("skill-a");
         assert!(duration.is_some());
         assert!(duration.unwrap() < 1);
+    }
+
+    #[test]
+    fn test_feedback_collector_persistence_roundtrip() {
+        let temp = tempfile::tempdir().unwrap();
+        let path = FeedbackCollector::default_path(temp.path());
+        let mut collector = FeedbackCollector::new();
+        collector.on_suggestions_shown(&["s1".to_string(), "s2".to_string()], Some(42));
+        collector.on_skill_load("s1");
+        collector.save(&path).unwrap();
+
+        let mut loaded = FeedbackCollector::load(&path);
+        assert_eq!(loaded.suggestions.pending_suggestions().len(), 1);
+        assert_eq!(loaded.suggestions.pending_suggestions()[0].skill_id, "s2");
+        let ignored = loaded.suggestions.end_tracking();
+        assert_eq!(ignored.len(), 1);
+        assert_eq!(ignored[0].0, "s2");
     }
 }

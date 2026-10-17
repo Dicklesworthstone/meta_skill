@@ -1615,7 +1615,7 @@ fn emit_beads(
     let client = BeadsClient::new().with_work_dir(work_dir);
     if !client.is_available() {
         return Err(MsError::BeadsUnavailable(
-            "bd not available (install beads or configure PATH)".to_string(),
+            "beads (br/bd) not available (install beads_rust or configure PATH)".to_string(),
         ));
     }
 

@@ -32,6 +32,10 @@ pub fn run(ctx: &AppContext, args: &OutcomeArgs) -> Result<()> {
     let success = args.success;
     ctx.db.record_skill_outcome(&skill_id, success)?;
 
+    if let Err(e) = update_bandits_from_outcome(ctx, &skill_id, success) {
+        eprintln!("Warning: Failed to update bandit from outcome: {e}");
+    }
+
     if ctx.output_format != OutputFormat::Human {
         let payload = serde_json::json!({
             "status": "ok",
@@ -47,6 +51,38 @@ pub fn run(ctx: &AppContext, args: &OutcomeArgs) -> Result<()> {
         .kv("Skill", &skill_id)
         .kv("Outcome", if success { "success" } else { "failure" });
     crate::cli::output::emit_human(layout);
+    Ok(())
+}
+
+fn update_bandits_from_outcome(ctx: &AppContext, skill_id: &str, success: bool) -> Result<()> {
+    use crate::suggestions::bandit::{
+        ContextFeatures, ContextualBandit, Reward, SignalBandit, SignalType, SkillFeedback,
+        SuggestionContext as BanditSuggestionContext,
+    };
+
+    let contextual_path = ctx.ms_root.join("contextual_bandit.json");
+    let mut contextual = ContextualBandit::load(&contextual_path)?;
+    contextual.register_skill(skill_id);
+    let feedback = if success {
+        SkillFeedback::ExplicitHelpful
+    } else {
+        SkillFeedback::ExplicitNotHelpful { reason: None }
+    };
+    contextual.update(skill_id, &ContextFeatures::default(), &feedback);
+    contextual.save(&contextual_path)?;
+
+    let signal_path = ctx.ms_root.join("bandit.json");
+    let mut signal_bandit = SignalBandit::load(&signal_path)?;
+    let reward = if success {
+        Reward::Success
+    } else {
+        Reward::Failure
+    };
+    let bandit_ctx = BanditSuggestionContext::default();
+    for signal in SignalType::all() {
+        signal_bandit.update(*signal, reward, &bandit_ctx);
+    }
+    signal_bandit.save(&signal_path)?;
     Ok(())
 }
 

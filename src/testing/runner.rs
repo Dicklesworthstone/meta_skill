@@ -299,7 +299,7 @@ impl<'a> SkillTestRunner<'a> {
             }
 
             // Run the test
-            let result = self.run_test(&test)?;
+            let result = self.run_test(skill_id, &test)?;
 
             match result.status {
                 TestStatus::Passed => passed += 1,
@@ -514,7 +514,7 @@ impl<'a> SkillTestRunner<'a> {
     }
 
     /// Run a single test.
-    fn run_test(&self, test: &TestDefinition) -> Result<TestResult> {
+    fn run_test(&self, skill_id: &str, test: &TestDefinition) -> Result<TestResult> {
         let start = Instant::now();
         let timeout = self
             .options
@@ -526,7 +526,12 @@ impl<'a> SkillTestRunner<'a> {
             eprintln!("[TEST] Running: {}", test.name);
         }
 
-        let mut executor = StepExecutor::new(self.ctx, self.options.verbose);
+        let mut executor =
+            StepExecutor::new(self.ctx, self.options.verbose).with_skill_id(skill_id.to_string());
+        let gate = crate::security::SafetyGate::from_context(self.ctx);
+        if gate.status().dcg_version.is_some() {
+            executor = executor.with_safety(gate);
+        }
         let mut failures = Vec::new();
 
         // Run setup steps

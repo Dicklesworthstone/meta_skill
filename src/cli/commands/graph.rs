@@ -328,6 +328,10 @@ fn print_metric_table(
 ) {
     if let Some(table) = format_metric_table(title, items, names, limit) {
         println!();
+        if should_use_rich_for_graph() {
+            let width = terminal_width().clamp(60, 120);
+            println!("{}", "─".repeat(width));
+        }
         println!("{table}");
     }
 }
@@ -423,7 +427,6 @@ fn run_health(ctx: &AppContext, client: &BvClient, issues: &[crate::beads::Issue
 }
 
 /// Check whether the terminal supports rich output for graph commands.
-#[allow(dead_code)]
 fn should_use_rich_for_graph() -> bool {
     use std::io::IsTerminal;
 
@@ -443,7 +446,6 @@ fn should_use_rich_for_graph() -> bool {
 }
 
 /// Get the terminal width, defaulting to 80 if detection fails.
-#[allow(dead_code)]
 fn terminal_width() -> usize {
     crossterm::terminal::size()
         .map(|(w, _)| w as usize)

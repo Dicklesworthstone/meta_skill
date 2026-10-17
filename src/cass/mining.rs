@@ -562,6 +562,19 @@ pub enum SimplePatternType {
 // Mining Functions
 // =============================================================================
 
+impl Pattern {
+    /// Convert a full `ExtractedPattern` into a simplified `Pattern` for synthesis.
+    #[must_use]
+    pub fn from_extracted(ep: &ExtractedPattern) -> Self {
+        Self {
+            id: ep.id.clone(),
+            pattern_type: pattern_type_to_simple(&ep.pattern_type),
+            content: pattern_content(&ep.pattern_type),
+            confidence: ep.confidence,
+        }
+    }
+}
+
 /// Extract patterns from a session transcript file
 ///
 /// Parses the session file (JSON or JSONL format) and extracts patterns.
@@ -590,15 +603,7 @@ pub fn extract_patterns(session_path: &str) -> Result<Vec<Pattern>> {
     let extracted = extract_from_session(&session)?;
 
     // Convert ExtractedPattern to simple Pattern format
-    let patterns = extracted
-        .into_iter()
-        .map(|ep| Pattern {
-            id: ep.id,
-            pattern_type: pattern_type_to_simple(&ep.pattern_type),
-            content: pattern_content(&ep.pattern_type),
-            confidence: ep.confidence,
-        })
-        .collect();
+    let patterns = extracted.iter().map(Pattern::from_extracted).collect();
 
     Ok(patterns)
 }
@@ -696,6 +701,22 @@ pub fn extract_from_session(session: &Session) -> Result<Vec<ExtractedPattern>> 
     // Extract error handling patterns
     let error_patterns = extract_error_patterns(session);
     patterns.extend(error_patterns);
+
+    // Extract decision patterns from conditional guidance
+    let decision_patterns = extract_decision_patterns(session);
+    patterns.extend(decision_patterns);
+
+    // Extract refactoring patterns from edit tool calls and before/after blocks
+    let refactor_patterns = extract_refactor_patterns(session);
+    patterns.extend(refactor_patterns);
+
+    // Extract configuration patterns from config edits and blocks
+    let config_patterns = extract_config_patterns(session);
+    patterns.extend(config_patterns);
+
+    // Extract tool usage patterns across non-shell tools
+    let tool_patterns = extract_tool_patterns(session);
+    patterns.extend(tool_patterns);
 
     // Apply ACIP taint labels based on evidence from tainted messages
     let patterns = apply_taint_labels(patterns, &tainted_indices);
@@ -1229,6 +1250,290 @@ fn compute_error_pattern_confidence(ctx: &ErrorContext) -> f32 {
 
     // Cap at 0.85 for auto-extracted patterns
     confidence.min(0.85_f32)
+}
+
+/// Extract conditional decision patterns from assistant messages.
+fn extract_decision_patterns(session: &Session) -> Vec<ExtractedPattern> {
+    let mut patterns = Vec::new();
+
+    for msg in &session.messages {
+        if msg.role != "assistant" {
+            continue;
+        }
+        let mut branches = Vec::new();
+        let mut default_action = None;
+
+        for line in msg.content.lines() {
+            let trimmed = line.trim().trim_start_matches(['-', '*', '•']).trim();
+            let lower = trimmed.to_lowercase();
+            if (lower.starts_with("if ") || lower.starts_with("when "))
+                && (lower.contains(", ") || lower.contains(" then ") || lower.contains(": "))
+            {
+                let split_pair = if let Some((cond, act)) = trimmed.split_once(" then ") {
+                    Some((cond.trim(), act.trim()))
+                } else if let Some((cond, act)) = trimmed.split_once(": ") {
+                    Some((cond.trim(), act.trim()))
+                } else {
+                    trimmed
+                        .split_once(", ")
+                        .map(|(cond, act)| (cond.trim(), act.trim()))
+                };
+
+                if let Some((cond, act)) = split_pair {
+                    if !cond.is_empty() && !act.is_empty() {
+                        branches.push(DecisionBranch {
+                            condition: truncate(cond, 120),
+                            action: truncate(act, 160),
+                            rationale: None,
+                        });
+                    }
+                }
+            } else if lower.starts_with("otherwise") || lower.starts_with("else") {
+                let action = trimmed
+                    .split_once([',', ':'])
+                    .map_or(trimmed, |(_, rest)| rest.trim());
+                if !action.is_empty() {
+                    default_action = Some(truncate(action, 160));
+                }
+            }
+        }
+
+        if !branches.is_empty() {
+            let primary_cond = branches[0].condition.clone();
+            patterns.push(ExtractedPattern {
+                id: format!(
+                    "decision_{}_{}_{}",
+                    safe_prefix(&session.id, 8),
+                    msg.index,
+                    patterns.len()
+                ),
+                pattern_type: PatternType::DecisionPattern {
+                    condition: primary_cond,
+                    branches,
+                    default_action,
+                },
+                evidence: vec![EvidenceRef {
+                    session_id: session.id.clone(),
+                    message_indices: vec![msg.index],
+                    relevance: 0.7,
+                    snippet: Some(truncate(&msg.content, 100)),
+                }],
+                confidence: 0.65,
+                frequency: 1,
+                tags: vec!["auto-extracted".to_string(), "decision".to_string()],
+                description: Some("Conditional decision tree extracted from session".to_string()),
+                taint_label: None,
+            });
+        }
+    }
+
+    patterns
+}
+
+/// Extract refactoring patterns from edit tool calls and before/after code blocks.
+fn extract_refactor_patterns(session: &Session) -> Vec<ExtractedPattern> {
+    let mut patterns = Vec::new();
+
+    for msg in &session.messages {
+        for tool in &msg.tool_calls {
+            let name_lower = tool.name.to_lowercase();
+            if matches!(
+                name_lower.as_str(),
+                "edit" | "replace_file_content" | "str_replace"
+            ) {
+                let before = tool
+                    .arguments
+                    .get("old_string")
+                    .or_else(|| tool.arguments.get("old_str"))
+                    .or_else(|| tool.arguments.get("target_content"))
+                    .and_then(|v| v.as_str());
+                let after = tool
+                    .arguments
+                    .get("new_string")
+                    .or_else(|| tool.arguments.get("new_str"))
+                    .or_else(|| tool.arguments.get("replacement_content"))
+                    .and_then(|v| v.as_str());
+
+                if let (Some(before_str), Some(after_str)) = (before, after) {
+                    let b_trim = before_str.trim();
+                    let a_trim = after_str.trim();
+                    if !b_trim.is_empty() && !a_trim.is_empty() && b_trim != a_trim {
+                        let rationale = if msg.content.trim().is_empty() {
+                            "Code transformation applied via edit tool".to_string()
+                        } else {
+                            truncate(msg.content.trim(), 120)
+                        };
+                        patterns.push(ExtractedPattern {
+                            id: format!(
+                                "refactor_{}_{}_{}",
+                                safe_prefix(&session.id, 8),
+                                msg.index,
+                                patterns.len()
+                            ),
+                            pattern_type: PatternType::RefactorPattern {
+                                before_pattern: truncate(b_trim, 200),
+                                after_pattern: truncate(a_trim, 200),
+                                rationale,
+                                safety_checks: vec![
+                                    "Verify compilation and tests pass".to_string(),
+                                ],
+                            },
+                            evidence: vec![EvidenceRef {
+                                session_id: session.id.clone(),
+                                message_indices: vec![msg.index],
+                                relevance: 0.75,
+                                snippet: Some(truncate(a_trim, 100)),
+                            }],
+                            confidence: 0.7,
+                            frequency: 1,
+                            tags: vec!["auto-extracted".to_string(), "refactor".to_string()],
+                            description: Some(
+                                "Refactoring pattern from edit operation".to_string(),
+                            ),
+                            taint_label: None,
+                        });
+                    }
+                }
+            }
+        }
+    }
+
+    patterns
+}
+
+/// Extract configuration patterns from config blocks in assistant messages.
+fn extract_config_patterns(session: &Session) -> Vec<ExtractedPattern> {
+    let mut patterns = Vec::new();
+
+    for msg in &session.messages {
+        if msg.role != "assistant" {
+            continue;
+        }
+        for (lang, block) in extract_code_blocks(&msg.content) {
+            let lang_lower = lang.to_lowercase();
+            if !matches!(
+                lang_lower.as_str(),
+                "toml" | "yaml" | "yml" | "ini" | "env" | "conf"
+            ) {
+                continue;
+            }
+            let mut settings = Vec::new();
+            for line in block.lines() {
+                let trimmed = line.trim();
+                if trimmed.is_empty() || trimmed.starts_with('#') || trimmed.starts_with('[') {
+                    continue;
+                }
+                let kv = trimmed.split_once('=').or_else(|| trimmed.split_once(':'));
+                if let Some((k, v)) = kv {
+                    let key = k.trim();
+                    let val = v.trim();
+                    if !key.is_empty() && !val.is_empty() {
+                        settings.push(ConfigSetting {
+                            key: key.to_string(),
+                            value: val.to_string(),
+                            description: None,
+                        });
+                    }
+                }
+            }
+            if !settings.is_empty() {
+                patterns.push(ExtractedPattern {
+                    id: format!(
+                        "config_{}_{}_{}",
+                        safe_prefix(&session.id, 8),
+                        msg.index,
+                        patterns.len()
+                    ),
+                    pattern_type: PatternType::ConfigPattern {
+                        config_type: lang_lower.clone(),
+                        settings,
+                        context: session
+                            .metadata
+                            .project
+                            .clone()
+                            .unwrap_or_else(|| "general".to_string()),
+                    },
+                    evidence: vec![EvidenceRef {
+                        session_id: session.id.clone(),
+                        message_indices: vec![msg.index],
+                        relevance: 0.7,
+                        snippet: Some(truncate(&block, 100)),
+                    }],
+                    confidence: 0.65,
+                    frequency: 1,
+                    tags: vec![
+                        "auto-extracted".to_string(),
+                        "config".to_string(),
+                        lang_lower,
+                    ],
+                    description: Some("Configuration settings pattern".to_string()),
+                    taint_label: None,
+                });
+            }
+        }
+    }
+
+    patterns
+}
+
+/// Extract non-shell tool usage patterns across a session.
+fn extract_tool_patterns(session: &Session) -> Vec<ExtractedPattern> {
+    let mut tool_stats: std::collections::BTreeMap<String, (Vec<String>, Vec<usize>, usize)> =
+        std::collections::BTreeMap::new();
+
+    for msg in &session.messages {
+        for tool in &msg.tool_calls {
+            let name_lower = tool.name.to_lowercase();
+            if matches!(
+                name_lower.as_str(),
+                "bash" | "shell" | "command" | "terminal" | "exec"
+            ) {
+                continue;
+            }
+            let entry = tool_stats
+                .entry(name_lower)
+                .or_insert_with(|| (Vec::new(), Vec::new(), 0));
+            entry.2 += 1;
+            if !entry.1.contains(&msg.index) {
+                entry.1.push(msg.index);
+            }
+            if let Some(obj) = tool.arguments.as_object() {
+                for k in obj.keys() {
+                    if !entry.0.contains(k) {
+                        entry.0.push(k.clone());
+                    }
+                }
+            }
+        }
+    }
+
+    let mut patterns = Vec::new();
+    for (tool_name, (common_args, msg_indices, freq)) in tool_stats {
+        if freq == 0 {
+            continue;
+        }
+        patterns.push(ExtractedPattern {
+            id: format!("tool_{}_{}", safe_prefix(&session.id, 8), tool_name),
+            pattern_type: PatternType::ToolPattern {
+                tool_name: tool_name.clone(),
+                common_args,
+                use_cases: vec![format!("Used {freq} time(s) in session")],
+            },
+            evidence: vec![EvidenceRef {
+                session_id: session.id.clone(),
+                message_indices: msg_indices,
+                relevance: 0.65,
+                snippet: Some(format!("Tool {tool_name} invoked {freq} time(s)")),
+            }],
+            confidence: (0.5 + (freq as f32 * 0.05)).min(0.85),
+            frequency: freq,
+            tags: vec!["auto-extracted".to_string(), "tool".to_string(), tool_name],
+            description: None,
+            taint_label: None,
+        });
+    }
+
+    patterns
 }
 
 /// Normalize patterns for consistency
@@ -2216,5 +2521,73 @@ And more text.
                 assert!(false, "Expected CommandSeq IR");
             }
         }
+    }
+
+    #[test]
+    fn test_extract_decision_refactor_config_and_tool_patterns() {
+        use super::super::client::{Session, SessionMessage, ToolCall};
+        let session = Session {
+            id: "session-all-types".to_string(),
+            path: "/path/to/session.json".to_string(),
+            content_hash: "hash-all".to_string(),
+            messages: vec![SessionMessage {
+                index: 0,
+                role: "assistant".to_string(),
+                content: concat!(
+                    "- If the build fails with E0382, clone or borrow the value before moving.\n",
+                    "- When running in CI, pass --locked to cargo test.\n",
+                    "- Otherwise: use the default cargo test invocation.\n\n",
+                    "```toml\n",
+                    "opt-level = 3\n",
+                    "lto = true\n",
+                    "```\n"
+                )
+                .to_string(),
+                tool_calls: vec![
+                    ToolCall {
+                        id: "call-edit-1".to_string(),
+                        name: "edit".to_string(),
+                        arguments: serde_json::json!({
+                            "file_path": "src/lib.rs",
+                            "old_string": "let x = val.unwrap();",
+                            "new_string": "let x = val.context(\"missing value\")?;"
+                        }),
+                    },
+                    ToolCall {
+                        id: "call-grep-1".to_string(),
+                        name: "grep".to_string(),
+                        arguments: serde_json::json!({
+                            "pattern": "unwrap\\(",
+                            "path": "src/"
+                        }),
+                    },
+                ],
+                tool_results: vec![],
+            }],
+            metadata: Default::default(),
+        };
+
+        let extracted =
+            extract_from_session(&session).expect("extract_from_session should succeed");
+        assert!(
+            extracted
+                .iter()
+                .any(|p| matches!(p.pattern_type, PatternType::DecisionPattern { .. }))
+        );
+        assert!(
+            extracted
+                .iter()
+                .any(|p| matches!(p.pattern_type, PatternType::RefactorPattern { .. }))
+        );
+        assert!(
+            extracted
+                .iter()
+                .any(|p| matches!(p.pattern_type, PatternType::ConfigPattern { .. }))
+        );
+        assert!(
+            extracted
+                .iter()
+                .any(|p| matches!(p.pattern_type, PatternType::ToolPattern { .. }))
+        );
     }
 }

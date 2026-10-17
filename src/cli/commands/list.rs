@@ -12,7 +12,7 @@ use crate::storage::sqlite::SkillRecord;
 #[derive(Args, Debug)]
 pub struct ListArgs {
     /// Filter by tags
-    #[arg(long, short)]
+    #[arg(long, short, visible_alias = "tag")]
     pub tags: Vec<String>,
 
     /// Filter by layer: base, org, project, user
@@ -39,8 +39,8 @@ pub struct ListArgs {
 pub fn run(ctx: &AppContext, args: &ListArgs) -> Result<()> {
     debug!(target: "list", mode = ?ctx.output_format, "output mode selected");
 
-    // Fetch skills from database
-    let skills = ctx.db.list_skills(args.limit, args.offset)?;
+    // Fetch skills from database before filtering/sorting so pagination is accurate
+    let skills = ctx.db.list_skills(10_000, 0)?;
 
     // Filter by layer if specified
     let skills: Vec<_> = if let Some(ref layer) = args.layer {
@@ -89,6 +89,12 @@ pub fn run(ctx: &AppContext, args: &ListArgs) -> Result<()> {
         "updated" => skills.sort_by(|a, b| b.modified_at.cmp(&a.modified_at)),
         _ => {}
     }
+
+    let skills: Vec<_> = skills
+        .into_iter()
+        .skip(args.offset)
+        .take(args.limit)
+        .collect();
 
     debug!(target: "list", count = skills.len(), filters = ?args.tags, "listing skills");
 
@@ -238,7 +244,12 @@ fn display_list_human(skills: &[SkillRecord], args: &ListArgs) -> Result<()> {
         "{:40} {:12} {:8} {:20}",
         "ID", "VERSION", "LAYER", "UPDATED"
     );
-    println!("{}", "─".repeat(84));
+    let sep_width = if should_use_rich_for_list() {
+        terminal_width().clamp(60, 120)
+    } else {
+        84
+    };
+    println!("{}", "─".repeat(sep_width));
 
     for skill in skills {
         let layer = normalize_layer(&skill.source_layer);
@@ -295,7 +306,6 @@ fn normalize_layer(input: &str) -> String {
 }
 
 /// Check whether the terminal supports rich output for list commands.
-#[allow(dead_code)]
 fn should_use_rich_for_list() -> bool {
     use std::io::IsTerminal;
 
@@ -315,7 +325,6 @@ fn should_use_rich_for_list() -> bool {
 }
 
 /// Get the terminal width, defaulting to 80 if detection fails.
-#[allow(dead_code)]
 fn terminal_width() -> usize {
     crossterm::terminal::size()
         .map(|(w, _)| w as usize)

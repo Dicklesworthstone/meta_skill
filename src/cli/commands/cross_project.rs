@@ -684,6 +684,23 @@ mod tests {
         assert!(!sanitized.contains(':'));
         assert!(!sanitized.contains('"'));
     }
+
+    #[test]
+    fn test_session_marks_roundtrip() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let record = SessionMarkRecord {
+            session_id: "sess-42".to_string(),
+            mark_type: "exemplary".to_string(),
+            topics: vec!["debugging".to_string(), "rust".to_string()],
+            reason: Some("Great bisect workflow".to_string()),
+            marked_at: "2026-10-14T00:00:00Z".to_string(),
+        };
+        save_session_marks(dir.path(), std::slice::from_ref(&record)).unwrap();
+        let loaded = load_session_marks(dir.path());
+        assert_eq!(loaded.len(), 1);
+        assert_eq!(loaded[0].session_id, "sess-42");
+        assert_eq!(loaded[0].topics, vec!["debugging", "rust"]);
+    }
 }
 
 #[derive(Debug, Default)]
@@ -895,4 +912,298 @@ fn print_gaps(report: &CrossProjectGapsReport) {
     }
 
     println!("{}", layout.build());
+}
+
+// =============================================================================
+// ms coverage & ms mark
+// =============================================================================
+
+/// Arguments for `ms coverage`
+#[derive(Args, Debug, Clone)]
+pub struct CoverageArgs {
+    /// Minimum sessions required for a topic to be listed
+    #[arg(long, default_value = "5")]
+    pub min_sessions: usize,
+
+    /// Optional CASS search query filter
+    #[arg(long, default_value = "*")]
+    pub query: String,
+
+    /// Maximum sessions to scan
+    #[arg(long, default_value = "500")]
+    pub limit: usize,
+
+    /// Maximum topics to display
+    #[arg(long, default_value = "20")]
+    pub top: usize,
+
+    /// Override path to cass binary
+    #[arg(long)]
+    pub cass_path: Option<PathBuf>,
+}
+
+/// Arguments for `ms mark`
+#[derive(Args, Debug, Clone)]
+pub struct MarkArgs {
+    /// Session ID or path to mark
+    pub session: String,
+
+    /// Mark session as an exemplary reference for skill extraction
+    #[arg(long, conflicts_with = "anti_pattern")]
+    pub exemplary: bool,
+
+    /// Mark session as an anti-pattern to avoid
+    #[arg(long = "anti-pattern", conflicts_with = "exemplary")]
+    pub anti_pattern: bool,
+
+    /// Comma-separated topics associated with this session
+    #[arg(long)]
+    pub topics: Option<String>,
+
+    /// Reason or note explaining why the session was marked
+    #[arg(long)]
+    pub reason: Option<String>,
+}
+
+/// Persisted session mark record in `<ms_root>/session_marks.json`
+#[derive(Debug, Clone, Serialize, serde::Deserialize)]
+pub struct SessionMarkRecord {
+    pub session_id: String,
+    pub mark_type: String,
+    pub topics: Vec<String>,
+    pub reason: Option<String>,
+    pub marked_at: String,
+}
+
+#[derive(Debug, Serialize)]
+struct TopicCoverageItem {
+    topic: String,
+    sessions: usize,
+    exemplary_marks: usize,
+    anti_pattern_marks: usize,
+    indexed_skills: usize,
+}
+
+#[derive(Debug, Serialize)]
+struct CoverageReport {
+    min_sessions: usize,
+    total_topics: usize,
+    topics: Vec<TopicCoverageItem>,
+}
+
+pub fn load_session_marks(ms_root: &std::path::Path) -> Vec<SessionMarkRecord> {
+    let path = ms_root.join("session_marks.json");
+    if !path.exists() {
+        return Vec::new();
+    }
+    std::fs::read_to_string(&path)
+        .ok()
+        .and_then(|s| serde_json::from_str(&s).ok())
+        .unwrap_or_default()
+}
+
+fn save_session_marks(ms_root: &std::path::Path, marks: &[SessionMarkRecord]) -> Result<()> {
+    let path = ms_root.join("session_marks.json");
+    let json = serde_json::to_string_pretty(marks)?;
+    std::fs::write(path, json)?;
+    Ok(())
+}
+
+/// Execute `ms mark`
+pub fn run_mark(ctx: &AppContext, args: &MarkArgs) -> Result<()> {
+    if !args.exemplary && !args.anti_pattern {
+        return Err(MsError::ValidationFailed(
+            "Specify either --exemplary or --anti-pattern when marking a session".to_string(),
+        ));
+    }
+
+    let mark_type = if args.anti_pattern {
+        "anti_pattern".to_string()
+    } else {
+        "exemplary".to_string()
+    };
+
+    let topics: Vec<String> = args
+        .topics
+        .as_deref()
+        .unwrap_or("")
+        .split(',')
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(str::to_lowercase)
+        .collect();
+
+    let record = SessionMarkRecord {
+        session_id: args.session.clone(),
+        mark_type: mark_type.clone(),
+        topics: topics.clone(),
+        reason: args.reason.clone(),
+        marked_at: Utc::now().to_rfc3339(),
+    };
+
+    let mut marks = load_session_marks(&ctx.ms_root);
+    if let Some(existing) = marks.iter_mut().find(|m| m.session_id == args.session) {
+        *existing = record.clone();
+    } else {
+        marks.push(record.clone());
+    }
+    save_session_marks(&ctx.ms_root, &marks)?;
+
+    if ctx.output_format != OutputFormat::Human {
+        return emit_json(&serde_json::json!({
+            "status": "ok",
+            "mark": record,
+            "total_marks": marks.len(),
+        }));
+    }
+
+    let mut layout = HumanLayout::new();
+    layout
+        .title("Session Marked")
+        .kv("Session", &record.session_id)
+        .kv("Type", &record.mark_type)
+        .kv(
+            "Topics",
+            &if record.topics.is_empty() {
+                "-".to_string()
+            } else {
+                record.topics.join(", ")
+            },
+        );
+    if let Some(reason) = &record.reason {
+        layout.kv("Reason", reason);
+    }
+    println!("{}", layout.build());
+    Ok(())
+}
+
+/// Execute `ms coverage`
+pub fn run_coverage(ctx: &AppContext, args: &CoverageArgs) -> Result<()> {
+    let mut topic_sessions: HashMap<String, usize> = HashMap::new();
+    let mut topic_exemplary: HashMap<String, usize> = HashMap::new();
+    let mut topic_antipattern: HashMap<String, usize> = HashMap::new();
+    let mut topic_skills: HashMap<String, usize> = HashMap::new();
+
+    // 1. Fold in marked sessions from session_marks.json
+    let marks = load_session_marks(&ctx.ms_root);
+    for mark in &marks {
+        for topic in &mark.topics {
+            *topic_sessions.entry(topic.clone()).or_insert(0) += 1;
+            if mark.mark_type == "anti_pattern" {
+                *topic_antipattern.entry(topic.clone()).or_insert(0) += 1;
+            } else {
+                *topic_exemplary.entry(topic.clone()).or_insert(0) += 1;
+            }
+        }
+    }
+
+    // 2. Fold in CASS sessions if CASS is available
+    let client = args.cass_path.as_ref().map_or_else(
+        || {
+            ctx.config
+                .cass
+                .cass_path
+                .as_ref()
+                .map_or_else(CassClient::new, |path| {
+                    CassClient::with_binary(PathBuf::from(path))
+                })
+        },
+        |path| CassClient::with_binary(path.clone()),
+    );
+    if let Ok(matches) = client.search(&args.query, args.limit) {
+        for m in matches {
+            if let Some(proj) = m
+                .project
+                .as_deref()
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+            {
+                let topic = proj
+                    .rsplit(['/', '\\'])
+                    .next()
+                    .unwrap_or(proj)
+                    .to_lowercase();
+                *topic_sessions.entry(topic).or_insert(0) += 1;
+            }
+        }
+    }
+
+    // 3. Fold in indexed skills and their tags from SQLite
+    if let Ok(skills) = ctx.db.list_skills(1000, 0) {
+        for skill in skills {
+            if let Ok(meta) = serde_json::from_str::<serde_json::Value>(&skill.metadata_json) {
+                if let Some(tags) = meta.get("tags").and_then(|v| v.as_array()) {
+                    for tag in tags.iter().filter_map(|v| v.as_str()) {
+                        let t = tag.trim().to_lowercase();
+                        if !t.is_empty() {
+                            *topic_skills.entry(t.clone()).or_insert(0) += 1;
+                            topic_sessions.entry(t).or_insert(0);
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    let mut topics: Vec<TopicCoverageItem> = topic_sessions
+        .into_iter()
+        .filter(|(_, sessions)| *sessions >= args.min_sessions)
+        .map(|(topic, sessions)| TopicCoverageItem {
+            exemplary_marks: topic_exemplary.get(&topic).copied().unwrap_or(0),
+            anti_pattern_marks: topic_antipattern.get(&topic).copied().unwrap_or(0),
+            indexed_skills: topic_skills.get(&topic).copied().unwrap_or(0),
+            topic,
+            sessions,
+        })
+        .collect();
+
+    topics.sort_by(|a, b| {
+        b.sessions
+            .cmp(&a.sessions)
+            .then_with(|| a.topic.cmp(&b.topic))
+    });
+    if args.top > 0 && topics.len() > args.top {
+        topics.truncate(args.top);
+    }
+
+    let report = CoverageReport {
+        min_sessions: args.min_sessions,
+        total_topics: topics.len(),
+        topics,
+    };
+
+    if ctx.output_format != OutputFormat::Human {
+        return emit_json(&report);
+    }
+
+    let mut layout = HumanLayout::new();
+    layout
+        .title("Topic Session Coverage")
+        .kv("Min sessions", &report.min_sessions.to_string())
+        .kv("Matching topics", &report.total_topics.to_string())
+        .blank()
+        .section("Topics")
+        .push_line(format!(
+            "{:30} {:>10} {:>10} {:>10} {:>10}",
+            "Topic".bold(),
+            "Sessions".bold(),
+            "Exemplary".bold(),
+            "AntiPat".bold(),
+            "Skills".bold()
+        ))
+        .push_line("-".repeat(76));
+
+    for item in &report.topics {
+        layout.push_line(format!(
+            "{:30} {:>10} {:>10} {:>10} {:>10}",
+            truncate_string(&item.topic, 30),
+            item.sessions,
+            item.exemplary_marks,
+            item.anti_pattern_marks,
+            item.indexed_skills
+        ));
+    }
+
+    println!("{}", layout.build());
+    Ok(())
 }

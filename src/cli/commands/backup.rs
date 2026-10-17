@@ -355,10 +355,8 @@ fn timestamp_id() -> String {
 }
 
 fn validate_backup_id(id: &str) -> Result<()> {
-    if id.is_empty() {
-        return Err(MsError::ValidationFailed("backup id is empty".to_string()));
-    }
-    if id.contains('/') || id.contains('\\') || id.contains("..") || id.contains('\0') {
+    crate::security::path_policy::validate_path_component(id)?;
+    if id.contains("..") {
         return Err(MsError::ValidationFailed(
             "backup id contains invalid path characters".to_string(),
         ));
@@ -449,19 +447,7 @@ fn restore_paths_for_entry(
 /// Normalize a path by resolving `.` and `..` components lexically.
 /// This doesn't access the filesystem, so it works on non-existent paths.
 fn normalize_path(path: &Path) -> PathBuf {
-    let mut result = PathBuf::new();
-    for component in path.components() {
-        match component {
-            std::path::Component::ParentDir => {
-                result.pop();
-            }
-            std::path::Component::CurDir => {}
-            other => {
-                result.push(other);
-            }
-        }
-    }
-    result
+    crate::security::path_policy::normalize_path(path)
 }
 
 fn latest_backup_id(root: &Path) -> Result<String> {

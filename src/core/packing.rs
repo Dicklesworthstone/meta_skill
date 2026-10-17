@@ -217,28 +217,18 @@ impl ConstrainedPacker {
             .filter(|slice| !selected_ids.contains(&slice.id))
             .filter(|slice| !is_excluded(slice, &excluded_groups))
             .collect();
-        let ranked = rank_by_density(
+        celf_select_from_candidates(
             &candidates,
-            &group_counts,
+            &mut selected,
+            &mut selected_ids,
+            &mut group_counts,
+            &mut remaining,
             &constraints.recent_slice_ids,
             mode,
             contract,
+            max_per_group,
+            &excluded_groups,
         );
-        for slice in ranked {
-            if slice.token_estimate > remaining {
-                continue;
-            }
-            if !deps_satisfied(slice, &selected_ids) {
-                continue;
-            }
-            if !can_add_slice(slice, &excluded_groups, &group_counts, max_per_group) {
-                continue;
-            }
-            selected_ids.insert(slice.id.clone());
-            selected.push(slice.clone());
-            remaining -= slice.token_estimate;
-            add_group_count(&mut group_counts, slice);
-        }
 
         for _ in 0..constraints.max_improvement_passes {
             if !try_improve(
@@ -266,7 +256,7 @@ impl ConstrainedPacker {
         );
 
         let coverage_satisfied = check_coverage(&selected, &required_coverage);
-        let total_tokens = constraints.budget.saturating_sub(remaining);
+        let total_tokens = selected.iter().map(|s| s.token_estimate).sum();
 
         Ok(PackResult {
             slices: selected,
@@ -305,6 +295,27 @@ fn merge_required_coverage(constraints: &PackConstraints) -> Vec<CoverageQuota> 
     items
 }
 
+fn add_with_transitive_requires(
+    slice: &SkillSlice,
+    all_slices: &[SkillSlice],
+    seen: &mut HashSet<String>,
+    visiting: &mut HashSet<String>,
+    mandatory: &mut Vec<SkillSlice>,
+) {
+    if seen.contains(&slice.id) || !visiting.insert(slice.id.clone()) {
+        return;
+    }
+    for req_id in &slice.requires {
+        if let Some(req_slice) = all_slices.iter().find(|s| &s.id == req_id) {
+            add_with_transitive_requires(req_slice, all_slices, seen, visiting, mandatory);
+        }
+    }
+    visiting.remove(&slice.id);
+    if seen.insert(slice.id.clone()) {
+        mandatory.push(slice.clone());
+    }
+}
+
 fn collect_mandatory_slices(
     slices: &[SkillSlice],
     constraints: &PackConstraints,
@@ -317,20 +328,31 @@ fn collect_mandatory_slices(
     }
 
     let mut seen: HashSet<String> = HashSet::new();
+    let mut visiting: HashSet<String> = HashSet::new();
     let mut mandatory: Vec<SkillSlice> = Vec::new();
     for spec in mandatory_specs {
         match spec {
             MandatorySlice::ById(id) => {
                 if let Some(slice) = slices.iter().find(|slice| slice.id == id) {
-                    if seen.insert(slice.id.clone()) {
-                        mandatory.push(slice.clone());
-                    }
+                    add_with_transitive_requires(
+                        slice,
+                        slices,
+                        &mut seen,
+                        &mut visiting,
+                        &mut mandatory,
+                    );
                 }
             }
             MandatorySlice::ByPredicate(predicate) => {
                 for slice in slices {
-                    if matches_predicate(slice, &predicate) && seen.insert(slice.id.clone()) {
-                        mandatory.push(slice.clone());
+                    if matches_predicate(slice, &predicate) {
+                        add_with_transitive_requires(
+                            slice,
+                            slices,
+                            &mut seen,
+                            &mut visiting,
+                            &mut mandatory,
+                        );
                     }
                 }
             }
@@ -403,6 +425,154 @@ fn deps_satisfied(slice: &SkillSlice, selected_ids: &HashSet<String>) -> bool {
     slice.requires.iter().all(|req| selected_ids.contains(req))
 }
 
+fn marginal_density(
+    slice: &SkillSlice,
+    group_counts: &HashMap<String, usize>,
+    recent: &HashSet<&str>,
+    mode: PackMode,
+    contract: Option<&PackContract>,
+) -> (f32, usize) {
+    let base = score_slice_with_contract(slice, mode, contract);
+    let density = base / slice.token_estimate.max(1) as f32;
+    let group_count = slice
+        .coverage_group
+        .as_ref()
+        .and_then(|group| group_counts.get(group))
+        .copied()
+        .unwrap_or(0);
+    let group_penalty = 0.8_f32.powi(group_count as i32);
+    let novelty_penalty = if recent.contains(slice.id.as_str()) {
+        0.6
+    } else {
+        1.0
+    };
+    (density * group_penalty * novelty_penalty, group_count)
+}
+
+#[derive(Clone, Debug)]
+struct CelfEntry<'a> {
+    density: f32,
+    group_count_at_eval: usize,
+    slice: &'a SkillSlice,
+}
+
+impl PartialEq for CelfEntry<'_> {
+    fn eq(&self, other: &Self) -> bool {
+        self.density.to_bits() == other.density.to_bits() && self.slice.id == other.slice.id
+    }
+}
+
+impl Eq for CelfEntry<'_> {}
+
+impl PartialOrd for CelfEntry<'_> {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl Ord for CelfEntry<'_> {
+    fn cmp(&self, other: &Self) -> Ordering {
+        self.density
+            .partial_cmp(&other.density)
+            .unwrap_or(Ordering::Equal)
+            .then_with(|| other.slice.id.cmp(&self.slice.id))
+    }
+}
+
+/// CELF (Cost-Effective Lazy Forward) submodular greedy selection.
+///
+/// Exploits diminishing marginal returns (`0.8^group_count`) by lazily re-evaluating
+/// the top priority-queue candidate only when its coverage group's count has increased
+/// since the entry's upper-bound density was computed. Also re-queues slices whose
+/// `requires` dependencies become satisfied as earlier slices are selected.
+fn celf_select_from_candidates(
+    candidates: &[&SkillSlice],
+    selected: &mut Vec<SkillSlice>,
+    selected_ids: &mut HashSet<String>,
+    group_counts: &mut HashMap<String, usize>,
+    remaining: &mut usize,
+    recent_slice_ids: &[String],
+    mode: PackMode,
+    contract: Option<&PackContract>,
+    max_per_group: usize,
+    excluded: &HashSet<String>,
+) {
+    let recent: HashSet<&str> = recent_slice_ids
+        .iter()
+        .map(std::string::String::as_str)
+        .collect();
+    let mut heap = std::collections::BinaryHeap::with_capacity(candidates.len());
+    for &slice in candidates {
+        let (density, group_count_at_eval) =
+            marginal_density(slice, group_counts, &recent, mode, contract);
+        heap.push(CelfEntry {
+            density,
+            group_count_at_eval,
+            slice,
+        });
+    }
+
+    let mut deferred_for_deps: Vec<&SkillSlice> = Vec::new();
+
+    while let Some(entry) = heap.pop() {
+        let slice = entry.slice;
+        if selected_ids.contains(&slice.id) {
+            continue;
+        }
+        if slice.token_estimate > *remaining {
+            continue;
+        }
+        if !can_add_slice(slice, excluded, group_counts, max_per_group) {
+            continue;
+        }
+        if !deps_satisfied(slice, selected_ids) {
+            deferred_for_deps.push(slice);
+            continue;
+        }
+
+        let current_group_count = slice
+            .coverage_group
+            .as_ref()
+            .and_then(|group| group_counts.get(group))
+            .copied()
+            .unwrap_or(0);
+
+        if entry.group_count_at_eval != current_group_count {
+            let (new_density, new_count) =
+                marginal_density(slice, group_counts, &recent, mode, contract);
+            heap.push(CelfEntry {
+                density: new_density,
+                group_count_at_eval: new_count,
+                slice,
+            });
+            continue;
+        }
+
+        selected_ids.insert(slice.id.clone());
+        selected.push(slice.clone());
+        *remaining -= slice.token_estimate;
+        add_group_count(group_counts, slice);
+
+        if !deferred_for_deps.is_empty() {
+            let mut still_deferred = Vec::new();
+            for def_slice in std::mem::take(&mut deferred_for_deps) {
+                if deps_satisfied(def_slice, selected_ids) {
+                    let (density, group_count_at_eval) =
+                        marginal_density(def_slice, group_counts, &recent, mode, contract);
+                    heap.push(CelfEntry {
+                        density,
+                        group_count_at_eval,
+                        slice: def_slice,
+                    });
+                } else {
+                    still_deferred.push(def_slice);
+                }
+            }
+            deferred_for_deps = still_deferred;
+        }
+    }
+}
+
 fn rank_by_density<'a>(
     slices: &[&'a SkillSlice],
     group_counts: &HashMap<String, usize>,
@@ -417,19 +587,8 @@ fn rank_by_density<'a>(
     let mut scored: Vec<(f32, &'a SkillSlice)> = slices
         .iter()
         .map(|slice| {
-            let base = score_slice_with_contract(slice, mode, contract);
-            let density = base / slice.token_estimate.max(1) as f32;
-            let group_penalty = slice
-                .coverage_group
-                .as_ref()
-                .and_then(|group| group_counts.get(group))
-                .map_or(1.0, |count| 0.8_f32.powi(*count as i32));
-            let novelty_penalty = if recent.contains(slice.id.as_str()) {
-                0.6
-            } else {
-                1.0
-            };
-            (density * group_penalty * novelty_penalty, *slice)
+            let (score, _) = marginal_density(slice, group_counts, &recent, mode, contract);
+            (score, *slice)
         })
         .collect();
     scored.sort_by(|a, b| {
@@ -643,7 +802,7 @@ fn fill_from_candidates(
     let used_tokens: usize = selected.iter().map(|s| s.token_estimate).sum();
     let mut remaining = constraints.budget.saturating_sub(used_tokens);
 
-    // Candidates are anything not yet selected, not excluded, and dependencies satisfied
+    // Candidates are anything not yet selected and not excluded
     let candidates: Vec<&SkillSlice> = slices
         .iter()
         .filter(|slice| !selected_ids.contains(&slice.id))
@@ -654,30 +813,18 @@ fn fill_from_candidates(
         return;
     }
 
-    let ranked = rank_by_density(
+    celf_select_from_candidates(
         &candidates,
-        &group_counts,
+        selected,
+        selected_ids,
+        &mut group_counts,
+        &mut remaining,
         &constraints.recent_slice_ids,
         mode,
         constraints.contract.as_ref(),
+        max_per_group,
+        excluded,
     );
-
-    for slice in ranked {
-        if slice.token_estimate > remaining {
-            continue;
-        }
-        if !deps_satisfied(slice, selected_ids) {
-            continue;
-        }
-        if !can_add_slice(slice, excluded, &group_counts, max_per_group) {
-            continue;
-        }
-
-        selected_ids.insert(slice.id.clone());
-        selected.push(slice.clone());
-        remaining -= slice.token_estimate;
-        add_group_count(&mut group_counts, slice);
-    }
 }
 
 fn collect_mandatory_ids(slices: &[SkillSlice], constraints: &PackConstraints) -> HashSet<String> {
@@ -960,5 +1107,46 @@ mod tests {
             !result.slices.iter().any(|s| s.id == "A"),
             "A should be removed"
         );
+    }
+
+    #[test]
+    fn test_celf_submodular_group_diminishing_returns() {
+        // Without CELF lazy re-evaluation:
+        // rule-1 (0.9) and rule-2 (0.85) in group "rules" would both be ranked ahead of cmd-1 (0.75)
+        // in group "commands" because group_counts["rules"] == 0 at initial ranking time.
+        // With CELF: after rule-1 is selected, rule-2's marginal density becomes 0.85 * 0.8 / 10 = 0.068,
+        // which is lower than cmd-1's 0.75 / 10 = 0.075.
+        let mut constraints = PackConstraints::new(20, 3);
+        constraints.max_improvement_passes = 0;
+        let slices = vec![
+            make_slice("rule-1", SliceType::Rule, 10, 0.9, "rules"),
+            make_slice("rule-2", SliceType::Rule, 10, 0.85, "rules"),
+            make_slice("cmd-1", SliceType::Command, 10, 0.75, "commands"),
+        ];
+        let packer = ConstrainedPacker;
+        let result = packer
+            .pack(&slices, &constraints, PackMode::UtilityFirst)
+            .unwrap();
+        let ids: Vec<String> = result.slices.into_iter().map(|s| s.id).collect();
+        assert_eq!(ids, vec!["rule-1".to_string(), "cmd-1".to_string()]);
+    }
+
+    #[test]
+    fn test_transitive_mandatory_requires_closure() {
+        let base = make_slice("base-rule", SliceType::Rule, 10, 0.5, "rules");
+        let mut policy = make_slice("policy-1", SliceType::Policy, 10, 0.2, "policy");
+        policy.requires = vec!["base-rule".to_string()];
+        let slices = vec![policy, base];
+
+        let mut constraints = PackConstraints::new(25, 2);
+        constraints
+            .mandatory_slices
+            .push(MandatorySlice::ByPredicate(MandatoryPredicate::Always));
+        let packer = ConstrainedPacker;
+        let result = packer
+            .pack(&slices, &constraints, PackMode::UtilityFirst)
+            .unwrap();
+        let ids: Vec<String> = result.slices.into_iter().map(|s| s.id).collect();
+        assert_eq!(ids, vec!["base-rule".to_string(), "policy-1".to_string()]);
     }
 }

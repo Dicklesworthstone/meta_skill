@@ -687,6 +687,11 @@ impl ResolutionCache {
         Ok(())
     }
 
+    /// Persist the in-memory dependency graph to SQLite.
+    pub fn save_graph_to_db(&self, conn: &Connection) -> Result<()> {
+        self.dependency_graph.read().save_to_db(conn)
+    }
+
     /// Get cache statistics
     pub fn stats(&self) -> CacheStats {
         let memory = self.memory.read();

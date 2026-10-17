@@ -108,16 +108,16 @@ impl HashEmbedder {
         embedding
     }
 
-    /// Compute cosine similarity between two embeddings
+    /// Compute cosine similarity between two embeddings using portable SIMD (`wide::f32x8`).
     #[must_use]
     pub fn similarity(&self, a: &[f32], b: &[f32]) -> f32 {
         if a.len() != b.len() {
             return 0.0;
         }
 
-        let dot: f32 = a.iter().zip(b.iter()).map(|(x, y)| x * y).sum();
-        let norm_a: f32 = a.iter().map(|x| x * x).sum::<f32>().sqrt();
-        let norm_b: f32 = b.iter().map(|x| x * x).sum::<f32>().sqrt();
+        let dot = dot_product(a, b);
+        let norm_a = dot_product(a, a).sqrt();
+        let norm_b = dot_product(b, b).sqrt();
 
         if norm_a == 0.0 || norm_b == 0.0 {
             0.0
@@ -379,18 +379,80 @@ pub fn skill_embedding_text(skill: &crate::storage::SkillRecord) -> String {
     format!("{}\n{}\n{}", skill.name, skill.description, skill.body)
 }
 
-/// Scale `vec` to unit L2 length in place; an all-zero vector is left as is.
+/// Scale `vec` to unit L2 length in place using portable SIMD (`wide::f32x8`);
+/// an all-zero vector is left as is.
 pub fn l2_normalize(vec: &mut [f32]) {
-    let norm = vec.iter().map(|x| x * x).sum::<f32>().sqrt();
+    let norm = dot_product(vec, vec).sqrt();
     if norm > 0.0 {
-        for value in vec.iter_mut() {
+        let inv_norm = wide::f32x8::splat(1.0 / norm);
+        let (chunks, remainder) = vec.as_chunks_mut::<8>();
+        for chunk in chunks {
+            let scaled = (wide::f32x8::from(*chunk) * inv_norm).to_array();
+            *chunk = scaled;
+        }
+        for value in remainder {
             *value /= norm;
         }
     }
 }
 
-fn dot_product(a: &[f32], b: &[f32]) -> f32 {
-    a.iter().zip(b.iter()).map(|(x, y)| x * y).sum()
+/// Compute dot product of two equal-length `f32` slices using 8-lane portable SIMD (`wide::f32x8`).
+#[must_use]
+pub fn dot_product(a: &[f32], b: &[f32]) -> f32 {
+    let len = a.len().min(b.len());
+    let a = &a[..len];
+    let b = &b[..len];
+
+    let mut acc = wide::f32x8::ZERO;
+    let (a_chunks, a_rem) = a.as_chunks::<8>();
+    let (b_chunks, b_rem) = b.as_chunks::<8>();
+
+    for (ac, bc) in a_chunks.iter().zip(b_chunks.iter()) {
+        acc += wide::f32x8::from(*ac) * wide::f32x8::from(*bc);
+    }
+
+    let lanes = acc.to_array();
+    let mut sum =
+        lanes[0] + lanes[1] + lanes[2] + lanes[3] + lanes[4] + lanes[5] + lanes[6] + lanes[7];
+
+    for (&x, &y) in a_rem.iter().zip(b_rem.iter()) {
+        sum += x * y;
+    }
+
+    sum
+}
+
+/// Quantize an `f32` embedding slice to IEEE 754 `half::f16` values (2x memory reduction).
+#[must_use]
+pub fn quantize_f16(vec: &[f32]) -> Vec<half::f16> {
+    vec.iter().copied().map(half::f16::from_f32).collect()
+}
+
+/// Dequantize a `half::f16` slice back to `f32`.
+#[must_use]
+pub fn dequantize_f16(vec: &[half::f16]) -> Vec<f32> {
+    vec.iter().copied().map(half::f16::to_f32).collect()
+}
+
+/// Encode an `f32` embedding vector as compact little-endian `f16` bytes (2 bytes per dimension).
+#[must_use]
+pub fn encode_f16_bytes(vec: &[f32]) -> Vec<u8> {
+    let mut out = Vec::with_capacity(vec.len() * 2);
+    for &val in vec {
+        out.extend_from_slice(&half::f16::from_f32(val).to_le_bytes());
+    }
+    out
+}
+
+/// Decode compact little-endian `f16` bytes back into an `f32` embedding vector.
+#[must_use]
+pub fn decode_f16_bytes(bytes: &[u8]) -> Vec<f32> {
+    bytes
+        .as_chunks::<2>()
+        .0
+        .iter()
+        .map(|chunk| half::f16::from_le_bytes(*chunk).to_f32())
+        .collect()
 }
 
 #[cfg(test)]
@@ -517,5 +579,29 @@ mod tests {
         // "C" is preserved because we allow single-char tokens (len >= 1)
         assert!(tokens.contains(&"c".to_string()), "Should contain 'c'");
         assert!(tokens.contains(&"programming".to_string()));
+    }
+
+    #[test]
+    fn test_simd_dot_product_and_f16_roundtrip() {
+        // Non-multiple-of-8 length (13) exercises both SIMD 8-lane loop and scalar tail
+        let a: Vec<f32> = (1..=13).map(|x| x as f32 * 0.1).collect();
+        let b: Vec<f32> = (1..=13).map(|x| (14 - x) as f32 * 0.2).collect();
+        let expected: f32 = a.iter().zip(b.iter()).map(|(x, y)| x * y).sum();
+        let actual = dot_product(&a, &b);
+        assert!((actual - expected).abs() < 1e-5);
+
+        // f16 quantization and byte encoding roundtrip
+        let embedder = HashEmbedder::new(384);
+        let vec = embedder.embed("simd vector quantization test");
+        let f16_vec = quantize_f16(&vec);
+        assert_eq!(f16_vec.len(), 384);
+        let restored = dequantize_f16(&f16_vec);
+        let sim = embedder.similarity(&vec, &restored);
+        assert!(sim > 0.9999, "f16 roundtrip cosine similarity was {sim}");
+
+        let bytes = encode_f16_bytes(&vec);
+        assert_eq!(bytes.len(), 384 * 2);
+        let decoded = decode_f16_bytes(&bytes);
+        assert_eq!(decoded, restored);
     }
 }

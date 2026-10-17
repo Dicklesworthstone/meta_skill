@@ -783,17 +783,13 @@ mod integration_tests {
     /// SAFETY: Uses tempdir + BEADS_DB override to completely isolate tests.
     struct TestBeadsEnv {
         /// Temporary directory containing the test database
-        #[allow(dead_code)]
-        temp_dir: TempDir,
+        _temp_dir: TempDir,
         /// Directory where the project is initialized
         project_dir: PathBuf,
         /// Path to the test database
         db_path: PathBuf,
         /// Test logger for this environment
         log: TestLogger,
-        /// Whether bd was successfully initialized
-        #[allow(dead_code)]
-        initialized: bool,
     }
 
     impl TestBeadsEnv {
@@ -836,10 +832,9 @@ mod integration_tests {
                 .current_dir(&project_dir)
                 .output();
 
-            let initialized = match init_status {
+            match init_status {
                 Ok(output) if output.status.success() => {
                     log.success("INIT", "Test database initialized", None);
-                    true
                 }
                 Ok(output) => {
                     let stderr = String::from_utf8_lossy(&output.stderr);
@@ -850,14 +845,13 @@ mod integration_tests {
                     log.error("INIT", &format!("Failed to run bd: {}", e), None);
                     return None;
                 }
-            };
+            }
 
             Some(TestBeadsEnv {
-                temp_dir,
+                _temp_dir: temp_dir,
                 project_dir,
                 db_path,
                 log,
-                initialized,
             })
         }
 

@@ -25,10 +25,64 @@ pub struct InboxArgs {
     /// Acknowledge all fetched messages
     #[arg(long)]
     pub ack_all: bool,
+
+    /// Register this agent identity in Agent Mail
+    #[arg(long)]
+    pub register: bool,
+
+    /// Send a message to comma-separated recipient agent names
+    #[arg(long, value_delimiter = ',')]
+    pub send_to: Option<Vec<String>>,
+
+    /// Subject line when sending a message
+    #[arg(long)]
+    pub subject: Option<String>,
+
+    /// Markdown body when sending a message
+    #[arg(long)]
+    pub body: Option<String>,
+
+    /// Optional thread ID (e.g. br-123) when sending a message
+    #[arg(long)]
+    pub thread_id: Option<String>,
 }
 
 pub fn run(ctx: &AppContext, args: &InboxArgs) -> Result<()> {
     let mut client = AgentMailClient::from_config(&ctx.config.agent_mail)?;
+
+    if args.register {
+        let reg = client.register_agent("ms", env!("CARGO_PKG_VERSION"))?;
+        if ctx.output_format != OutputFormat::Human {
+            return emit_robot(&robot_ok(serde_json::json!({
+                "registered": client.agent_name(),
+                "project": client.project_key(),
+                "result": reg,
+            })));
+        }
+        println!(
+            "Registered agent '{}' in project '{}'.",
+            client.agent_name(),
+            client.project_key()
+        );
+        return Ok(());
+    }
+
+    if let Some(recipients) = &args.send_to {
+        let subject = args.subject.as_deref().unwrap_or("[ms] Notification");
+        let body = args.body.as_deref().unwrap_or("");
+        let sent =
+            client.send_message(recipients, subject, body, args.thread_id.as_deref(), false)?;
+        if ctx.output_format != OutputFormat::Human {
+            return emit_robot(&robot_ok(serde_json::json!({
+                "sent_to": recipients,
+                "subject": subject,
+                "thread_id": args.thread_id,
+                "result": sent,
+            })));
+        }
+        println!("Sent message '{}' to {}.", subject, recipients.join(", "));
+        return Ok(());
+    }
 
     if let Some(id) = args.ack {
         client.acknowledge(id)?;

@@ -76,7 +76,15 @@ impl ValidationRule for RequiredMetadataRule {
 
     fn fix(&self, skill: &mut SkillSpec, diagnostic: &Diagnostic) -> Result<()> {
         if diagnostic.message.contains("description") {
-            skill.metadata.description = format!("TODO: Add description for {}", skill.metadata.id);
+            let label = if !skill.metadata.name.trim().is_empty() {
+                skill.metadata.name.trim()
+            } else if !skill.metadata.id.trim().is_empty() {
+                skill.metadata.id.trim()
+            } else {
+                "this skill"
+            };
+            skill.metadata.description =
+                format!("Operational guide and best practices for {label}.");
             Ok(())
         } else {
             Err(crate::error::MsError::NotImplemented(

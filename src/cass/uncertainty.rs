@@ -334,7 +334,6 @@ pub trait QueryGenerator: Send + Sync {
 }
 
 /// Default query generator using pattern analysis
-#[allow(dead_code)] // Field used for configuration, implementation pending
 pub struct DefaultQueryGenerator {
     queries_per_type: usize,
 }
@@ -361,9 +360,9 @@ impl QueryGenerator for DefaultQueryGenerator {
         let mut queries = Vec::new();
         let pattern = &uncertainty.pattern_candidate;
 
-        // Distribute queries based on uncertainty reason
-        let (positive, negative, boundary) = match &uncertainty.reason {
-            UncertaintyReason::InsufficientInstances { .. } => (3, 1, 1),
+        // Distribute queries based on uncertainty reason, scaled by queries_per_type
+        let (base_pos, base_neg, base_bound) = match &uncertainty.reason {
+            UncertaintyReason::InsufficientInstances { .. } => (3usize, 1usize, 1usize),
             UncertaintyReason::HighVariance { .. } => (1, 2, 2),
             UncertaintyReason::CounterExampleFound { .. } => (2, 2, 1),
             UncertaintyReason::AmbiguousScope { .. } => (1, 1, 3),
@@ -372,6 +371,10 @@ impl QueryGenerator for DefaultQueryGenerator {
             UncertaintyReason::OvergeneralizationFlagged { .. } => (1, 3, 1),
             UncertaintyReason::ConflictingPatterns { .. } => (2, 2, 1),
         };
+        let scale = self.queries_per_type.max(1);
+        let positive = (base_pos * scale).div_ceil(2);
+        let negative = (base_neg * scale).div_ceil(2);
+        let boundary = (base_bound * scale).div_ceil(2);
 
         queries.extend(self.generate_positive_queries(pattern, positive.min(max_queries)));
         queries.extend(
@@ -662,14 +665,65 @@ impl UncertaintyResolver for DefaultResolver {
     }
 }
 
+/// Binary Shannon entropy $H(p) = -p \log_2(p) - (1-p) \log_2(1-p)$ in bits.
+fn binary_entropy(p: f32) -> f32 {
+    let p_clamped = p.clamp(0.0, 1.0);
+    if p_clamped <= 1e-6 || p_clamped >= 1.0 - 1e-6 {
+        return 0.0;
+    }
+    let q = 1.0 - p_clamped;
+    -(p_clamped * p_clamped.log2() + q * q.log2())
+}
+
+impl UncertaintyItem {
+    /// Compute the effective $\text{Beta}(\alpha, \beta)$ prior parameters from the current
+    /// confidence and accumulated evidence count.
+    #[must_use]
+    pub fn prior_beta_params(&self) -> (f32, f32) {
+        let p = self.confidence.clamp(0.05, 0.95);
+        let prior_strength = (self.pattern_candidate.evidence.len() as f32 + 2.0).max(2.0);
+        let alpha = (p * prior_strength).max(0.5);
+        let beta = ((1.0 - p) * prior_strength).max(0.5);
+        (alpha, beta)
+    }
+
+    /// Compute the Expected Information Gain (EIG, in bits) of running one additional
+    /// targeted query for this uncertainty item, weighted by proximity to the decision threshold.
+    #[must_use]
+    pub fn expected_information_gain(&self) -> f32 {
+        let (alpha, beta) = self.prior_beta_params();
+        let total = alpha + beta;
+        let p = alpha / total;
+        let h_prior = binary_entropy(p);
+
+        // Posterior mean if next observation is positive vs negative
+        let p_pos = (alpha + 1.0) / (total + 1.0);
+        let p_neg = alpha / (total + 1.0);
+
+        let expected_h_post = p.mul_add(binary_entropy(p_pos), (1.0 - p) * binary_entropy(p_neg));
+        let raw_eig = (h_prior - expected_h_post).max(0.0);
+
+        // Weight by decision boundary proximity so items near `self.threshold` are prioritized
+        let dist_sq = (p - self.threshold).powi(2);
+        let boundary_weight = 1.0 / (1.0 + 4.0 * dist_sq);
+        raw_eig * boundary_weight
+    }
+}
+
 impl DefaultResolver {
     fn estimate_new_confidence(&self, uncertainty: &UncertaintyItem, new_sessions: usize) -> f32 {
-        // Simple heuristic: each new session adds confidence
-        let session_boost = (new_sessions as f32) * 0.05;
-        let base = uncertainty.confidence;
+        if new_sessions == 0 {
+            return uncertainty.confidence;
+        }
+        // Bayesian Beta-Bernoulli posterior mean update with diminishing returns
+        let (alpha, beta) = uncertainty.prior_beta_params();
+        let k = new_sessions as f32;
+        let posterior_mean = (alpha + k) / (alpha + beta + k);
 
         // Cap at threshold + small margin
-        (base + session_boost).min(self.confidence_threshold + 0.1)
+        posterior_mean
+            .max(uncertainty.confidence)
+            .min(self.confidence_threshold + 0.1)
     }
 }
 
@@ -846,6 +900,26 @@ impl UncertaintyQueue {
             .iter()
             .find(|item| matches!(item.status, UncertaintyStatus::Pending))
             .cloned()
+    }
+
+    /// Return pending uncertainty items prioritized by Expected Information Gain (EIG) descending.
+    #[must_use]
+    pub fn prioritized_by_eig(&self) -> Vec<UncertaintyItem> {
+        let items = self
+            .items
+            .read()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let mut pending: Vec<UncertaintyItem> = items
+            .iter()
+            .filter(|item| matches!(item.status, UncertaintyStatus::Pending))
+            .cloned()
+            .collect();
+        pending.sort_by(|a, b| {
+            b.expected_information_gain()
+                .partial_cmp(&a.expected_information_gain())
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
+        pending
     }
 
     /// Get item by ID
@@ -1617,5 +1691,33 @@ mod tests {
 
         let parsed: ScopeCandidate = serde_json::from_str(&json).unwrap();
         assert_eq!(parsed.scope, "rust files");
+    }
+
+    #[test]
+    fn test_bayesian_eig_and_queue_prioritization() {
+        let queue = UncertaintyQueue::with_defaults();
+
+        let mut near_threshold = make_test_item();
+        near_threshold.id = "near-threshold".to_string();
+        near_threshold.confidence = 0.5;
+        near_threshold.threshold = 0.55;
+
+        let mut high_certainty = make_test_item();
+        high_certainty.id = "high-certainty".to_string();
+        high_certainty.confidence = 0.92;
+        high_certainty.threshold = 0.55;
+
+        assert!(
+            near_threshold.expected_information_gain() > high_certainty.expected_information_gain(),
+            "Uncertain item near threshold should have higher EIG than near-certain item"
+        );
+
+        let _ = queue.enqueue(high_certainty);
+        let _ = queue.enqueue(near_threshold);
+
+        let prioritized = queue.prioritized_by_eig();
+        assert_eq!(prioritized.len(), 2);
+        assert_eq!(prioritized[0].id, "near-threshold");
+        assert_eq!(prioritized[1].id, "high-certainty");
     }
 }

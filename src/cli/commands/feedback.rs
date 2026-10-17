@@ -1,7 +1,5 @@
 //! ms feedback - Record and inspect skill feedback.
 
-use std::path::PathBuf;
-
 use clap::{Args, Subcommand};
 
 use crate::app::AppContext;
@@ -87,8 +85,8 @@ fn run_add(ctx: &AppContext, args: &FeedbackAddArgs) -> Result<()> {
         args.comment.as_deref(),
     )?;
 
-    // Update the contextual bandit with this feedback
-    if let Err(e) = update_contextual_bandit(&skill_id, &feedback_type, args.rating) {
+    // Update the contextual and signal bandits with this feedback
+    if let Err(e) = update_bandits(ctx, &skill_id, &feedback_type, args.rating) {
         // Log but don't fail - bandit update is best-effort
         eprintln!("Warning: Failed to update bandit: {e}");
     }
@@ -189,18 +187,21 @@ fn resolve_skill_id(ctx: &AppContext, input: &str) -> Result<String> {
     Err(MsError::SkillNotFound(format!("skill not found: {input}")))
 }
 
-/// Update the contextual bandit with skill feedback.
-fn update_contextual_bandit(
+/// Update both the contextual bandit and signal bandit with skill feedback.
+pub(crate) fn update_bandits(
+    ctx: &AppContext,
     skill_id: &str,
     feedback_type: &str,
     rating: Option<i64>,
 ) -> Result<()> {
-    let path = default_contextual_bandit_path();
+    use crate::suggestions::bandit::{
+        Reward, SignalBandit, SignalType, SuggestionContext as BanditSuggestionContext,
+    };
 
-    // Load existing bandit or create new
-    let mut bandit = ContextualBandit::load(&path)?;
+    let contextual_path = ctx.ms_root.join("contextual_bandit.json");
+    let mut bandit = ContextualBandit::load(&contextual_path)?;
+    bandit.register_skill(skill_id);
 
-    // Convert feedback type to SkillFeedback enum
     let feedback = match feedback_type {
         "positive" => SkillFeedback::ExplicitHelpful,
         "negative" => SkillFeedback::ExplicitNotHelpful { reason: None },
@@ -210,25 +211,39 @@ fn update_contextual_bandit(
                 stars: stars.clamp(1, 5),
             }
         }
-        _ => SkillFeedback::LoadedOnly, // Unknown type, treat as minimal signal
+        _ => SkillFeedback::LoadedOnly,
     };
 
-    // Use default context features (user could be in any context)
     let features = ContextFeatures::default();
-
-    // Update the bandit
     bandit.update(skill_id, &features, &feedback);
+    bandit.save(&contextual_path)?;
 
-    // Save the updated bandit
-    bandit.save(&path)?;
+    let signal_path = ctx.ms_root.join("bandit.json");
+    let mut signal_bandit = SignalBandit::load(&signal_path)?;
+    let reward = match feedback_type {
+        "positive" => Some(Reward::Success),
+        "negative" => Some(Reward::Failure),
+        "rating" => match rating.unwrap_or(3) {
+            4..=5 => Some(Reward::Success),
+            1..=2 => Some(Reward::Failure),
+            _ => None,
+        },
+        _ => None,
+    };
+    if let Some(reward) = reward {
+        let bandit_ctx = BanditSuggestionContext::default();
+        for signal in [
+            SignalType::Bm25,
+            SignalType::Embedding,
+            SignalType::ProjectMatch,
+            SignalType::UserHistory,
+        ] {
+            signal_bandit.update(signal, reward, &bandit_ctx);
+        }
+        signal_bandit.save(&signal_path)?;
+    }
 
     Ok(())
-}
-
-/// Default path for the contextual bandit state file.
-fn default_contextual_bandit_path() -> PathBuf {
-    let base = dirs::data_dir().unwrap_or_else(|| PathBuf::from("."));
-    base.join("ms").join("contextual_bandit.json")
 }
 
 #[cfg(test)]

@@ -8,7 +8,7 @@ use crate::app::AppContext;
 use crate::cli::output::OutputFormat;
 use crate::core::safety::SafetyTier;
 use crate::error::Result;
-use crate::security::SafetyGate;
+use crate::security::{CommandSafetyEvent, SafetyGate};
 
 #[derive(Args, Debug)]
 pub struct SafetyArgs {
@@ -21,10 +21,15 @@ pub enum SafetyCommand {
     /// Show DCG safety gate status
     Status,
 
+    /// List configured DCG safety packs
+    Packs,
+
     /// Show recent safety events log
+    #[command(visible_alias = "audit")]
     Log(LogArgs),
 
     /// Check a command through the safety gate
+    #[command(visible_alias = "explain")]
     Check(CheckArgs),
 }
 
@@ -60,9 +65,35 @@ pub struct CheckArgs {
 pub fn run(ctx: &AppContext, args: &SafetyArgs) -> Result<()> {
     match &args.command {
         SafetyCommand::Status => run_status(ctx),
+        SafetyCommand::Packs => run_packs(ctx),
         SafetyCommand::Log(log_args) => run_log(ctx, log_args),
         SafetyCommand::Check(check_args) => run_check(ctx, check_args),
     }
+}
+
+fn run_packs(ctx: &AppContext) -> Result<()> {
+    let gate = SafetyGate::from_context(ctx);
+    let status = gate.status();
+
+    if ctx.output_format != OutputFormat::Human {
+        let output = json!({
+            "packs": status.packs,
+            "count": status.packs.len(),
+            "dcg_available": status.dcg_version.is_some(),
+        });
+        println!("{}", serde_json::to_string_pretty(&output)?);
+    } else {
+        println!("{}", "Configured DCG Safety Packs".bold());
+        println!("{}", "─".repeat(30));
+        if status.packs.is_empty() {
+            println!("  (default packs enabled)");
+        } else {
+            for pack in &status.packs {
+                println!("  • {}", pack.cyan());
+            }
+        }
+    }
+    Ok(())
 }
 
 /// Show DCG safety gate status.
@@ -302,9 +333,15 @@ fn run_check(ctx: &AppContext, args: &CheckArgs) -> Result<()> {
 
     // Log the event if not dry run
     if !args.dry_run {
-        let _session_id = args.session_id.as_deref();
-        // Note: In a full implementation, we would log the event here
-        // using gate.enforce() or a similar mechanism
+        let event = CommandSafetyEvent {
+            session_id: args.session_id.clone(),
+            command: args.command.clone(),
+            dcg_version: status.dcg_version,
+            dcg_pack: decision.pack.clone(),
+            decision,
+            created_at: chrono::Utc::now().to_rfc3339(),
+        };
+        ctx.db.insert_command_safety_event(&event)?;
     }
 
     Ok(())

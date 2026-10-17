@@ -19,11 +19,11 @@ use super::definition::{
 
 /// Step executor that manages test context and executes steps
 pub struct StepExecutor<'a> {
-    #[allow(dead_code)]
     ctx: &'a AppContext,
     test_ctx: TestContext,
     verbose: bool,
     safety: Option<SafetyGate>,
+    skill_id: Option<String>,
 }
 
 impl<'a> StepExecutor<'a> {
@@ -35,7 +35,15 @@ impl<'a> StepExecutor<'a> {
             test_ctx: TestContext::default(),
             verbose,
             safety: None,
+            skill_id: None,
         }
+    }
+
+    /// Set the target skill ID for `load_skill` steps.
+    #[must_use]
+    pub fn with_skill_id(mut self, skill_id: String) -> Self {
+        self.skill_id = Some(skill_id);
+        self
     }
 
     /// Enable safety gate for command execution.
@@ -50,6 +58,35 @@ impl<'a> StepExecutor<'a> {
 
     /// Execute a single test step
     pub fn execute(&mut self, step: &TestStep) -> Result<()> {
+        if let TestStep::LoadSkill { load_skill } = step {
+            if let Some(ref skill_id) = self.skill_id {
+                if let Ok(spec) = self.ctx.git.read_skill(skill_id) {
+                    if self.verbose {
+                        println!(
+                            "[STEP] load_skill id={} level={}",
+                            skill_id, load_skill.level
+                        );
+                    }
+                    let md = crate::core::spec_lens::compile_markdown(&spec);
+                    let sections = spec
+                        .sections
+                        .iter()
+                        .map(|s| s.id.clone())
+                        .collect::<Vec<_>>();
+                    let estimated_tokens = (md.len() / 4).max(1);
+                    let tokens = load_skill
+                        .budget
+                        .map_or(estimated_tokens, |b| b.min(estimated_tokens));
+                    self.test_ctx.loaded_skill = Some(LoadedSkillInfo {
+                        skill_id: skill_id.clone(),
+                        sections,
+                        content_length: md.len(),
+                    });
+                    self.test_ctx.tokens_used = tokens;
+                    return Ok(());
+                }
+            }
+        }
         execute_step(step, &mut self.test_ctx, self.verbose, self.safety.as_ref())
     }
 

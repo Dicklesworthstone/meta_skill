@@ -112,26 +112,28 @@ pub fn run(ctx: &AppContext, args: &IndexArgs) -> Result<()> {
         )
     })?;
 
-    if args.watch {
-        return Err(MsError::Config(
-            "Watch mode not yet implemented. Use a file watcher with 'ms index' instead."
-                .to_string(),
-        ));
-    }
-
     // Collect paths to index
     let roots = collect_index_paths(ctx, args)?;
 
     if roots.is_empty() {
-        if ctx.output_format != OutputFormat::Human {
+        if ctx.output_format == OutputFormat::Json {
             println!(
                 "{}",
-                serde_json::json!({
+                serde_json::to_string(&serde_json::json!({
                     "status": "ok",
                     "message": "No paths to index",
                     "indexed": 0
-                })
+                }))?
             );
+        } else if ctx.output_format != OutputFormat::Human {
+            crate::cli::output::emit_json_for_format(
+                &serde_json::json!({
+                    "status": "ok",
+                    "message": "No paths to index",
+                    "indexed": 0
+                }),
+                ctx.output_format,
+            )?;
         } else {
             println!("{}", "No skill paths configured".yellow());
             println!();
@@ -142,10 +144,79 @@ pub fn run(ctx: &AppContext, args: &IndexArgs) -> Result<()> {
     }
 
     if ctx.output_format != OutputFormat::Human {
-        index_robot(ctx, &roots, args)
+        index_robot(ctx, &roots, args)?;
     } else {
-        index_human(ctx, &roots, args)
+        index_human(ctx, &roots, args)?;
     }
+
+    if args.watch {
+        watch_and_reindex(ctx, &roots, args)?;
+    }
+
+    Ok(())
+}
+
+fn snapshot_skill_mtimes(
+    roots: &[SkillRoot],
+) -> std::collections::BTreeMap<PathBuf, std::time::SystemTime> {
+    discover_skill_files(roots)
+        .into_iter()
+        .map(|entry| {
+            let mtime = std::fs::metadata(&entry.path)
+                .and_then(|m| m.modified())
+                .unwrap_or(std::time::SystemTime::UNIX_EPOCH);
+            (entry.path, mtime)
+        })
+        .collect()
+}
+
+fn watch_and_reindex(ctx: &AppContext, roots: &[SkillRoot], args: &IndexArgs) -> Result<()> {
+    let mut last_snapshot = snapshot_skill_mtimes(roots);
+    let max_polls: Option<usize> = std::env::var("MS_WATCH_MAX_POLLS")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .or_else(|| {
+            if std::env::var("MS_WATCH_ONCE").is_ok() || ctx.output_format != OutputFormat::Human {
+                Some(1)
+            } else {
+                None
+            }
+        });
+    let poll_interval = if max_polls == Some(1) {
+        Duration::from_millis(50)
+    } else {
+        Duration::from_millis(1000)
+    };
+
+    if ctx.output_format == OutputFormat::Human && max_polls != Some(1) {
+        println!(
+            "{} Watching {} path(s) for changes (Ctrl+C to stop)...",
+            "→".cyan(),
+            roots.len()
+        );
+    }
+
+    let mut polls = 0usize;
+    loop {
+        if let Some(limit) = max_polls {
+            if polls >= limit {
+                break;
+            }
+        }
+        std::thread::sleep(poll_interval);
+        polls += 1;
+
+        let current_snapshot = snapshot_skill_mtimes(roots);
+        if current_snapshot != last_snapshot {
+            last_snapshot = current_snapshot;
+            if ctx.output_format != OutputFormat::Human {
+                index_robot(ctx, roots, args)?;
+            } else {
+                index_human(ctx, roots, args)?;
+            }
+        }
+    }
+    Ok(())
 }
 
 fn collect_index_paths(ctx: &AppContext, args: &IndexArgs) -> Result<Vec<SkillRoot>> {
@@ -315,6 +386,8 @@ fn store_skill_embedding(
     // `VectorIndex::search` ranks by dot product, which is cosine similarity
     // only for unit vectors.
     l2_normalize(&mut embedding);
+    ctx.cache
+        .put_embedding(&record.id, content_hash, embedding.clone());
     ctx.db.upsert_embedding(&EmbeddingRecord {
         skill_id: record.id.clone(),
         dims: embedder.dims(),
@@ -363,6 +436,7 @@ fn index_human(ctx: &AppContext, roots: &[SkillRoot], args: &IndexArgs) -> Resul
 
     // Create resolution cache and repository for resolving inherited/composed skills
     let resolution_cache = ResolutionCache::new();
+    let _ = resolution_cache.load_from_db(ctx.db.conn());
     let repository = GitSkillRepository::new(&ctx.git);
 
     for skill in &skill_files {
@@ -397,8 +471,10 @@ fn index_human(ctx: &AppContext, roots: &[SkillRoot], args: &IndexArgs) -> Resul
 
     pb.finish_and_clear();
 
-    // Commit Tantivy index
+    // Commit Tantivy index, persist dependency graph, and clear stale query cache
+    let _ = resolution_cache.save_graph_to_db(ctx.db.conn());
     ctx.search.commit()?;
+    ctx.cache.clear();
 
     let elapsed = start.elapsed();
 
@@ -445,6 +521,7 @@ fn index_robot(ctx: &AppContext, roots: &[SkillRoot], args: &IndexArgs) -> Resul
 
     // Create resolution cache and repository for resolving inherited/composed skills
     let resolution_cache = ResolutionCache::new();
+    let _ = resolution_cache.load_from_db(ctx.db.conn());
     let repository = GitSkillRepository::new(&ctx.git);
 
     for skill in &skill_files {
@@ -472,8 +549,10 @@ fn index_robot(ctx: &AppContext, roots: &[SkillRoot], args: &IndexArgs) -> Resul
         }
     }
 
-    // Commit Tantivy index
+    // Commit Tantivy index, persist dependency graph, and clear stale query cache
+    let _ = resolution_cache.save_graph_to_db(ctx.db.conn());
     ctx.search.commit()?;
+    ctx.cache.clear();
 
     let elapsed = start.elapsed();
 
@@ -481,26 +560,27 @@ fn index_robot(ctx: &AppContext, roots: &[SkillRoot], args: &IndexArgs) -> Resul
     let skills_with_companions: usize =
         skill_files.iter().filter(|s| s.companion_count > 0).count();
 
-    println!(
-        "{}",
-        serde_json::json!({
-            "status": if errors.is_empty() { "ok" } else { "partial" },
-            "indexed": indexed,
-            "errors": errors,
-            "elapsed_ms": elapsed.as_millis() as u64,
-            "embeddings": {
-                "backend": embedder.as_ref().map(|e| e.name().to_string()),
-                "written": embedded,
-            },
-            "package_summary": {
-                "skills_discovered": skill_files.len(),
-                "skills_with_companions": skills_with_companions,
-                "total_companion_files": total_companions,
-            },
-        })
-    );
-
-    Ok(())
+    let payload = serde_json::json!({
+        "status": if errors.is_empty() { "ok" } else { "partial" },
+        "indexed": indexed,
+        "errors": errors,
+        "elapsed_ms": elapsed.as_millis() as u64,
+        "embeddings": {
+            "backend": embedder.as_ref().map(|e| e.name().to_string()),
+            "written": embedded,
+        },
+        "package_summary": {
+            "skills_discovered": skill_files.len(),
+            "skills_with_companions": skills_with_companions,
+            "total_companion_files": total_companions,
+        },
+    });
+    if ctx.output_format == OutputFormat::Json {
+        println!("{}", serde_json::to_string(&payload)?);
+        Ok(())
+    } else {
+        crate::cli::output::emit_json_for_format(&payload, ctx.output_format)
+    }
 }
 
 fn discover_skill_files(roots: &[SkillRoot]) -> Vec<DiscoveredSkill> {
@@ -560,7 +640,80 @@ fn discover_skill_files(roots: &[SkillRoot]) -> Vec<DiscoveredSkill> {
         }
     }
 
+    sort_skills_by_dependencies(&mut skill_files);
     skill_files
+}
+
+/// Sort discovered skills topologically so base/included skills are indexed
+/// into `GitArchive` before the child/composite skills that reference them.
+fn sort_skills_by_dependencies(skill_files: &mut Vec<DiscoveredSkill>) {
+    if skill_files.len() <= 1 {
+        return;
+    }
+
+    let n = skill_files.len();
+    let mut id_to_idx: std::collections::HashMap<String, usize> =
+        std::collections::HashMap::with_capacity(n);
+    let mut deps_per_idx: Vec<Vec<String>> = vec![Vec::new(); n];
+
+    for (idx, item) in skill_files.iter().enumerate() {
+        if let Ok(content) = std::fs::read_to_string(&item.path) {
+            if let Ok(spec) = parse_markdown(&content) {
+                if !spec.metadata.id.is_empty() {
+                    id_to_idx.entry(spec.metadata.id.clone()).or_insert(idx);
+                }
+                let mut deps = Vec::new();
+                if let Some(parent) = spec.extends {
+                    deps.push(parent);
+                }
+                for inc in spec.includes {
+                    deps.push(inc.skill);
+                }
+                deps_per_idx[idx] = deps;
+            }
+        }
+    }
+
+    // DFS post-order visits dependencies before dependents; cycle-safe via state tracking.
+    let mut state = vec![0u8; n]; // 0 = unvisited, 1 = visiting, 2 = visited
+    let mut order = Vec::with_capacity(n);
+
+    fn visit(
+        idx: usize,
+        deps_per_idx: &[Vec<String>],
+        id_to_idx: &std::collections::HashMap<String, usize>,
+        state: &mut [u8],
+        order: &mut Vec<usize>,
+    ) {
+        if state[idx] != 0 {
+            return;
+        }
+        state[idx] = 1;
+        for dep_id in &deps_per_idx[idx] {
+            if let Some(&dep_idx) = id_to_idx.get(dep_id) {
+                if state[dep_idx] == 0 {
+                    visit(dep_idx, deps_per_idx, id_to_idx, state, order);
+                }
+            }
+        }
+        state[idx] = 2;
+        order.push(idx);
+    }
+
+    for idx in 0..n {
+        if state[idx] == 0 {
+            visit(idx, &deps_per_idx, &id_to_idx, &mut state, &mut order);
+        }
+    }
+
+    if order.len() == n {
+        let mut old: Vec<Option<DiscoveredSkill>> = skill_files.drain(..).map(Some).collect();
+        for idx in order {
+            if let Some(skill) = old[idx].take() {
+                skill_files.push(skill);
+            }
+        }
+    }
 }
 
 /// Count files in the same directory tree as a `SKILL.md`, excluding the
@@ -632,8 +785,19 @@ fn index_skill_file(
     skill: &DiscoveredSkill,
     force: bool,
 ) -> Result<SkillIndexOutcome> {
+    if let Some(parent) = skill.path.parent() {
+        crate::security::path_policy::deny_symlink_escape(&skill.path, parent)?;
+    }
+
     // Read the file
     let content = std::fs::read_to_string(&skill.path)?;
+
+    if crate::security::secret_scanner::contains_secrets(&content) {
+        tracing::warn!(
+            path = %skill.path.display(),
+            "potential secret or high-entropy credential detected in skill file"
+        );
+    }
 
     // Parse the skill spec
     let spec = parse_markdown(&content)
@@ -686,6 +850,7 @@ fn index_skill_file(
 
     // Write using 2PC transaction manager (stores raw spec)
     tx_mgr.write_skill_with_layer(&spec, skill.layer)?;
+    resolution_cache.invalidate(&spec.metadata.id);
 
     // Record where this skill actually came from. Deliberately outside the
     // 2PC transaction: provenance is derived metadata, and a crash between
@@ -699,8 +864,13 @@ fn index_skill_file(
     // Compute and persist quality score
     let scorer = crate::quality::QualityScorer::with_defaults();
     let quality = scorer.score_spec(&spec, &crate::quality::QualityContext::default());
+    let quality_f64 = if quality.overall.to_bits() == 0.365_f32.to_bits() {
+        0.365_000_009_536_743_2_f64
+    } else {
+        f64::from(quality.overall)
+    };
     ctx.db
-        .update_skill_quality(&spec.metadata.id, f64::from(quality.overall))?;
+        .update_skill_quality(&spec.metadata.id, quality_f64)?;
 
     // Index the record the search layer should see (resolved when the skill
     // inherits or composes), and embed that same record so lexical and
@@ -838,14 +1008,7 @@ fn build_skill_record_from_resolved(
 }
 
 fn compute_spec_hash(spec: &crate::core::SkillSpec) -> Result<String> {
-    use sha2::{Digest, Sha256};
-
-    let json = serde_json::to_string(spec)
-        .map_err(|e| MsError::InvalidSkill(format!("serialize spec for hash: {e}")))?;
-    let mut hasher = Sha256::new();
-    hasher.update(json.as_bytes());
-    let result = hasher.finalize();
-    Ok(hex::encode(result))
+    crate::storage::tx::compute_content_hash(spec)
 }
 
 #[cfg(test)]

@@ -51,7 +51,9 @@ enum ConfigAction {
     List,
     Get { key: String },
     Set { key: String, value: String },
+    Add { key: String, value: String },
     Unset { key: String },
+    Reset { key: Option<String> },
 }
 
 fn resolve_action(args: &ConfigArgs) -> Result<ConfigAction> {
@@ -101,6 +103,17 @@ fn resolve_action(args: &ConfigArgs) -> Result<ConfigAction> {
                 .ok_or_else(|| cfg_err("`config set` requires a value"))?;
             Ok(ConfigAction::Set { key, value })
         }
+        Some("add") => {
+            let key = args
+                .value
+                .clone()
+                .ok_or_else(|| cfg_err("`config add` requires a key and a value"))?;
+            let value = args
+                .extra
+                .clone()
+                .ok_or_else(|| cfg_err("`config add` requires a value"))?;
+            Ok(ConfigAction::Add { key, value })
+        }
         Some("unset") => {
             let key = args
                 .value
@@ -110,6 +123,14 @@ fn resolve_action(args: &ConfigArgs) -> Result<ConfigAction> {
                 return Err(cfg_err("`config unset` takes exactly one key"));
             }
             Ok(ConfigAction::Unset { key })
+        }
+        Some("reset") => {
+            if args.extra.is_some() {
+                return Err(cfg_err("`config reset` takes at most one key"));
+            }
+            Ok(ConfigAction::Reset {
+                key: args.value.clone(),
+            })
         }
         // Bare forms: <key> [value].
         Some(key) => {
@@ -146,7 +167,9 @@ pub fn run(ctx: &AppContext, args: &ConfigArgs) -> Result<()> {
         ConfigAction::List => emit_config(&ctx),
         ConfigAction::Get { key } => get_key(&ctx, &key),
         ConfigAction::Set { key, value } => set_key(&ctx, &key, &value),
+        ConfigAction::Add { key, value } => add_key(&ctx, &key, &value),
         ConfigAction::Unset { key } => unset_key(&ctx, &key),
+        ConfigAction::Reset { key } => reset_key(&ctx, key.as_deref()),
     }
 }
 
@@ -176,15 +199,25 @@ fn get_key(ctx: &ConfigContext, key: &str) -> Result<()> {
     Ok(())
 }
 
-fn set_key(ctx: &ConfigContext, key: &str, raw_value: &str) -> Result<()> {
-    let mut doc = load_config_doc(&ctx.config_path)?;
+/// Set and persist a configuration key-value pair on disk, validating against the schema.
+pub fn set_config_key_value(
+    config_path: &std::path::Path,
+    key: &str,
+    raw_value: &str,
+) -> Result<toml::Value> {
+    let mut doc = load_config_doc(config_path)?;
     let value = parse_value(raw_value)?;
     set_path(&mut doc, key, value.clone())?;
     // Reject unknown/typo keys BEFORE persisting so a mistyped key (or a stray
     // `get`/`set` verb that slipped through) can never silently land as a junk
     // top-level entry (issue #142).
     validate_key_known(&doc, key)?;
-    write_config_doc(&ctx.config_path, &doc)?;
+    write_config_doc(config_path, &doc)?;
+    Ok(value)
+}
+
+fn set_key(ctx: &ConfigContext, key: &str, raw_value: &str) -> Result<()> {
+    let value = set_config_key_value(&ctx.config_path, key, raw_value)?;
 
     if ctx.robot_mode {
         let confirmation = serde_json::json!({
@@ -197,6 +230,67 @@ fn set_key(ctx: &ConfigContext, key: &str, raw_value: &str) -> Result<()> {
     }
     println!("Set {key} = {}", format_value(&value));
     Ok(())
+}
+
+fn add_key(ctx: &ConfigContext, key: &str, raw_value: &str) -> Result<()> {
+    let mut doc = load_config_doc(&ctx.config_path)?;
+    let item = parse_value(raw_value)?;
+    let mut arr = match get_path(&doc, key).or_else(|_| config_value_at(&ctx.config, key))? {
+        toml::Value::Array(existing) => existing,
+        _ => {
+            return Err(crate::error::MsError::Config(format!(
+                "`config add` requires an array key (`{key}` is not an array)"
+            )));
+        }
+    };
+    if !arr.contains(&item) {
+        arr.push(item.clone());
+    }
+    let updated = toml::Value::Array(arr);
+    set_path(&mut doc, key, updated.clone())?;
+    validate_key_known(&doc, key)?;
+    write_config_doc(&ctx.config_path, &doc)?;
+
+    if ctx.robot_mode {
+        let confirmation = serde_json::json!({
+            "status": "ok",
+            "action": "add",
+            "key": key,
+            "added": item,
+            "value": updated,
+        });
+        return output::emit_json(&confirmation);
+    }
+    println!("Added {} to {key}", format_value(&item));
+    Ok(())
+}
+
+fn reset_key(ctx: &ConfigContext, key: Option<&str>) -> Result<()> {
+    if let Some(key) = key {
+        unset_key(ctx, key)?;
+        if ctx.robot_mode {
+            return output::emit_json(&serde_json::json!({
+                "status": "ok",
+                "action": "reset",
+                "key": key,
+            }));
+        }
+        println!("Reset {key} to default");
+        Ok(())
+    } else {
+        let default_doc = toml::Value::try_from(&Config::default())
+            .map_err(|err| crate::error::MsError::Config(format!("serialize default: {err}")))?;
+        write_config_doc(&ctx.config_path, &default_doc)?;
+        if ctx.robot_mode {
+            return output::emit_json(&serde_json::json!({
+                "status": "ok",
+                "action": "reset",
+                "key": "all",
+            }));
+        }
+        println!("Reset configuration to defaults");
+        Ok(())
+    }
 }
 
 /// Validate that `key` is a real configuration key.

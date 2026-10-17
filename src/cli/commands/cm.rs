@@ -3,7 +3,7 @@
 use clap::{Args, Subcommand};
 
 use crate::app::AppContext;
-use crate::cli::output::OutputFormat;
+use crate::cli::output::{OutputFormat, emit_json};
 use crate::cm::CmClient;
 use crate::error::{MsError, Result};
 use crate::security::SafetyGate;
@@ -38,6 +38,17 @@ pub enum CmCommand {
         #[arg(long, default_value = "0.7")]
         threshold: f32,
     },
+    /// Add a new rule to the playbook (checking for duplicates first)
+    Add {
+        /// Rule content to add
+        content: String,
+        /// Optional rule category
+        #[arg(long)]
+        category: Option<String>,
+        /// Duplicate similarity threshold (0.0-1.0)
+        #[arg(long, default_value = "0.85")]
+        threshold: f32,
+    },
     /// Check CM status and availability
     Status,
 }
@@ -45,22 +56,38 @@ pub enum CmCommand {
 pub fn run(ctx: &AppContext, args: &CmArgs) -> Result<()> {
     if !ctx.config.cm.enabled {
         if ctx.output_format != OutputFormat::Human {
-            println!(
-                "{}",
-                serde_json::json!({
-                    "status": "disabled",
-                    "message": "cm integration disabled (cm.enabled=false)"
-                })
-            );
-        } else {
-            println!("cm integration disabled (cm.enabled=false)");
+            return emit_json(&serde_json::json!({
+                "status": "disabled",
+                "message": "cm integration disabled (cm.enabled=false)"
+            }));
         }
+        println!("cm integration disabled (cm.enabled=false)");
         return Ok(());
     }
 
     let mut client = CmClient::from_config(&ctx.config.cm);
     if let Ok(gate) = SafetyGate::from_env() {
         client = client.with_safety(gate);
+    }
+
+    if matches!(&args.command, CmCommand::Status) {
+        let available = client.is_available();
+        if ctx.output_format != OutputFormat::Human {
+            return emit_json(&serde_json::json!({
+                "available": available,
+                "cm_path": ctx.config.cm.cm_path.as_deref().unwrap_or("cm"),
+                "enabled": ctx.config.cm.enabled
+            }));
+        }
+        if available {
+            println!("✓ CM is available");
+        } else {
+            println!("✗ CM is not available");
+        }
+        if let Some(path) = &ctx.config.cm.cm_path {
+            println!("  path: {path}");
+        }
+        return Ok(());
     }
 
     if !client.is_available() {
@@ -73,7 +100,7 @@ pub fn run(ctx: &AppContext, args: &CmArgs) -> Result<()> {
         CmCommand::Context { task } => {
             let context = client.context(task)?;
             if ctx.output_format != OutputFormat::Human {
-                println!("{}", serde_json::to_string(&context).unwrap_or_default());
+                emit_json(&context)?;
             } else {
                 println!("CM context for: {task}");
                 println!("relevant_bullets: {}", context.relevant_bullets.len());
@@ -93,13 +120,10 @@ pub fn run(ctx: &AppContext, args: &CmArgs) -> Result<()> {
             let rules: Vec<_> = rules.into_iter().take(*limit).collect();
 
             if ctx.output_format != OutputFormat::Human {
-                println!(
-                    "{}",
-                    serde_json::json!({
-                        "rules": rules,
-                        "count": rules.len()
-                    })
-                );
+                emit_json(&serde_json::json!({
+                    "rules": rules,
+                    "count": rules.len()
+                }))?;
             } else if rules.is_empty() {
                 println!("No rules found");
             } else {
@@ -119,13 +143,10 @@ pub fn run(ctx: &AppContext, args: &CmArgs) -> Result<()> {
             let matches = client.similar(query, Some(*threshold))?;
 
             if ctx.output_format != OutputFormat::Human {
-                println!(
-                    "{}",
-                    serde_json::json!({
-                        "query": query,
-                        "matches": matches
-                    })
-                );
+                emit_json(&serde_json::json!({
+                    "query": query,
+                    "matches": matches
+                }))?;
             } else if matches.is_empty() {
                 println!("No similar rules found for: {query}");
             } else {
@@ -136,28 +157,33 @@ pub fn run(ctx: &AppContext, args: &CmArgs) -> Result<()> {
             }
         }
 
-        CmCommand::Status => {
-            let available = client.is_available();
-            if ctx.output_format != OutputFormat::Human {
+        CmCommand::Add {
+            content,
+            category,
+            threshold,
+        } => {
+            if let Ok(Some(existing)) = client.rule_exists(content, *threshold) {
+                if ctx.output_format != OutputFormat::Human {
+                    return emit_json(&serde_json::json!({
+                        "status": "duplicate",
+                        "existing_rule": existing,
+                    }));
+                }
                 println!(
-                    "{}",
-                    serde_json::json!({
-                        "available": available,
-                        "cm_path": ctx.config.cm.cm_path.as_deref().unwrap_or("cm"),
-                        "enabled": ctx.config.cm.enabled
-                    })
+                    "Rule already exists: [{}] {}",
+                    existing.id, existing.content
                 );
+                return Ok(());
+            }
+            let added = client.add_rule(content, category.as_deref())?;
+            if ctx.output_format != OutputFormat::Human {
+                emit_json(&added)?;
             } else {
-                if available {
-                    println!("✓ CM is available");
-                } else {
-                    println!("✗ CM is not available");
-                }
-                if let Some(path) = &ctx.config.cm.cm_path {
-                    println!("  path: {path}");
-                }
+                println!("✓ Added rule [{}]: {}", added.id, added.content);
             }
         }
+
+        CmCommand::Status => {}
     }
 
     Ok(())

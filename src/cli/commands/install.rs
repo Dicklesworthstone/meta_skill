@@ -15,6 +15,10 @@ pub struct InstallArgs {
     #[arg(long)]
     pub skills: Vec<String>,
 
+    /// Target skill layer (system, global, project, local)
+    #[arg(long, default_value = "project")]
+    pub layer: String,
+
     /// GitHub token (overrides env)
     #[arg(long)]
     pub token: Option<String>,
@@ -40,6 +44,7 @@ pub fn run(ctx: &AppContext, args: &InstallArgs) -> Result<()> {
     let install = BundleInstallArgs {
         source: args.source.clone(),
         skills: args.skills.clone(),
+        layer: args.layer.clone(),
         token: args.token.clone(),
         tag: args.tag.clone(),
         asset_name: args.asset_name.clone(),

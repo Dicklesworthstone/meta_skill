@@ -96,6 +96,31 @@ pub fn run(ctx: &AppContext, args: &AntiPatternsArgs) -> Result<()> {
     }
 }
 
+fn antipatterns_store_path(ctx: &AppContext) -> std::path::PathBuf {
+    ctx.ms_root.join("antipatterns.json")
+}
+
+fn load_stored_antipatterns(ctx: &AppContext) -> Result<Vec<AntiPattern>> {
+    let path = antipatterns_store_path(ctx);
+    if !path.exists() {
+        return Ok(Vec::new());
+    }
+    let content = std::fs::read_to_string(&path)?;
+    let items: Vec<AntiPattern> = serde_json::from_str(&content)
+        .map_err(|e| MsError::Config(format!("failed to parse antipatterns store: {e}")))?;
+    Ok(items)
+}
+
+fn save_stored_antipatterns(ctx: &AppContext, items: &[AntiPattern]) -> Result<()> {
+    let path = antipatterns_store_path(ctx);
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    let content = serde_json::to_string_pretty(items)?;
+    std::fs::write(&path, content)?;
+    Ok(())
+}
+
 fn run_mine(ctx: &AppContext, args: &MineArgs) -> Result<()> {
     if args.sessions.is_empty() {
         return Err(MsError::ValidationFailed(
@@ -143,6 +168,18 @@ fn run_mine(ctx: &AppContext, args: &MineArgs) -> Result<()> {
         .filter(|ap| ap.confidence >= args.min_confidence)
         .collect();
 
+    if args.save {
+        let mut stored = load_stored_antipatterns(ctx).unwrap_or_default();
+        for ap in &filtered {
+            if let Some(existing) = stored.iter_mut().find(|item| item.id == ap.id) {
+                *existing = ap.clone();
+            } else {
+                stored.push(ap.clone());
+            }
+        }
+        save_stored_antipatterns(ctx, &stored)?;
+    }
+
     // Output
     if ctx.output_format != OutputFormat::Human || args.format == "json" {
         output_mine_robot(&filtered)
@@ -152,62 +189,139 @@ fn run_mine(ctx: &AppContext, args: &MineArgs) -> Result<()> {
 }
 
 fn run_show(ctx: &AppContext, args: &ShowArgs) -> Result<()> {
-    // For now, we don't have persistent storage, so show is a placeholder
-    // In a full implementation, this would query the database
+    let stored = load_stored_antipatterns(ctx)?;
+    let Some(ap) = stored.iter().find(|ap| ap.id.0 == args.id) else {
+        return Err(MsError::NotFound(format!(
+            "anti-pattern not found: {}",
+            args.id
+        )));
+    };
+
     if ctx.output_format != OutputFormat::Human {
-        let output = serde_json::json!({
-            "status": "error",
-            "message": "anti-pattern storage not yet implemented"
+        let mut obj = serde_json::json!({
+            "status": "ok",
+            "id": ap.id.0,
+            "rule": ap.rule.statement,
+            "severity": format!("{:?}", ap.rule.severity),
+            "confidence": ap.confidence,
+            "constrains": ap.constrains.as_ref().map(|p| &p.0),
+            "orphaned": ap.is_orphaned(),
+            "rationale": ap.rule.rationale,
+            "instead": ap.rule.instead,
+            "failure_modes": ap.failure_modes,
+            "evidence_count": ap.evidence.len(),
         });
-        println!("{}", serde_json::to_string_pretty(&output)?);
+        if args.evidence {
+            obj["evidence"] = serde_json::to_value(&ap.evidence)?;
+        }
+        println!("{}", serde_json::to_string_pretty(&obj)?);
     } else {
-        println!(
-            "{}",
-            "Anti-pattern storage not yet implemented. Use 'mine' to extract from sessions."
-                .yellow()
-        );
-        println!("Requested ID: {}", args.id.cyan());
+        println!("{} {}", "Anti-Pattern:".bold(), ap.id.0.cyan());
+        println!("  {}: {}", "Rule".dimmed(), ap.rule.statement);
+        println!("  {}: {:?}", "Severity".dimmed(), ap.rule.severity);
+        println!("  {}: {:.0}%", "Confidence".dimmed(), ap.confidence * 100.0);
+        if let Some(ref pat) = ap.constrains {
+            println!("  {}: {}", "Constrains".dimmed(), pat.0.green());
+        } else {
+            println!("  {}: {}", "Constrains".dimmed(), "(orphaned)".yellow());
+        }
+        if let Some(ref rationale) = ap.rule.rationale {
+            println!("  {}: {}", "Why".dimmed(), rationale);
+        }
+        if let Some(ref instead) = ap.rule.instead {
+            println!("  {}: {}", "Instead".dimmed(), instead.green());
+        }
+        if args.evidence && !ap.evidence.is_empty() {
+            println!("\n  {}:", "Evidence".bold());
+            for ev in &ap.evidence {
+                println!("    - [{}] {}", ev.session_id.0, ev.incident.description);
+            }
+        }
     }
     Ok(())
 }
 
 fn run_list(ctx: &AppContext, args: &ListArgs) -> Result<()> {
-    // Placeholder - would query database in full implementation
+    let stored = load_stored_antipatterns(ctx)?;
+    let filtered: Vec<&AntiPattern> = stored
+        .iter()
+        .filter(|ap| !args.orphaned || ap.is_orphaned())
+        .filter(|ap| {
+            if let Some(ref sev) = args.severity {
+                let sev_lower = sev.to_ascii_lowercase();
+                match ap.rule.severity {
+                    AntiPatternSeverity::Advisory => sev_lower == "advisory",
+                    AntiPatternSeverity::Warning => sev_lower == "warning",
+                    AntiPatternSeverity::Blocking => sev_lower == "blocking",
+                }
+            } else {
+                true
+            }
+        })
+        .take(args.limit)
+        .collect();
+
     if ctx.output_format != OutputFormat::Human {
         let output = serde_json::json!({
             "status": "ok",
-            "count": 0,
-            "anti_patterns": []
+            "count": filtered.len(),
+            "anti_patterns": filtered.iter().map(|ap| {
+                serde_json::json!({
+                    "id": ap.id.0,
+                    "rule": ap.rule.statement,
+                    "severity": format!("{:?}", ap.rule.severity),
+                    "confidence": ap.confidence,
+                    "constrains": ap.constrains.as_ref().map(|p| &p.0),
+                    "orphaned": ap.is_orphaned(),
+                })
+            }).collect::<Vec<_>>(),
         });
         println!("{}", serde_json::to_string_pretty(&output)?);
     } else {
         println!("{}", "Anti-Patterns".bold());
         println!("{}", "═".repeat(50));
         println!();
-        println!(
-            "{}",
-            "No anti-patterns in database. Use 'mine' to extract from sessions.".dimmed()
-        );
-        if args.orphaned {
-            println!("{}", "(--orphaned filter active)".dimmed());
-        }
-        if let Some(ref sev) = args.severity {
-            println!("{}", format!("(--severity {sev} filter active)").dimmed());
+        if filtered.is_empty() {
+            println!(
+                "{}",
+                "No anti-patterns in database. Use 'mine --save' to extract from sessions."
+                    .dimmed()
+            );
+        } else {
+            let owned: Vec<AntiPattern> = filtered.into_iter().cloned().collect();
+            output_mine_human(&owned)?;
         }
     }
     Ok(())
 }
 
-fn run_link(_ctx: &AppContext, args: &LinkArgs) -> Result<()> {
-    // Placeholder - would update database in full implementation
-    println!(
-        "{}",
-        format!(
-            "Link {} → {} (storage not yet implemented)",
-            args.anti_pattern_id, args.pattern_id
-        )
-        .yellow()
-    );
+fn run_link(ctx: &AppContext, args: &LinkArgs) -> Result<()> {
+    let mut stored = load_stored_antipatterns(ctx)?;
+    let Some(ap) = stored.iter_mut().find(|ap| ap.id.0 == args.anti_pattern_id) else {
+        return Err(MsError::NotFound(format!(
+            "anti-pattern not found: {}",
+            args.anti_pattern_id
+        )));
+    };
+    ap.constrains = Some(crate::antipatterns::PatternId::new(&args.pattern_id));
+    ap.updated_at = chrono::Utc::now();
+    save_stored_antipatterns(ctx, &stored)?;
+
+    if ctx.output_format != OutputFormat::Human {
+        let output = serde_json::json!({
+            "status": "ok",
+            "anti_pattern_id": args.anti_pattern_id,
+            "pattern_id": args.pattern_id,
+        });
+        println!("{}", serde_json::to_string_pretty(&output)?);
+    } else {
+        println!(
+            "{} Linked {} → {}",
+            "✓".green(),
+            args.anti_pattern_id.cyan(),
+            args.pattern_id.green()
+        );
+    }
     Ok(())
 }
 

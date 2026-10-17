@@ -334,6 +334,17 @@ fn show_json(ctx: &AppContext, skill: &SkillRecord, args: &ShowArgs, pretty: boo
         }
     });
 
+    if let Ok(spec) = ctx.git.read_skill(&skill.id) {
+        if let Some(extends) = spec.extends {
+            output["skill"]["extends"] = serde_json::Value::String(extends);
+        }
+        if !spec.includes.is_empty() {
+            if let Ok(inc_val) = serde_json::to_value(&spec.includes) {
+                output["skill"]["includes"] = inc_val;
+            }
+        }
+    }
+
     if args.meta || args.full {
         if let Ok(meta) = serde_json::from_str::<serde_json::Value>(&skill.metadata_json) {
             output["skill"]["metadata"] = meta;

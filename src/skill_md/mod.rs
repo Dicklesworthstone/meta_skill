@@ -83,15 +83,14 @@ impl SkillMdGenerator {
 
     /// Write the header section.
     fn write_header(&self, out: &mut String) {
-        writeln!(out, "# ms — Meta Skill CLI").unwrap();
-        writeln!(out).unwrap();
-        writeln!(
-            out,
-            "> Local-first skill management platform for AI coding agents"
-        )
-        .unwrap();
-        writeln!(out).unwrap();
-        writeln!(out, "> Version: {}", self.version).unwrap();
+        let header = templates::HEADER_TEMPLATE
+            .replace("{name}", "ms — Meta Skill CLI")
+            .replace(
+                "{description}",
+                "Local-first skill management platform for AI coding agents",
+            )
+            .replace("{version}", &self.version);
+        out.push_str(&header);
         writeln!(out).unwrap();
     }
 
@@ -114,16 +113,8 @@ impl SkillMdGenerator {
         writeln!(out, "All commands support `-O json` for JSON output:").unwrap();
         writeln!(out, "```bash").unwrap();
 
-        // Generate examples for robot-mode enabled commands
-        let examples = [
-            ("search", "search \"query\" -O json"),
-            ("load", "load skill-name -O json --level overview"),
-            ("suggest", "suggest -O json"),
-            ("list", "list -O json"),
-        ];
-
-        for (_, example) in examples {
-            writeln!(out, "ms {example}").unwrap();
+        for (_, example) in templates::ROBOT_MODE_EXAMPLES {
+            writeln!(out, "{example}").unwrap();
         }
 
         writeln!(out, "```").unwrap();
@@ -132,16 +123,7 @@ impl SkillMdGenerator {
 
     /// Write the MCP section.
     fn write_mcp_section(&self, out: &mut String) {
-        writeln!(out, "## MCP Server").unwrap();
-        writeln!(out, "Start MCP server for native tool integration:").unwrap();
-        writeln!(out, "```bash").unwrap();
-        writeln!(
-            out,
-            "ms mcp serve           # stdio transport (Claude Code)"
-        )
-        .unwrap();
-        writeln!(out, "ms mcp serve --tcp-port 8080  # HTTP transport").unwrap();
-        writeln!(out, "```").unwrap();
+        out.push_str(templates::MCP_SECTION_TEMPLATE);
         writeln!(out).unwrap();
 
         writeln!(out, "### Available MCP Tools").unwrap();
@@ -153,18 +135,7 @@ impl SkillMdGenerator {
 
     /// Write the context integration section.
     fn write_context_section(&self, out: &mut String) {
-        writeln!(out, "## Context Integration").unwrap();
-        writeln!(
-            out,
-            "- Reads `.ms/config.toml` for project-specific settings"
-        )
-        .unwrap();
-        writeln!(
-            out,
-            "- Respects `NO_COLOR` and `FORCE_COLOR` environment variables"
-        )
-        .unwrap();
-        writeln!(out, "- Auto-detects project type from marker files").unwrap();
+        out.push_str(templates::CONTEXT_SECTION);
         writeln!(out).unwrap();
     }
 
@@ -172,20 +143,13 @@ impl SkillMdGenerator {
     fn write_examples(&self, out: &mut String) {
         writeln!(out, "## Examples").unwrap();
         writeln!(out, "```bash").unwrap();
-        writeln!(out, "# Find skills for error handling").unwrap();
-        writeln!(out, "ms search \"rust error handling\"").unwrap();
-        writeln!(out).unwrap();
-        writeln!(out, "# Load with full content").unwrap();
-        writeln!(out, "ms load rust-error-patterns --level full").unwrap();
-        writeln!(out).unwrap();
-        writeln!(out, "# Get suggestions for current project").unwrap();
-        writeln!(out, "ms suggest --explain").unwrap();
-        writeln!(out).unwrap();
-        writeln!(out, "# Validate a skill file").unwrap();
-        writeln!(out, "ms lint SKILL.md").unwrap();
-        writeln!(out).unwrap();
-        writeln!(out, "# Run health checks").unwrap();
-        writeln!(out, "ms doctor").unwrap();
+        for (idx, (comment, command)) in templates::EXAMPLE_COMMANDS.iter().enumerate() {
+            if idx > 0 {
+                writeln!(out).unwrap();
+            }
+            writeln!(out, "# {comment}").unwrap();
+            writeln!(out, "{command}").unwrap();
+        }
         writeln!(out, "```").unwrap();
     }
 
@@ -287,6 +251,16 @@ fn collect_command_info() -> Vec<CommandInfo> {
         CommandInfo {
             name: "build".to_string(),
             description: "Extract skills from CASS sessions".to_string(),
+            robot_mode: true,
+        },
+        CommandInfo {
+            name: "coverage".to_string(),
+            description: "Analyze topic coverage across CASS sessions".to_string(),
+            robot_mode: true,
+        },
+        CommandInfo {
+            name: "mark".to_string(),
+            description: "Mark CASS sessions as exemplary or anti-pattern".to_string(),
             robot_mode: true,
         },
         CommandInfo {

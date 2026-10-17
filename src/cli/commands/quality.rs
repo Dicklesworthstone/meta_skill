@@ -50,6 +50,17 @@ pub fn run(ctx: &AppContext, args: &QualityArgs) -> Result<()> {
 
     let scorer = QualityScorer::with_defaults();
     let mut outputs = Vec::new();
+    let detected_project_tags: Vec<String> = std::env::current_dir()
+        .ok()
+        .map(|cwd| {
+            use crate::context::{DefaultDetector, ProjectDetector};
+            DefaultDetector::new()
+                .detect(&cwd)
+                .into_iter()
+                .map(|d| d.project_type.name().to_lowercase())
+                .collect()
+        })
+        .unwrap_or_default();
 
     let skill_files = if args.all {
         crate::cli::commands::discover_skill_markdowns(ctx)?
@@ -76,11 +87,13 @@ pub fn run(ctx: &AppContext, args: &QualityArgs) -> Result<()> {
                 (None, None, None)
             };
 
+        let toolchain_match = compute_toolchain_match(&spec, &detected_project_tags);
+
         let context = QualityContext {
             usage_count,
             evidence_count,
             modified_at,
-            toolchain_match: true,
+            toolchain_match,
         };
 
         let score = scorer.score_spec(&spec, &context);
@@ -150,6 +163,45 @@ pub fn run(ctx: &AppContext, args: &QualityArgs) -> Result<()> {
         crate::cli::output::emit_human(layout);
         Ok(())
     }
+}
+
+fn compute_toolchain_match(spec: &crate::core::SkillSpec, detected_tags: &[String]) -> bool {
+    if detected_tags.is_empty() {
+        return true;
+    }
+    const KNOWN_TECH_TAGS: &[&str] = &[
+        "rust",
+        "python",
+        "javascript",
+        "typescript",
+        "go",
+        "java",
+        "csharp",
+        "cpp",
+        "ruby",
+        "php",
+        "swift",
+        "kotlin",
+        "scala",
+        "elixir",
+        "haskell",
+        "clojure",
+        "lua",
+        "zig",
+        "nix",
+    ];
+    let skill_tech_tags: Vec<String> = spec
+        .metadata
+        .tags
+        .iter()
+        .chain(spec.metadata.requires.iter())
+        .map(|t| t.to_lowercase())
+        .filter(|t| KNOWN_TECH_TAGS.contains(&t.as_str()))
+        .collect();
+    if skill_tech_tags.is_empty() {
+        return true;
+    }
+    skill_tech_tags.iter().any(|t| detected_tags.contains(t))
 }
 
 fn parse_modified_at(raw: &str) -> Option<chrono::DateTime<chrono::Utc>> {

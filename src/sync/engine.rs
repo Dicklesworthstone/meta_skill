@@ -67,7 +67,6 @@ impl SyncReport {
 #[derive(Debug, Clone)]
 struct SkillSnapshot {
     hash: String,
-    #[allow(dead_code)]
     id: String,
     modified: DateTime<Utc>,
 }
@@ -152,8 +151,7 @@ impl SyncEngine {
                 self.sync_filesystem(&remote, options, &mut report)?;
             }
             RemoteType::Git => {
-                let remote_git = open_git_remote(&remote, &self.ms_root)?;
-                self.sync_with_archive(&remote, options, &mut report, &remote_git)?;
+                self.sync_git(&remote, options, &mut report)?;
             }
             RemoteType::Ru => {
                 self.sync_ru(&remote, options, &mut report)?;
@@ -231,7 +229,42 @@ impl SyncEngine {
         report.skipped.extend(result.skipped.clone());
 
         match RuExitCode::from_code(result.exit_code) {
-            RuExitCode::Ok | RuExitCode::Partial | RuExitCode::Conflicts => Ok(()),
+            RuExitCode::Ok | RuExitCode::Partial | RuExitCode::Conflicts => {
+                if !options.dry_run
+                    && self.ru_config.auto_index
+                    && (!result.cloned.is_empty() || !result.pulled.is_empty())
+                {
+                    let mut changed_repos: HashSet<String> = HashSet::new();
+                    changed_repos.extend(result.cloned.iter().cloned());
+                    changed_repos.extend(result.pulled.iter().cloned());
+
+                    let mut target_paths: Vec<PathBuf> = Vec::new();
+                    for repo in &changed_repos {
+                        let p = PathBuf::from(repo);
+                        if p.is_dir() {
+                            target_paths.push(p);
+                        }
+                    }
+                    if let Ok(paths) = client.list_paths() {
+                        for p in paths {
+                            let matches_name = p
+                                .file_name()
+                                .map(|n| changed_repos.contains(&n.to_string_lossy().to_string()))
+                                .unwrap_or(false)
+                                || changed_repos.contains(&p.to_string_lossy().to_string());
+                            if matches_name && p.is_dir() && !target_paths.contains(&p) {
+                                target_paths.push(p);
+                            }
+                        }
+                    }
+                    if !target_paths.is_empty() {
+                        if let Err(err) = self.index_ru_repo_paths(&target_paths) {
+                            report.errors.push(format!("ru auto_index failed: {err}"));
+                        }
+                    }
+                }
+                Ok(())
+            }
             RuExitCode::Interrupted => Err(MsError::Config(
                 "ru sync interrupted; re-run with --resume".to_string(),
             )),
@@ -239,6 +272,44 @@ impl SyncEngine {
                 "ru sync failed; check ru output for details".to_string(),
             )),
         }
+    }
+
+    /// Discover and index `SKILL.md` files under the given RU repository paths.
+    pub fn index_ru_repo_paths(&self, repo_paths: &[PathBuf]) -> Result<Vec<String>> {
+        let tx_mgr = TxManager::new(self.db.clone(), self.git.clone(), self.ms_root.clone())?;
+        let mut indexed = Vec::new();
+        for root in repo_paths {
+            if !root.exists() {
+                continue;
+            }
+            for entry in walkdir::WalkDir::new(root)
+                .max_depth(5)
+                .into_iter()
+                .filter_map(std::result::Result::ok)
+            {
+                let path = entry.path();
+                if path.is_file()
+                    && path
+                        .file_name()
+                        .is_some_and(|n| n.eq_ignore_ascii_case("SKILL.md"))
+                {
+                    if let Ok(raw) = std::fs::read_to_string(path) {
+                        if let Ok(mut spec) = crate::core::spec_lens::parse_markdown(&raw) {
+                            if spec.metadata.id.is_empty() {
+                                if let Some(dir_name) = path.parent().and_then(|p| p.file_name()) {
+                                    spec.metadata.id = dir_name.to_string_lossy().to_string();
+                                }
+                            }
+                            if !spec.metadata.id.is_empty() {
+                                tx_mgr.write_skill_locked(&spec)?;
+                                indexed.push(spec.metadata.id);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        Ok(indexed)
     }
 
     fn sync_jfp_cloud(
@@ -471,13 +542,11 @@ impl SyncEngine {
                 let skill_id = &tombstone.ms_skill_id;
                 if self.git.skill_exists(skill_id) {
                     if !options.dry_run {
-                        // Remove the skill
-                        if let Some(skill_path) = self.git.skill_path(skill_id) {
-                            std::fs::remove_dir_all(&skill_path).ok();
-                        }
+                        tx_mgr.delete_skill_locked(skill_id)?;
                     }
                     report.pulled.push(format!("{} (deleted)", skill_id));
                     self.state.skill_states.remove(skill_id);
+                    cloud_state.skill_revisions.remove(skill_id);
                 }
             }
 
@@ -566,6 +635,7 @@ impl SyncEngine {
         }
 
         let skill_ids = self.git.list_skill_ids()?;
+        let skill_ids_set: HashSet<String> = skill_ids.iter().cloned().collect();
 
         for skill_id in &skill_ids {
             if queued_ids.contains(skill_id) {
@@ -622,6 +692,45 @@ impl SyncEngine {
             }
         }
 
+        // Detect locally deleted skills that were previously synced with this JFP Cloud remote
+        let mut previously_synced_ids: HashSet<String> =
+            cloud_state.skill_revisions.keys().cloned().collect();
+        for (id, st) in &self.state.skill_states {
+            if st.remote_hashes.contains_key(&remote.name) {
+                previously_synced_ids.insert(id.clone());
+            }
+        }
+
+        let mut deleted_ids: Vec<String> = previously_synced_ids
+            .into_iter()
+            .filter(|id| !skill_ids_set.contains(id) && !queued_ids.contains(id))
+            .collect();
+        deleted_ids.sort();
+
+        for skill_id in deleted_ids {
+            let base_revision = cloud_state.skill_revisions.get(&skill_id).copied();
+            let content_hash = self
+                .state
+                .skill_states
+                .get(&skill_id)
+                .and_then(|s| {
+                    s.remote_hashes
+                        .get(&remote.name)
+                        .cloned()
+                        .or_else(|| s.local_hash.clone())
+                })
+                .unwrap_or_default();
+            let item = JfpPushItem {
+                ms_skill_id: skill_id.clone(),
+                content_hash,
+                base_revision_id: base_revision,
+                spec: None,
+                skill_md: None,
+                deleted: Some(true),
+            };
+            push_items.push((skill_id, item, JfpChangeType::Delete, base_revision, false));
+        }
+
         if push_items.is_empty() {
             return Ok(());
         }
@@ -662,36 +771,51 @@ impl SyncEngine {
                     entry;
                 match result.status {
                     JfpPushStatus::Applied => {
-                        report.pushed.push(skill_id.clone());
+                        if *change_type == JfpChangeType::Delete {
+                            report.pushed.push(format!("{} (deleted)", skill_id));
+                            cloud_state.skill_revisions.remove(skill_id);
+                            if let Some(mut state_entry) = self.state.skill_states.remove(skill_id)
+                            {
+                                state_entry.remote_hashes.remove(&remote.name);
+                                state_entry.local_hash = None;
+                                if !state_entry.remote_hashes.is_empty() {
+                                    self.state
+                                        .skill_states
+                                        .insert(skill_id.clone(), state_entry);
+                                }
+                            }
+                        } else {
+                            report.pushed.push(skill_id.clone());
 
-                        // Update revision tracking
-                        if let Some(rev) = result.revision_id {
-                            cloud_state.skill_revisions.insert(skill_id.clone(), rev);
+                            // Update revision tracking
+                            if let Some(rev) = result.revision_id {
+                                cloud_state.skill_revisions.insert(skill_id.clone(), rev);
+                            }
+
+                            let mut state_entry = self
+                                .state
+                                .skill_states
+                                .get(skill_id)
+                                .cloned()
+                                .unwrap_or_else(|| SkillSyncState {
+                                    skill_id: skill_id.clone(),
+                                    local_hash: None,
+                                    remote_hashes: HashMap::new(),
+                                    local_modified: None,
+                                    remote_modified: HashMap::new(),
+                                    status: SkillSyncStatus::Synced,
+                                    last_modified_by: None,
+                                });
+
+                            state_entry.local_hash = Some(item.content_hash.clone());
+                            state_entry
+                                .remote_hashes
+                                .insert(remote.name.clone(), item.content_hash.clone());
+                            state_entry.status = SkillSyncStatus::Synced;
+                            self.state
+                                .skill_states
+                                .insert(skill_id.clone(), state_entry);
                         }
-
-                        let mut state_entry = self
-                            .state
-                            .skill_states
-                            .get(skill_id)
-                            .cloned()
-                            .unwrap_or_else(|| SkillSyncState {
-                                skill_id: skill_id.clone(),
-                                local_hash: None,
-                                remote_hashes: HashMap::new(),
-                                local_modified: None,
-                                remote_modified: HashMap::new(),
-                                status: SkillSyncStatus::Synced,
-                                last_modified_by: None,
-                            });
-
-                        state_entry.local_hash = Some(item.content_hash.clone());
-                        state_entry
-                            .remote_hashes
-                            .insert(remote.name.clone(), item.content_hash.clone());
-                        state_entry.status = SkillSyncStatus::Synced;
-                        self.state
-                            .skill_states
-                            .insert(skill_id.clone(), state_entry);
                     }
                     JfpPushStatus::Skipped => {
                         report.skipped.push(skill_id.clone());
@@ -828,6 +952,11 @@ impl SyncEngine {
         let mut all_ids = HashSet::new();
         all_ids.extend(local_map.keys().cloned());
         all_ids.extend(remote_map.keys().cloned());
+        for (id, st) in &self.state.skill_states {
+            if st.remote_hashes.contains_key(&remote.name) {
+                all_ids.insert(id.clone());
+            }
+        }
 
         let tx_mgr = TxManager::new(self.db.clone(), self.git.clone(), self.ms_root.clone())?;
 
@@ -845,6 +974,8 @@ impl SyncEngine {
             let status = determine_sync_status(local, remote_snap, base_hash);
 
             let mut final_status = status.clone();
+            let mut effective_local_hash = local.map(|s| s.hash.clone());
+            let mut effective_remote_hash = remote_snap.map(|s| s.hash.clone());
 
             match status {
                 SkillSyncStatus::Synced => {
@@ -852,14 +983,27 @@ impl SyncEngine {
                 }
                 SkillSyncStatus::LocalAhead | SkillSyncStatus::LocalOnly => {
                     if allow_push {
-                        if !options.dry_run {
-                            let spec = self.git.read_skill(&id)?;
-                            remote_git.write_skill(&spec)?;
-                            if remote.remote_type == RemoteType::Git {
-                                needs_git_push = true;
+                        if let Some(l) = local {
+                            if !options.dry_run {
+                                let spec = self.git.read_skill(&id)?;
+                                remote_git.write_skill(&spec)?;
+                                if remote.remote_type == RemoteType::Git {
+                                    needs_git_push = true;
+                                }
                             }
+                            effective_remote_hash = Some(l.hash.clone());
+                            report.pushed.push(id.clone());
+                        } else {
+                            // Local deletion propagating to remote
+                            if !options.dry_run && remote_snap.is_some() {
+                                remote_git.delete_skill(&id)?;
+                                if remote.remote_type == RemoteType::Git {
+                                    needs_git_push = true;
+                                }
+                            }
+                            effective_remote_hash = None;
+                            report.pushed.push(format!("{id} (deleted)"));
                         }
-                        report.pushed.push(id.clone());
                         final_status = SkillSyncStatus::Synced;
                     } else {
                         report.skipped.push(id.clone());
@@ -867,11 +1011,21 @@ impl SyncEngine {
                 }
                 SkillSyncStatus::RemoteAhead | SkillSyncStatus::RemoteOnly => {
                     if allow_pull {
-                        if !options.dry_run {
-                            let spec = remote_git.read_skill(&id)?;
-                            tx_mgr.write_skill_locked(&spec)?;
+                        if let Some(r) = remote_snap {
+                            if !options.dry_run {
+                                let spec = remote_git.read_skill(&id)?;
+                                tx_mgr.write_skill_locked(&spec)?;
+                            }
+                            effective_local_hash = Some(r.hash.clone());
+                            report.pulled.push(id.clone());
+                        } else {
+                            // Remote deletion propagating to local
+                            if !options.dry_run && local.is_some() {
+                                tx_mgr.delete_skill_locked(&id)?;
+                            }
+                            effective_local_hash = None;
+                            report.pulled.push(format!("{id} (deleted)"));
                         }
-                        report.pulled.push(id.clone());
                         final_status = SkillSyncStatus::Synced;
                     } else {
                         report.skipped.push(id.clone());
@@ -900,6 +1054,25 @@ impl SyncEngine {
                             &mut needs_git_push,
                         )?;
                         if final_status == SkillSyncStatus::Synced {
+                            match strategy {
+                                ConflictStrategy::PreferLocal => {
+                                    effective_remote_hash = effective_local_hash.clone();
+                                }
+                                ConflictStrategy::PreferRemote => {
+                                    effective_local_hash = effective_remote_hash.clone();
+                                }
+                                ConflictStrategy::PreferNewest => {
+                                    if local.map(|s| s.modified) >= remote_snap.map(|s| s.modified)
+                                    {
+                                        effective_remote_hash = effective_local_hash.clone();
+                                    } else {
+                                        effective_local_hash = effective_remote_hash.clone();
+                                    }
+                                }
+                                ConflictStrategy::KeepBoth => {
+                                    effective_remote_hash = effective_local_hash.clone();
+                                }
+                            }
                             report.resolved.push(id.clone());
                         }
                     } else {
@@ -921,8 +1094,8 @@ impl SyncEngine {
             // Otherwise, we must preserve the last known common ancestor to correctly
             // detect future conflicts/directions.
             if final_status == SkillSyncStatus::Synced {
-                if let Some(snap) = remote_snap {
-                    remote_hashes.insert(remote.name.clone(), snap.hash.clone());
+                if let Some(ref r_hash) = effective_remote_hash {
+                    remote_hashes.insert(remote.name.clone(), r_hash.clone());
                 } else {
                     remote_hashes.remove(&remote.name);
                 }
@@ -935,16 +1108,24 @@ impl SyncEngine {
                 remote_modified.remove(&remote.name);
             }
 
-            let state_entry = SkillSyncState {
-                skill_id: id.clone(),
-                local_hash: local.map(|s| s.hash.clone()),
-                remote_hashes,
-                local_modified: local.map(|s| s.modified),
-                remote_modified,
-                status: final_status,
-                last_modified_by: existing.and_then(|entry| entry.last_modified_by.clone()),
-            };
-            self.state.skill_states.insert(id, state_entry);
+            if effective_local_hash.is_none() && remote_hashes.is_empty() {
+                self.state.skill_states.remove(&id);
+            } else {
+                let canonical_id = local.map_or_else(
+                    || remote_snap.map_or_else(|| id.clone(), |s| s.id.clone()),
+                    |s| s.id.clone(),
+                );
+                let state_entry = SkillSyncState {
+                    skill_id: canonical_id,
+                    local_hash: effective_local_hash,
+                    remote_hashes,
+                    local_modified: local.map(|s| s.modified),
+                    remote_modified,
+                    status: final_status,
+                    last_modified_by: existing.and_then(|entry| entry.last_modified_by.clone()),
+                };
+                self.state.skill_states.insert(id, state_entry);
+            }
         }
 
         if needs_git_push && !options.dry_run {
@@ -961,16 +1142,14 @@ impl SyncEngine {
         Ok(())
     }
 
-    #[allow(dead_code)]
     fn sync_git(
         &mut self,
-        _remote: &RemoteConfig,
-        _options: &SyncOptions,
-        _report: &mut SyncReport,
+        remote: &RemoteConfig,
+        options: &SyncOptions,
+        report: &mut SyncReport,
     ) -> Result<()> {
-        Err(MsError::NotImplemented(
-            "Git remote sync not yet implemented".to_string(),
-        ))
+        let remote_git = open_git_remote(remote, &self.ms_root)?;
+        self.sync_with_archive(remote, options, report, &remote_git)
     }
 
     fn apply_conflict_strategy(
@@ -991,14 +1170,24 @@ impl SyncEngine {
         match strategy {
             ConflictStrategy::PreferLocal => {
                 if allow_push {
-                    if !options.dry_run {
-                        let spec = self.git.read_skill(id)?;
-                        remote_git.write_skill(&spec)?;
-                        if remote_is_git {
-                            *needs_git_push = true;
+                    if local.is_some() {
+                        if !options.dry_run {
+                            let spec = self.git.read_skill(id)?;
+                            remote_git.write_skill(&spec)?;
+                            if remote_is_git {
+                                *needs_git_push = true;
+                            }
                         }
+                        report.pushed.push(id.to_string());
+                    } else {
+                        if !options.dry_run && remote_snap.is_some() {
+                            remote_git.delete_skill(id)?;
+                            if remote_is_git {
+                                *needs_git_push = true;
+                            }
+                        }
+                        report.pushed.push(format!("{id} (deleted)"));
                     }
-                    report.pushed.push(id.to_string());
                     Ok(SkillSyncStatus::Synced)
                 } else {
                     report.conflicts.push(id.to_string());
@@ -1007,11 +1196,18 @@ impl SyncEngine {
             }
             ConflictStrategy::PreferRemote => {
                 if allow_pull {
-                    if !options.dry_run {
-                        let spec = remote_git.read_skill(id)?;
-                        tx_mgr.write_skill_locked(&spec)?;
+                    if remote_snap.is_some() {
+                        if !options.dry_run {
+                            let spec = remote_git.read_skill(id)?;
+                            tx_mgr.write_skill_locked(&spec)?;
+                        }
+                        report.pulled.push(id.to_string());
+                    } else {
+                        if !options.dry_run && local.is_some() {
+                            tx_mgr.delete_skill_locked(id)?;
+                        }
+                        report.pulled.push(format!("{id} (deleted)"));
                     }
-                    report.pulled.push(id.to_string());
                     Ok(SkillSyncStatus::Synced)
                 } else {
                     report.conflicts.push(id.to_string());
@@ -1059,24 +1255,28 @@ impl SyncEngine {
                     return Ok(SkillSyncStatus::Conflict);
                 }
 
-                let fork_id = unique_fork_id(&self.git, id)?;
-                if !options.dry_run {
-                    let mut spec = remote_git.read_skill(id)?;
-                    spec.metadata.id = fork_id.clone();
-                    spec.metadata.name = format!("{} (remote)", spec.metadata.name);
-                    tx_mgr.write_skill_locked(&spec)?;
+                if remote_snap.is_some() {
+                    let fork_id = unique_fork_id(&self.git, id)?;
+                    if !options.dry_run {
+                        let mut spec = remote_git.read_skill(id)?;
+                        spec.metadata.id = fork_id.clone();
+                        spec.metadata.name = format!("{} (remote)", spec.metadata.name);
+                        tx_mgr.write_skill_locked(&spec)?;
+                    }
+                    report.forked.push(fork_id);
                 }
-                report.forked.push(fork_id);
 
                 if allow_push {
-                    if !options.dry_run {
-                        let spec = self.git.read_skill(id)?;
-                        remote_git.write_skill(&spec)?;
-                        if remote_is_git {
-                            *needs_git_push = true;
+                    if local.is_some() {
+                        if !options.dry_run {
+                            let spec = self.git.read_skill(id)?;
+                            remote_git.write_skill(&spec)?;
+                            if remote_is_git {
+                                *needs_git_push = true;
+                            }
                         }
+                        report.pushed.push(id.to_string());
                     }
-                    report.pushed.push(id.to_string());
                     Ok(SkillSyncStatus::Synced)
                 } else {
                     report.conflicts.push(id.to_string());
@@ -1446,8 +1646,30 @@ fn determine_sync_status(
                 SkillSyncStatus::Conflict
             }
         }
-        (Some(_), None) => SkillSyncStatus::LocalOnly,
-        (None, Some(_)) => SkillSyncStatus::RemoteOnly,
+        (Some(l), None) => {
+            if let Some(base) = base_hash {
+                // Previously synced with remote, now missing on remote -> deleted on remote
+                if l.hash == base {
+                    SkillSyncStatus::RemoteAhead
+                } else {
+                    SkillSyncStatus::Conflict
+                }
+            } else {
+                SkillSyncStatus::LocalOnly
+            }
+        }
+        (None, Some(r)) => {
+            if let Some(base) = base_hash {
+                // Previously synced with remote, now missing locally -> deleted locally
+                if r.hash == base {
+                    SkillSyncStatus::LocalAhead
+                } else {
+                    SkillSyncStatus::Conflict
+                }
+            } else {
+                SkillSyncStatus::RemoteOnly
+            }
+        }
         (None, None) => SkillSyncStatus::Synced,
     }
 }
@@ -1557,6 +1779,33 @@ mod tests {
         // Result should be Conflict.
         assert_eq!(
             determine_sync_status(Some(&local), Some(&remote), Some("hash1")),
+            SkillSyncStatus::Conflict
+        );
+    }
+
+    #[test]
+    fn test_sync_logic_deletion_propagation_and_modify_delete_conflict() {
+        let snap_base = make_snap("hash1", 10);
+        let snap_modified = make_snap("hash2", 0);
+
+        // Deleted on remote, unchanged locally -> RemoteAhead (delete locally)
+        assert_eq!(
+            determine_sync_status(Some(&snap_base), None, Some("hash1")),
+            SkillSyncStatus::RemoteAhead
+        );
+        // Deleted on remote, modified locally -> Conflict
+        assert_eq!(
+            determine_sync_status(Some(&snap_modified), None, Some("hash1")),
+            SkillSyncStatus::Conflict
+        );
+        // Deleted locally, unchanged on remote -> LocalAhead (delete on remote)
+        assert_eq!(
+            determine_sync_status(None, Some(&snap_base), Some("hash1")),
+            SkillSyncStatus::LocalAhead
+        );
+        // Deleted locally, modified on remote -> Conflict
+        assert_eq!(
+            determine_sync_status(None, Some(&snap_modified), Some("hash1")),
             SkillSyncStatus::Conflict
         );
     }

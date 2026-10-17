@@ -6,7 +6,7 @@
 use serde::{Deserialize, Serialize};
 
 /// Context for personalized search ranking
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct SearchContext {
     /// Current working directory
     pub cwd: Option<String>,
@@ -14,6 +14,26 @@ pub struct SearchContext {
     pub recent_skills: Vec<String>,
     /// Project tech stack
     pub tech_stack: Vec<String>,
+}
+
+impl SearchContext {
+    /// Compute a contextual tie-breaking boost for a candidate skill.
+    #[must_use]
+    pub fn boost_for(&self, skill_id: &str, skill_tags: &[String]) -> f32 {
+        let mut boost = 0.0_f32;
+        if self.recent_skills.iter().any(|id| id == skill_id) {
+            boost += 0.002;
+        }
+        if !self.tech_stack.is_empty()
+            && self
+                .tech_stack
+                .iter()
+                .any(|t| skill_tags.iter().any(|st| st.eq_ignore_ascii_case(t)))
+        {
+            boost += 0.003;
+        }
+        boost
+    }
 }
 
 /// Search layer (source of skills)
@@ -251,6 +271,57 @@ impl FilterResult {
             filtered_by_deprecated: 0,
             applied_filters: filters.clone(),
         }
+    }
+
+    /// Evaluate a candidate against `applied_filters` and update audit counters.
+    pub fn evaluate_candidate(
+        &mut self,
+        skill_tags: &[String],
+        skill_layer: &str,
+        skill_quality: f32,
+        is_deprecated: bool,
+    ) -> bool {
+        if is_deprecated && !self.applied_filters.include_deprecated {
+            self.filtered_by_deprecated += 1;
+            return false;
+        }
+
+        if let Some(ref layer) = self.applied_filters.layer {
+            let layer_lc = skill_layer.to_lowercase();
+            let normalized_layer = match layer_lc.as_str() {
+                "base" | "system" => "base",
+                "org" | "global" => "org",
+                "project" => "project",
+                "user" | "local" => "user",
+                _ => layer_lc.as_str(),
+            };
+            if normalized_layer != layer.as_str() {
+                self.filtered_by_layer += 1;
+                return false;
+            }
+        }
+
+        if let Some(min_q) = self.applied_filters.min_quality {
+            if skill_quality < min_q {
+                self.filtered_by_quality += 1;
+                return false;
+            }
+        }
+
+        if !self.applied_filters.tags.is_empty() {
+            let has_matching_tag = self
+                .applied_filters
+                .tags
+                .iter()
+                .any(|t| skill_tags.contains(t));
+            if !has_matching_tag {
+                self.filtered_by_tags += 1;
+                return false;
+            }
+        }
+
+        self.total_after += 1;
+        true
     }
 }
 
