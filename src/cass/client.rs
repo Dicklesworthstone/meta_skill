@@ -20,6 +20,15 @@ pub struct CassClient {
     /// Path to cass binary (default: "cass")
     cass_bin: PathBuf,
 
+    /// Whether CASS auto-detection or explicit binary is enabled
+    enabled: bool,
+
+    /// Optional glob pattern for filtering session file paths
+    session_pattern: Option<String>,
+
+    /// Optional temporal cutoff for filtering sessions
+    since: Option<chrono::DateTime<chrono::Utc>>,
+
     /// CASS data directory (optional, uses default if not set)
     data_dir: Option<PathBuf>,
 
@@ -36,6 +45,9 @@ impl CassClient {
     pub fn new() -> Self {
         Self {
             cass_bin: PathBuf::from("cass"),
+            enabled: true,
+            session_pattern: None,
+            since: None,
             data_dir: None,
             fingerprint_cache: None,
             safety: None,
@@ -46,10 +58,56 @@ impl CassClient {
     pub fn with_binary(binary: impl Into<PathBuf>) -> Self {
         Self {
             cass_bin: binary.into(),
+            enabled: true,
+            session_pattern: None,
+            since: None,
             data_dir: None,
             fingerprint_cache: None,
             safety: None,
         }
+    }
+
+    /// Create a CASS client from `CassConfig`, honoring `cass_path`, `auto_detect`, and `session_pattern`.
+    #[must_use]
+    pub fn from_config(config: &crate::config::CassConfig) -> Self {
+        let (cass_bin, enabled) = if let Some(ref path) = config.cass_path {
+            (PathBuf::from(path), true)
+        } else if config.auto_detect {
+            (PathBuf::from("cass"), true)
+        } else {
+            (PathBuf::from("cass"), false)
+        };
+        let session_pattern = Some(config.session_pattern.trim().to_string())
+            .filter(|p| !p.is_empty() && p != "*");
+        Self {
+            cass_bin,
+            enabled,
+            session_pattern,
+            since: None,
+            data_dir: None,
+            fingerprint_cache: None,
+            safety: None,
+        }
+    }
+
+    /// Set a glob pattern to filter session file paths
+    #[must_use]
+    pub fn with_session_pattern(mut self, pattern: impl Into<String>) -> Self {
+        let pat = pattern.into();
+        let trimmed = pat.trim();
+        self.session_pattern = if trimmed.is_empty() || trimmed == "*" {
+            None
+        } else {
+            Some(trimmed.to_string())
+        };
+        self
+    }
+
+    /// Set a temporal cutoff to filter sessions
+    #[must_use]
+    pub const fn with_since(mut self, since: Option<chrono::DateTime<chrono::Utc>>) -> Self {
+        self.since = since;
+        self
     }
 
     /// Set the CASS data directory
@@ -71,6 +129,9 @@ impl CassClient {
 
     /// Check if CASS is available and responsive
     pub fn is_available(&self) -> bool {
+        if !self.enabled {
+            return false;
+        }
         let mut cmd = Command::new(&self.cass_bin);
         cmd.arg("--version");
         if let Some(gate) = self.safety.as_ref() {
@@ -80,6 +141,39 @@ impl CassClient {
             }
         }
         cmd.output().map(|o| o.status.success()).unwrap_or(false)
+    }
+
+    /// Check whether a `SessionMatch` satisfies configured `session_pattern` and `since` filters.
+    #[must_use]
+    pub fn matches_filters(&self, m: &SessionMatch) -> bool {
+        if let Some(ref pattern) = self.session_pattern {
+            if !m.path.is_empty() {
+                let has_extension = std::path::Path::new(&m.path).extension().is_some();
+                // For default "*.jsonl", allow extensionless synthetic IDs in mock environments,
+                // but enforce glob matching whenever a file extension or custom pattern is present.
+                if has_extension || pattern != "*.jsonl" {
+                    if let Ok(glob_pat) = glob::Pattern::new(pattern) {
+                        let file_name = std::path::Path::new(&m.path)
+                            .file_name()
+                            .and_then(|n| n.to_str())
+                            .unwrap_or(&m.path);
+                        if !glob_pat.matches(&m.path) && !glob_pat.matches(file_name) {
+                            return false;
+                        }
+                    }
+                }
+            }
+        }
+        if let Some(cutoff) = self.since {
+            if let Some(ref ts_str) = m.timestamp {
+                if let Some(ts) = parse_session_timestamp(ts_str) {
+                    if ts < cutoff {
+                        return false;
+                    }
+                }
+            }
+        }
+        true
     }
 
     /// Get CASS health status
@@ -97,7 +191,12 @@ impl CassClient {
         let results: CassSearchResults = serde_json::from_slice(&output)
             .map_err(|e| MsError::CassUnavailable(format!("Failed to parse search output: {e}")))?;
 
-        Ok(results.hits.into_iter().map(normalize_match).collect())
+        Ok(results
+            .hits
+            .into_iter()
+            .map(normalize_match)
+            .filter(|m| self.matches_filters(m))
+            .collect())
     }
 
     /// Fetch a full session by its file path.
@@ -197,7 +296,12 @@ impl CassClient {
 
         let results: CassSearchResults = serde_json::from_slice(&output)
             .map_err(|e| MsError::CassUnavailable(format!("Failed to parse search output: {e}")))?;
-        let hits: Vec<SessionMatch> = results.hits.into_iter().map(normalize_match).collect();
+        let hits: Vec<SessionMatch> = results
+            .hits
+            .into_iter()
+            .map(normalize_match)
+            .filter(|m| self.matches_filters(m))
+            .collect();
 
         // If no fingerprint cache, return all results
         let cache = match &self.fingerprint_cache {
@@ -305,6 +409,27 @@ impl Default for CassClient {
     fn default() -> Self {
         Self::new()
     }
+}
+
+/// Parse a session timestamp string (RFC3339, YYYY-MM-DD, or epoch milliseconds/seconds).
+pub fn parse_session_timestamp(raw: &str) -> Option<chrono::DateTime<chrono::Utc>> {
+    let trimmed = raw.trim();
+    if let Ok(dt) = chrono::DateTime::parse_from_rfc3339(trimmed) {
+        return Some(dt.with_timezone(&chrono::Utc));
+    }
+    if let Ok(date) = chrono::NaiveDate::parse_from_str(trimmed, "%Y-%m-%d") {
+        return date
+            .and_hms_opt(0, 0, 0)
+            .map(|dt| chrono::DateTime::<chrono::Utc>::from_naive_utc_and_offset(dt, chrono::Utc));
+    }
+    if let Ok(num) = trimmed.parse::<i64>() {
+        if num > 1_000_000_000_000 {
+            return chrono::DateTime::from_timestamp_millis(num);
+        } else if num > 0 {
+            return chrono::DateTime::from_timestamp(num, 0);
+        }
+    }
+    None
 }
 
 /// Classify CASS errors into actionable categories
@@ -1170,4 +1295,41 @@ mod tests {
         );
         assert!(calls[0].id.starts_with("inline_7_"));
     }
+
+    #[test]
+    fn test_cass_client_from_config_and_filters() {
+        let mut cfg = crate::config::CassConfig::default();
+        cfg.auto_detect = false;
+        let disabled_client = CassClient::from_config(&cfg);
+        assert!(!disabled_client.is_available());
+
+        cfg.auto_detect = true;
+        cfg.session_pattern = "proj_*.jsonl".to_string();
+        let cutoff = parse_session_timestamp("2026-10-10T00:00:00Z").unwrap();
+        let client = CassClient::from_config(&cfg).with_since(Some(cutoff));
+
+        let matching = SessionMatch {
+            session_id: "s1".to_string(),
+            path: "/sessions/proj_alpha.jsonl".to_string(),
+            score: 0.9,
+            snippet: None,
+            content_hash: None,
+            project: None,
+            timestamp: Some("2026-10-12T12:00:00Z".to_string()),
+        };
+        assert!(client.matches_filters(&matching));
+
+        let wrong_pattern = SessionMatch {
+            path: "/sessions/other.jsonl".to_string(),
+            ..matching.clone()
+        };
+        assert!(!client.matches_filters(&wrong_pattern));
+
+        let too_old = SessionMatch {
+            timestamp: Some("2026-10-01T00:00:00Z".to_string()),
+            ..matching
+        };
+        assert!(!client.matches_filters(&too_old));
+    }
 }
+

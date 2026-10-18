@@ -403,6 +403,73 @@ pub struct RefinementCritique {
     pub critique_confidence: f32,
 }
 
+/// Concrete refiner that critiques candidate generalizations for overbreadth/platitudes.
+pub struct StructuralCritiqueRefiner {
+    strict_llm_mode: bool,
+}
+
+impl StructuralCritiqueRefiner {
+    #[must_use]
+    pub const fn new(strict_llm_mode: bool) -> Self {
+        Self { strict_llm_mode }
+    }
+}
+
+impl GeneralizationRefiner for StructuralCritiqueRefiner {
+    fn critique(
+        &self,
+        common: &CommonElements,
+        cluster: &InstanceCluster,
+    ) -> Result<RefinementCritique> {
+        let mut suggested_refinements = Vec::new();
+        let desc = common.abstracted_description.trim();
+        let generic_description = desc.is_empty()
+            || desc == "Empty pattern"
+            || desc == "Pattern extracted from multiple instances";
+
+        if generic_description {
+            suggested_refinements.push(
+                "Replace generic description with domain-specific invariant phrasing".to_string(),
+            );
+        }
+        if common.invariants.is_empty() && common.context_conditions.is_empty() {
+            suggested_refinements.push(
+                "Add explicit preconditions or structural invariants to prevent overbreadth"
+                    .to_string(),
+            );
+        }
+        let coherence_floor = if self.strict_llm_mode { 0.45 } else { 0.35 };
+        if cluster.coherence < coherence_floor {
+            suggested_refinements.push(format!(
+                "Split cluster (coherence {:.2} < {:.2}) into narrower context-specific patterns",
+                cluster.coherence, coherence_floor
+            ));
+        }
+
+        let flags_overgeneralization = generic_description
+            && common.invariants.is_empty()
+            && cluster.coherence < coherence_floor;
+
+        let summary = if flags_overgeneralization {
+            "Candidate generalization is overly broad and lacks structural invariants".to_string()
+        } else if suggested_refinements.is_empty() {
+            "Generalization exhibits strong coherence and explicit invariants".to_string()
+        } else {
+            format!(
+                "Generalization passed with {} refinement suggestion(s)",
+                suggested_refinements.len()
+            )
+        };
+
+        Ok(RefinementCritique {
+            summary,
+            flags_overgeneralization,
+            suggested_refinements,
+            critique_confidence: common.extraction_confidence.clamp(0.5, 0.98),
+        })
+    }
+}
+
 // =============================================================================
 // Uncertainty Queue Integration
 // =============================================================================
