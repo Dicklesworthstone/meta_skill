@@ -311,7 +311,26 @@ fn run_auto_load(ctx: &AppContext, args: &LoadArgs) -> Result<()> {
         }
     }
 
-    // Re-sort after blending bandit scores
+    // Apply NTM swarm role diversification if --for-ntm is enabled
+    if args.for_ntm {
+        let skill_tags: HashMap<String, Vec<String>> = skills
+            .iter()
+            .map(|s| (s.id.clone(), s.tags.clone()))
+            .collect();
+        let mut seen_primary_tags = HashSet::new();
+        for candidate in &mut candidates {
+            if let Some(primary) = skill_tags
+                .get(&candidate.skill_id)
+                .and_then(|tags| tags.first())
+            {
+                if !seen_primary_tags.insert(primary.to_lowercase()) {
+                    candidate.score = (candidate.score * 0.85).clamp(0.0, 1.0);
+                }
+            }
+        }
+    }
+
+    // Re-sort after blending bandit scores / NTM diversification
     candidates.sort_by(|a, b| {
         b.score
             .partial_cmp(&a.score)
@@ -362,8 +381,22 @@ fn run_auto_load(ctx: &AppContext, args: &LoadArgs) -> Result<()> {
     let mut loaded_results = Vec::new();
     let mut skipped = Vec::new();
     let mut total_tokens = 0usize;
+    let ntm_budget = if args.for_ntm {
+        Some(
+            args.pack
+                .unwrap_or(ctx.config.disclosure.token_budget as usize),
+        )
+    } else {
+        args.pack
+    };
 
     for candidate in &candidates {
+        if let Some(budget) = ntm_budget {
+            if total_tokens >= budget && !loaded_results.is_empty() {
+                skipped.push(candidate.skill_id.clone());
+                continue;
+            }
+        }
         // Confirm mode: ask user before each load (only for human-readable output)
         if args.confirm && ctx.output_format == OutputFormat::Human {
             print!(
@@ -869,7 +902,7 @@ pub(crate) fn load_skill(ctx: &AppContext, args: &LoadArgs, skill_ref: &str) -> 
     )?;
 
     // Determine disclosure plan
-    let disclosure_plan = determine_disclosure_plan(args, contract);
+    let disclosure_plan = determine_disclosure_plan(&ctx.config.disclosure, args, contract);
 
     // Parse skill body into SkillSpec
     let spec = parse_markdown(&skill.body)
@@ -986,7 +1019,7 @@ fn try_load_meta_skill(
     skill_ref: &str,
 ) -> Result<Option<MetaSkillLoadResultWrapper>> {
     let mut registry = MetaSkillRegistry::new();
-    let meta_skill_paths = get_meta_skill_paths();
+    let meta_skill_paths = get_meta_skill_paths(&ctx.ms_root);
 
     // Load registry, but don't fail if no meta-skills exist
     if registry.load_from_paths(&meta_skill_paths).unwrap_or(0) == 0 {
@@ -1026,20 +1059,26 @@ fn try_load_meta_skill(
 }
 
 /// Get meta-skill directories
-fn get_meta_skill_paths() -> Vec<PathBuf> {
+fn get_meta_skill_paths(ms_root: &std::path::Path) -> Vec<PathBuf> {
     let mut paths = Vec::new();
+
+    // Active ms_root meta-skills directory
+    let root_meta = ms_root.join("meta-skills");
+    if root_meta.exists() {
+        paths.push(root_meta);
+    }
 
     // Project meta-skills directory
     let working_dir = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
     let project_meta = working_dir.join(".ms").join("meta-skills");
-    if project_meta.exists() {
+    if project_meta.exists() && !paths.contains(&project_meta) {
         paths.push(project_meta);
     }
 
     // Global meta-skills directory
     if let Some(home) = dirs::home_dir() {
         let global_meta = home.join(".ms").join("meta-skills");
-        if global_meta.exists() {
+        if global_meta.exists() && !paths.contains(&global_meta) {
             paths.push(global_meta);
         }
     }
@@ -1135,7 +1174,11 @@ fn output_robot_meta(
     Ok(())
 }
 
-fn determine_disclosure_plan(args: &LoadArgs, contract: Option<PackContract>) -> DisclosurePlan {
+fn determine_disclosure_plan(
+    disclosure_cfg: &crate::config::DisclosureConfig,
+    args: &LoadArgs,
+    contract: Option<PackContract>,
+) -> DisclosurePlan {
     // Token budget takes precedence
     if let Some(tokens) = args.pack {
         return DisclosurePlan::Pack(TokenBudget {
@@ -1163,8 +1206,20 @@ fn determine_disclosure_plan(args: &LoadArgs, contract: Option<PackContract>) ->
         }
     }
 
-    // Default to Standard
-    DisclosurePlan::Level(DisclosureLevel::Standard)
+    // Handle --for-ntm (pack within configured disclosure token_budget)
+    if args.for_ntm && disclosure_cfg.token_budget > 0 {
+        return DisclosurePlan::Pack(TokenBudget {
+            tokens: disclosure_cfg.token_budget as usize,
+            mode: args.mode.into(),
+            max_per_group: args.max_per_group,
+            contract,
+        });
+    }
+
+    // Consult configured default disclosure level (falling back to Standard)
+    let default_level = DisclosureLevel::from_str_or_level(&disclosure_cfg.default_level)
+        .unwrap_or(DisclosureLevel::Standard);
+    DisclosurePlan::Level(default_level)
 }
 
 fn resolve_contract(ctx: &AppContext, args: &LoadArgs) -> Result<Option<PackContract>> {
@@ -1993,5 +2048,42 @@ mod tests {
     fn test_load_terminal_width() {
         let width = terminal_width();
         assert!(width >= 40 && width <= 500);
+    }
+
+    #[test]
+    fn test_determine_disclosure_plan_for_ntm_and_default_level() {
+        let mut config = crate::config::Config::default();
+        config.disclosure.default_level = "full".to_string();
+        config.disclosure.token_budget = 640;
+
+        let base_args = LoadArgs {
+            skill: Some("test".to_string()),
+            auto: false,
+            threshold: 0.3,
+            confirm: false,
+            dry_run: false,
+            level: None,
+            pack: None,
+            mode: CliPackMode::Balanced,
+            contract: None,
+            contract_id: None,
+            max_per_group: 2,
+            full: false,
+            complete: false,
+            deps: DepsMode::Auto,
+            experiment_id: None,
+            variant_id: None,
+            for_ntm: false,
+        };
+        let plan = determine_disclosure_plan(&config.disclosure, &base_args, None);
+        assert!(matches!(plan, DisclosurePlan::Level(DisclosureLevel::Full)));
+
+        let mut ntm_args = base_args;
+        ntm_args.for_ntm = true;
+        let ntm_plan = determine_disclosure_plan(&config.disclosure, &ntm_args, None);
+        match ntm_plan {
+            DisclosurePlan::Pack(budget) => assert_eq!(budget.tokens, 640),
+            other => panic!("expected Pack plan for --for-ntm, got {other:?}"),
+        }
     }
 }

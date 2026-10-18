@@ -239,9 +239,15 @@ impl SyncEngine {
                     changed_repos.extend(result.pulled.iter().cloned());
 
                     let mut target_paths: Vec<PathBuf> = Vec::new();
+                    for repo in &self.ru_config.skill_repos {
+                        let p = PathBuf::from(repo);
+                        if p.is_dir() && !target_paths.contains(&p) {
+                            target_paths.push(p);
+                        }
+                    }
                     for repo in &changed_repos {
                         let p = PathBuf::from(repo);
-                        if p.is_dir() {
+                        if p.is_dir() && !target_paths.contains(&p) {
                             target_paths.push(p);
                         }
                     }

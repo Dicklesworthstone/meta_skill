@@ -67,15 +67,18 @@ impl Theme {
     }
 
     pub fn from_config(config: &Config) -> Result<Self, ThemeError> {
-        let _ = config;
-
-        let preset_str = std::env::var("MS_THEME").unwrap_or_else(|_| "auto".to_string());
+        let preset_str = std::env::var("MS_THEME").unwrap_or_else(|_| config.output.theme.clone());
         let preset = ThemePreset::from_str(&preset_str).unwrap_or(ThemePreset::Auto);
 
         let mut theme = match preset {
             ThemePreset::Auto => Theme::auto_detect(),
             _ => preset.to_theme(),
         };
+
+        if config.output.light_mode {
+            theme.is_light_mode = true;
+            theme.colors = theme.colors.for_light_background();
+        }
 
         if let Ok(mode) = std::env::var("MS_THEME_MODE") {
             match mode.to_lowercase().as_str() {
@@ -91,13 +94,17 @@ impl Theme {
             }
         }
 
-        let caps = detect_terminal_capabilities();
+        let mut caps = detect_terminal_capabilities();
+        if config.output.no_unicode {
+            caps.supports_unicode = false;
+        }
         let adapted = theme.adapted_for_terminal(&caps);
 
         debug!(
             preset = %preset_str,
             color_system = ?caps.color_system,
             unicode = caps.supports_unicode,
+            light_mode = theme.is_light_mode,
             "Theme loaded"
         );
 
@@ -1603,5 +1610,16 @@ mod tests {
             .set("KITTY_WINDOW_ID", "1")
             .set("MS_NO_HYPERLINKS", "1");
         assert!(!detect_hyperlink_support());
+    }
+
+    #[test]
+    fn test_theme_from_config_respects_light_mode_and_no_unicode() {
+        let _lock = ENV_LOCK.lock().unwrap();
+        let mut config = Config::default();
+        config.output.light_mode = true;
+        config.output.no_unicode = true;
+        let theme = Theme::from_config(&config).unwrap();
+        assert!(theme.is_light_mode);
+        assert_eq!(theme.box_style, BoxStyle::Ascii);
     }
 }

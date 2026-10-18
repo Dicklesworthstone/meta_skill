@@ -219,15 +219,57 @@ fn watch_and_reindex(ctx: &AppContext, roots: &[SkillRoot], args: &IndexArgs) ->
     Ok(())
 }
 
+fn infer_skill_layer(path: &std::path::Path, config: &crate::config::Config) -> SkillLayer {
+    for p in &config.skill_paths.local {
+        if path.starts_with(expand_path(p)) {
+            return SkillLayer::User;
+        }
+    }
+    for p in &config.skill_paths.project {
+        if path.starts_with(expand_path(p)) {
+            return if config.layers.project_overrides {
+                SkillLayer::Project
+            } else {
+                SkillLayer::Org
+            };
+        }
+    }
+    for p in &config.skill_paths.global {
+        if path.starts_with(expand_path(p)) {
+            return SkillLayer::Org;
+        }
+    }
+    for p in &config.skill_paths.community {
+        if path.starts_with(expand_path(p)) {
+            return SkillLayer::Base;
+        }
+    }
+    if config.layers.project_overrides {
+        SkillLayer::Project
+    } else {
+        SkillLayer::User
+    }
+}
+
 fn collect_index_paths(ctx: &AppContext, args: &IndexArgs) -> Result<Vec<SkillRoot>> {
     if !args.paths.is_empty() {
         // Use explicitly provided paths
         return Ok(args
             .paths
             .iter()
-            .map(|p| SkillRoot {
-                path: expand_path(p),
-                layer: SkillLayer::Project,
+            .map(|p| {
+                let expanded = expand_path(p);
+                let layer = if ctx.config.layers.auto_detect {
+                    infer_skill_layer(&expanded, &ctx.config)
+                } else if ctx.config.layers.project_overrides {
+                    SkillLayer::Project
+                } else {
+                    SkillLayer::User
+                };
+                SkillRoot {
+                    path: expanded,
+                    layer,
+                }
             })
             .collect());
     }
@@ -247,11 +289,13 @@ fn collect_index_paths(ctx: &AppContext, args: &IndexArgs) -> Result<Vec<SkillRo
             layer: SkillLayer::Org,
         });
     }
-    for p in &ctx.config.skill_paths.project {
-        roots.push(SkillRoot {
-            path: expand_path(p),
-            layer: SkillLayer::Project,
-        });
+    if ctx.config.layers.project_overrides || args.all {
+        for p in &ctx.config.skill_paths.project {
+            roots.push(SkillRoot {
+                path: expand_path(p),
+                layer: SkillLayer::Project,
+            });
+        }
     }
     for p in &ctx.config.skill_paths.community {
         roots.push(SkillRoot {
@@ -265,6 +309,17 @@ fn collect_index_paths(ctx: &AppContext, args: &IndexArgs) -> Result<Vec<SkillRo
             layer: SkillLayer::User,
         });
     }
+    if args.all && ctx.config.ru.enabled {
+        for repo in &ctx.config.ru.skill_repos {
+            let expanded = expand_path(repo);
+            if !roots.iter().any(|r| r.path == expanded) {
+                roots.push(SkillRoot {
+                    path: expanded,
+                    layer: SkillLayer::Base,
+                });
+            }
+        }
+    }
 
     roots.sort_by_key(|root| root.layer);
     Ok(roots)
@@ -272,12 +327,35 @@ fn collect_index_paths(ctx: &AppContext, args: &IndexArgs) -> Result<Vec<SkillRo
 
 /// Collect paths from ru-managed repositories
 fn collect_ru_paths(ctx: &AppContext) -> Result<Vec<SkillRoot>> {
-    let mut ru_client = RuClient::new();
+    if !ctx.config.ru.enabled {
+        if ctx.output_format != OutputFormat::Human {
+            return Ok(Vec::new());
+        }
+        return Err(MsError::Config(
+            "ru integration is disabled in config ([ru].enabled = false)".to_string(),
+        ));
+    }
+
+    let mut roots: Vec<SkillRoot> = ctx
+        .config
+        .ru
+        .skill_repos
+        .iter()
+        .map(|repo| SkillRoot {
+            path: expand_path(repo),
+            layer: SkillLayer::Base,
+        })
+        .collect();
+
+    let mut ru_client = if let Some(ref ru_path) = ctx.config.ru.ru_path {
+        RuClient::with_path(expand_path(ru_path))
+    } else {
+        RuClient::new()
+    };
 
     if !ru_client.is_available() {
-        if ctx.output_format != OutputFormat::Human {
-            // Return empty list with no error for robot mode
-            return Ok(Vec::new());
+        if !roots.is_empty() || ctx.output_format != OutputFormat::Human {
+            return Ok(roots);
         }
         return Err(MsError::Config(
             "ru is not available. Install from /data/projects/repo_updater or use other index paths.".to_string(),
@@ -287,13 +365,14 @@ fn collect_ru_paths(ctx: &AppContext) -> Result<Vec<SkillRoot>> {
     let paths = ru_client.list_paths()?;
 
     // Treat ru-managed repos as community/shared layer
-    let roots: Vec<SkillRoot> = paths
-        .into_iter()
-        .map(|path| SkillRoot {
-            path,
-            layer: SkillLayer::Base,
-        })
-        .collect();
+    for path in paths {
+        if !roots.iter().any(|r| r.path == path) {
+            roots.push(SkillRoot {
+                path,
+                layer: SkillLayer::Base,
+            });
+        }
+    }
 
     Ok(roots)
 }
@@ -1744,5 +1823,37 @@ mod tests {
         let discovered = discover_skill_files(&roots);
         assert_eq!(discovered.len(), 1);
         assert_eq!(discovered[0].companion_count, 2);
+    }
+
+    #[test]
+    fn test_infer_skill_layer_respects_config() {
+        let mut config = crate::config::Config::default();
+        config.skill_paths.global = vec!["/opt/ms/global".to_string()];
+        config.skill_paths.project = vec!["/work/proj/.ms/skills".to_string()];
+        config.skill_paths.community = vec!["/opt/ms/community".to_string()];
+        config.skill_paths.local = vec!["/home/u/.local/skills".to_string()];
+
+        assert_eq!(
+            infer_skill_layer(std::path::Path::new("/opt/ms/global/s1"), &config),
+            SkillLayer::Org
+        );
+        assert_eq!(
+            infer_skill_layer(std::path::Path::new("/work/proj/.ms/skills/s2"), &config),
+            SkillLayer::Project
+        );
+        assert_eq!(
+            infer_skill_layer(std::path::Path::new("/opt/ms/community/s3"), &config),
+            SkillLayer::Base
+        );
+        assert_eq!(
+            infer_skill_layer(std::path::Path::new("/home/u/.local/skills/s4"), &config),
+            SkillLayer::User
+        );
+
+        config.layers.project_overrides = false;
+        assert_eq!(
+            infer_skill_layer(std::path::Path::new("/work/proj/.ms/skills/s2"), &config),
+            SkillLayer::Org
+        );
     }
 }

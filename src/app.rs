@@ -145,7 +145,19 @@ impl AppContext {
             }
         }
         crate::cli::output::set_active_output_format(output_format);
+        crate::cli::output::set_robot_include_metadata(config.robot.include_metadata);
         let robot_mode = output_format != OutputFormat::Human;
+
+        if config.update.auto_check
+            && !matches!(cli.command, crate::cli::Commands::Update(_))
+            && crate::cli::commands::update::is_update_check_due(&ms_root, &config.update)
+        {
+            tracing::debug!(
+                interval_hours = config.update.check_interval_hours,
+                channel = %config.update.channel,
+                "Periodic update check interval elapsed"
+            );
+        }
 
         // The MCP server never writes to the search index (its `index` tool
         // only reports configured paths and defers to the CLI), so it must

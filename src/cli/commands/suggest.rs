@@ -6,7 +6,8 @@ use tracing::debug;
 
 use crate::app::AppContext;
 use crate::cli::formatters::{
-    ScorePercentageBreakdown, SuggestionContext, SuggestionItem, SuggestionOutput,
+    LoadedSuggestionSkill, ScorePercentageBreakdown, SuggestionContext, SuggestionItem,
+    SuggestionOutput,
 };
 use crate::cli::output::Formattable;
 use crate::context::collector::{CollectedContext, ContextCollector, ContextCollectorConfig};
@@ -314,8 +315,18 @@ pub fn run(ctx: &AppContext, args: &SuggestArgs) -> Result<()> {
             .retain(|s| !matches!(cache.status(fp, &s.skill_id), CooldownStatus::Active { .. }));
     }
 
-    // 13. Truncate to limit
+    // 12b. Honor disclosure.auto_suggest: when disabled and not explicitly forced,
+    // only surface high-confidence or favorite suggestions.
+    if !ctx.config.disclosure.auto_suggest && !args.load && !args.discover && !args.ignore_cooldowns
+    {
+        suggestions.retain(|s| s.score >= 0.75 || s.is_favorite);
+    }
+
+    // 13. Truncate to limit (and apply token budget across suggestions when --budget is set without --load)
     suggestions.truncate(args.limit);
+    if let Some(budget) = args.budget.filter(|_| !args.load) {
+        apply_suggestion_budget(&mut suggestions, &skill_map, budget);
+    }
 
     // 14. Build discovery suggestions if requested
     let mut discovery_suggestions: Vec<Suggestion> = Vec::new();
@@ -410,13 +421,20 @@ pub fn run(ctx: &AppContext, args: &SuggestArgs) -> Result<()> {
     feedback_collector.on_suggestions_shown(&all_suggested_ids, Some(fingerprint.as_u64()));
     let _ = feedback_collector.save(&tracking_path);
 
-    // 15b. Update cooldowns for shown suggestions (default 5 minute cooldown) and purge expired
-    let cooldown_seconds = 300; // 5 minutes
+    // 15b. Update cooldowns for shown suggestions using configured cooldown_seconds and purge expired
+    let cooldown_seconds = ctx.config.disclosure.cooldown_seconds;
     for suggestion in &suggestions {
         cache.record(fp, suggestion.skill_id.clone(), cooldown_seconds);
     }
     cache.purge_expired();
     cache.save(&cache_path)?;
+
+    // 15c. Auto-load top suggested skills if --load is requested
+    let loaded_skills = if args.load {
+        auto_load_suggestions(ctx, args, &suggestions)
+    } else {
+        Vec::new()
+    };
 
     // 16. Output results
     debug!(target: "suggest", count = suggestions.len(), "generating suggestions");
@@ -426,9 +444,87 @@ pub fn run(ctx: &AppContext, args: &SuggestArgs) -> Result<()> {
         &fingerprint,
         &suggestions,
         &discovery_suggestions,
+        &loaded_skills,
         &collected_context,
         &contextual_bandit,
     )
+}
+
+/// Filter suggestions so their cumulative estimated token cost fits within `budget`.
+fn apply_suggestion_budget(
+    suggestions: &mut Vec<Suggestion>,
+    skill_map: &HashMap<String, &SkillRecord>,
+    budget: usize,
+) {
+    let mut used = 0usize;
+    let mut kept = Vec::with_capacity(suggestions.len());
+    for s in suggestions.drain(..) {
+        let est = skill_map
+            .get(&s.skill_id)
+            .map(|r| (r.body.len() / 4).max(16))
+            .unwrap_or_else(|| ((s.name.len() + s.description.len()) / 4).max(16));
+        if used + est <= budget || kept.is_empty() {
+            used += est;
+            kept.push(s);
+        }
+        if used >= budget {
+            break;
+        }
+    }
+    *suggestions = kept;
+}
+
+/// Auto-load the top `args.top` suggested skills within `args.budget` (or `disclosure.token_budget`).
+fn auto_load_suggestions(
+    ctx: &AppContext,
+    args: &SuggestArgs,
+    suggestions: &[Suggestion],
+) -> Vec<LoadedSuggestionSkill> {
+    use crate::cli::commands::load::{CliPackMode, DepsMode, LoadArgs, load_skill};
+
+    let total_budget = args
+        .budget
+        .unwrap_or(ctx.config.disclosure.token_budget as usize);
+    let mut remaining_budget = total_budget;
+    let mut loaded = Vec::new();
+
+    for suggestion in suggestions.iter().take(args.top) {
+        if remaining_budget == 0 && !loaded.is_empty() {
+            break;
+        }
+        let load_args = LoadArgs {
+            skill: Some(suggestion.skill_id.clone()),
+            auto: false,
+            threshold: 0.3,
+            confirm: false,
+            dry_run: false,
+            level: None,
+            pack: Some(remaining_budget.max(50)),
+            mode: CliPackMode::Balanced,
+            contract: None,
+            contract_id: None,
+            max_per_group: 2,
+            full: false,
+            complete: false,
+            deps: DepsMode::Off,
+            experiment_id: None,
+            variant_id: None,
+            for_ntm: args.for_ntm,
+        };
+        if let Ok(result) = load_skill(ctx, &load_args, &suggestion.skill_id) {
+            if result.disclosed.token_estimate <= remaining_budget || loaded.is_empty() {
+                remaining_budget = remaining_budget.saturating_sub(result.disclosed.token_estimate);
+                loaded.push(LoadedSuggestionSkill {
+                    skill_id: result.skill_id,
+                    name: result.name,
+                    token_count: result.disclosed.token_estimate,
+                    content: result.disclosed.body,
+                });
+            }
+        }
+    }
+
+    loaded
 }
 
 /// Output when no skills are available.
@@ -444,12 +540,14 @@ fn output_empty_suggestions(
 }
 
 /// Unified output function using the new formatter system.
+#[allow(clippy::too_many_arguments)]
 fn output_suggestions(
     ctx: &AppContext,
     args: &SuggestArgs,
     fingerprint: &ContextFingerprint,
     suggestions: &[Suggestion],
     discovery_suggestions: &[Suggestion],
+    loaded_skills: &[LoadedSuggestionSkill],
     context: &CollectedContext,
     _bandit: &ContextualBandit,
 ) -> Result<()> {
@@ -469,7 +567,9 @@ fn output_suggestions(
     };
 
     // Build output
-    let mut output = SuggestionOutput::new().with_context(suggestion_context);
+    let mut output = SuggestionOutput::new()
+        .with_context(suggestion_context)
+        .with_loaded_skills(loaded_skills.to_vec());
 
     // Add main suggestions
     for s in suggestions {
@@ -1093,5 +1193,44 @@ mod tests {
     #[test]
     fn test_suggest_should_use_rich_returns_bool() {
         let _result: bool = should_use_rich_for_suggest();
+    }
+
+    #[test]
+    fn test_apply_suggestion_budget_truncates_to_budget() {
+        let mut suggestions = vec![
+            make_test_suggestion(false, 0.9, 5),
+            make_test_suggestion(false, 0.8, 5),
+            make_test_suggestion(false, 0.7, 5),
+        ];
+        suggestions[0].skill_id = "s1".to_string();
+        suggestions[1].skill_id = "s2".to_string();
+        suggestions[2].skill_id = "s3".to_string();
+        let skill_map = HashMap::new();
+        // Each suggestion estimates to max(..., 16) = 16 tokens; budget 32 fits 2
+        apply_suggestion_budget(&mut suggestions, &skill_map, 32);
+        assert_eq!(suggestions.len(), 2);
+        assert_eq!(suggestions[0].skill_id, "s1");
+        assert_eq!(suggestions[1].skill_id, "s2");
+    }
+
+    #[test]
+    fn test_suggest_output_with_loaded_skills_json_and_human() {
+        let mut output = SuggestionOutput::new().with_loaded_skills(vec![LoadedSuggestionSkill {
+            skill_id: "loaded-1".to_string(),
+            name: "Loaded One".to_string(),
+            token_count: 42,
+            content: Some("Rule: Always verify.".to_string()),
+        }]);
+        output.add_suggestion(make_suggestion_item("loaded-1", 0.9, false));
+
+        let json_str = output.format(OutputFormat::Json);
+        let parsed: serde_json::Value = serde_json::from_str(&json_str).unwrap();
+        assert_eq!(parsed["loaded_skills"][0]["skill_id"], "loaded-1");
+        assert_eq!(parsed["loaded_skills"][0]["token_count"], 42);
+
+        let human_str = output.format(OutputFormat::Human);
+        assert!(human_str.contains("Auto-loaded skills:"));
+        assert!(human_str.contains("Loaded One"));
+        assert!(human_str.contains("Rule: Always verify."));
     }
 }

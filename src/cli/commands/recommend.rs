@@ -83,7 +83,7 @@ pub fn run(ctx: &AppContext, args: &RecommendArgs) -> Result<()> {
 }
 
 fn stats(ctx: &AppContext, args: &StatsArgs) -> Result<()> {
-    let bandit_path = default_bandit_path();
+    let bandit_path = bandit_path(&ctx.ms_root);
     let history_path = UserHistory::default_path();
 
     let bandit = ContextualBandit::load(&bandit_path)
@@ -269,7 +269,13 @@ fn history(ctx: &AppContext, args: &HistoryArgs) -> Result<()> {
 }
 
 fn tune(ctx: &AppContext, args: &TuneArgs) -> Result<()> {
-    let bandit_path = default_bandit_path();
+    let bandit_path = bandit_path(&ctx.ms_root);
+
+    if args.show && (args.reset || args.exploration.is_some() || args.learning_rate.is_some()) {
+        return Err(crate::error::MsError::ValidationFailed(
+            "--show cannot be combined with --reset, --exploration, or --learning-rate".to_string(),
+        ));
+    }
 
     if args.reset {
         let bandit = ContextualBandit::with_feature_dim(FEATURE_DIM);
@@ -301,20 +307,22 @@ fn tune(ctx: &AppContext, args: &TuneArgs) -> Result<()> {
 
     let mut changed = false;
 
-    if let Some(exploration) = args.exploration {
-        let clamped = exploration.clamp(0.0, 1.0);
-        bandit.set_exploration_rate(clamped);
-        changed = true;
-    }
+    if !args.show {
+        if let Some(exploration) = args.exploration {
+            let clamped = exploration.clamp(0.0, 1.0);
+            bandit.set_exploration_rate(clamped);
+            changed = true;
+        }
 
-    if let Some(learning_rate) = args.learning_rate {
-        let clamped = learning_rate.clamp(0.0, 1.0);
-        bandit.set_learning_rate(clamped);
-        changed = true;
-    }
+        if let Some(learning_rate) = args.learning_rate {
+            let clamped = learning_rate.clamp(0.0, 1.0);
+            bandit.set_learning_rate(clamped);
+            changed = true;
+        }
 
-    if changed {
-        bandit.save(&bandit_path)?;
+        if changed {
+            bandit.save(&bandit_path)?;
+        }
     }
 
     // Show current settings
@@ -324,6 +332,7 @@ fn tune(ctx: &AppContext, args: &TuneArgs) -> Result<()> {
         let payload = serde_json::json!({
             "status": "ok",
             "changed": changed,
+            "show_only": args.show,
             "config": config,
         });
         return emit_json(&payload);
@@ -368,9 +377,16 @@ fn tune(ctx: &AppContext, args: &TuneArgs) -> Result<()> {
     Ok(())
 }
 
-fn default_bandit_path() -> PathBuf {
-    let base = dirs::data_dir().unwrap_or_else(|| PathBuf::from("."));
-    base.join("ms").join("contextual_bandit.json")
+fn bandit_path(ms_root: &std::path::Path) -> PathBuf {
+    let primary = ms_root.join("contextual_bandit.json");
+    if primary.exists() {
+        return primary;
+    }
+    let legacy = dirs::data_dir()
+        .unwrap_or_else(|| PathBuf::from("."))
+        .join("ms")
+        .join("contextual_bandit.json");
+    if legacy.exists() { legacy } else { primary }
 }
 
 #[cfg(test)]
@@ -487,5 +503,12 @@ mod tests {
             }
             _ => panic!("expected tune command"),
         }
+    }
+
+    #[test]
+    fn test_bandit_path_uses_ms_root() {
+        let tmp = tempfile::tempdir().unwrap();
+        let p = bandit_path(tmp.path());
+        assert_eq!(p, tmp.path().join("contextual_bandit.json"));
     }
 }

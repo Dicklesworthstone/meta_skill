@@ -77,8 +77,8 @@ impl CassClient {
         } else {
             (PathBuf::from("cass"), false)
         };
-        let session_pattern = Some(config.session_pattern.trim().to_string())
-            .filter(|p| !p.is_empty() && p != "*");
+        let session_pattern =
+            Some(config.session_pattern.trim().to_string()).filter(|p| !p.is_empty() && p != "*");
         Self {
             cass_bin,
             enabled,
@@ -1332,4 +1332,3 @@ mod tests {
         assert!(!client.matches_filters(&too_old));
     }
 }
-

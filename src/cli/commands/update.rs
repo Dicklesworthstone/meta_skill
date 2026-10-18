@@ -35,6 +35,44 @@ pub struct UpdateArgs {
     pub channel: Option<String>,
 }
 
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct UpdateCheckState {
+    pub last_checked_at: chrono::DateTime<chrono::Utc>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub latest_version: Option<String>,
+}
+
+/// Check whether an automatic update check is due based on `UpdateConfig` (`auto_check`, `check_interval_hours`).
+#[must_use]
+pub fn is_update_check_due(
+    ms_root: &std::path::Path,
+    update_cfg: &crate::config::UpdateConfig,
+) -> bool {
+    if !update_cfg.auto_check {
+        return false;
+    }
+    let state_path = ms_root.join("last_update_check.json");
+    let Ok(raw) = std::fs::read_to_string(&state_path) else {
+        return true;
+    };
+    let Ok(state) = serde_json::from_str::<UpdateCheckState>(&raw) else {
+        return true;
+    };
+    let interval = chrono::Duration::hours(i64::from(update_cfg.check_interval_hours.max(1)));
+    chrono::Utc::now().signed_duration_since(state.last_checked_at) >= interval
+}
+
+/// Record that an update check was performed in `<ms_root>/last_update_check.json`.
+pub fn record_update_check(ms_root: &std::path::Path, latest_version: Option<&str>) {
+    let state = UpdateCheckState {
+        last_checked_at: chrono::Utc::now(),
+        latest_version: latest_version.map(std::string::ToString::to_string),
+    };
+    if let Ok(serialized) = serde_json::to_string_pretty(&state) {
+        let _ = std::fs::write(ms_root.join("last_update_check.json"), serialized);
+    }
+}
+
 pub fn run(ctx: &AppContext, args: &UpdateArgs) -> Result<()> {
     let current_version =
         Version::parse(env!("CARGO_PKG_VERSION")).unwrap_or_else(|_| Version::new(0, 1, 0));
@@ -57,6 +95,7 @@ pub fn run(ctx: &AppContext, args: &UpdateArgs) -> Result<()> {
         run_interactive(args, &checker, target_version.as_ref())?;
     }
 
+    record_update_check(&ctx.ms_root, None);
     Ok(())
 }
 
@@ -268,4 +307,28 @@ fn run_interactive(
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_is_update_check_due_respects_auto_check_and_interval() {
+        let tmp = tempfile::tempdir().unwrap();
+        let mut cfg = crate::config::UpdateConfig {
+            auto_check: false,
+            check_interval_hours: 24,
+            channel: "stable".to_string(),
+        };
+        assert!(!is_update_check_due(tmp.path(), &cfg));
+
+        cfg.auto_check = true;
+        // Missing state file -> due
+        assert!(is_update_check_due(tmp.path(), &cfg));
+
+        // Record check -> no longer due
+        record_update_check(tmp.path(), Some("0.2.3"));
+        assert!(!is_update_check_due(tmp.path(), &cfg));
+    }
 }

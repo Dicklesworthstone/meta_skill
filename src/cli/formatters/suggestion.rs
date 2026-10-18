@@ -100,6 +100,20 @@ pub struct SuggestionContext {
     pub fingerprint: Option<u64>,
 }
 
+/// A suggested skill that was auto-loaded via `--load`
+#[derive(Debug, Clone, Serialize)]
+pub struct LoadedSuggestionSkill {
+    /// Skill ID
+    pub skill_id: String,
+    /// Skill name
+    pub name: String,
+    /// Estimated token count of disclosed content
+    pub token_count: usize,
+    /// Disclosed skill content
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub content: Option<String>,
+}
+
 /// Formatted suggestion output
 #[derive(Debug, Clone)]
 pub struct SuggestionOutput {
@@ -109,6 +123,8 @@ pub struct SuggestionOutput {
     pub discovery_suggestions: Vec<SuggestionItem>,
     /// Context information
     pub context: SuggestionContext,
+    /// Skills auto-loaded via `--load`
+    pub loaded_skills: Vec<LoadedSuggestionSkill>,
 }
 
 /// Serializable suggestion for JSON output
@@ -133,6 +149,8 @@ struct SuggestionResponseJson {
     context: SuggestionContext,
     suggestions: Vec<SuggestionJson>,
     discovery_suggestions: Vec<SuggestionJson>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    loaded_skills: Vec<LoadedSuggestionSkill>,
 }
 
 impl SuggestionOutput {
@@ -142,6 +160,7 @@ impl SuggestionOutput {
             suggestions: Vec::new(),
             discovery_suggestions: Vec::new(),
             context: SuggestionContext::default(),
+            loaded_skills: Vec::new(),
         }
     }
 
@@ -165,6 +184,13 @@ impl SuggestionOutput {
     #[must_use]
     pub fn with_fingerprint(mut self, fingerprint: u64) -> Self {
         self.context.fingerprint = Some(fingerprint);
+        self
+    }
+
+    /// Attach auto-loaded skills
+    #[must_use]
+    pub fn with_loaded_skills(mut self, loaded_skills: Vec<LoadedSuggestionSkill>) -> Self {
+        self.loaded_skills = loaded_skills;
         self
     }
 
@@ -195,6 +221,7 @@ impl SuggestionOutput {
                 .iter()
                 .map(Self::to_suggestion_json)
                 .collect(),
+            loaded_skills: self.loaded_skills.clone(),
         }
     }
 
@@ -310,6 +337,27 @@ impl SuggestionOutput {
                     out.push_str(&format!("   {}\n", suggestion.description));
                 }
 
+                out.push('\n');
+            }
+        }
+
+        if !self.loaded_skills.is_empty() {
+            out.push_str(&format!(
+                "{}\n\n",
+                style("Auto-loaded skills:").green().bold()
+            ));
+            for loaded in &self.loaded_skills {
+                out.push_str(&format!(
+                    "# {} ({} tokens)\n",
+                    style(&loaded.name).bold(),
+                    loaded.token_count
+                ));
+                if let Some(ref content) = loaded.content {
+                    out.push_str(content);
+                    if !content.ends_with('\n') {
+                        out.push('\n');
+                    }
+                }
                 out.push('\n');
             }
         }

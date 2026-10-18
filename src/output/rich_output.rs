@@ -203,15 +203,15 @@ impl RichOutput {
         force_plain: bool,
         force_rich: bool,
     ) -> Self {
-        // CLI --plain or --color=never takes immediate precedence
-        if force_plain {
+        // CLI --plain or --color=never or config.output.plain takes immediate precedence
+        if force_plain || config.output.plain {
             trace!("RichOutput: force_plain flag set, using plain mode");
             return Self::plain();
         }
 
         // Build environment with potential force_rich override
         let mut env = OutputEnvironment::from_env();
-        if force_rich {
+        if force_rich || config.output.force_rich {
             trace!("RichOutput: force_rich flag set, overriding environment");
             env.force_rich = true;
         }
@@ -316,7 +316,10 @@ impl RichOutput {
             }
         };
 
-        let caps = detect_terminal_capabilities();
+        let mut caps = detect_terminal_capabilities();
+        if config.output.no_unicode {
+            caps.supports_unicode = false;
+        }
         let theme = if mode == OutputMode::Rich {
             Theme::from_config(config)
                 .unwrap_or_else(|_| Theme::auto_detect())
@@ -330,7 +333,9 @@ impl RichOutput {
             theme,
             width: terminal_width(),
             color_system: caps.color_system,
-            use_unicode: caps.supports_unicode && mode == OutputMode::Rich,
+            use_unicode: caps.supports_unicode
+                && !config.output.no_unicode
+                && mode == OutputMode::Rich,
             supports_hyperlinks: caps.supports_hyperlinks && mode == OutputMode::Rich,
         }
     }

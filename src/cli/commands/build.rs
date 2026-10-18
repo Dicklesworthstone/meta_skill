@@ -742,11 +742,9 @@ pub fn parse_since_cutoff(since_str: &str) -> Result<chrono::DateTime<chrono::Ut
         )));
     };
 
-    let amount: i64 = num_str.parse().map_err(|_| {
-        MsError::Config(format!(
-            "Invalid number in --since value '{since_str}'"
-        ))
-    })?;
+    let amount: i64 = num_str
+        .parse()
+        .map_err(|_| MsError::Config(format!("Invalid number in --since value '{since_str}'")))?;
     if amount <= 0 {
         return Err(MsError::Config(
             "--since duration must be greater than zero".into(),
@@ -955,7 +953,7 @@ fn run_redaction_report(ctx: &AppContext, args: &BuildArgs) -> Result<()> {
                         sessions_with_secrets += 1;
                         total_secrets_detected += summary.total_count;
                         for (k, v) in summary.by_type {
-                            *by_type.entry(k).or_insert(0) += v;
+                            *by_type.entry(k.to_string()).or_insert(0) += v;
                         }
                     }
                 }
@@ -3389,4 +3387,3 @@ mod tests {
         assert!(build_transformer(CassClient::new(), &args).is_err());
     }
 }
-

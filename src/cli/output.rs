@@ -275,8 +275,32 @@ impl From<StructuredError> for RobotStatus {
     }
 }
 
+static ACTIVE_ROBOT_INCLUDE_METADATA: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(true);
+
+/// Configure whether [`emit_robot`] includes top-level `timestamp` and `version` metadata.
+pub fn set_robot_include_metadata(include: bool) {
+    ACTIVE_ROBOT_INCLUDE_METADATA.store(include, Ordering::Relaxed);
+}
+
+/// Return whether [`emit_robot`] includes top-level `timestamp` and `version` metadata.
+#[must_use]
+pub fn robot_include_metadata() -> bool {
+    ACTIVE_ROBOT_INCLUDE_METADATA.load(Ordering::Relaxed)
+}
+
 pub fn emit_robot<T: Serialize>(response: &RobotResponse<T>) -> Result<()> {
-    emit_json(response)
+    if robot_include_metadata() {
+        emit_json(response)
+    } else {
+        let mut val = serde_json::to_value(response)
+            .map_err(|err| MsError::Config(format!("serialize output: {err}")))?;
+        if let serde_json::Value::Object(ref mut map) = val {
+            map.remove("timestamp");
+            map.remove("version");
+        }
+        emit_json(&val)
+    }
 }
 
 pub fn emit_json<T: Serialize>(value: &T) -> Result<()> {
@@ -803,5 +827,13 @@ mod tests {
             }
             _ => panic!("Expected StructuredError status"),
         }
+    }
+
+    #[test]
+    fn test_robot_include_metadata_toggle() {
+        set_robot_include_metadata(false);
+        assert!(!robot_include_metadata());
+        set_robot_include_metadata(true);
+        assert!(robot_include_metadata());
     }
 }
