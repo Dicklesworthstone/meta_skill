@@ -715,6 +715,88 @@ impl BeadsTracker {
     }
 }
 
+/// Parse a `--since` filter string into a UTC cutoff timestamp.
+///
+/// Accepts RFC3339 timestamps, `YYYY-MM-DD` dates, or relative durations such as
+/// `"7 days"`, `"7d"`, `"2 weeks"`, `"24h"`, `"30m"`.
+pub fn parse_since_cutoff(since_str: &str) -> Result<chrono::DateTime<chrono::Utc>> {
+    let trimmed = since_str.trim();
+    if trimmed.is_empty() {
+        return Err(MsError::Config("Empty --since value".into()));
+    }
+    if let Some(ts) = crate::cass::client::parse_session_timestamp(trimmed) {
+        return Ok(ts);
+    }
+
+    let lower = trimmed.to_lowercase();
+    let tokens: Vec<&str> = lower.split_whitespace().collect();
+    let (num_str, unit_str) = if tokens.len() == 2 {
+        (tokens[0], tokens[1])
+    } else if tokens.len() == 1 {
+        let s = tokens[0];
+        let split_idx = s.find(|c: char| !c.is_ascii_digit()).unwrap_or(s.len());
+        (&s[..split_idx], &s[split_idx..])
+    } else {
+        return Err(MsError::Config(format!(
+            "Invalid --since value '{since_str}'. Expected date or relative duration (e.g., '7 days', '24h')."
+        )));
+    };
+
+    let amount: i64 = num_str.parse().map_err(|_| {
+        MsError::Config(format!(
+            "Invalid number in --since value '{since_str}'"
+        ))
+    })?;
+    if amount <= 0 {
+        return Err(MsError::Config(
+            "--since duration must be greater than zero".into(),
+        ));
+    }
+
+    let delta = match unit_str {
+        "d" | "day" | "days" => chrono::Duration::days(amount),
+        "w" | "wk" | "wks" | "week" | "weeks" => chrono::Duration::weeks(amount),
+        "h" | "hr" | "hrs" | "hour" | "hours" => chrono::Duration::hours(amount),
+        "m" | "min" | "mins" | "minute" | "minutes" => chrono::Duration::minutes(amount),
+        "s" | "sec" | "secs" | "second" | "seconds" => chrono::Duration::seconds(amount),
+        _ => {
+            return Err(MsError::Config(format!(
+                "Unsupported --since unit '{unit_str}' in '{since_str}'"
+            )));
+        }
+    };
+
+    Ok(chrono::Utc::now() - delta)
+}
+
+fn build_cass_client(ctx: &AppContext, args: &BuildArgs) -> Result<CassClient> {
+    let since_cutoff = match args.since.as_deref() {
+        Some(s) => Some(parse_since_cutoff(s)?),
+        None => None,
+    };
+    Ok(CassClient::from_config(&ctx.config.cass).with_since(since_cutoff))
+}
+
+fn build_transformer(
+    cass_client: CassClient,
+    args: &BuildArgs,
+) -> Result<crate::cass::SpecificToGeneralTransformer> {
+    let method = args.generalize.trim().to_lowercase();
+    if method != "heuristic" && method != "llm" {
+        return Err(MsError::Config(format!(
+            "Invalid --generalize method '{}': expected 'heuristic' or 'llm'",
+            args.generalize
+        )));
+    }
+    let mut transformer = crate::cass::SpecificToGeneralTransformer::new(cass_client);
+    if args.llm_critique || method == "llm" {
+        transformer = transformer.with_refiner(Box::new(
+            crate::cass::transformation::StructuralCritiqueRefiner::new(method == "llm"),
+        ));
+    }
+    Ok(transformer)
+}
+
 pub fn run(ctx: &AppContext, args: &BuildArgs) -> Result<()> {
     debug!(target: "build", mode = ?ctx.output_format, "output mode selected");
 
@@ -723,6 +805,25 @@ pub fn run(ctx: &AppContext, args: &BuildArgs) -> Result<()> {
         return Err(MsError::Config(
             "--guided and --auto are mutually exclusive".into(),
         ));
+    }
+
+    // Validate generalization method upfront
+    let gen_method = args.generalize.trim().to_lowercase();
+    if gen_method != "heuristic" && gen_method != "llm" {
+        return Err(MsError::Config(format!(
+            "Invalid --generalize method '{}': expected 'heuristic' or 'llm'",
+            args.generalize
+        )));
+    }
+
+    // Validate --since upfront if provided
+    if let Some(ref since_str) = args.since {
+        let _ = parse_since_cutoff(since_str)?;
+    }
+
+    // Handle --redaction-report (emit secret redaction report without building)
+    if args.redaction_report {
+        return run_redaction_report(ctx, args);
     }
 
     // Warn about risky flags
@@ -829,6 +930,66 @@ pub fn run(ctx: &AppContext, args: &BuildArgs) -> Result<()> {
     run_interactive_build(ctx, args, cm_context.as_ref(), bead_tracker)
 }
 
+/// Emit a secret redaction report across matching CASS sessions without building a skill.
+fn run_redaction_report(ctx: &AppContext, args: &BuildArgs) -> Result<()> {
+    let query = args.from_cass.as_deref().unwrap_or("*");
+    let client = build_cass_client(ctx, args)?;
+    let mut sessions_scanned = 0usize;
+    let mut sessions_with_secrets = 0usize;
+    let mut total_secrets_detected = 0usize;
+    let mut by_type: std::collections::BTreeMap<String, usize> = std::collections::BTreeMap::new();
+
+    if client.is_available() {
+        if let Ok(matches) = client.search(query, args.sessions.max(1) * 3) {
+            for m in matches.into_iter().take(args.sessions.max(1)) {
+                if let Ok(sess) = client.get_session(&m.path) {
+                    sessions_scanned += 1;
+                    let combined = sess
+                        .messages
+                        .iter()
+                        .map(|msg| msg.content.as_str())
+                        .collect::<Vec<_>>()
+                        .join("\n");
+                    let summary = crate::security::secret_scanner::scan_secrets_summary(&combined);
+                    if summary.total_count > 0 {
+                        sessions_with_secrets += 1;
+                        total_secrets_detected += summary.total_count;
+                        for (k, v) in summary.by_type {
+                            *by_type.entry(k).or_insert(0) += v;
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    let report = json!({
+        "status": "redaction_report",
+        "query": query,
+        "since": args.since,
+        "sessions_scanned": sessions_scanned,
+        "sessions_with_secrets": sessions_with_secrets,
+        "total_secrets_detected": total_secrets_detected,
+        "by_type": by_type,
+        "redaction_enabled": !args.no_redact,
+    });
+
+    if ctx.output_format != OutputFormat::Human {
+        println!("{}", serde_json::to_string_pretty(&report)?);
+    } else {
+        println!("Redaction Report");
+        println!("  Query: {query}");
+        if let Some(ref since) = args.since {
+            println!("  Since: {since}");
+        }
+        println!("  Sessions scanned: {sessions_scanned}");
+        println!("  Sessions with secrets: {sessions_with_secrets}");
+        println!("  Total secrets detected: {total_secrets_detected}");
+        println!("  Redaction enabled: {}", !args.no_redact);
+    }
+    Ok(())
+}
+
 /// Run guided build using Brenner Method wizard
 fn run_guided(
     ctx: &AppContext,
@@ -860,7 +1021,9 @@ fn run_guided(
         output_dir: output_dir.clone(),
     };
 
-    let mut wizard = BrennerWizard::new(&query, config.clone());
+    let transformer_client = build_cass_client(ctx, args)?;
+    let transformer = build_transformer(transformer_client, args)?;
+    let mut wizard = BrennerWizard::new(&query, config.clone()).with_transformer(transformer);
 
     // Show CM suggestions if available
     if let Some(cm_ctx) = cm_context {
@@ -874,11 +1037,7 @@ fn run_guided(
     }
 
     // Create CASS client and quality scorer
-    let client = if let Some(ref cass_path) = ctx.config.cass.cass_path {
-        CassClient::with_binary(cass_path)
-    } else {
-        CassClient::new()
-    };
+    let client = build_cass_client(ctx, args)?;
     let quality_scorer = QualityScorer::with_defaults();
 
     if ctx.output_format != OutputFormat::Human {
@@ -887,6 +1046,9 @@ fn run_guided(
             "status": "wizard_started",
             "checkpoint_id": wizard.checkpoint().id,
             "query": query,
+            "since": args.since,
+            "generalize": args.generalize,
+            "llm_critique": args.llm_critique,
             "output_dir": output_dir.display().to_string(),
         });
         println!("{}", serde_json::to_string_pretty(&output)?);
@@ -1036,11 +1198,7 @@ fn run_auto(
     }
 
     // Create CASS client and quality scorer
-    let mut cass_client = if let Some(ref cass_path) = ctx.config.cass.cass_path {
-        CassClient::with_binary(cass_path)
-    } else {
-        CassClient::new()
-    };
+    let mut cass_client = build_cass_client(ctx, args)?;
     if let Ok(fp_cache) =
         crate::cass::FingerprintCache::open(ctx.ms_root.join("cass_fingerprints.db"))
     {
@@ -1405,6 +1563,11 @@ fn run_auto(
     // Write patterns JSON
     let patterns_path = output_dir.join("patterns.json");
     let patterns_json = serde_json::to_string_pretty(&filtered_patterns)?;
+    let patterns_json = if args.no_redact {
+        patterns_json
+    } else {
+        crate::security::secret_scanner::redact_secrets(&patterns_json)
+    };
     fs::write(&patterns_path, &patterns_json)?;
 
     // Synthesize SKILL.md from filtered patterns
@@ -1414,7 +1577,7 @@ fn run_auto(
         .collect();
     let mut draft = crate::cass::synthesis::synthesize_skill(&simple_patterns)?;
     if let Some(top_pat) = simple_patterns.first() {
-        let transformer = crate::cass::SpecificToGeneralTransformer::new(cass_client);
+        let transformer = build_transformer(cass_client, args)?;
         let instance = crate::cass::SpecificInstance {
             id: top_pat.id.clone(),
             content: top_pat.content.clone(),
@@ -1494,6 +1657,10 @@ fn run_auto(
         }
     }
 
+    if !args.no_redact {
+        skill_md = crate::security::secret_scanner::redact_secrets(&skill_md);
+    }
+
     let skill_md_path = output_dir.join("SKILL.md");
     fs::write(&skill_md_path, &skill_md)?;
 
@@ -1509,7 +1676,10 @@ fn run_auto(
         "version": "1.0.0",
         "session_id": session.session_id,
         "query": query,
+        "since": args.since,
         "build_type": "auto",
+        "generalize": args.generalize,
+        "llm_critique": args.llm_critique,
         "sessions_used": quality_sessions.iter().map(|(s, q)| json!({
             "id": s.id,
             "quality_score": q.score,
@@ -2046,11 +2216,7 @@ fn run_resolve_uncertainties(ctx: &AppContext, args: &BuildArgs) -> Result<()> {
         }
 
         let resolver = DefaultResolver::new(args.min_confidence, 5);
-        let cass_client = if let Some(ref cass_path) = ctx.config.cass.cass_path {
-            CassClient::with_binary(cass_path)
-        } else {
-            CassClient::new()
-        };
+        let cass_client = build_cass_client(ctx, args)?;
 
         let mut resolved_count = 0;
         let mut escalated_count = 0;
@@ -3169,4 +3335,58 @@ mod tests {
         let display = format!("{:.1}s", display_secs);
         assert!(display.contains("9000.0s"));
     }
+
+    #[test]
+    fn test_parse_since_cutoff_formats() {
+        let seven_days = parse_since_cutoff("7 days").unwrap();
+        let diff = chrono::Utc::now() - seven_days;
+        assert!((diff.num_hours() - 168).abs() <= 1);
+
+        let short_form = parse_since_cutoff("24h").unwrap();
+        let diff_h = chrono::Utc::now() - short_form;
+        assert!((diff_h.num_hours() - 24).abs() <= 1);
+
+        let iso_date = parse_since_cutoff("2026-10-01").unwrap();
+        assert_eq!(iso_date.format("%Y-%m-%d").to_string(), "2026-10-01");
+
+        assert!(parse_since_cutoff("").is_err());
+        assert!(parse_since_cutoff("invalid").is_err());
+    }
+
+    #[test]
+    fn test_build_transformer_validates_generalize_method() {
+        let mut args = BuildArgs {
+            from_cass: Some("error handling".to_string()),
+            since: Some("7 days".to_string()),
+            bead_id: None,
+            close_bead_on_success: true,
+            guided: false,
+            tui: false,
+            name: None,
+            sessions: 5,
+            duration: None,
+            checkpoint_interval: None,
+            resume: None,
+            with_cm: false,
+            min_session_quality: 0.6,
+            redaction_report: false,
+            no_redact: false,
+            no_antipatterns: false,
+            no_injection_filter: false,
+            generalize: "llm".to_string(),
+            llm_critique: true,
+            output: None,
+            output_spec: None,
+            min_confidence: 0.8,
+            min_sessions: None,
+            min_patterns: None,
+            auto: true,
+            resolve_uncertainties: false,
+        };
+        assert!(build_transformer(CassClient::new(), &args).is_ok());
+
+        args.generalize = "unsupported".to_string();
+        assert!(build_transformer(CassClient::new(), &args).is_err());
+    }
 }
+

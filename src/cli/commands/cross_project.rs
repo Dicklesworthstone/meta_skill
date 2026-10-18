@@ -428,10 +428,9 @@ fn format_date(raw: Option<&str>) -> String {
 fn cass_client(ctx: &AppContext, override_path: &Option<PathBuf>) -> CassClient {
     if let Some(cass_path) = override_path {
         CassClient::with_binary(cass_path)
-    } else if let Some(ref cass_path) = ctx.config.cass.cass_path {
-        CassClient::with_binary(cass_path)
+            .with_session_pattern(ctx.config.cass.session_pattern.clone())
     } else {
-        CassClient::new()
+        CassClient::from_config(&ctx.config.cass)
     }
 }
 
@@ -1098,18 +1097,7 @@ pub fn run_coverage(ctx: &AppContext, args: &CoverageArgs) -> Result<()> {
     }
 
     // 2. Fold in CASS sessions if CASS is available
-    let client = args.cass_path.as_ref().map_or_else(
-        || {
-            ctx.config
-                .cass
-                .cass_path
-                .as_ref()
-                .map_or_else(CassClient::new, |path| {
-                    CassClient::with_binary(PathBuf::from(path))
-                })
-        },
-        |path| CassClient::with_binary(path.clone()),
-    );
+    let client = cass_client(ctx, &args.cass_path);
     if let Ok(matches) = client.search(&args.query, args.limit) {
         for m in matches {
             if let Some(proj) = m
