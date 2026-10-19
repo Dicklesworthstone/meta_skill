@@ -188,11 +188,13 @@ fn collect_mcp_tools() -> Vec<McpToolInfo> {
     vec![
         McpToolInfo {
             name: "search".to_string(),
-            description: "Search for skills using BM25 full-text search".to_string(),
+            description: "Search for skills using BM25 full-text and hybrid semantic search"
+                .to_string(),
         },
         McpToolInfo {
             name: "load".to_string(),
-            description: "Load a skill by ID".to_string(),
+            description: "Load a skill by ID with progressive disclosure and token packing"
+                .to_string(),
         },
         McpToolInfo {
             name: "suggest".to_string(),
@@ -225,6 +227,26 @@ fn collect_mcp_tools() -> Vec<McpToolInfo> {
         McpToolInfo {
             name: "index".to_string(),
             description: "Re-index skills".to_string(),
+        },
+        McpToolInfo {
+            name: "validate".to_string(),
+            description: "Validate a skill specification".to_string(),
+        },
+        McpToolInfo {
+            name: "config".to_string(),
+            description: "Get or set ms configuration values".to_string(),
+        },
+        McpToolInfo {
+            name: "safety".to_string(),
+            description: "Check command safety using DCG tiers".to_string(),
+        },
+        McpToolInfo {
+            name: "security".to_string(),
+            description: "Scan content for prompt injection (ACIP) and secrets".to_string(),
+        },
+        McpToolInfo {
+            name: "dedup".to_string(),
+            description: "Scan indexed skills for near-duplicates".to_string(),
         },
     ]
 }

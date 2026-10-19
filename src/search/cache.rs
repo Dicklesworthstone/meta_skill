@@ -41,6 +41,8 @@ pub struct CachedQueryResult {
 pub struct CachedEmbedding {
     /// The embedding vector
     pub embedding: Vec<f32>,
+    /// Compact IEEE 754 `f16` representation of the embedding
+    pub quantized: Vec<half::f16>,
     /// Content hash used to generate this embedding
     pub content_hash: String,
 }
@@ -215,15 +217,56 @@ impl CacheLayer {
         None
     }
 
-    /// Cache embedding for a skill.
+    /// Get cached quantized (`half::f16`) embedding for a skill.
+    pub fn get_embedding_quantized(
+        &self,
+        skill_id: &str,
+        content_hash: &str,
+    ) -> Option<Vec<half::f16>> {
+        let mut cache = self.embedding_cache.try_lock().ok()?;
+        let mut stats = self.stats.try_lock().ok()?;
+
+        if let Some(entry) = cache.get(skill_id) {
+            if entry.content_hash == content_hash {
+                stats.embedding_hits += 1;
+                return Some(entry.quantized.clone());
+            }
+        }
+        stats.embedding_misses += 1;
+        None
+    }
+
+    /// Cache embedding for a skill (alongside its `f16` quantized representation).
     ///
     /// Silently fails if cache is locked.
     pub fn put_embedding(&self, skill_id: &str, content_hash: &str, embedding: Vec<f32>) {
         if let Ok(mut cache) = self.embedding_cache.try_lock() {
+            let quantized = crate::search::embeddings::quantize_f16(&embedding);
             cache.put(
                 skill_id.to_string(),
                 CachedEmbedding {
                     embedding,
+                    quantized,
+                    content_hash: content_hash.to_string(),
+                },
+            );
+        }
+    }
+
+    /// Cache a pre-quantized (`half::f16`) embedding for a skill.
+    pub fn put_embedding_quantized(
+        &self,
+        skill_id: &str,
+        content_hash: &str,
+        quantized: Vec<half::f16>,
+    ) {
+        if let Ok(mut cache) = self.embedding_cache.try_lock() {
+            let embedding = crate::search::embeddings::dequantize_f16(&quantized);
+            cache.put(
+                skill_id.to_string(),
+                CachedEmbedding {
+                    embedding,
+                    quantized,
                     content_hash: content_hash.to_string(),
                 },
             );

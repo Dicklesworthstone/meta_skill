@@ -219,12 +219,31 @@ fn synthesize_from_clusters(clusters: Vec<EvidenceCluster>) -> Vec<AntiPattern> 
                 ap.add_evidence(ev);
             }
 
-            // Extract failure modes
+            // Extract failure modes and trigger conditions
             ap.failure_modes = extract_failure_modes(&ap.evidence);
+            ap.trigger_conditions = extract_trigger_conditions(&ap.evidence);
 
             ap
         })
         .collect()
+}
+
+/// Extract trigger conditions from evidence context messages
+fn extract_trigger_conditions(evidence: &[AntiPatternEvidence]) -> Vec<Condition> {
+    let mut seen = std::collections::HashSet::new();
+    let mut conditions = Vec::new();
+    for ev in evidence {
+        for msg in &ev.incident.context.before {
+            let lower = msg.to_lowercase();
+            if lower.contains("if ") || lower.contains("when ") {
+                let desc = truncate(msg, 100);
+                if seen.insert(desc.clone()) {
+                    conditions.push(Condition::suggested(desc));
+                }
+            }
+        }
+    }
+    conditions
 }
 
 /// Synthesize a negative rule from a cluster
@@ -427,5 +446,24 @@ mod tests {
         let japanese = "日本語テスト";
         let result = truncate(japanese, 3);
         assert_eq!(result, "日本語...");
+    }
+
+    #[test]
+    fn test_find_orphaned_and_link_to_pattern() {
+        let mut ap1 = AntiPattern::new(NegativeRule::new("Avoid X", AntiPatternSeverity::Warning));
+        let ap2 = AntiPattern::new(NegativeRule::new("Avoid Y", AntiPatternSeverity::Advisory));
+
+        let items = vec![ap1.clone(), ap2.clone()];
+        assert_eq!(find_orphaned(&items).len(), 2);
+
+        link_to_pattern(&mut ap1, PatternId::new("positive-skill-1"));
+        assert!(!ap1.is_orphaned());
+        assert_eq!(
+            ap1.constrains.as_ref().map(|p| p.0.as_str()),
+            Some("positive-skill-1")
+        );
+
+        let updated = vec![ap1, ap2];
+        assert_eq!(find_orphaned(&updated).len(), 1);
     }
 }

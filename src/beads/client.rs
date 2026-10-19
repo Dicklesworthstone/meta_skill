@@ -476,12 +476,20 @@ impl BeadsClient {
     /// Check sync status without syncing.
     pub fn sync_status(&self) -> Result<SyncStatus> {
         let output = self.run_command(&["sync", "--status"])?;
-        let output_str = String::from_utf8_lossy(&output);
+        let output_lower = String::from_utf8_lossy(&output).to_ascii_lowercase();
 
-        // Parse the status output
-        if output_str.contains("no differences") || output_str.contains("up to date") {
+        // Parse the status output across both `br` and legacy `bd`
+        if output_lower.contains("no differences")
+            || output_lower.contains("up to date")
+            || output_lower.contains("in sync")
+            || output_lower.contains("dirty issues: 0")
+        {
             Ok(SyncStatus::Clean)
-        } else if output_str.contains("pending") || output_str.contains("uncommitted") {
+        } else if output_lower.contains("pending")
+            || output_lower.contains("uncommitted")
+            || output_lower.contains("out of sync")
+            || output_lower.contains("dirty issues:")
+        {
             Ok(SyncStatus::Dirty)
         } else {
             Ok(SyncStatus::Unknown)

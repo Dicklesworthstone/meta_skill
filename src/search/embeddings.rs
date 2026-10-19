@@ -305,6 +305,26 @@ impl VectorIndex {
         true
     }
 
+    /// Insert or replace an embedding from a quantized `half::f16` slice
+    pub fn insert_quantized(
+        &mut self,
+        skill_id: impl Into<String>,
+        quantized: &[half::f16],
+    ) -> bool {
+        if quantized.len() != self.dims {
+            return false;
+        }
+        self.embeddings
+            .insert(skill_id.into(), dequantize_f16(quantized));
+        true
+    }
+
+    /// Retrieve a stored embedding quantized to `half::f16`
+    #[must_use]
+    pub fn get_quantized(&self, skill_id: &str) -> Option<Vec<half::f16>> {
+        self.embeddings.get(skill_id).map(|emb| quantize_f16(emb))
+    }
+
     /// Remove an embedding by skill id
     pub fn remove(&mut self, skill_id: &str) -> Option<Vec<f32>> {
         self.embeddings.remove(skill_id)
@@ -603,5 +623,10 @@ mod tests {
         assert_eq!(bytes.len(), 384 * 2);
         let decoded = decode_f16_bytes(&bytes);
         assert_eq!(decoded, restored);
+
+        let mut idx = VectorIndex::new(384);
+        assert!(idx.insert_quantized("skill-q", &f16_vec));
+        let fetched_q = idx.get_quantized("skill-q").expect("quantized present");
+        assert_eq!(fetched_q, f16_vec);
     }
 }

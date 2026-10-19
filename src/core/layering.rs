@@ -416,6 +416,68 @@ impl LayeredRegistry {
             .get(id)
             .and_then(|by_layer| by_layer.get(&layer))
     }
+
+    /// Populate a `LayeredRegistry` by scanning configured skill path buckets on disk.
+    #[must_use]
+    pub fn from_skill_paths(skill_paths: &crate::config::SkillPathsConfig) -> Self {
+        let mut registry = Self::new();
+        let expand = |p: &str| -> std::path::PathBuf {
+            if let Some(stripped) = p.strip_prefix("~/") {
+                if let Some(home) = dirs::home_dir() {
+                    return home.join(stripped);
+                }
+            }
+            std::path::PathBuf::from(p)
+        };
+
+        let buckets = [
+            (&skill_paths.community, SkillLayer::Base),
+            (&skill_paths.global, SkillLayer::Org),
+            (&skill_paths.project, SkillLayer::Project),
+            (&skill_paths.local, SkillLayer::User),
+        ];
+
+        for (paths, layer) in buckets {
+            for raw_path in paths {
+                let root = expand(raw_path);
+                if !root.exists() {
+                    continue;
+                }
+                for entry in walkdir::WalkDir::new(&root)
+                    .max_depth(4)
+                    .follow_links(false)
+                    .into_iter()
+                    .filter_map(std::result::Result::ok)
+                {
+                    if entry.file_type().is_file() && entry.file_name() == "SKILL.md" {
+                        if let Ok(content) = std::fs::read_to_string(entry.path()) {
+                            if let Ok(mut spec) = crate::core::spec_lens::parse_markdown(&content) {
+                                if spec.metadata.id.is_empty() {
+                                    if let Some(parent_name) = entry
+                                        .path()
+                                        .parent()
+                                        .and_then(|p| p.file_name())
+                                        .and_then(|n| n.to_str())
+                                    {
+                                        spec.metadata.id = parent_name.to_string();
+                                    }
+                                }
+                                if !spec.metadata.id.is_empty() {
+                                    registry.register(SkillCandidate {
+                                        spec,
+                                        layer,
+                                        source_path: entry.path().display().to_string(),
+                                    });
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        registry
+    }
 }
 
 impl LayeredRegistry {
@@ -942,5 +1004,41 @@ mod tests {
         assert_eq!(conflicts[0].section_id, "s1");
         assert_eq!(conflicts[1].section_id, "s2");
         assert_eq!(conflicts[2].section_id, "s3");
+    }
+
+    #[test]
+    fn test_from_skill_paths_detects_multi_layer_candidates() {
+        let temp = tempfile::tempdir().unwrap();
+        let org_dir = temp.path().join("org").join("shared-skill");
+        let project_dir = temp.path().join("project").join("shared-skill");
+        std::fs::create_dir_all(&org_dir).unwrap();
+        std::fs::create_dir_all(&project_dir).unwrap();
+
+        std::fs::write(
+            org_dir.join("SKILL.md"),
+            "---\nid: shared-skill\nname: Shared Skill\ndescription: Org version\n---\n\n# Shared Skill\n\n## Rules\n\nOrg rule.\n",
+        )
+        .unwrap();
+        std::fs::write(
+            project_dir.join("SKILL.md"),
+            "---\nid: shared-skill\nname: Shared Skill\ndescription: Project version\n---\n\n# Shared Skill\n\n## Rules\n\nProject override rule.\n",
+        )
+        .unwrap();
+
+        let paths = crate::config::SkillPathsConfig {
+            global: vec![temp.path().join("org").display().to_string()],
+            project: vec![temp.path().join("project").display().to_string()],
+            community: vec![],
+            local: vec![],
+        };
+
+        let registry = LayeredRegistry::from_skill_paths(&paths);
+        assert_eq!(
+            registry.candidate_layers("shared-skill"),
+            vec![SkillLayer::Org, SkillLayer::Project]
+        );
+        let resolved = registry.effective("shared-skill").unwrap().unwrap();
+        assert_eq!(resolved.source_layer, SkillLayer::Project);
+        assert!(resolved.has_conflicts());
     }
 }

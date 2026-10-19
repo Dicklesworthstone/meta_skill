@@ -11,7 +11,6 @@ use crate::storage::conn::{Connection, ConnectionExt};
 use fsqlite::Row;
 use fsqlite::compat::RowExt;
 use fsqlite_error::FrankenError;
-use half::f16;
 use serde_json::Value as JsonValue;
 use uuid::Uuid;
 
@@ -2004,12 +2003,7 @@ fn decode_raw_embedding(raw: EmbeddingRawRow) -> Result<EmbeddingRecord> {
 }
 
 fn encode_embedding_f16(values: &[f32]) -> Vec<u8> {
-    let mut out = Vec::with_capacity(values.len() * 2);
-    for value in values {
-        let bits = f16::from_f32(*value).to_bits();
-        out.extend_from_slice(&bits.to_le_bytes());
-    }
-    out
+    crate::search::embeddings::encode_f16_bytes(values)
 }
 
 fn decode_embedding_f16(bytes: &[u8], dims: usize) -> Result<Vec<f32>> {
@@ -2022,12 +2016,7 @@ fn decode_embedding_f16(bytes: &[u8], dims: usize) -> Result<Vec<f32>> {
         )));
     }
 
-    let mut out = Vec::with_capacity(dims);
-    for chunk in bytes.as_chunks::<2>().0 {
-        let bits = u16::from_le_bytes([chunk[0], chunk[1]]);
-        out.push(f16::from_bits(bits).to_f32());
-    }
-    Ok(out)
+    Ok(crate::search::embeddings::decode_f16_bytes(bytes))
 }
 
 /// Row mapper used inside `query_map_collect` closures. JSON decoding of the
