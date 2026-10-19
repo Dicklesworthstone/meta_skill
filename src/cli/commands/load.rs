@@ -1230,7 +1230,9 @@ fn determine_disclosure_plan(
     // Parse explicit level
     if let Some(ref level_str) = args.level {
         if let Some(level) = DisclosureLevel::from_str_or_level(level_str) {
-            return DisclosurePlan::Level(level);
+            if level != DisclosureLevel::Auto {
+                return DisclosurePlan::Level(level);
+            }
         }
     }
 
@@ -1247,6 +1249,27 @@ fn determine_disclosure_plan(
     // Consult configured default disclosure level (falling back to Standard)
     let default_level = DisclosureLevel::from_str_or_level(&disclosure_cfg.default_level)
         .unwrap_or(DisclosureLevel::Standard);
+    if default_level == DisclosureLevel::Auto
+        || args
+            .level
+            .as_deref()
+            .is_some_and(|l| l.eq_ignore_ascii_case("auto"))
+    {
+        let context = crate::core::disclosure::DisclosureContext {
+            explicit_level: None,
+            pack_budget: None,
+            pack_mode: Some(args.mode.into()),
+            max_per_group: Some(args.max_per_group),
+            remaining_tokens: if disclosure_cfg.token_budget > 0 {
+                disclosure_cfg.token_budget as usize
+            } else {
+                2000
+            },
+            usage_history: crate::core::disclosure::UsageHistory::default(),
+            request_type: crate::core::disclosure::RequestType::Direct,
+        };
+        return crate::core::disclosure::optimal_disclosure(&context);
+    }
     DisclosurePlan::Level(default_level)
 }
 

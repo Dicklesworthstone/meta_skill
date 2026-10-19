@@ -1298,7 +1298,34 @@ fn run_auto(
 
         match cass_client.get_session(&session_match.path) {
             Ok(cass_session) => {
-                let mut quality = quality_scorer.score(&cass_session);
+                let mut quality = match ctx.db.get_session_quality(&cass_session.id) {
+                    Ok(Some(cached)) if cached.content_hash == cass_session.content_hash => {
+                        crate::cass::SessionQuality {
+                            score: cached.score,
+                            signals: cached.signals,
+                            missing: Vec::new(),
+                            computed_at: chrono::Utc::now(),
+                        }
+                    }
+                    _ => {
+                        let q = quality_scorer.score(&cass_session);
+                        let _ = ctx.db.upsert_session_quality(
+                            &crate::storage::sqlite::SessionQualityRecord {
+                                session_id: cass_session.id.clone(),
+                                content_hash: cass_session.content_hash.clone(),
+                                score: q.score,
+                                signals: q.signals.clone(),
+                                missing: q
+                                    .missing
+                                    .iter()
+                                    .map(|m| m.description().to_string())
+                                    .collect(),
+                                computed_at: q.computed_at.to_rfc3339(),
+                            },
+                        );
+                        q
+                    }
+                };
                 if is_exemplary {
                     quality.score = (quality.score + 0.25).min(1.0);
                 }
@@ -1393,10 +1420,28 @@ fn run_auto(
 
         let segmented = crate::cass::mining::segment_session(cass_session);
         let dominant_phase = segmented.dominant_phase().map(|p| format!("{p:?}"));
+        let recon_count = segmented
+            .segments_for_phase(crate::cass::mining::SessionPhase::Reconnaissance)
+            .len();
+        let change_count = segmented
+            .segments_for_phase(crate::cass::mining::SessionPhase::Change)
+            .len();
+        let validation_count = segmented
+            .segments_for_phase(crate::cass::mining::SessionPhase::Validation)
+            .len();
+        let wrapup_count = segmented
+            .segments_for_phase(crate::cass::mining::SessionPhase::WrapUp)
+            .len();
         session_phase_summaries.push(json!({
             "session_id": cass_session.id,
             "dominant_phase": dominant_phase,
             "segments": segmented.segments.len(),
+            "phase_counts": {
+                "reconnaissance": recon_count,
+                "change": change_count,
+                "validation": validation_count,
+                "wrap_up": wrapup_count,
+            }
         }));
 
         match extract_from_session(cass_session) {
@@ -1677,6 +1722,10 @@ fn run_auto(
     }
 
     // Write build manifest
+    let pattern_irs: Vec<crate::cass::mining::PatternIR> = filtered_patterns
+        .iter()
+        .map(crate::cass::mining::pattern_to_ir)
+        .collect();
     let manifest = json!({
         "version": "1.0.0",
         "session_id": session.session_id,
@@ -1691,6 +1740,7 @@ fn run_auto(
         })).collect::<Vec<_>>(),
         "session_phases": session_phase_summaries,
         "patterns_extracted": filtered_patterns.len(),
+        "pattern_ir_count": pattern_irs.len(),
         "skill_path": skill_md_path.display().to_string(),
         "quality_gates": {
             "min_confidence": args.min_confidence,
@@ -2104,7 +2154,7 @@ fn run_resolve_uncertainties(ctx: &AppContext, args: &BuildArgs) -> Result<()> {
 
     // Load uncertainty queue from file or create new
     let uncertainties_path = ctx.ms_root.join(".ms").join("uncertainties.json");
-    let (_queue, items) = load_uncertainties(&uncertainties_path)?;
+    let (queue, items) = load_uncertainties(&uncertainties_path)?;
 
     // Get counts
     let counts = count_uncertainties(&items);
@@ -2183,14 +2233,11 @@ fn run_resolve_uncertainties(ctx: &AppContext, args: &BuildArgs) -> Result<()> {
         println!();
     }
 
-    // Get pending items
-    let pending_items: Vec<_> = items
-        .iter()
-        .filter(|i| matches!(i.status, UncertaintyStatus::Pending))
-        .collect();
+    // Get pending items prioritized by Expected Information Gain (EIG) descending
+    let pending_items = queue.prioritized_by_eig();
 
     if ctx.output_format == OutputFormat::Human && !pending_items.is_empty() {
-        println!("{}", "Pending Uncertainties:");
+        println!("{}", "Pending Uncertainties (prioritized by EIG):");
         for (i, item) in pending_items.iter().take(10).enumerate() {
             let reason_str = format_uncertainty_reason(&item.reason);
             let description = item
@@ -2199,10 +2246,11 @@ fn run_resolve_uncertainties(ctx: &AppContext, args: &BuildArgs) -> Result<()> {
                 .as_deref()
                 .unwrap_or("(no description)");
             println!(
-                "  {}. {} ({:.0}% confidence)",
+                "  {}. {} ({:.0}% confidence, EIG: {:.3})",
                 i + 1,
                 description.chars().take(50).collect::<String>(),
-                item.confidence * 100.0
+                item.confidence * 100.0,
+                item.expected_information_gain()
             );
             println!("     Reason: {reason_str}");
             println!("     Queries: {}", item.suggested_queries.len());
@@ -2226,11 +2274,8 @@ fn run_resolve_uncertainties(ctx: &AppContext, args: &BuildArgs) -> Result<()> {
         let mut resolved_count = 0;
         let mut escalated_count = 0;
         let mut rejected_count = 0;
-        let mut updated_items = items.clone();
 
-        for item in pending_items {
-            let mut item = item.clone();
-
+        for mut item in pending_items {
             // Execute unexecuted queries
             let mut new_sessions = Vec::new();
             for query in &mut item.suggested_queries {
@@ -2275,14 +2320,11 @@ fn run_resolve_uncertainties(ctx: &AppContext, args: &BuildArgs) -> Result<()> {
 
             // Attempt resolution with gathered evidence
             let result = resolver.attempt_resolution(&mut item, &new_sessions);
+            let _ = queue.update(item.clone());
 
             match result {
                 crate::cass::ResolutionResult::Resolved(resolution) => {
-                    item.status = UncertaintyStatus::Resolved {
-                        new_confidence: item.confidence,
-                        resolution,
-                        resolved_at: chrono::Utc::now(),
-                    };
+                    queue.mark_resolved(&item.id, resolution, item.confidence);
                     resolved_count += 1;
                     if ctx.output_format == OutputFormat::Human {
                         println!(
@@ -2313,6 +2355,7 @@ fn run_resolve_uncertainties(ctx: &AppContext, args: &BuildArgs) -> Result<()> {
                         reason: reason.clone(),
                         escalated_at: chrono::Utc::now(),
                     };
+                    let _ = queue.update(item.clone());
                     escalated_count += 1;
                     if ctx.output_format == OutputFormat::Human {
                         println!(
@@ -2327,10 +2370,7 @@ fn run_resolve_uncertainties(ctx: &AppContext, args: &BuildArgs) -> Result<()> {
                     }
                 }
                 crate::cass::ResolutionResult::Reject { reason } => {
-                    item.status = UncertaintyStatus::Rejected {
-                        reason: reason.clone(),
-                        rejected_at: chrono::Utc::now(),
-                    };
+                    queue.mark_rejected(&item.id, &reason);
                     rejected_count += 1;
                     if ctx.output_format == OutputFormat::Human {
                         println!(
@@ -2345,13 +2385,9 @@ fn run_resolve_uncertainties(ctx: &AppContext, args: &BuildArgs) -> Result<()> {
                     }
                 }
             }
-
-            // Update in the items list
-            if let Some(pos) = updated_items.iter().position(|i| i.id == item.id) {
-                updated_items[pos] = item;
-            }
         }
 
+        let updated_items = queue.list(None);
         // Save updated uncertainties
         save_uncertainties(&uncertainties_path, &updated_items)?;
 
@@ -2439,7 +2475,12 @@ fn load_uncertainties(
         let content = fs::read_to_string(path)?;
         let items: Vec<UncertaintyItem> = serde_json::from_str(&content)
             .map_err(|e| MsError::Config(format!("Failed to parse uncertainties file: {e}")))?;
-        Ok((queue, items))
+        for item in items {
+            let _ = queue.enqueue(item);
+        }
+        let _ = queue.prune_expired();
+        let active_items = queue.list(None);
+        Ok((queue, active_items))
     } else {
         Ok((queue, Vec::new()))
     }

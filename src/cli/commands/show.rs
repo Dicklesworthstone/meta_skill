@@ -345,6 +345,23 @@ fn show_json(ctx: &AppContext, skill: &SkillRecord, args: &ShowArgs, pretty: boo
         }
     }
 
+    if let Ok(aliases) = ctx.db.get_aliases_for_skill(&skill.id) {
+        if !aliases.is_empty() {
+            output["skill"]["aliases"] = serde_json::json!(aliases);
+        }
+    }
+
+    if let Ok(prefs) = ctx.db.get_skill_preferences(&skill.id) {
+        if !prefs.is_empty() {
+            let pref_types: Vec<&str> = prefs.iter().map(|p| p.preference_type.as_str()).collect();
+            output["skill"]["preferences"] = serde_json::json!(pref_types);
+        }
+    }
+
+    if let Ok(Some(slice_idx)) = ctx.db.get_skill_slices(&skill.id) {
+        output["skill"]["indexed_slices_count"] = serde_json::json!(slice_idx.slices.len());
+    }
+
     // Surface multi-layer override candidates and section conflicts if present
     let layered = crate::core::layering::LayeredRegistry::from_skill_paths(&ctx.config.skill_paths);
     if layered.candidate_layers(&skill.id).len() > 1 {
@@ -357,6 +374,12 @@ fn show_json(ctx: &AppContext, skill: &SkillRecord, args: &ShowArgs, pretty: boo
                     output["skill"]["layer_conflicts"] = conflicts_val;
                 }
             }
+        }
+        if let Some(res_opts) = layered.get_resolution_options(&skill.id) {
+            output["skill"]["resolution_options"] = serde_json::json!({
+                "available_layers": res_opts.available_layers,
+                "conflict_count": res_opts.conflicts.len(),
+            });
         }
     }
 
@@ -377,6 +400,51 @@ fn show_json(ctx: &AppContext, skill: &SkillRecord, args: &ShowArgs, pretty: boo
                 .get("requires")
                 .cloned()
                 .unwrap_or(serde_json::Value::Array(vec![]));
+        }
+        // Build dependency graph across indexed skills to compute direct_dependents & issues
+        if let Ok(all_skills) = ctx.db.list_skills(500, 0) {
+            let mut graph = crate::core::dependencies::DependencyGraph::new();
+            for s in &all_skills {
+                let s_meta: serde_json::Value =
+                    serde_json::from_str(&s.metadata_json).unwrap_or_default();
+                let reqs: Vec<String> = s_meta
+                    .get("requires")
+                    .and_then(|v| v.as_array())
+                    .map(|arr| {
+                        arr.iter()
+                            .filter_map(|x| x.as_str().map(String::from))
+                            .collect()
+                    })
+                    .unwrap_or_default();
+                let mut provs: Vec<String> = s_meta
+                    .get("provides")
+                    .and_then(|v| v.as_array())
+                    .map(|arr| {
+                        arr.iter()
+                            .filter_map(|x| x.as_str().map(String::from))
+                            .collect()
+                    })
+                    .unwrap_or_default();
+                if !provs.contains(&s.id) {
+                    provs.push(s.id.clone());
+                }
+                graph.add_skill(s.id.clone(), reqs, provs);
+            }
+            graph.build_edges();
+            let dependents: Vec<String> = graph
+                .direct_dependents(&skill.id)
+                .into_iter()
+                .map(String::from)
+                .collect();
+            output["skill"]["dependents"] = serde_json::json!(dependents);
+            let resolver = crate::core::dependencies::DependencyResolver::new(&graph);
+            if let Ok(plan) = resolver.resolve(
+                &skill.id,
+                crate::core::disclosure::DisclosureLevel::Standard,
+                crate::core::dependencies::DependencyLoadMode::Auto,
+            ) {
+                output["skill"]["has_dependency_issues"] = serde_json::json!(plan.has_issues());
+            }
         }
     }
 

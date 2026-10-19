@@ -162,6 +162,13 @@ pub fn run(ctx: &AppContext, args: &CmArgs) -> Result<()> {
             category,
             threshold,
         } => {
+            if let Ok(false) = client.validate_rule(content) {
+                if ctx.output_format == OutputFormat::Human {
+                    eprintln!(
+                        "Warning: rule validation against CASS history reported potential issues."
+                    );
+                }
+            }
             if let Ok(Some(existing)) = client.rule_exists(content, *threshold) {
                 if ctx.output_format != OutputFormat::Human {
                     return emit_json(&serde_json::json!({

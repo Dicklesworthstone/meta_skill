@@ -327,17 +327,29 @@ impl SyncEngine {
         let allow_push = remote.direction.allows_push() && !options.pull_only;
         let allow_pull = remote.direction.allows_pull() && !options.push_only;
 
-        // Get token from environment
+        // Get token from environment or stored JFP credentials
         let token_env = match &remote.auth {
             Some(RemoteAuth::Token { token_env, .. }) => token_env.clone(),
             _ => "JFP_CLOUD_TOKEN".to_string(),
         };
-        let token = std::env::var(&token_env).map_err(|_| {
-            MsError::Config(format!(
-                "JFP Cloud requires auth token; set {} env var",
-                token_env
-            ))
-        })?;
+        let token = match std::env::var(&token_env) {
+            Ok(t) => t,
+            Err(_) if remote.auth.is_none() => crate::auth::JfpAuthClient::new()
+                .and_then(|c| c.get_valid_credentials())
+                .map(|creds| creds.access_token)
+                .map_err(|_| {
+                    MsError::Config(format!(
+                        "JFP Cloud requires auth token; set {} env var or run 'ms auth login'",
+                        token_env
+                    ))
+                })?,
+            Err(_) => {
+                return Err(MsError::Config(format!(
+                    "JFP Cloud requires auth token; set {} env var",
+                    token_env
+                )));
+            }
+        };
 
         // Create device info from machine identity
         let device =

@@ -453,7 +453,14 @@ fn store_skill_embedding(
     record: &SkillRecord,
     content_hash: &str,
 ) -> Result<bool> {
-    let mut embedding = embedder.embed(&skill_embedding_text(record));
+    let mut embedding = if let Ok(Some(existing)) =
+        ctx.db
+            .get_embedding_by_hash(content_hash, embedder.name(), embedder.dims())
+    {
+        existing.embedding
+    } else {
+        embedder.embed(&skill_embedding_text(record))
+    };
     if embedding.len() != embedder.dims() || embedding.iter().all(|v| *v == 0.0) {
         eprintln!(
             "warning: {}: embedding backend `{}` returned no usable vector; skipping",

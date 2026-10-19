@@ -140,8 +140,9 @@ impl JfpAuthClient {
             Ok(Some(creds)) => {
                 let storage_method = token_storage::current_storage_method();
                 let time_remaining = creds.time_remaining();
+                let authenticated = !creds.is_expired();
                 Ok(AuthStatus {
-                    authenticated: true,
+                    authenticated,
                     email: Some(creds.email),
                     tier: Some(creds.tier),
                     expires_in: Some(time_remaining),

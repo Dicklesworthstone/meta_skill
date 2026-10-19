@@ -739,6 +739,10 @@ struct BundleConflictSummary {
     modified: usize,
     deleted: usize,
     conflict: usize,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    modified_files: Vec<String>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    conflicting_files: Vec<String>,
 }
 
 fn run_update(ctx: &AppContext, args: &BundleUpdateArgs) -> Result<()> {
@@ -937,11 +941,23 @@ fn apply_bundle_update(
             if let Some(existing_hashes) = load_bundle_meta(&target)? {
                 let report = detect_modifications(&target, &skill.name, &existing_hashes)?;
                 if report.needs_attention() {
+                    let modified_files = report
+                        .modified_files()
+                        .into_iter()
+                        .map(|f| f.path.display().to_string())
+                        .collect();
+                    let conflicting_files = report
+                        .conflicting_files()
+                        .into_iter()
+                        .map(|f| f.path.display().to_string())
+                        .collect();
                     conflicts.push(BundleConflictSummary {
                         skill_id: report.skill_id.clone(),
                         modified: report.summary.modified,
                         deleted: report.summary.deleted,
                         conflict: report.summary.conflict,
+                        modified_files,
+                        conflicting_files,
                     });
                 }
                 Some(report)
@@ -973,15 +989,14 @@ fn apply_bundle_update(
         let skill_backup_root = backup_root.join(&skill_name);
         if let Some(report) = report {
             if report.needs_attention() && args.force {
-                for file in &report.files {
-                    if matches!(
-                        file.status,
-                        ModificationStatus::Modified | ModificationStatus::Conflict
-                    ) {
-                        let path = target.join(&file.path);
-                        if path.exists() {
-                            let _ = backup_file(&path, &skill_backup_root);
-                        }
+                for file in report
+                    .modified_files()
+                    .into_iter()
+                    .chain(report.conflicting_files())
+                {
+                    let path = target.join(&file.path);
+                    if path.exists() {
+                        let _ = backup_file(&path, &skill_backup_root);
                     }
                 }
             }
