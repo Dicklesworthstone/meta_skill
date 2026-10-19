@@ -955,6 +955,38 @@ pub(crate) fn load_skill(ctx: &AppContext, args: &LoadArgs, skill_ref: &str) -> 
         load_dependencies(ctx, &skill, args)?
     };
 
+    let mut warnings: Vec<String> = resolved
+        .warnings
+        .iter()
+        .map(|w| format!("{:?}", w))
+        .collect();
+
+    if !spec.metadata.requires.is_empty() || !spec.metadata.platforms.is_empty() {
+        let mut available = HashSet::new();
+        if let Ok(all_skills) = ctx.db.list_skills(1000, 0) {
+            for rec in all_skills {
+                available.insert(rec.id);
+                if let Ok(meta) = serde_json::from_str::<serde_json::Value>(&rec.metadata_json) {
+                    if let Some(provides) = meta.get("provides").and_then(|v| v.as_array()) {
+                        for p in provides.iter().filter_map(|v| v.as_str()) {
+                            available.insert(p.to_string());
+                        }
+                    }
+                }
+            }
+        }
+        let req_report = crate::core::requirements::check_skill_requirements(&spec, &available);
+        for check in req_report.checks {
+            if check.required && !check.satisfied {
+                warnings.push(format!(
+                    "Unsatisfied requirement '{}': {}",
+                    check.name,
+                    check.message.unwrap_or_default()
+                ));
+            }
+        }
+    }
+
     let result = LoadResult {
         skill_id: skill.id.clone(),
         name: skill.name.clone(),
@@ -963,11 +995,7 @@ pub(crate) fn load_skill(ctx: &AppContext, args: &LoadArgs, skill_ref: &str) -> 
         slices_included,
         inheritance_chain: resolved.inheritance_chain,
         included_from: resolved.included_from,
-        warnings: resolved
-            .warnings
-            .iter()
-            .map(|w| format!("{:?}", w))
-            .collect(),
+        warnings,
     };
 
     record_usage(

@@ -391,7 +391,8 @@ fn define_tools() -> Vec<Tool> {
     vec![
         Tool {
             name: "search".to_string(),
-            description: "Search for skills using BM25 full-text search".to_string(),
+            description: "Search for skills using BM25 full-text and hybrid semantic search"
+                .to_string(),
             input_schema: serde_json::json!({
                 "type": "object",
                 "properties": {
@@ -403,6 +404,15 @@ fn define_tools() -> Vec<Tool> {
                         "type": "integer",
                         "description": "Maximum number of results (default: 20)",
                         "default": 20
+                    },
+                    "layer": {
+                        "type": "string",
+                        "description": "Filter by skill layer (base, org, project, user)"
+                    },
+                    "tags": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "Filter by tags"
                     }
                 },
                 "required": ["query"]
@@ -410,17 +420,32 @@ fn define_tools() -> Vec<Tool> {
         },
         Tool {
             name: "load".to_string(),
-            description: "Load a skill by ID".to_string(),
+            description: "Load a skill by ID with progressive disclosure and token packing"
+                .to_string(),
             input_schema: serde_json::json!({
                 "type": "object",
                 "properties": {
                     "skill": {
                         "type": "string",
-                        "description": "Skill ID or name to load"
+                        "description": "Skill ID, name, or alias to load"
                     },
                     "full": {
                         "type": "boolean",
                         "description": "Include full skill content",
+                        "default": false
+                    },
+                    "level": {
+                        "type": "string",
+                        "enum": ["minimal", "overview", "standard", "full", "complete"],
+                        "description": "Progressive disclosure level"
+                    },
+                    "pack": {
+                        "type": "integer",
+                        "description": "Token budget for constrained slice packing"
+                    },
+                    "for_ntm": {
+                        "type": "boolean",
+                        "description": "Optimize packing for NTM multi-agent swarm sessions",
                         "default": false
                     }
                 },
@@ -636,6 +661,68 @@ fn define_tools() -> Vec<Tool> {
                     "value": {
                         "type": "string",
                         "description": "Configuration value (for set)"
+                    }
+                }
+            }),
+        },
+        Tool {
+            name: "safety".to_string(),
+            description: "Check command safety using DCG tiers (Safe, Caution, Danger, Critical)"
+                .to_string(),
+            input_schema: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "command": {
+                        "type": "string",
+                        "description": "Shell command to classify and check"
+                    },
+                    "session_id": {
+                        "type": "string",
+                        "description": "Optional session ID for audit logging"
+                    }
+                },
+                "required": ["command"]
+            }),
+        },
+        Tool {
+            name: "security".to_string(),
+            description: "Scan text or skill content for prompt injection (ACIP) and secrets"
+                .to_string(),
+            input_schema: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "content": {
+                        "type": "string",
+                        "description": "Text content to scan"
+                    },
+                    "skill": {
+                        "type": "string",
+                        "description": "Skill ID to scan (alternative to content)"
+                    },
+                    "source": {
+                        "type": "string",
+                        "enum": ["user", "assistant", "tool", "file"],
+                        "description": "Trust boundary source (default: user)",
+                        "default": "user"
+                    }
+                }
+            }),
+        },
+        Tool {
+            name: "dedup".to_string(),
+            description: "Scan indexed skills for near-duplicates and alias candidates".to_string(),
+            input_schema: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "threshold": {
+                        "type": "number",
+                        "description": "Similarity threshold (0.0-1.0, default: 0.85)",
+                        "default": 0.85
+                    },
+                    "limit": {
+                        "type": "integer",
+                        "description": "Maximum duplicate pairs to return (default: 50)",
+                        "default": 50
                     }
                 }
             }),
@@ -967,6 +1054,9 @@ fn handle_tools_call(
         "index" => handle_tool_index(ctx, &arguments),
         "validate" => handle_tool_validate(ctx, &arguments),
         "config" => handle_tool_config(ctx, &arguments),
+        "safety" => handle_tool_safety(ctx, &arguments),
+        "security" => handle_tool_security(ctx, &arguments),
+        "dedup" => handle_tool_dedup(ctx, &arguments),
         _ => Err(MsError::ValidationFailed(format!("Unknown tool: {name}"))),
     };
 
@@ -1020,28 +1110,100 @@ fn handle_tool_search(ctx: &AppContext, args: &Value) -> Result<ToolResult> {
         .and_then(serde_json::Value::as_u64)
         .unwrap_or(20) as usize;
 
-    // Use BM25 search via Tantivy
-    let results = ctx.search.search(query, limit)?;
+    let layer_filter = args
+        .get("layer")
+        .and_then(|v| v.as_str())
+        .and_then(crate::search::SearchLayer::from_str);
+    let tags_filter: Vec<String> = args
+        .get("tags")
+        .and_then(|v| v.as_array())
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|v| v.as_str().map(str::to_lowercase))
+                .collect()
+        })
+        .unwrap_or_default();
+
+    let mut filters = crate::search::SearchFilters::new();
+    if let Some(layer) = layer_filter {
+        filters = filters.layer(layer);
+    }
+    if !tags_filter.is_empty() {
+        filters = filters.tags(tags_filter);
+    }
+
+    let fetch_limit = limit.saturating_mul(5).max(50);
+    let bm25_hits = ctx.search.search(query, fetch_limit)?;
+    let bm25_ranked: Vec<(String, f32)> = bm25_hits
+        .iter()
+        .map(|r| (r.skill_id.clone(), r.score))
+        .collect();
+
+    // Fuse with semantic embeddings when enabled and available
+    let ranked_pairs: Vec<(String, f32)> = if ctx.config.search.use_embeddings {
+        if let Ok(embedder) = crate::search::build_embedder(&ctx.config.search) {
+            if let Ok(all_embeddings) = ctx.db.get_embeddings_for(embedder.name(), embedder.dims())
+            {
+                if !all_embeddings.is_empty() {
+                    let query_emb = embedder.embed(query);
+                    let mut vector_index = crate::search::VectorIndex::new(embedder.dims());
+                    for (id, emb) in all_embeddings {
+                        let _ = vector_index.insert(id, emb);
+                    }
+                    let semantic_results = crate::search::admit_semantic_candidates(
+                        &bm25_ranked,
+                        vector_index.search(&query_emb, fetch_limit),
+                        embedder.name() == "hash",
+                    );
+                    let rrf_cfg = crate::search::RrfConfig::with_weights(
+                        ctx.config.search.bm25_weight,
+                        ctx.config.search.semantic_weight,
+                    );
+                    crate::search::fuse_results(&bm25_ranked, &semantic_results, &rrf_cfg)
+                        .into_iter()
+                        .map(|h| (h.skill_id, h.score))
+                        .collect()
+                } else {
+                    bm25_ranked
+                }
+            } else {
+                bm25_ranked
+            }
+        } else {
+            bm25_ranked
+        }
+    } else {
+        bm25_ranked
+    };
+
+    let mut formatted_results = Vec::new();
+    for (skill_id, score) in ranked_pairs {
+        if let Ok(Some(skill)) = ctx.db.get_skill(&skill_id) {
+            if !crate::search::matches_skill_record(&filters, &skill) {
+                continue;
+            }
+            formatted_results.push(serde_json::json!({
+                "id": skill_id,
+                "name": skill.name,
+                "description": skill.description,
+                "layer": skill.source_layer,
+                "score": score,
+            }));
+        } else if layer_filter.is_none() && filters.tags.is_empty() {
+            formatted_results.push(serde_json::json!({
+                "id": skill_id,
+                "score": score,
+            }));
+        }
+        if formatted_results.len() >= limit {
+            break;
+        }
+    }
 
     let output = serde_json::json!({
         "query": query,
-        "count": results.len(),
-        "results": results.iter().map(|r| {
-            if let Ok(Some(skill)) = ctx.db.get_skill(&r.skill_id) {
-                serde_json::json!({
-                    "id": r.skill_id,
-                    "name": skill.name,
-                    "description": skill.description,
-                    "layer": skill.source_layer,
-                    "score": r.score,
-                })
-            } else {
-                serde_json::json!({
-                    "id": r.skill_id,
-                    "score": r.score,
-                })
-            }
-        }).collect::<Vec<_>>()
+        "count": formatted_results.len(),
+        "results": formatted_results,
     });
 
     Ok(ToolResult::text(serde_json::to_string_pretty(&output)?))
@@ -1056,22 +1218,73 @@ fn handle_tool_load(ctx: &AppContext, args: &Value) -> Result<ToolResult> {
         .get("full")
         .and_then(serde_json::Value::as_bool)
         .unwrap_or(false);
+    let level = args.get("level").and_then(|v| v.as_str()).map(String::from);
+    let pack = args
+        .get("pack")
+        .and_then(serde_json::Value::as_u64)
+        .map(|v| v as usize);
+    let for_ntm = args
+        .get("for_ntm")
+        .and_then(serde_json::Value::as_bool)
+        .unwrap_or(false);
 
-    // Look up skill
-    let skill = ctx
-        .db
-        .get_skill(skill_id)?
-        .ok_or_else(|| MsError::SkillNotFound(skill_id.to_string()))?;
+    // Look up skill (supporting aliases)
+    let skill = if let Some(s) = ctx.db.get_skill(skill_id)? {
+        s
+    } else if let Some(alias_res) = ctx.db.resolve_alias(skill_id)? {
+        ctx.db
+            .get_skill(&alias_res.canonical_id)?
+            .ok_or_else(|| MsError::SkillNotFound(skill_id.to_string()))?
+    } else {
+        return Err(MsError::SkillNotFound(skill_id.to_string()));
+    };
 
-    let output = if full {
-        serde_json::json!({
-            "skill_id": skill.id,
-            "name": skill.name,
-            "description": skill.description,
-            "content": skill.body,
-            "layer": skill.source_layer,
-            "quality_score": skill.quality_score,
-        })
+    let output = if full || level.is_some() || pack.is_some() || for_ntm {
+        let load_args = super::load::LoadArgs {
+            skill: Some(skill.id.clone()),
+            auto: false,
+            threshold: 0.3,
+            confirm: false,
+            dry_run: false,
+            level: level.clone(),
+            pack,
+            mode: super::load::CliPackMode::Balanced,
+            contract: None,
+            contract_id: None,
+            max_per_group: 2,
+            full: full && level.is_none() && pack.is_none(),
+            complete: false,
+            deps: super::load::DepsMode::Auto,
+            experiment_id: None,
+            variant_id: None,
+            for_ntm,
+        };
+        if let Ok(loaded) = super::load::load_skill(ctx, &load_args, &skill.id) {
+            serde_json::json!({
+                "skill_id": loaded.skill_id,
+                "name": loaded.name,
+                "description": skill.description,
+                "content": loaded.disclosed.body.unwrap_or_else(|| skill.body.clone()),
+                "layer": skill.source_layer,
+                "quality_score": skill.quality_score,
+                "level": format!("{:?}", loaded.disclosed.level).to_lowercase(),
+                "token_estimate": loaded.disclosed.token_estimate,
+                "slices_included": loaded.slices_included,
+                "inheritance_chain": loaded.inheritance_chain,
+                "included_from": loaded.included_from,
+                "dependencies_loaded": loaded.dependencies_loaded,
+                "warnings": loaded.warnings,
+            })
+        } else {
+            serde_json::json!({
+                "skill_id": skill.id,
+                "name": skill.name,
+                "description": skill.description,
+                "content": skill.body,
+                "layer": skill.source_layer,
+                "quality_score": skill.quality_score,
+            })
+        }
     } else {
         serde_json::json!({
             "skill_id": skill.id,
@@ -1347,6 +1560,11 @@ fn handle_tool_suggest(ctx: &AppContext, args: &Value) -> Result<ToolResult> {
         .and_then(serde_json::Value::as_bool)
         .unwrap_or(false);
 
+    let threshold = args
+        .get("threshold")
+        .and_then(serde_json::Value::as_f64)
+        .unwrap_or(0.3);
+
     // Detect project context using available detector
     let detector = crate::context::DefaultDetector::new();
     let detected_projects = detector.detect(&cwd);
@@ -1355,11 +1573,30 @@ fn handle_tool_suggest(ctx: &AppContext, args: &Value) -> Result<ToolResult> {
         .map(|p| format!("{:?}", p.project_type).to_lowercase())
         .collect();
 
-    // Rank skills by context match + quality score
+    // Blend SignalBandit weight if persisted
+    let signal_bandit_path = ctx.ms_root.join("bandit.json");
+    let signal_boost =
+        if let Ok(bandit) = crate::suggestions::bandit::SignalBandit::load(&signal_bandit_path) {
+            if bandit.total_selections > 0 {
+                let bandit_ctx = crate::suggestions::bandit::SuggestionContext::default();
+                let weights = bandit.estimated_weights(&bandit_ctx);
+                let boost = weights.get(crate::suggestions::bandit::SignalType::ProjectMatch)
+                    + weights.get(crate::suggestions::bandit::SignalType::Bm25)
+                    + weights.get(crate::suggestions::bandit::SignalType::Embedding);
+                (0.85 + 0.15 * boost).clamp(0.8, 1.2)
+            } else {
+                1.0
+            }
+        } else {
+            1.0
+        };
+
+    // Rank skills by context match + quality score + user preferences + bandit boost
     let all_skills = ctx.db.list_skills(200, 0)?;
     let mut scored: Vec<_> = all_skills
         .into_iter()
-        .map(|s| {
+        .filter(|s| !ctx.db.has_user_preference(&s.id, "hidden").unwrap_or(false))
+        .filter_map(|s| {
             let text_lower = format!("{} {} {}", s.id, s.name, s.description).to_lowercase();
             let mut score = 0.4 + (s.quality_score * 0.2);
             for tag in &project_tags {
@@ -1367,11 +1604,32 @@ fn handle_tool_suggest(ctx: &AppContext, args: &Value) -> Result<ToolResult> {
                     score += 0.3;
                 }
             }
-            (s, score.min(1.0))
+            if ctx
+                .db
+                .has_user_preference(&s.id, "favorite")
+                .unwrap_or(false)
+            {
+                score += 0.15;
+            }
+            let final_score = (score * signal_boost).min(1.0);
+            if final_score >= threshold {
+                Some((s, final_score))
+            } else {
+                None
+            }
         })
         .collect();
     scored.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
     scored.truncate(limit);
+
+    // Record shown suggestions in FeedbackCollector for implicit bandit learning
+    if !scored.is_empty() {
+        let shown_ids: Vec<String> = scored.iter().map(|(s, _)| s.id.clone()).collect();
+        let tracking_path = crate::suggestions::FeedbackCollector::default_path(&ctx.ms_root);
+        let mut collector = crate::suggestions::FeedbackCollector::load(&tracking_path);
+        collector.on_suggestions_shown(&shown_ids, None);
+        let _ = collector.save(&tracking_path);
+    }
 
     // Format detected contexts
     let contexts: Vec<_> = detected_projects
@@ -1388,6 +1646,7 @@ fn handle_tool_suggest(ctx: &AppContext, args: &Value) -> Result<ToolResult> {
 
     let output = serde_json::json!({
         "cwd": cwd.display().to_string(),
+        "threshold": threshold,
         "detected_contexts": contexts,
         "count": scored.len(),
         "suggestions": scored.iter().map(|(s, score)| {
@@ -1639,6 +1898,124 @@ fn handle_tool_config(ctx: &AppContext, args: &Value) -> Result<ToolResult> {
             "Unknown action: {action}. Valid actions: list, get, set"
         ))),
     }
+}
+
+fn handle_tool_safety(ctx: &AppContext, args: &Value) -> Result<ToolResult> {
+    let command = args
+        .get("command")
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| {
+            MsError::ValidationFailed("Missing required parameter: command".to_string())
+        })?;
+    let session_id = args.get("session_id").and_then(|v| v.as_str());
+
+    let gate = crate::security::SafetyGate::from_context(ctx);
+    let status = gate.status();
+    let enforce_result = gate.enforce(command, session_id);
+    let allowed = enforce_result.is_ok();
+    let reason = match &enforce_result {
+        Ok(()) => "allowed".to_string(),
+        Err(e) => e.to_string(),
+    };
+
+    let output = serde_json::json!({
+        "command": command,
+        "allowed": allowed,
+        "reason": reason,
+        "dcg_available": status.dcg_version.is_some(),
+        "dcg_version": status.dcg_version,
+        "packs": status.packs,
+    });
+    Ok(ToolResult::text(serde_json::to_string_pretty(&output)?))
+}
+
+fn handle_tool_security(ctx: &AppContext, args: &Value) -> Result<ToolResult> {
+    let content = if let Some(text) = args.get("content").and_then(|v| v.as_str()) {
+        text.to_string()
+    } else if let Some(skill_id) = args.get("skill").and_then(|v| v.as_str()) {
+        let skill = ctx
+            .db
+            .get_skill(skill_id)?
+            .ok_or_else(|| MsError::SkillNotFound(skill_id.to_string()))?;
+        skill.body
+    } else {
+        return Err(MsError::ValidationFailed(
+            "Either 'content' or 'skill' parameter is required".to_string(),
+        ));
+    };
+
+    let source_str = args
+        .get("source")
+        .and_then(|v| v.as_str())
+        .unwrap_or("user");
+    let source = match source_str {
+        "user" | "user_input" => crate::security::ContentSource::User,
+        "assistant" | "agent_message" => crate::security::ContentSource::Assistant,
+        "tool" | "tool_output" => crate::security::ContentSource::ToolOutput,
+        "file" | "file_content" | "skill" => crate::security::ContentSource::File,
+        other => {
+            return Err(MsError::ValidationFailed(format!(
+                "Invalid source '{other}'. Valid: user, assistant, tool, file"
+            )));
+        }
+    };
+
+    let secret_summary = crate::security::scan_secrets_summary(&content);
+    let mut acip_cfg = ctx.config.security.acip.clone();
+    acip_cfg.enabled = true;
+    let acip_result = match crate::security::AcipEngine::load(acip_cfg) {
+        Ok(engine) => engine.analyze(&content, source).ok(),
+        Err(_) => None,
+    };
+
+    let is_disallowed = acip_result.as_ref().is_some_and(|a| {
+        matches!(
+            a.classification,
+            crate::security::AcipClassification::Disallowed { .. }
+        )
+    });
+
+    let by_type: std::collections::BTreeMap<String, usize> = secret_summary
+        .by_type
+        .iter()
+        .map(|(k, v)| (format!("{k:?}"), *v))
+        .collect();
+    let output = serde_json::json!({
+        "safe": secret_summary.total_count == 0 && !is_disallowed,
+        "secrets": {
+            "total_count": secret_summary.total_count,
+            "by_type": by_type,
+        },
+        "acip": acip_result.map(|a| serde_json::json!({
+            "classification": a.classification,
+            "safe_excerpt": a.safe_excerpt,
+            "audit_tag": a.audit_tag,
+        })),
+    });
+
+    Ok(ToolResult::text(serde_json::to_string_pretty(&output)?))
+}
+
+fn handle_tool_dedup(ctx: &AppContext, args: &Value) -> Result<ToolResult> {
+    let threshold = args
+        .get("threshold")
+        .and_then(serde_json::Value::as_f64)
+        .unwrap_or(0.85) as f32;
+    let limit = args
+        .get("limit")
+        .and_then(serde_json::Value::as_u64)
+        .unwrap_or(50) as usize;
+
+    let embedder = crate::search::build_embedder(&ctx.config.search)?;
+    let mut config = crate::dedup::DedupConfig::default();
+    config.similarity_threshold = threshold;
+    let engine = crate::dedup::DeduplicationEngine::new(config, embedder.as_ref());
+
+    let total_skills = ctx.db.list_skills(10000, 0).map_or(0, |s| s.len());
+    let pairs = engine.scan_all(ctx.db.as_ref())?;
+    let summary = crate::dedup::DeduplicationSummary::from_pairs(total_skills, pairs, limit);
+
+    Ok(ToolResult::text(serde_json::to_string_pretty(&summary)?))
 }
 
 #[cfg(test)]
@@ -2079,5 +2456,28 @@ mod tests {
             !contains_ansi(&json),
             "Response should not contain ANSI codes"
         );
+    }
+
+    #[test]
+    fn test_define_tools_includes_safety_security_dedup() {
+        let tools = define_tools();
+        assert!(tools.iter().any(|t| t.name == "safety"));
+        assert!(tools.iter().any(|t| t.name == "security"));
+        assert!(tools.iter().any(|t| t.name == "dedup"));
+    }
+
+    #[test]
+    fn test_search_and_load_enriched_tool_schemas() {
+        let tools = define_tools();
+        let search_tool = tools.iter().find(|t| t.name == "search").unwrap();
+        let search_props = search_tool.input_schema.get("properties").unwrap();
+        assert!(search_props.get("layer").is_some());
+        assert!(search_props.get("tags").is_some());
+
+        let load_tool = tools.iter().find(|t| t.name == "load").unwrap();
+        let load_props = load_tool.input_schema.get("properties").unwrap();
+        assert!(load_props.get("level").is_some());
+        assert!(load_props.get("pack").is_some());
+        assert!(load_props.get("for_ntm").is_some());
     }
 }

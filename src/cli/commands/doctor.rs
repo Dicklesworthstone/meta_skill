@@ -129,6 +129,11 @@ pub fn run(ctx: &AppContext, args: &DoctorArgs) -> Result<()> {
         issues_found += check_transactions(ctx, args.fix, verbose, &mut issues_fixed)?;
     }
 
+    // Check core system tool requirements (git, tar, optional cass/bd/rg)
+    if run_only.is_none() {
+        issues_found += check_system_requirements(ctx, verbose)?;
+    }
+
     // Run comprehensive recovery diagnostics if requested
     if run_only.is_none() && args.comprehensive {
         issues_found += run_comprehensive_check(ctx, args.fix, verbose, &mut issues_fixed)?;
@@ -144,11 +149,14 @@ pub fn run(ctx: &AppContext, args: &DoctorArgs) -> Result<()> {
             "output" | "output-mode" => check_output_mode(ctx, verbose)?,
             "origins" => check_skill_origins(ctx, verbose)?,
             "blobs" => check_bundle_blobs(ctx, verbose)?,
+            "requirements" | "tools" => check_system_requirements(ctx, verbose)?,
+            "layers" => check_layers(ctx, verbose)?,
+            "beads" => check_beads(ctx, verbose)?,
             other => {
                 say!(ctx, "{} Unknown check: {}", "[!]", other);
                 say!(
                     ctx,
-                    "  Available checks: safety, security, recovery, perf, output, origins, blobs"
+                    "  Available checks: safety, security, recovery, perf, output, origins, blobs, requirements, layers, beads"
                 );
                 1
             }
@@ -1206,6 +1214,160 @@ fn check_perf(ctx: &AppContext, verbose: bool) -> Result<usize> {
         say!(ctx, "  Search latency: {elapsed:?}");
     }
 
+    if verbose {
+        let stats = ctx.cache.stats();
+        let (q_size, e_size, f_size) = ctx.cache.sizes();
+        say!(
+            ctx,
+            "  Cache sizes: query={}, embedding={}, fingerprint={} (hit rates: {:.0}%/{:.0}%/{:.0}%)",
+            q_size,
+            e_size,
+            f_size,
+            stats.query_hit_rate() * 100.0,
+            stats.embedding_hit_rate() * 100.0,
+            stats.fingerprint_hit_rate() * 100.0
+        );
+    }
+
+    Ok(issues)
+}
+
+/// Check core system tool requirements (git, tar, optional cass/bd/rg)
+fn check_system_requirements(ctx: &AppContext, verbose: bool) -> Result<usize> {
+    say_inline!(ctx, "Checking system requirements... ");
+    let checks = crate::core::requirements::check_requirements()?;
+    let missing_required: Vec<_> = checks
+        .iter()
+        .filter(|c| c.required && !c.satisfied)
+        .collect();
+
+    if missing_required.is_empty() {
+        say!(ctx, "{} OK", "[ok]");
+    } else {
+        say!(
+            ctx,
+            "{} {} required tool(s) missing",
+            "[FAIL]",
+            missing_required.len()
+        );
+    }
+
+    if verbose || !missing_required.is_empty() {
+        for c in &checks {
+            let icon = if c.satisfied {
+                "[ok]"
+            } else if c.required {
+                "[FAIL]"
+            } else {
+                "[-]"
+            };
+            let msg = c.message.as_deref().unwrap_or("");
+            say!(ctx, "  {icon} {}: {msg}", c.name);
+        }
+    }
+
+    Ok(missing_required.len())
+}
+
+/// Check layered skill paths for multi-layer override conflicts
+fn check_layers(ctx: &AppContext, verbose: bool) -> Result<usize> {
+    say_inline!(ctx, "Checking skill layers and conflicts... ");
+    let registry =
+        crate::core::layering::LayeredRegistry::from_skill_paths(&ctx.config.skill_paths);
+    let ids = registry.list_ids();
+    let mut conflict_count = 0usize;
+    let mut details = Vec::new();
+
+    for id in &ids {
+        if let Ok(Some(resolved)) = registry.effective(id) {
+            if resolved.has_conflicts() {
+                conflict_count += 1;
+                details.push((
+                    id.clone(),
+                    resolved.source_layer,
+                    resolved.candidate_layers,
+                    resolved.conflicts.len(),
+                ));
+            }
+        }
+    }
+
+    if conflict_count == 0 {
+        say!(ctx, "{} OK ({} skill(s) across layers)", "[ok]", ids.len());
+    } else {
+        say!(
+            ctx,
+            "{} {} skill(s) have multi-layer section conflicts",
+            "[!]",
+            conflict_count
+        );
+        for (id, winner, candidates, num_conflicts) in &details {
+            let layers_str = candidates
+                .iter()
+                .map(|l| format!("{l:?}").to_lowercase())
+                .collect::<Vec<_>>()
+                .join(", ");
+            say!(
+                ctx,
+                "  [!] '{id}': {num_conflicts} section conflict(s) across [{layers_str}] (winner: {winner:?})"
+            );
+        }
+    }
+
+    if verbose && conflict_count == 0 {
+        for id in &ids {
+            let layers = registry.candidate_layers(id);
+            if layers.len() > 1 {
+                say!(ctx, "  [ok] '{id}' clean override across {layers:?}");
+            }
+        }
+    }
+
+    Ok(0)
+}
+
+/// Check beads (br/bd) availability, version compatibility, and preflight sync status
+fn check_beads(ctx: &AppContext, verbose: bool) -> Result<usize> {
+    say_inline!(ctx, "Checking beads issue tracker... ");
+    let client = crate::beads::BeadsClient::new();
+    if !client.is_available() {
+        say!(ctx, "{} Skipped (br/bd not installed)", "-");
+        return Ok(0);
+    }
+
+    let mut issues = 0usize;
+    match client.check_compatibility() {
+        Ok(crate::beads::VersionCompatibility::Full) => {
+            if let Err(err) = client.preflight_check() {
+                say!(ctx, "{} Preflight warning: {err}", "[!]");
+                issues += 1;
+            } else {
+                say!(ctx, "{} OK", "[ok]");
+            }
+        }
+        Ok(crate::beads::VersionCompatibility::Partial { warning }) => {
+            say!(ctx, "{} {warning}", "[!]");
+            issues += 1;
+        }
+        Ok(crate::beads::VersionCompatibility::Unsupported { error }) => {
+            say!(ctx, "{} {error}", "[FAIL]");
+            issues += 1;
+        }
+        Err(err) => {
+            say!(ctx, "{} Version check failed: {err}", "[!]");
+            issues += 1;
+        }
+    }
+
+    if verbose {
+        if let Some(ver) = client.version() {
+            say!(ctx, "  Version: {ver}");
+        }
+        if let Ok(sync) = client.sync_status() {
+            say!(ctx, "  Sync status: {sync:?}");
+        }
+    }
+
     Ok(issues)
 }
 
@@ -1402,6 +1564,9 @@ mod tests {
             "output-mode",
             "origins",
             "blobs",
+            "requirements",
+            "tools",
+            "layers",
         ];
 
         for check in &available_checks {

@@ -111,10 +111,27 @@ pub struct ScoreBreakdown {
 pub fn run(ctx: &AppContext, args: &SuggestArgs) -> Result<()> {
     debug!(target: "suggest", mode = ?ctx.output_format, "output mode selected");
 
-    // 1. Capture working context
+    // 1. Capture working context and update in-memory session fingerprint cache
     let cwd_path: Option<PathBuf> = args.cwd.as_ref().map(PathBuf::from);
     let capture = ContextCapture::capture_current(cwd_path.clone())?;
     let fingerprint = ContextFingerprint::capture(&capture);
+    let session_key = capture.repo_root.display().to_string();
+    let _previous_fp = ctx.cache.get_fingerprint(&session_key);
+    ctx.cache.put_fingerprint(
+        &session_key,
+        crate::search::SessionFingerprint {
+            content_hash: format!("{:016x}", fingerprint.as_u64()),
+            keywords: capture
+                .open_files
+                .iter()
+                .filter_map(|p| {
+                    p.extension()
+                        .and_then(|e| e.to_str())
+                        .map(str::to_lowercase)
+                })
+                .collect(),
+        },
+    );
 
     // 2. Load cooldown cache
     let cache_path = ctx.ms_root.join("cooldowns.json");

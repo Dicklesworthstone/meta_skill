@@ -243,9 +243,13 @@ fn run_show(ctx: &AppContext, args: &ShowArgs) -> Result<()> {
 
 fn run_list(ctx: &AppContext, args: &ListArgs) -> Result<()> {
     let stored = load_stored_antipatterns(ctx)?;
-    let filtered: Vec<&AntiPattern> = stored
-        .iter()
-        .filter(|ap| !args.orphaned || ap.is_orphaned())
+    let candidates: Vec<&AntiPattern> = if args.orphaned {
+        crate::antipatterns::find_orphaned(&stored)
+    } else {
+        stored.iter().collect()
+    };
+    let filtered: Vec<&AntiPattern> = candidates
+        .into_iter()
         .filter(|ap| {
             if let Some(ref sev) = args.severity {
                 let sev_lower = sev.to_ascii_lowercase();
@@ -303,8 +307,7 @@ fn run_link(ctx: &AppContext, args: &LinkArgs) -> Result<()> {
             args.anti_pattern_id
         )));
     };
-    ap.constrains = Some(crate::antipatterns::PatternId::new(&args.pattern_id));
-    ap.updated_at = chrono::Utc::now();
+    crate::antipatterns::link_to_pattern(ap, crate::antipatterns::PatternId::new(&args.pattern_id));
     save_stored_antipatterns(ctx, &stored)?;
 
     if ctx.output_format != OutputFormat::Human {

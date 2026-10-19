@@ -59,16 +59,26 @@ fn update_bandits_from_outcome(ctx: &AppContext, skill_id: &str, success: bool) 
         ContextFeatures, ContextualBandit, Reward, SignalBandit, SignalType, SkillFeedback,
         SuggestionContext as BanditSuggestionContext,
     };
+    use crate::suggestions::tracking::FeedbackCollector;
 
     let contextual_path = ctx.ms_root.join("contextual_bandit.json");
     let mut contextual = ContextualBandit::load(&contextual_path)?;
     contextual.register_skill(skill_id);
+    let features = ContextFeatures::default();
+
+    // Flush any pending session/unload feedback for loaded skills and ignored suggestions
+    let tracking_path = FeedbackCollector::default_path(&ctx.ms_root);
+    let mut collector = FeedbackCollector::load(&tracking_path);
+    let _ = collector.on_skill_unload_and_update_bandit(skill_id, &mut contextual, &features);
+    let _ = collector.end_session_and_update_bandit(&mut contextual, &features);
+    let _ = collector.save(&tracking_path);
+
     let feedback = if success {
         SkillFeedback::ExplicitHelpful
     } else {
         SkillFeedback::ExplicitNotHelpful { reason: None }
     };
-    contextual.update(skill_id, &ContextFeatures::default(), &feedback);
+    contextual.update(skill_id, &features, &feedback);
     contextual.save(&contextual_path)?;
 
     let signal_path = ctx.ms_root.join("bandit.json");

@@ -314,7 +314,21 @@ fn search_bm25(ctx: &AppContext, args: &SearchArgs, filters: &SearchFilters) -> 
 
 fn search_semantic(ctx: &AppContext, args: &SearchArgs, filters: &SearchFilters) -> Result<()> {
     let embedder = build_embedder(&ctx.config.search)?;
-    let query_embedding = embedder.embed(&args.query);
+    let query_cache_key = format!("__query__:{}", embedder.name());
+    let query_embedding = if let Some(q) = ctx
+        .cache
+        .get_embedding_quantized(&query_cache_key, &args.query)
+    {
+        crate::search::embeddings::dequantize_f16(&q)
+    } else {
+        let emb = embedder.embed(&args.query);
+        ctx.cache.put_embedding_quantized(
+            &query_cache_key,
+            &args.query,
+            crate::search::embeddings::quantize_f16(&emb),
+        );
+        emb
+    };
 
     // Load the embeddings that live in the query vector's space
     let mut vector_index = VectorIndex::new(embedder.dims());
@@ -323,7 +337,14 @@ fn search_semantic(ctx: &AppContext, args: &SearchArgs, filters: &SearchFilters)
         .get_embeddings_for(embedder.name(), embedder.dims())?;
 
     for (id, embedding) in all_embeddings {
-        let _ = vector_index.insert(id, embedding);
+        if let Some(q) = ctx.cache.get_embedding_quantized(&id, embedder.name()) {
+            let _ = vector_index.insert_quantized(id, &q);
+        } else {
+            let _ = vector_index.insert(id.clone(), embedding);
+            if let Some(q) = vector_index.get_quantized(&id) {
+                ctx.cache.put_embedding_quantized(&id, embedder.name(), q);
+            }
+        }
     }
 
     // Search more to allow filtering
@@ -461,6 +482,8 @@ fn display_explained_results(
                 })
             })
             .collect();
+        let cache_stats = ctx.cache.stats();
+        let (query_cache_size, embedding_cache_size, fingerprint_cache_size) = ctx.cache.sizes();
         let payload = serde_json::json!({
             "status": "ok",
             "query": args.query,
@@ -468,11 +491,23 @@ fn display_explained_results(
             "count": items.len(),
             "filter_audit": filter_audit,
             "search_context": search_ctx,
+            "cache": {
+                "query_hit_rate": cache_stats.query_hit_rate(),
+                "embedding_hit_rate": cache_stats.embedding_hit_rate(),
+                "fingerprint_hit_rate": cache_stats.fingerprint_hit_rate(),
+                "sizes": {
+                    "query": query_cache_size,
+                    "embedding": embedding_cache_size,
+                    "fingerprint": fingerprint_cache_size,
+                }
+            },
             "results": items,
         });
         return crate::cli::output::emit_json(&payload);
     }
 
+    let cache_stats = ctx.cache.stats();
+    let (query_cache_size, embedding_cache_size, fingerprint_cache_size) = ctx.cache.sizes();
     println!(
         "Search Explain for '{}' (mode: {}, k={}, bm25_w={:.2}, sem_w={:.2}):",
         args.query, search_type, config.k, config.bm25_weight, config.semantic_weight
@@ -485,6 +520,15 @@ fn display_explained_results(
         filter_audit.filtered_by_layer,
         filter_audit.filtered_by_quality,
         filter_audit.filtered_by_deprecated
+    );
+    println!(
+        "  Cache: entries=(q={}, emb={}, fp={}), hit_rates=(q={:.1}%, emb={:.1}%, fp={:.1}%)",
+        query_cache_size,
+        embedding_cache_size,
+        fingerprint_cache_size,
+        cache_stats.query_hit_rate() * 100.0,
+        cache_stats.embedding_hit_rate() * 100.0,
+        cache_stats.fingerprint_hit_rate() * 100.0
     );
     for ((skill, score), exp) in results.iter().zip(explanations.iter()) {
         let bm25_rrf = exp

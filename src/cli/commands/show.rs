@@ -345,6 +345,21 @@ fn show_json(ctx: &AppContext, skill: &SkillRecord, args: &ShowArgs, pretty: boo
         }
     }
 
+    // Surface multi-layer override candidates and section conflicts if present
+    let layered = crate::core::layering::LayeredRegistry::from_skill_paths(&ctx.config.skill_paths);
+    if layered.candidate_layers(&skill.id).len() > 1 {
+        if let Ok(Some(resolved)) = layered.effective(&skill.id) {
+            if let Ok(layers_val) = serde_json::to_value(&resolved.candidate_layers) {
+                output["skill"]["candidate_layers"] = layers_val;
+            }
+            if resolved.has_conflicts() {
+                if let Ok(conflicts_val) = serde_json::to_value(&resolved.conflicts) {
+                    output["skill"]["layer_conflicts"] = conflicts_val;
+                }
+            }
+        }
+    }
+
     if args.meta || args.full {
         if let Ok(meta) = serde_json::from_str::<serde_json::Value>(&skill.metadata_json) {
             output["skill"]["metadata"] = meta;

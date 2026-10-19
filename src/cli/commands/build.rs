@@ -1645,8 +1645,15 @@ fn run_auto(
     if !args.no_antipatterns {
         let raw_sessions: Vec<_> = quality_sessions.iter().map(|(s, _)| s.clone()).collect();
         let detector = crate::antipatterns::DefaultDetector::default();
-        if let Ok(antipatterns) = crate::antipatterns::mine_anti_patterns(&raw_sessions, &detector)
+        if let Ok(mut antipatterns) =
+            crate::antipatterns::mine_anti_patterns(&raw_sessions, &detector)
         {
+            for ap in &mut antipatterns {
+                crate::antipatterns::link_to_pattern(
+                    ap,
+                    crate::antipatterns::PatternId::new(&skill_id),
+                );
+            }
             let section = crate::antipatterns::format_anti_patterns(&antipatterns);
             if !section.is_empty() {
                 skill_md.push('\n');
