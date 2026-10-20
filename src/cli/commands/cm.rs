@@ -162,7 +162,7 @@ pub fn run(ctx: &AppContext, args: &CmArgs) -> Result<()> {
             category,
             threshold,
         } => {
-            if let Ok(false) = client.validate_rule(content) {
+            if matches!(client.validate_rule(content), Ok(false)) {
                 if ctx.output_format == OutputFormat::Human {
                     eprintln!(
                         "Warning: rule validation against CASS history reported potential issues."

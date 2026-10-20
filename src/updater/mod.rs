@@ -637,18 +637,30 @@ const RUN_CHECK_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30
 pub fn verify_binary_runs(path: &Path) -> Result<()> {
     use std::process::{Command, Stdio};
 
-    let mut child = Command::new(path)
-        .arg("--version")
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .map_err(|e| {
-            MsError::ValidationFailed(format!(
-                "update candidate {} could not be executed: {e}",
-                path.display()
-            ))
-        })?;
+    let mut child = {
+        let mut attempts = 0;
+        loop {
+            match Command::new(path)
+                .arg("--version")
+                .stdin(Stdio::null())
+                .stdout(Stdio::piped())
+                .stderr(Stdio::piped())
+                .spawn()
+            {
+                Ok(child) => break child,
+                Err(e) if e.raw_os_error() == Some(26) && attempts < 10 => {
+                    attempts += 1;
+                    std::thread::sleep(std::time::Duration::from_millis(10));
+                }
+                Err(e) => {
+                    return Err(MsError::ValidationFailed(format!(
+                        "update candidate {} could not be executed: {e}",
+                        path.display()
+                    )));
+                }
+            }
+        }
+    };
 
     let deadline = std::time::Instant::now() + RUN_CHECK_TIMEOUT;
     let status = loop {

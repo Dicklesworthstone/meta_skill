@@ -440,7 +440,7 @@ fn show_json(ctx: &AppContext, skill: &SkillRecord, args: &ShowArgs, pretty: boo
             let resolver = crate::core::dependencies::DependencyResolver::new(&graph);
             if let Ok(plan) = resolver.resolve(
                 &skill.id,
-                crate::core::disclosure::DisclosureLevel::Standard,
+                crate::core::dependencies::DisclosureLevel::Standard,
                 crate::core::dependencies::DependencyLoadMode::Auto,
             ) {
                 output["skill"]["has_dependency_issues"] = serde_json::json!(plan.has_issues());
