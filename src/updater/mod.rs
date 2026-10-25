@@ -507,7 +507,10 @@ fn extract_from_zip(archive: &Path, dest: &Path) -> Result<()> {
         if !entry.is_file() {
             continue;
         }
-        let name = entry.name().to_string();
+        let name = entry
+            .name()
+            .map_err(|e| MsError::ValidationFailed(format!("invalid zip entry name: {e}")))?
+            .into_owned();
         if is_binary_member(&name) {
             write_executable(&mut entry, dest)?;
             return Ok(());
