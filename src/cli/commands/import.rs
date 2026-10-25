@@ -226,6 +226,7 @@ fn run_single(ctx: &AppContext, args: &ImportArgs) -> Result<()> {
     }
 
     // Run linting if requested
+    let mut fix_summary = None;
     let lint_result = if args.lint {
         let mut engine = ValidationEngine::with_defaults();
         for rule in all_rules() {
@@ -234,7 +235,8 @@ fn run_single(ctx: &AppContext, args: &ImportArgs) -> Result<()> {
         let mut result = engine.validate(&generated.skill);
 
         if args.fix && !result.passed {
-            let _fix_result = engine.auto_fix(&mut generated.skill)?;
+            let fix_result = engine.auto_fix(&mut generated.skill)?;
+            fix_summary = Some((fix_result.fixed_count(), fix_result.all_succeeded()));
             result = engine.validate(&generated.skill);
         }
 
@@ -292,6 +294,8 @@ fn run_single(ctx: &AppContext, args: &ImportArgs) -> Result<()> {
             lint_passed: lint_result.as_ref().map(|r| r.passed),
             lint_errors: lint_result.as_ref().map(|r| r.error_count()),
             lint_warnings: lint_result.as_ref().map(|r| r.warning_count()),
+            lint_fixes_applied: fix_summary.map(|(count, _)| count),
+            lint_all_fixes_succeeded: fix_summary.map(|(_, ok)| ok),
             indexed: if args.index { Some(indexed) } else { None },
             classification_signals: signal_summaries,
         };
@@ -744,6 +748,10 @@ struct ImportReport {
     lint_errors: Option<usize>,
     #[serde(skip_serializing_if = "Option::is_none")]
     lint_warnings: Option<usize>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    lint_fixes_applied: Option<usize>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    lint_all_fixes_succeeded: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
     indexed: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]

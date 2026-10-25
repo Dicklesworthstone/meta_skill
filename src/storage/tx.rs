@@ -606,6 +606,7 @@ impl TxManager {
         if res_cache.load_from_db(self.db.conn()).is_ok() {
             let _ = res_cache.invalidate_from_db(self.db.conn(), skill_id);
         }
+        let _ = self.db.delete_skill_evidence(skill_id);
         self.db.delete_skill(skill_id)?;
         tx.phase = TxPhase::Complete;
         self.db.update_tx_phase(&tx.id, TxPhase::Complete)?;
@@ -759,6 +760,21 @@ impl TxManager {
             &embedding_hash,
             &predicate_index_hash,
         )?;
+
+        // Sync provenance evidence from Git archive into SQLite skill_evidence table
+        let evidence_path = git_path.join("evidence.json");
+        if let Ok(raw_ev) = fs::read_to_string(&evidence_path) {
+            if let Ok(ev_index) = serde_json::from_str::<crate::core::SkillEvidenceIndex>(&raw_ev) {
+                for (rule_id, refs) in &ev_index.rules {
+                    let _ = self.db.upsert_evidence(
+                        &skill.metadata.id,
+                        rule_id,
+                        refs,
+                        &ev_index.coverage,
+                    );
+                }
+            }
+        }
 
         // Update phase
         let mut tx = tx.clone();

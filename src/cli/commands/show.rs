@@ -362,24 +362,46 @@ fn show_json(ctx: &AppContext, skill: &SkillRecord, args: &ShowArgs, pretty: boo
         output["skill"]["indexed_slices_count"] = serde_json::json!(slice_idx.slices.len());
     }
 
-    // Surface multi-layer override candidates and section conflicts if present
-    let layered = crate::core::layering::LayeredRegistry::from_skill_paths(&ctx.config.skill_paths);
-    if layered.candidate_layers(&skill.id).len() > 1 {
-        if let Ok(Some(resolved)) = layered.effective(&skill.id) {
+    // Surface multi-layer override candidates, overlays, and section conflicts if present
+    let mut layered =
+        crate::core::layering::LayeredRegistry::from_skill_paths(&ctx.config.skill_paths);
+    let _ = layered.load_overlays_from_root(&ctx.ms_root);
+    if let Ok(Some(resolved)) = layered.effective(&skill.id) {
+        if !resolved.overlay_results.is_empty() {
+            if let Ok(ov_val) = serde_json::to_value(&resolved.overlay_results) {
+                output["skill"]["applied_overlays"] = ov_val;
+            }
+        }
+        if layered.candidate_layers(&skill.id).len() > 1 {
             if let Ok(layers_val) = serde_json::to_value(&resolved.candidate_layers) {
                 output["skill"]["candidate_layers"] = layers_val;
+            }
+            let mut layer_versions = serde_json::Map::new();
+            for layer in &resolved.candidate_layers {
+                if let Some(candidate) = layered.get_at_layer(&skill.id, *layer) {
+                    layer_versions.insert(
+                        layer.as_str().to_string(),
+                        serde_json::json!({
+                            "version": candidate.spec.metadata.version,
+                            "source_path": candidate.source_path,
+                        }),
+                    );
+                }
+            }
+            if !layer_versions.is_empty() {
+                output["skill"]["layer_versions"] = serde_json::Value::Object(layer_versions);
             }
             if resolved.has_conflicts() {
                 if let Ok(conflicts_val) = serde_json::to_value(&resolved.conflicts) {
                     output["skill"]["layer_conflicts"] = conflicts_val;
                 }
             }
-        }
-        if let Some(res_opts) = layered.get_resolution_options(&skill.id) {
-            output["skill"]["resolution_options"] = serde_json::json!({
-                "available_layers": res_opts.available_layers,
-                "conflict_count": res_opts.conflicts.len(),
-            });
+            if let Some(res_opts) = layered.get_resolution_options(&skill.id) {
+                output["skill"]["resolution_options"] = serde_json::json!({
+                    "available_layers": res_opts.available_layers,
+                    "conflict_count": res_opts.conflicts.len(),
+                });
+            }
         }
     }
 

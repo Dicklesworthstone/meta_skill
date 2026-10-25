@@ -7,9 +7,11 @@ use crate::app::AppContext;
 use crate::cli::commands::resolve_skill_markdown;
 use crate::cli::output::OutputFormat;
 use crate::cli::output::{HumanLayout, emit_human, emit_json};
-use crate::core::spec_lens::parse_markdown;
+use crate::core::spec_lens::{SpecLens, compile_markdown, parse_markdown};
 use crate::core::validation::{ValidationWarning, validate, validate_with_ubs};
 use crate::error::{MsError, Result};
+use crate::lint::rules::all_rules;
+use crate::lint::{RuleCategory, ValidationEngine, ValidationResult};
 use crate::quality::ubs::{UbsClient, UbsFinding, UbsResult, UbsSeverity};
 use crate::security::SafetyGate;
 
@@ -25,6 +27,39 @@ pub struct ValidateArgs {
     /// Run UBS on code blocks
     #[arg(long)]
     pub ubs: bool,
+
+    /// Run 19-rule lint engine across structure, reference, quality, security, and performance
+    #[arg(long)]
+    pub lint: bool,
+
+    /// Automatically apply available lint fixes
+    #[arg(long)]
+    pub fix: bool,
+}
+
+fn run_lint_engine(
+    spec: &mut crate::core::SkillSpec,
+    skill_md: &std::path::Path,
+    apply_fixes: bool,
+) -> Result<(ValidationResult, Option<(usize, bool)>)> {
+    let mut engine = ValidationEngine::with_defaults();
+    for rule in all_rules() {
+        engine.register(rule);
+    }
+    let mut res = engine.validate(spec);
+    let mut fix_info = None;
+    if apply_fixes && (!res.passed || res.warning_count() > 0) {
+        let fix_res = engine.auto_fix(spec)?;
+        let fixed_count = fix_res.fixed_count();
+        let all_ok = fix_res.all_succeeded();
+        if fixed_count > 0 {
+            let updated_md = compile_markdown(spec);
+            let _ = std::fs::write(skill_md, updated_md);
+            res = engine.validate(spec);
+        }
+        fix_info = Some((fixed_count, all_ok));
+    }
+    Ok((res, fix_info))
 }
 
 pub fn run(ctx: &AppContext, args: &ValidateArgs) -> Result<()> {
@@ -41,10 +76,8 @@ pub fn run(ctx: &AppContext, args: &ValidateArgs) -> Result<()> {
             let raw = std::fs::read_to_string(&skill_md).map_err(|err| {
                 crate::error::MsError::Config(format!("read {}: {err}", skill_md.display()))
             })?;
-            let spec = parse_markdown(&raw)?;
-            let roundtrip_ok = crate::core::spec_lens::SpecLens
-                .verify_roundtrip(&spec)
-                .is_ok();
+            let mut spec = parse_markdown(&raw)?;
+            let roundtrip_ok = SpecLens.verify_roundtrip(&spec).is_ok();
             let mut warnings = validate(&spec)?;
             if !roundtrip_ok {
                 warnings.push(ValidationWarning {
@@ -53,6 +86,7 @@ pub fn run(ctx: &AppContext, args: &ValidateArgs) -> Result<()> {
                         .to_string(),
                 });
             }
+            let (lint_res, fix_info) = run_lint_engine(&mut spec, &skill_md, args.fix)?;
             let ubs_result = if args.ubs {
                 let gate = SafetyGate::from_context(ctx);
                 let client = UbsClient::new(None).with_safety(gate);
@@ -70,6 +104,9 @@ pub fn run(ctx: &AppContext, args: &ValidateArgs) -> Result<()> {
                 &warnings,
                 ubs_result.as_ref(),
                 roundtrip_ok,
+                &lint_res,
+                fix_info,
+                args.lint,
             ));
         }
 
@@ -113,10 +150,8 @@ pub fn run(ctx: &AppContext, args: &ValidateArgs) -> Result<()> {
     let raw = std::fs::read_to_string(&skill_md).map_err(|err| {
         crate::error::MsError::Config(format!("read {}: {err}", skill_md.display()))
     })?;
-    let spec = parse_markdown(&raw)?;
-    let roundtrip_ok = crate::core::spec_lens::SpecLens
-        .verify_roundtrip(&spec)
-        .is_ok();
+    let mut spec = parse_markdown(&raw)?;
+    let roundtrip_ok = SpecLens.verify_roundtrip(&spec).is_ok();
 
     let mut warnings = validate(&spec)?;
     if !roundtrip_ok {
@@ -125,6 +160,7 @@ pub fn run(ctx: &AppContext, args: &ValidateArgs) -> Result<()> {
             message: "Markdown compilation roundtrip did not preserve spec semantics".to_string(),
         });
     }
+    let (lint_res, fix_info) = run_lint_engine(&mut spec, &skill_md, args.fix)?;
     let ubs_result = if args.ubs {
         let gate = SafetyGate::from_context(ctx);
         let client = UbsClient::new(None).with_safety(gate);
@@ -140,6 +176,9 @@ pub fn run(ctx: &AppContext, args: &ValidateArgs) -> Result<()> {
             &warnings,
             ubs_result.as_ref(),
             roundtrip_ok,
+            &lint_res,
+            fix_info,
+            args.lint,
         );
         return emit_json(&report);
     }
@@ -149,6 +188,14 @@ pub fn run(ctx: &AppContext, args: &ValidateArgs) -> Result<()> {
     layout.kv("Skill", skill_arg);
     layout.kv("Path", &skill_md.display().to_string());
     layout.kv("Roundtrip OK", if roundtrip_ok { "yes" } else { "no" });
+    if args.lint || args.fix {
+        layout.kv("Lint Errors", &lint_res.error_count().to_string());
+        layout.kv("Lint Warnings", &lint_res.warning_count().to_string());
+        if let Some((fixed, all_ok)) = fix_info {
+            layout.kv("Fixes Applied", &fixed.to_string());
+            layout.kv("All Fixes Succeeded", if all_ok { "yes" } else { "no" });
+        }
+    }
 
     if !warnings.is_empty() {
         layout.section("Warnings");
@@ -206,6 +253,14 @@ struct ValidateReport {
     ubs: Option<UbsReport>,
     roundtrip_ok: bool,
     clean: bool,
+    lint_errors: usize,
+    lint_warnings: usize,
+    lint_infos: usize,
+    lint_by_category: std::collections::BTreeMap<String, usize>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    fixes_applied: Option<usize>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    all_fixes_succeeded: Option<bool>,
 }
 
 #[derive(Serialize)]
@@ -241,6 +296,9 @@ fn build_report(
     warnings: &[ValidationWarning],
     ubs_result: Option<&UbsResult>,
     roundtrip_ok: bool,
+    lint_res: &ValidationResult,
+    fix_info: Option<(usize, bool)>,
+    strict_lint: bool,
 ) -> ValidateReport {
     let warning_items = warnings
         .iter()
@@ -259,7 +317,22 @@ fn build_report(
     });
     let clean = roundtrip_ok
         && warning_items.is_empty()
-        && ubs_result.is_none_or(crate::quality::ubs::UbsResult::is_clean);
+        && ubs_result.is_none_or(crate::quality::ubs::UbsResult::is_clean)
+        && (!strict_lint || lint_res.passed);
+
+    let mut lint_by_category = std::collections::BTreeMap::new();
+    for cat in [
+        RuleCategory::Structure,
+        RuleCategory::Reference,
+        RuleCategory::Quality,
+        RuleCategory::Security,
+        RuleCategory::Performance,
+    ] {
+        let count = lint_res.by_category(cat).count();
+        if count > 0 {
+            lint_by_category.insert(cat.to_string(), count);
+        }
+    }
 
     ValidateReport {
         skill: skill.to_string(),
@@ -268,6 +341,12 @@ fn build_report(
         ubs,
         roundtrip_ok,
         clean,
+        lint_errors: lint_res.error_count(),
+        lint_warnings: lint_res.warning_count(),
+        lint_infos: lint_res.infos().count(),
+        lint_by_category,
+        fixes_applied: fix_info.map(|(f, _)| f),
+        all_fixes_succeeded: fix_info.map(|(_, ok)| ok),
     }
 }
 

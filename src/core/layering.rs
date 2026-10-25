@@ -255,10 +255,11 @@ impl LayeredRegistry {
         // Single candidate - no conflicts possible
         if sorted.len() == 1 {
             let (layer, candidate) = sorted[0];
-            return Ok(Some(ResolvedSkill::from_single(
-                candidate.spec.clone(),
-                *layer,
-            )));
+            let mut resolved_skill = ResolvedSkill::from_single(candidate.spec.clone(), *layer);
+            let overlay_results =
+                self.apply_overlays(id, &mut resolved_skill.spec, &OverlayContext::from_env());
+            resolved_skill.overlay_results = overlay_results;
+            return Ok(Some(resolved_skill));
         }
 
         // Multiple candidates - resolve conflicts
@@ -477,6 +478,19 @@ impl LayeredRegistry {
         }
 
         registry
+    }
+
+    /// Load and register overlays for all registered skills from `<ms_root>/overlays`.
+    pub fn load_overlays_from_root(&mut self, ms_root: &std::path::Path) -> usize {
+        let mut count = 0;
+        let ids = self.list_ids();
+        for id in ids {
+            for overlay in crate::core::overlay::load_overlays_for_skill(ms_root, &id) {
+                self.register_overlay(overlay);
+                count += 1;
+            }
+        }
+        count
     }
 }
 

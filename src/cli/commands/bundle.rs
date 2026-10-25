@@ -987,6 +987,7 @@ fn apply_bundle_update(
 
     for (skill_name, target, entries, expected_hashes, report) in pending {
         let skill_backup_root = backup_root.join(&skill_name);
+        let mut backups = Vec::new();
         if let Some(report) = report {
             if report.needs_attention() && args.force {
                 for file in report
@@ -996,14 +997,22 @@ fn apply_bundle_update(
                 {
                     let path = target.join(&file.path);
                     if path.exists() {
-                        let _ = backup_file(&path, &skill_backup_root);
+                        if let Ok(backup_info) = backup_file(&path, &skill_backup_root) {
+                            backups.push(backup_info);
+                        }
                     }
                 }
             }
         }
 
-        write_bundle_files(&target, &entries)?;
-        write_bundle_meta(&target, &expected_hashes)?;
+        if let Err(err) = write_bundle_files(&target, &entries)
+            .and_then(|()| write_bundle_meta(&target, &expected_hashes))
+        {
+            for backup in &backups {
+                let _ = crate::bundler::local_safety::restore_from_backup(backup);
+            }
+            return Err(err);
+        }
     }
 
     let installed = InstalledBundle {
@@ -1283,6 +1292,7 @@ fn run_verify(ctx: &AppContext, args: &BundleVerifyArgs) -> Result<()> {
             }
         }
     }
+    let archive_hash = crate::bundler::blob::BlobStore::hash_path(&path).ok();
 
     if ctx.output_format != OutputFormat::Human {
         return emit_json(&serde_json::json!({
@@ -1291,6 +1301,7 @@ fn run_verify(ctx: &AppContext, args: &BundleVerifyArgs) -> Result<()> {
             "bundle_id": package.manifest.bundle.id,
             "version": package.manifest.bundle.version,
             "checksum": package.manifest.checksum,
+            "archive_hash": archive_hash,
             "signed": signed,
             "signatures_verified": signatures_verified,
             "signature_count": package.manifest.signatures.len(),

@@ -866,7 +866,11 @@ fn run_comprehensive_check(
     }
 
     // Run diagnosis or recovery
-    let report = manager.recover(fix)?;
+    let report = if fix {
+        manager.recover(true)?
+    } else {
+        manager.diagnose()?
+    };
     print_recovery_report(ctx, &report, verbose);
 
     // Update fixed count

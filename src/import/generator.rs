@@ -150,6 +150,9 @@ pub struct ImportStats {
     pub unknown_count: usize,
     /// Average confidence of processed blocks
     pub avg_confidence: f32,
+    /// Blocks with medium confidence (0.4 <= conf < 0.7)
+    #[serde(default)]
+    pub medium_confidence_count: usize,
     /// Blocks skipped due to low confidence
     pub low_confidence_skipped: usize,
     /// Blocks skipped as duplicates
@@ -251,6 +254,9 @@ impl SkillGenerator {
             // Track confidence
             total_confidence += block.confidence;
             confidence_count += 1;
+            if block.is_medium_confidence() {
+                stats.medium_confidence_count += 1;
+            }
 
             // Map to appropriate section
             match block.block_type {
@@ -516,7 +522,12 @@ impl SkillGenerator {
             if i > 0 {
                 result.push_str("\n\n");
             }
-            let lang = code_block.language.as_deref().unwrap_or("");
+            let detected = formatting::detect_language(&code_block.code);
+            let lang = code_block
+                .language
+                .as_deref()
+                .or(detected.as_deref())
+                .unwrap_or("");
             result.push_str(&format!("```{}\n{}\n```", lang, code_block.code));
         }
 

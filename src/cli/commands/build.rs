@@ -1714,6 +1714,95 @@ fn run_auto(
     let skill_md_path = output_dir.join("SKILL.md");
     fs::write(&skill_md_path, &skill_md)?;
 
+    // Build and persist SkillEvidenceIndex to evidence.json and SQLite provenance graph
+    {
+        use sha2::{Digest, Sha256};
+        let mut rules_map = std::collections::BTreeMap::new();
+        let mut total_conf = 0.0_f32;
+        let mut ref_count = 0_usize;
+
+        for pat in &filtered_patterns {
+            let mut core_refs = Vec::new();
+            if pat.evidence.is_empty() {
+                for (sess, q) in &quality_sessions {
+                    let hash = hex::encode(Sha256::digest(
+                        format!("{}:{}:{}", skill_id, pat.id, sess.id).as_bytes(),
+                    ));
+                    core_refs.push(crate::core::EvidenceRef {
+                        session_id: sess.id.clone(),
+                        message_range: (0, sess.messages.len().saturating_sub(1) as u32),
+                        snippet_hash: hash,
+                        excerpt: pat.description.clone(),
+                        level: crate::core::EvidenceLevel::Pointer,
+                        confidence: (pat.confidence * q.score).clamp(0.0, 1.0),
+                    });
+                }
+            } else {
+                for ev in &pat.evidence {
+                    let min_idx = ev.message_indices.iter().copied().min().unwrap_or(0) as u32;
+                    let max_idx = ev
+                        .message_indices
+                        .iter()
+                        .copied()
+                        .max()
+                        .unwrap_or(min_idx as usize) as u32;
+                    let excerpt = ev.snippet.as_ref().map(|s| {
+                        if args.no_redact {
+                            s.clone()
+                        } else {
+                            crate::security::secret_scanner::redact_secrets(s)
+                        }
+                    });
+                    let hash_source = excerpt.as_deref().unwrap_or(&pat.id);
+                    let hash = hex::encode(Sha256::digest(hash_source.as_bytes()));
+                    let level = if excerpt.is_some() {
+                        crate::core::EvidenceLevel::Excerpt
+                    } else {
+                        crate::core::EvidenceLevel::Pointer
+                    };
+                    core_refs.push(crate::core::EvidenceRef {
+                        session_id: ev.session_id.clone(),
+                        message_range: (min_idx, max_idx),
+                        snippet_hash: hash,
+                        excerpt,
+                        level,
+                        confidence: (pat.confidence * ev.relevance.max(0.5)).clamp(0.0, 1.0),
+                    });
+                }
+            }
+
+            for r in &core_refs {
+                total_conf += r.confidence;
+                ref_count += 1;
+            }
+            rules_map.insert(pat.id.clone(), core_refs);
+        }
+
+        let rules_with_evidence = rules_map.values().filter(|v| !v.is_empty()).count();
+        let avg_confidence = if ref_count > 0 {
+            total_conf / ref_count as f32
+        } else {
+            0.0
+        };
+        let evidence_index = crate::core::SkillEvidenceIndex {
+            rules: rules_map,
+            coverage: crate::core::EvidenceCoverage {
+                total_rules: filtered_patterns.len(),
+                rules_with_evidence,
+                avg_confidence,
+            },
+        };
+        let evidence_path = output_dir.join("evidence.json");
+        if let Ok(ev_json) = serde_json::to_string_pretty(&evidence_index) {
+            let _ = fs::write(&evidence_path, ev_json);
+        }
+        for (rule_id, refs) in &evidence_index.rules {
+            let _ = ctx
+                .db
+                .upsert_evidence(&skill_id, rule_id, refs, &evidence_index.coverage);
+        }
+    }
+
     session.phase_progress = 0.5;
 
     if ctx.output_format == OutputFormat::Human {
