@@ -446,7 +446,12 @@ impl FeedbackCollector {
         std::fs::read_to_string(path)
             .ok()
             .and_then(|raw| serde_json::from_str(&raw).ok())
-            .unwrap_or_else(Self::new)
+            .unwrap_or_else(|| {
+                std::env::var("MS_SESSION_ID")
+                    .ok()
+                    .filter(|s| !s.trim().is_empty())
+                    .map_or_else(Self::new, Self::with_session_id)
+            })
     }
 
     /// Save the `FeedbackCollector` to disk.

@@ -17,6 +17,7 @@ fn main() -> ExitCode {
     let initial_format = cli.output_format();
     ms::cli::output::set_active_output_format(initial_format);
     init_tracing(&cli);
+    ms::output::detection::maybe_print_debug_output(initial_format, cli.robot);
 
     match run(&cli) {
         Ok(()) => ExitCode::SUCCESS,

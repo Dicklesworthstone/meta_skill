@@ -79,7 +79,7 @@ impl CassClient {
         };
         let session_pattern =
             Some(config.session_pattern.trim().to_string()).filter(|p| !p.is_empty() && p != "*");
-        Self {
+        let mut client = Self {
             cass_bin,
             enabled,
             session_pattern,
@@ -87,7 +87,13 @@ impl CassClient {
             data_dir: None,
             fingerprint_cache: None,
             safety: None,
+        };
+        if let Ok(dir) = std::env::var("CASS_DATA_DIR") {
+            if !dir.trim().is_empty() {
+                client = client.with_data_dir(dir);
+            }
         }
+        client
     }
 
     /// Set a glob pattern to filter session file paths

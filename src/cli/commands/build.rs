@@ -551,7 +551,11 @@ impl BuildCompletion {
             md.push_str("## Build Failed\n\n");
         }
 
-        md.push_str(&format!("**Duration:** {:.1}s\n", self.duration_secs));
+        let human_dur = crate::utils::format::format_duration(self.duration_secs as u64);
+        md.push_str(&format!(
+            "**Duration:** {:.1}s ({human_dur})\n",
+            self.duration_secs
+        ));
 
         if let (Some(p), Some(f), Some(s)) =
             (self.tests_passed, self.tests_failed, self.tests_skipped)
@@ -2595,7 +2599,8 @@ fn load_uncertainties(
 )> {
     use crate::cass::{UncertaintyConfig, UncertaintyItem, UncertaintyQueue};
 
-    let queue = UncertaintyQueue::new(UncertaintyConfig::default());
+    let queue = UncertaintyQueue::new(UncertaintyConfig::default())
+        .with_query_generator(Box::new(crate::cass::DefaultQueryGenerator::default()));
 
     if path.exists() {
         let content = fs::read_to_string(path)?;

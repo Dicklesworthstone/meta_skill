@@ -483,6 +483,16 @@ impl<'a> SkillTestRunner<'a> {
         }
 
         let duration = start.elapsed();
+        if self.options.verbose {
+            let tctx = executor.test_context();
+            eprintln!(
+                "[TEST] Completed {}: tokens_used={}, vars={}, last_exit={:?}",
+                test.name,
+                tctx.tokens_used,
+                tctx.variables.len(),
+                tctx.last_exit_code
+            );
+        }
         let timed_out = duration > timeout && failures.iter().any(|f| f.contains("timed out"));
 
         let status = if timed_out {

@@ -421,7 +421,8 @@ impl LayeredRegistry {
     /// Populate a `LayeredRegistry` by scanning configured skill path buckets on disk.
     #[must_use]
     pub fn from_skill_paths(skill_paths: &crate::config::SkillPathsConfig) -> Self {
-        let mut registry = Self::new();
+        let mut registry =
+            Self::with_strategies(ConflictStrategy::default(), MergeStrategy::default());
         let expand = |p: &str| -> std::path::PathBuf {
             if let Some(stripped) = p.strip_prefix("~/") {
                 if let Some(home) = dirs::home_dir() {

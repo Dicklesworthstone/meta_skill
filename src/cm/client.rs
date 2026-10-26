@@ -149,8 +149,7 @@ impl CmClient {
         if let Some(path) = config.cm_path.as_ref() {
             client.cm_bin = PathBuf::from(path);
         }
-        client.default_flags = config.default_flags.clone();
-        client
+        client.with_default_flags(config.default_flags.clone())
     }
 
     /// Create a CM client with a custom binary path.

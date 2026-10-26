@@ -1451,28 +1451,29 @@ fn load_trusted_verifier(
     ms_root: &Path,
     extra_key: Option<&Path>,
 ) -> Result<crate::bundler::Ed25519Verifier> {
-    let mut verifier = crate::bundler::Ed25519Verifier::new();
+    let mut keys = Vec::new();
     let trusted_dir = ms_root.join("trusted_keys");
     if trusted_dir.is_dir() {
         if let Ok(entries) = std::fs::read_dir(&trusted_dir) {
             for entry in entries.flatten() {
                 let path = entry.path();
                 if path.is_file() {
-                    let _ = add_key_file_to_verifier(&mut verifier, &path);
+                    if let Ok(pair) = parse_key_file(&path) {
+                        keys.push(pair);
+                    }
                 }
             }
         }
     }
+    let mut verifier = crate::bundler::Ed25519Verifier::from_keys(keys);
     if let Some(key_path) = extra_key {
-        add_key_file_to_verifier(&mut verifier, key_path)?;
+        let (key_id, pub_bytes) = parse_key_file(key_path)?;
+        verifier.add_key(key_id, pub_bytes);
     }
     Ok(verifier)
 }
 
-fn add_key_file_to_verifier(
-    verifier: &mut crate::bundler::Ed25519Verifier,
-    path: &Path,
-) -> Result<()> {
+fn parse_key_file(path: &Path) -> Result<(String, Vec<u8>)> {
     let raw = std::fs::read_to_string(path)
         .map_err(|err| MsError::Config(format!("read key {}: {err}", path.display())))?;
     let trimmed = raw.trim();
@@ -1480,8 +1481,7 @@ fn add_key_file_to_verifier(
     // Case 1: OpenSSH private key file
     if trimmed.contains("BEGIN OPENSSH PRIVATE KEY") {
         let signer = crate::bundler::Ed25519Signer::from_openssh_str(trimmed)?;
-        verifier.add_key(signer.key_id().to_string(), signer.public_key().to_vec());
-        return Ok(());
+        return Ok((signer.key_id().to_string(), signer.public_key().to_vec()));
     }
 
     // Case 2: OpenSSH public key line: "ssh-ed25519 <base64> [comment]"
@@ -1497,8 +1497,7 @@ fn add_key_file_to_verifier(
             if decoded.len() >= 32 {
                 let pub_bytes = decoded[decoded.len() - 32..].to_vec();
                 let key_id = format!("ed25519:{}", hex::encode(&pub_bytes[..8]));
-                verifier.add_key(key_id, pub_bytes);
-                return Ok(());
+                return Ok((key_id, pub_bytes));
             }
         }
     }
@@ -1519,8 +1518,7 @@ fn add_key_file_to_verifier(
         )));
     }
     let key_id = format!("ed25519:{}", hex::encode(&pub_bytes[..8]));
-    verifier.add_key(key_id, pub_bytes);
-    Ok(())
+    Ok((key_id, pub_bytes))
 }
 
 fn run_conflicts(ctx: &AppContext, args: &BundleConflictsArgs) -> Result<()> {

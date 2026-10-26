@@ -522,7 +522,10 @@ fn run_setup(_ctx: &AppContext, format: OutputFormat, args: &SetupArgs) -> Resul
     }
 
     // 3. Install pre-commit hook if in git repo
-    if project_root.join(".git").exists() {
+    if crate::utils::git::is_repo(&project_root) {
+        if let Ok(Some(branch)) = crate::utils::git::current_branch() {
+            debug!(branch = %branch, "Detected active git branch during setup");
+        }
         let hook_action = setup_pre_commit_hook(&project_root, args.dry_run)?;
         actions.push(hook_action);
     }
