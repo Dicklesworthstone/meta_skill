@@ -328,8 +328,20 @@ fn synthesize_rule(cluster: &EvidenceCluster) -> NegativeRule {
     }
 
     if !first.incident.failed_action.trim().is_empty() {
+        let action = first.incident.failed_action.trim();
+        let kind = if action.starts_with("*.") || action.contains("**") {
+            types::PredicateKind::FilePattern
+        } else if action.starts_with('^') && action.ends_with('$') {
+            types::PredicateKind::Regex
+        } else if first.incident.context.location.is_some()
+            && action.split_whitespace().count() == 1
+        {
+            types::PredicateKind::ContextMatch
+        } else {
+            types::PredicateKind::CommandPattern
+        };
         rule.predicate = Some(types::Predicate {
-            kind: types::PredicateKind::CommandPattern,
+            kind,
             params: vec![first.incident.failed_action.clone()],
         });
     }

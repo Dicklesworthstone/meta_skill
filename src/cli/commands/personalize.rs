@@ -351,11 +351,30 @@ fn analyze_naming_conventions(samples: &[String]) -> NamingConvention {
         }
     }
 
+    let mut pascal_count = 0usize;
+    let mut kebab_count = 0usize;
+    for sample in samples {
+        for word in sample.split_whitespace() {
+            if word.chars().next().is_some_and(char::is_uppercase)
+                && word.contains(char::is_lowercase)
+            {
+                pascal_count += 1;
+            }
+            if word.contains('-') && !word.starts_with('-') {
+                kebab_count += 1;
+            }
+        }
+    }
+
     NamingConvention {
         variable_case: if snake_count > camel_count * 2 {
             CaseStyle::SnakeCase
         } else if camel_count > snake_count * 2 {
             CaseStyle::CamelCase
+        } else if pascal_count > (snake_count + camel_count) * 2 {
+            CaseStyle::PascalCase
+        } else if kebab_count > (snake_count + camel_count) * 2 {
+            CaseStyle::KebabCase
         } else {
             CaseStyle::SnakeCase // Default to snake_case
         },
@@ -417,10 +436,16 @@ fn analyze_comment_style(samples: &[String]) -> CommentStyle {
 
     let doc_comment_count = all_code.matches("///").count() + all_code.matches("//!").count();
     let todo_count = all_code.matches("TODO").count() + all_code.matches("FIXME").count();
+    let block_comment_count = all_code.matches("/*").count();
+    let slash_comment_count = all_code.matches("//").count();
 
     CommentStyle {
         use_doc_comments: doc_comment_count > 2,
-        inline_style: crate::dedup::InlineCommentStyle::DoubleSlash,
+        inline_style: if block_comment_count > slash_comment_count {
+            crate::dedup::InlineCommentStyle::BlockComment
+        } else {
+            crate::dedup::InlineCommentStyle::DoubleSlash
+        },
         use_todo_markers: todo_count > 0,
     }
 }

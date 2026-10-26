@@ -159,11 +159,28 @@ pub fn check_skill_requirements(
     }
 
     // 4. Check context tools and build typed SkillRequirements / SkillTrigger descriptors
+    let network_req = if spec
+        .metadata
+        .requires
+        .iter()
+        .any(|r| r == "network:required")
+    {
+        crate::core::skill::NetworkRequirement::Required
+    } else if spec
+        .metadata
+        .requires
+        .iter()
+        .any(|r| r == "network:prefer_offline")
+    {
+        crate::core::skill::NetworkRequirement::PreferOffline
+    } else {
+        crate::core::skill::NetworkRequirement::OfflineOk
+    };
     let mut typed_reqs = crate::core::skill::SkillRequirements {
         platforms: Vec::new(),
         tools: Vec::new(),
         env: Vec::new(),
-        network: crate::core::skill::NetworkRequirement::OfflineOk,
+        network: network_req,
     };
     for tool in &spec.metadata.context.tools {
         typed_reqs.tools.push(crate::core::skill::ToolRequirement {

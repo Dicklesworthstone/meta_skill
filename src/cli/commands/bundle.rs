@@ -1001,7 +1001,19 @@ fn apply_bundle_update(
         pending.push((skill.name.clone(), target, entries, new_hashes, report));
     }
 
-    if !conflicts.is_empty() && !args.force {
+    let strategy = if args.force {
+        crate::bundler::local_safety::ConflictStrategy::BackupAndReplace
+    } else {
+        crate::bundler::local_safety::ConflictStrategy::Abort
+    };
+    if !conflicts.is_empty()
+        && matches!(
+            strategy,
+            crate::bundler::local_safety::ConflictStrategy::Abort
+                | crate::bundler::local_safety::ConflictStrategy::PreferLocal
+                | crate::bundler::local_safety::ConflictStrategy::Interactive
+        )
+    {
         return Ok(ApplyResult {
             applied: false,
             conflicts,
@@ -1011,9 +1023,21 @@ fn apply_bundle_update(
 
     for (skill_name, target, entries, expected_hashes, report) in pending {
         let skill_backup_root = backup_root.join(&skill_name);
-        let mut backups = Vec::new();
+        let mut res_result = crate::bundler::local_safety::ResolutionResult::new();
+        let _detected = crate::bundler::local_safety::detect_conflicts(
+            &target,
+            &skill_name,
+            &expected_hashes,
+            &expected_hashes,
+        );
         if let Some(report) = report {
-            if report.needs_attention() && args.force {
+            if report.needs_attention()
+                && matches!(
+                    strategy,
+                    crate::bundler::local_safety::ConflictStrategy::BackupAndReplace
+                        | crate::bundler::local_safety::ConflictStrategy::PreferBundle
+                )
+            {
                 for file in report
                     .modified_files()
                     .into_iter()
@@ -1022,17 +1046,19 @@ fn apply_bundle_update(
                     let path = target.join(&file.path);
                     if path.exists() {
                         if let Ok(backup_info) = backup_file(&path, &skill_backup_root) {
-                            backups.push(backup_info);
+                            res_result.backed_up.push(backup_info);
+                            res_result.replaced.push(file.path.clone());
                         }
                     }
                 }
             }
         }
+        let _complete = res_result.is_complete();
 
         if let Err(err) = write_bundle_files(&target, &entries)
             .and_then(|()| write_bundle_meta(&target, &expected_hashes))
         {
-            for backup in &backups {
+            for backup in &res_result.backed_up {
                 let _ = crate::bundler::local_safety::restore_from_backup(backup);
             }
             return Err(err);
