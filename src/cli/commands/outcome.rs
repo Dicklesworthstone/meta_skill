@@ -32,15 +32,25 @@ pub fn run(ctx: &AppContext, args: &OutcomeArgs) -> Result<()> {
     let success = args.success;
     ctx.db.record_skill_outcome(&skill_id, success)?;
 
-    if let Err(e) = update_bandits_from_outcome(ctx, &skill_id, success) {
-        eprintln!("Warning: Failed to update bandit from outcome: {e}");
-    }
+    let (contextual_reward, aggregated_reward) =
+        match update_bandits_from_outcome(ctx, &skill_id, success) {
+            Ok(rewards) => rewards,
+            Err(e) => {
+                eprintln!("Warning: Failed to update bandit from outcome: {e}");
+                (
+                    if success { 1.0 } else { 0.0 },
+                    if success { 1.0 } else { 0.0 },
+                )
+            }
+        };
 
     if ctx.output_format != OutputFormat::Human {
         let payload = serde_json::json!({
             "status": "ok",
             "skill_id": skill_id,
             "success": success,
+            "contextual_reward": contextual_reward,
+            "aggregated_reward": aggregated_reward,
         });
         return emit_json(&payload);
     }
@@ -49,15 +59,20 @@ pub fn run(ctx: &AppContext, args: &OutcomeArgs) -> Result<()> {
     layout
         .title("Outcome Recorded")
         .kv("Skill", &skill_id)
-        .kv("Outcome", if success { "success" } else { "failure" });
+        .kv("Outcome", if success { "success" } else { "failure" })
+        .kv("Reward", &format!("{aggregated_reward:.2}"));
     crate::cli::output::emit_human(layout);
     Ok(())
 }
 
-fn update_bandits_from_outcome(ctx: &AppContext, skill_id: &str, success: bool) -> Result<()> {
+fn update_bandits_from_outcome(
+    ctx: &AppContext,
+    skill_id: &str,
+    success: bool,
+) -> Result<(f32, f32)> {
     use crate::suggestions::bandit::{
         ContextFeatures, ContextualBandit, Reward, SignalBandit, SignalType, SkillFeedback,
-        SuggestionContext as BanditSuggestionContext,
+        SuggestionContext as BanditSuggestionContext, aggregate_rewards, compute_contextual_reward,
     };
     use crate::suggestions::tracking::FeedbackCollector;
 
@@ -69,6 +84,14 @@ fn update_bandits_from_outcome(ctx: &AppContext, skill_id: &str, success: bool) 
     // Flush any pending session/unload feedback for loaded skills and ignored suggestions
     let tracking_path = FeedbackCollector::default_path(&ctx.ms_root);
     let mut collector = FeedbackCollector::load(&tracking_path);
+
+    let was_loaded = collector.is_skill_loaded(skill_id);
+    let load_mins = collector.skill_load_duration_minutes(skill_id).unwrap_or(0);
+    let was_top_suggestion = collector
+        .all_suggestions()
+        .iter()
+        .any(|s| s.skill_id == skill_id && s.position == 0);
+
     let _ = collector.on_skill_unload_and_update_bandit(skill_id, &mut contextual, &features);
     let _ = collector.end_session_and_update_bandit(&mut contextual, &features);
     let _ = collector.save(&tracking_path);
@@ -78,12 +101,19 @@ fn update_bandits_from_outcome(ctx: &AppContext, skill_id: &str, success: bool) 
     } else {
         SkillFeedback::ExplicitNotHelpful { reason: None }
     };
+    let mut feedback_signals = vec![feedback.clone()];
+    if was_loaded && load_mins > 0 {
+        feedback_signals.push(SkillFeedback::used(load_mins));
+    }
+    let aggregated_reward = aggregate_rewards(&feedback_signals);
+    let contextual_reward = compute_contextual_reward(&feedback, 0.5, was_top_suggestion);
+
     contextual.update(skill_id, &features, &feedback);
     contextual.save(&contextual_path)?;
 
     let signal_path = ctx.ms_root.join("bandit.json");
     let mut signal_bandit = SignalBandit::load(&signal_path)?;
-    let reward = if success {
+    let reward = if aggregated_reward >= 0.5 {
         Reward::Success
     } else {
         Reward::Failure
@@ -93,7 +123,7 @@ fn update_bandits_from_outcome(ctx: &AppContext, skill_id: &str, success: bool) 
         signal_bandit.update(*signal, reward, &bandit_ctx);
     }
     signal_bandit.save(&signal_path)?;
-    Ok(())
+    Ok((contextual_reward, aggregated_reward))
 }
 
 fn resolve_skill_id(ctx: &AppContext, input: &str) -> Result<String> {

@@ -296,7 +296,11 @@ fn run_auto_load(ctx: &AppContext, args: &LoadArgs) -> Result<()> {
 
     // Score and rank skills
     let scorer = RelevanceScorer::default();
-    let mut candidates = scorer.above_threshold(&skills, &scoring_context, args.threshold);
+    let mut candidates = if args.threshold <= 0.0 {
+        scorer.top_n(&skills, &scoring_context, skills.len())
+    } else {
+        scorer.above_threshold(&skills, &scoring_context, args.threshold)
+    };
 
     // Blend in bandit scores from historical learning
     let skill_ids: Vec<String> = candidates.iter().map(|c| c.skill_id.clone()).collect();
@@ -464,6 +468,26 @@ fn run_auto_load(ctx: &AppContext, args: &LoadArgs) -> Result<()> {
 
 /// Convert `CollectedContext` to `WorkingContext` for scoring
 fn convert_to_scoring_context(collected: &CollectedContext) -> WorkingContext {
+    let mut content_snippets = Vec::new();
+    if let Some(git) = &collected.git_context {
+        content_snippets.push(git.branch.clone());
+        content_snippets.extend(git.recent_commits.iter().cloned());
+    }
+    for (k, v) in &collected.env_signals {
+        content_snippets.push(format!("{k}={v}"));
+    }
+
+    let history = UserHistory::load(&UserHistory::default_path());
+    let affinity: HashMap<String, f32> = history
+        .skill_load_counts
+        .keys()
+        .map(|id| {
+            let score = (0.6 * history.skill_frequency(id) + 0.4 * history.skill_recency(id))
+                .clamp(0.0, 1.0);
+            (id.clone(), score)
+        })
+        .collect();
+
     WorkingContext::new()
         .with_projects(collected.detected_projects.clone())
         .with_recent_files(
@@ -480,6 +504,8 @@ fn convert_to_scoring_context(collected: &CollectedContext) -> WorkingContext {
                 .collect(),
         )
         .with_tools(collected.detected_tools.iter().cloned())
+        .with_content(content_snippets)
+        .with_historical_affinity(affinity)
 }
 
 // =============================================================================

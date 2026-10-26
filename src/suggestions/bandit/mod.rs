@@ -15,5 +15,5 @@ pub use bandit::{BanditConfig, SignalBandit};
 pub use context::{ContextKey, ContextModifier, ProjectSize, SuggestionContext, TimeOfDay};
 pub use contextual::{ContextualArm, ContextualBandit, ContextualBanditConfig, Recommendation};
 pub use features::{ContextFeatures, DefaultFeatureExtractor, FeatureExtractor, UserHistory};
-pub use rewards::{SkillFeedback, compute_reward};
+pub use rewards::{SkillFeedback, aggregate_rewards, compute_contextual_reward, compute_reward};
 pub use types::{BanditArm, BetaDistribution, Reward, SignalType, SignalWeights};
