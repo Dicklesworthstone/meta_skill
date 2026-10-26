@@ -256,11 +256,18 @@ pub struct RecoveryManager {
 impl RecoveryManager {
     /// Create a new recovery manager.
     pub fn new(ms_root: impl AsRef<Path>) -> Self {
+        let retry_config = if std::env::var("MS_RETRY_AGGRESSIVE").is_ok() {
+            RetryConfig::aggressive()
+        } else if std::env::var("MS_RETRY_PATIENT").is_ok() {
+            RetryConfig::patient()
+        } else {
+            RetryConfig::default()
+        };
         Self {
             ms_root: ms_root.as_ref().to_path_buf(),
             db: None,
             git: None,
-            retry_config: RetryConfig::default(),
+            retry_config,
         }
     }
 
@@ -529,7 +536,11 @@ impl RecoveryManager {
         if let (Some(db), Some(git)) = (&self.db, &self.git) {
             let tx_mgr =
                 crate::storage::TxManager::new(db.clone(), git.clone(), self.ms_root.clone())?;
-            let tx_report = tx_mgr.recover()?;
+            let tx_report = with_retry_if(
+                &self.retry_config,
+                || tx_mgr.recover(),
+                |err| matches!(err, MsError::TransactionFailed(_) | MsError::Database(_)),
+            )?;
 
             report.rolled_back += tx_report.rolled_back;
             report.completed += tx_report.completed;
@@ -547,7 +558,9 @@ impl RecoveryManager {
 
         if let Some(holder) = GlobalLock::status(&self.ms_root)? {
             // Only break lock if process is confirmed dead (cross-platform check)
-            if !is_process_alive(holder.pid) && GlobalLock::break_lock(&self.ms_root)? {
+            if !is_process_alive(holder.pid)
+                && with_retry(&self.retry_config, || GlobalLock::break_lock(&self.ms_root))?
+            {
                 report.fixed += 1;
             }
         }
@@ -780,7 +793,7 @@ impl Checkpoint {
         let safe_id = Self::sanitize_operation_id(&self.operation_id)?;
 
         let checkpoints_dir = ms_root.join("checkpoints");
-        std::fs::create_dir_all(&checkpoints_dir)
+        crate::utils::fs::ensure_dir(&checkpoints_dir)
             .map_err(|e| MsError::Config(format!("Failed to create checkpoints dir: {e}")))?;
 
         let path = checkpoints_dir.join(format!("{safe_id}.json"));
@@ -798,12 +811,11 @@ impl Checkpoint {
         let safe_id = Self::sanitize_operation_id(operation_id)?;
 
         let path = ms_root.join("checkpoints").join(format!("{safe_id}.json"));
-        if !path.exists() {
+        let Some(json) = crate::utils::fs::read_optional(&path)
+            .map_err(|e| MsError::Config(format!("Failed to read checkpoint: {e}")))?
+        else {
             return Ok(None);
-        }
-
-        let json = std::fs::read_to_string(&path)
-            .map_err(|e| MsError::Config(format!("Failed to read checkpoint: {e}")))?;
+        };
 
         let checkpoint: Self = serde_json::from_str(&json)
             .map_err(|e| MsError::Config(format!("Failed to parse checkpoint: {e}")))?;

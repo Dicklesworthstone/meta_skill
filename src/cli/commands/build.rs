@@ -252,24 +252,22 @@ impl BuildSession {
 
     /// Update the checkpoint with current state.
     fn update_checkpoint(&mut self) {
-        self.checkpoint.phase = self.phase.to_string();
-        self.checkpoint.progress = self.overall_progress();
-        self.checkpoint.updated_at = chrono::Utc::now();
+        let phase_str = self.phase.to_string();
+        let progress = self.overall_progress();
+        self.checkpoint.update_progress(phase_str, progress);
 
         // Store state - including query for resume
-        self.checkpoint
-            .state
-            .insert("query".to_string(), self.query.clone());
-        self.checkpoint.state.insert(
-            "qualified_sessions".to_string(),
+        self.checkpoint.set_state("query", self.query.clone());
+        self.checkpoint.set_state(
+            "qualified_sessions",
             self.state.qualified_session_ids.join(","),
         );
-        self.checkpoint.state.insert(
-            "patterns_extracted".to_string(),
+        self.checkpoint.set_state(
+            "patterns_extracted",
             self.state.patterns_extracted.to_string(),
         );
-        self.checkpoint.state.insert(
-            "patterns_filtered".to_string(),
+        self.checkpoint.set_state(
+            "patterns_filtered",
             self.state.patterns_filtered.to_string(),
         );
     }
@@ -645,8 +643,23 @@ impl BeadsTracker {
         }
 
         if self.close_on_success {
-            match self.client.close(&self.bead_id, None) {
-                Ok(_) => {
+            let reason = format!("Build successful: {skill_name}");
+            let ids: Vec<&str> = self
+                .bead_id
+                .split(',')
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+                .collect();
+            let close_res = if ids.len() > 1 {
+                if let [first, second, ..] = ids.as_slice() {
+                    let _ = self.client.remove_dependency(first, second);
+                }
+                self.client.close_batch(&ids).map(|_| ())
+            } else {
+                self.client.close(&self.bead_id, Some(&reason)).map(|_| ())
+            };
+            match close_res {
+                Ok(()) => {
                     eprintln!(
                         "{} {} closed (build successful: {})",
                         "Bead:", self.bead_id, skill_name
@@ -1924,6 +1937,8 @@ fn run_auto(
     if let Some(t) = tracker {
         t.on_success(&format!("Auto build: {query}"))?;
     }
+
+    let _ = Checkpoint::remove(&ctx.ms_root, &session.session_id);
 
     Ok(())
 }

@@ -876,6 +876,59 @@ fn run_comprehensive_check(
     // Update fixed count
     *issues_fixed += report.fixed;
 
+    if fix {
+        if let Ok(git_ids) = ctx.git.list_skill_ids() {
+            let mut restored_db = 0usize;
+            for skill_id in git_ids {
+                if ctx.db.get_skill(&skill_id).ok().flatten().is_none() {
+                    if let Ok(spec) = ctx.git.read_skill(&skill_id) {
+                        let body = crate::core::spec_lens::compile_markdown(&spec);
+                        let now = chrono::Utc::now().to_rfc3339();
+                        let source_path = ctx
+                            .git
+                            .skill_path(&skill_id)
+                            .map_or_else(|| skill_id.clone(), |p| p.to_string_lossy().to_string());
+                        let record = crate::storage::sqlite::SkillRecord {
+                            id: spec.metadata.id.clone(),
+                            name: spec.metadata.name.clone(),
+                            description: spec.metadata.description.clone(),
+                            version: Some(spec.metadata.version.clone()),
+                            author: spec.metadata.author.clone(),
+                            source_path,
+                            source_layer: "project".to_string(),
+                            git_remote: None,
+                            git_commit: None,
+                            content_hash: String::new(),
+                            body,
+                            metadata_json: serde_json::to_string(&spec.metadata)
+                                .unwrap_or_else(|_| "{}".to_string()),
+                            assets_json: "{}".to_string(),
+                            token_count: crate::core::SkillSlicer::estimate_total_tokens(&spec)
+                                as i64,
+                            quality_score: 0.5,
+                            indexed_at: now.clone(),
+                            modified_at: now,
+                            is_deprecated: false,
+                            deprecation_reason: None,
+                        };
+                        if ctx.db.upsert_skill(&record).is_ok() {
+                            restored_db += 1;
+                        }
+                    }
+                }
+            }
+            if restored_db > 0 {
+                say!(
+                    ctx,
+                    "  {} Reconciled {} skill(s) from Git archive into SQLite",
+                    "[ok]",
+                    restored_db
+                );
+                *issues_fixed += restored_db;
+            }
+        }
+    }
+
     if fix && !ctx.search.is_readonly() && ctx.search.is_empty() {
         if let Ok(records) = ctx.db.list_skills(10_000, 0) {
             if !records.is_empty() {
@@ -1381,7 +1434,11 @@ fn check_beads(ctx: &AppContext, verbose: bool) -> Result<usize> {
 
     if verbose {
         if let Some(ver) = client.version() {
-            say!(ctx, "  Version: {ver}");
+            if let Ok(semver) = client.version_semver() {
+                say!(ctx, "  Version: {ver} (semver: {semver})");
+            } else {
+                say!(ctx, "  Version: {ver}");
+            }
         }
         if let Ok(sync) = client.sync_status() {
             say!(ctx, "  Sync status: {sync:?}");
