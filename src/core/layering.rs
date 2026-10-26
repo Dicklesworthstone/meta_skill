@@ -528,7 +528,7 @@ fn detect_section_conflicts(
     higher_layer: SkillLayer,
     lower: &SkillSpec,
     lower_layer: SkillLayer,
-    _merge_strategy: MergeStrategy,
+    merge_strategy: MergeStrategy,
 ) -> Vec<ConflictDetail> {
     let mut conflicts = Vec::new();
 
@@ -544,12 +544,19 @@ fn detect_section_conflicts(
                 || !diff.lower_only.is_empty()
                 || !diff.modified.is_empty()
             {
+                let resolution = if matches!(merge_strategy, MergeStrategy::PreferSections)
+                    && diff.modified.is_empty()
+                {
+                    ConflictResolution::Merged
+                } else {
+                    ConflictResolution::HigherWins
+                };
                 conflicts.push(ConflictDetail {
                     section_id: higher_section.id.clone(),
                     section_name: higher_section.title.clone(),
                     higher_layer,
                     lower_layer,
-                    resolution: ConflictResolution::HigherWins,
+                    resolution,
                     diff: Some(diff),
                 });
             }

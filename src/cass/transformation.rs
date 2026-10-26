@@ -336,9 +336,16 @@ impl GeneralizationValidation {
             // Instance not in cluster - check if it's a relevant counterexample
             if instance.distance_to_centroid < 0.5 {
                 // Close but not included - interesting counterexample
+                let failure_reason = if instance.distance_to_centroid < 0.2 {
+                    CounterExampleReason::OutcomeMismatch
+                } else if instance.distance_to_centroid < 0.35 {
+                    CounterExampleReason::DifferentContext
+                } else {
+                    CounterExampleReason::PatternNotApplicable
+                };
                 counterexamples.push(CounterExample {
                     instance_id: instance.instance.id.clone(),
-                    failure_reason: CounterExampleReason::PatternNotApplicable,
+                    failure_reason,
                     missing_precondition: Some("Context conditions not met".to_string()),
                     suggests_refinement: None,
                 });

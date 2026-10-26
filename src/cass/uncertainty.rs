@@ -629,6 +629,9 @@ impl UncertaintyResolver for DefaultResolver {
 
         // Check if max attempts reached
         if uncertainty.attempts.len() >= self.max_attempts {
+            if let Some(last) = uncertainty.attempts.last_mut() {
+                last.outcome = AttemptOutcome::Escalated;
+            }
             return ResolutionResult::Escalate {
                 reason: format!(
                     "Max attempts ({}) reached without achieving threshold",

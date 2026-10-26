@@ -139,6 +139,7 @@ impl<'a> MetaSkillManager<'a> {
         for slice_ref in &meta_skill.slices {
             let resolution = self.resolve_slice_ref(
                 slice_ref,
+                &meta_skill.pin_strategy,
                 condition_ctx,
                 &loaded_slice_keys,
                 &mut parsed_skills_cache,
@@ -196,6 +197,7 @@ impl<'a> MetaSkillManager<'a> {
     fn resolve_slice_ref(
         &self,
         slice_ref: &MetaSkillSliceRef,
+        pin_strategy: &super::types::PinStrategy,
         condition_ctx: &ConditionContext,
         loaded_slices: &HashSet<(String, String)>,
         parsed_skills_cache: &mut HashMap<String, SkillSpec>,
@@ -231,6 +233,29 @@ impl<'a> MetaSkillManager<'a> {
                     });
                 }
             };
+
+            // Verify version against pin_strategy if applicable
+            if let Some(actual_ver) = skill_record.version.as_deref() {
+                use super::types::PinStrategy;
+                let required_ver = match pin_strategy {
+                    PinStrategy::ExactVersion(v) => Some(v.as_str()),
+                    PinStrategy::PerSkill(map) => map.get(&slice_ref.skill_id).map(String::as_str),
+                    PinStrategy::LatestCompatible
+                    | PinStrategy::FloatingMajor
+                    | PinStrategy::LocalInstalled => None,
+                };
+                if let Some(req) = required_ver {
+                    if !req.is_empty() && !actual_ver.is_empty() && req != actual_ver {
+                        return SliceResolution::Skipped(SkippedSlice {
+                            skill_id: slice_ref.skill_id.clone(),
+                            slice_id: None,
+                            reason: SkipReason::ResolutionError(format!(
+                                "version mismatch: expected {req}, found {actual_ver}"
+                            )),
+                        });
+                    }
+                }
+            }
 
             // Parse and slice the skill
             let spec = match parse_markdown(&skill_record.body) {

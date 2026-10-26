@@ -841,9 +841,17 @@ impl SyncEngine {
                     JfpPushStatus::Conflict => {
                         report.conflicts.push(skill_id.clone());
                         if let Some(conflict) = &result.conflict {
+                            let reason_label = match conflict.reason {
+                                crate::sync::jfp::JfpConflictReason::BaseRevisionMismatch => {
+                                    "base_revision_mismatch"
+                                }
+                                crate::sync::jfp::JfpConflictReason::ContentConflict => {
+                                    "content_conflict"
+                                }
+                            };
                             warn!(
                                 skill_id = %skill_id,
-                                reason = ?conflict.reason,
+                                reason = reason_label,
                                 "Push conflict detected"
                             );
                         }

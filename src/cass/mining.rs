@@ -803,7 +803,18 @@ fn apply_taint_labels(
 
             // Mark patterns with sensitive-tainted evidence
             if has_sensitive && pattern.taint_label.is_none() {
-                pattern.taint_label = Some(TaintLabel::RequiresReview);
+                let is_redacted = pattern.evidence.iter().any(|ev| {
+                    ev.snippet
+                        .as_deref()
+                        .is_some_and(|s| s.contains("[REDACTED]") || s.contains("***"))
+                });
+                pattern.taint_label = Some(if is_redacted {
+                    TaintLabel::Redacted
+                } else if pattern.confidence < 0.5 {
+                    TaintLabel::Sensitive
+                } else {
+                    TaintLabel::RequiresReview
+                });
             }
 
             Some(pattern)
@@ -1906,10 +1917,15 @@ pub fn pattern_to_ir(pattern: &ExtractedPattern) -> PatternIR {
                 .collect(),
         },
 
-        _ => PatternIR::Text {
-            content: pattern.description.clone().unwrap_or_default(),
-            role: TextRole::Explanation,
-        },
+        _ => {
+            let content = pattern.description.clone().unwrap_or_default();
+            let role = if content.starts_with("Note:") || content.contains("[!NOTE]") {
+                TextRole::Note
+            } else {
+                TextRole::Explanation
+            };
+            PatternIR::Text { content, role }
+        }
     }
 }
 
