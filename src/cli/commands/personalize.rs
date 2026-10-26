@@ -295,6 +295,14 @@ fn extract_style_from_sessions(
         style.naming = analyze_naming_conventions(&code_samples);
         style.patterns = analyze_code_patterns(&code_samples);
         style.comment_style = analyze_comment_style(&code_samples);
+        style.language_prefs.insert(
+            "default".to_string(),
+            crate::dedup::LanguagePrefs {
+                error_handling: style.patterns.first().map(|p| p.name.clone()),
+                async_patterns: None,
+                test_framework: None,
+            },
+        );
     }
 
     Ok(style)
