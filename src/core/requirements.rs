@@ -158,20 +158,54 @@ pub fn check_skill_requirements(
         });
     }
 
-    // 4. Check context tools (optional/recommended tools)
+    // 4. Check context tools and build typed SkillRequirements / SkillTrigger descriptors
+    let mut typed_reqs = crate::core::skill::SkillRequirements {
+        platforms: Vec::new(),
+        tools: Vec::new(),
+        env: Vec::new(),
+        network: crate::core::skill::NetworkRequirement::OfflineOk,
+    };
     for tool in &spec.metadata.context.tools {
-        let (satisfied, msg) = check_binary(tool);
-        checks.push(RequirementCheck {
-            name: format!("context_tool:{tool}"),
-            category: "context_tool".to_string(),
+        typed_reqs.tools.push(crate::core::skill::ToolRequirement {
+            name: tool.clone(),
+            min_version: None,
             required: false,
+        });
+    }
+    for req_tool in &typed_reqs.tools {
+        let (satisfied, msg) = check_binary(&req_tool.name);
+        checks.push(RequirementCheck {
+            name: format!("context_tool:{}", req_tool.name),
+            category: "context_tool".to_string(),
+            required: req_tool.required,
             satisfied,
             message: Some(msg),
         });
     }
 
+    let _triggers: Vec<crate::core::skill::SkillTrigger> = spec
+        .metadata
+        .context
+        .file_patterns
+        .iter()
+        .map(|pat| crate::core::skill::SkillTrigger {
+            trigger_type: "file_pattern".to_string(),
+            pattern: pat.clone(),
+            boost: 0.25,
+        })
+        .collect();
+
     // 5. Check platforms if specified
     if !spec.metadata.platforms.is_empty() {
+        for p in &spec.metadata.platforms {
+            let platform = match p.to_lowercase().as_str() {
+                "linux" => crate::core::skill::Platform::Linux,
+                "macos" | "darwin" => crate::core::skill::Platform::Macos,
+                "windows" | "win32" => crate::core::skill::Platform::Windows,
+                _ => crate::core::skill::Platform::Any,
+            };
+            typed_reqs.platforms.push(platform);
+        }
         let current_os = std::env::consts::OS.to_lowercase();
         let satisfied = spec.metadata.platforms.iter().any(|p| {
             let p_lower = p.to_lowercase();

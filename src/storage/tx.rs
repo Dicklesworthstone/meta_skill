@@ -741,23 +741,30 @@ impl TxManager {
         let packs_dir = self.ms_root.join("packs");
         let _ = fs::create_dir_all(&packs_dir);
         let pack_file = packs_dir.join(format!("{}.pack.json", skill.metadata.id));
+        let skill_pack = crate::core::skill::SkillPack {
+            skill_id: skill.metadata.id.clone(),
+            pack_path: pack_file,
+            spec_hash: content_hash.clone(),
+            slices_hash,
+            embedding_hash,
+        };
         let pack_payload = serde_json::json!({
-            "skill_id": skill.metadata.id,
-            "spec_hash": content_hash,
-            "slices_hash": slices_hash,
-            "embedding_hash": embedding_hash,
+            "skill_id": skill_pack.skill_id,
+            "spec_hash": skill_pack.spec_hash,
+            "slices_hash": skill_pack.slices_hash,
+            "embedding_hash": skill_pack.embedding_hash,
             "predicate_index_hash": predicate_index_hash,
             "slices": slice_index,
         });
         if let Ok(pack_str) = serde_json::to_string_pretty(&pack_payload) {
-            let _ = fs::write(&pack_file, pack_str);
+            let _ = fs::write(&skill_pack.pack_path, pack_str);
         }
         self.db.upsert_skill_pack(
-            &skill.metadata.id,
-            &pack_file.to_string_lossy(),
-            &content_hash,
-            &slices_hash,
-            &embedding_hash,
+            &skill_pack.skill_id,
+            &skill_pack.pack_path.to_string_lossy(),
+            &skill_pack.spec_hash,
+            &skill_pack.slices_hash,
+            &skill_pack.embedding_hash,
             &predicate_index_hash,
         )?;
 

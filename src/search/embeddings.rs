@@ -32,10 +32,15 @@ pub fn build_embedder(config: &SearchConfig) -> Result<Box<dyn Embedder>> {
 
     match backend.as_str() {
         "" | "hash" => Ok(Box::new(HashEmbedder::new(dims))),
-        "local" => Err(MsError::Config(
-            "search.embedding_backend=local requires ONNX runtime (not yet implemented)"
-                .to_string(),
-        )),
+        "local" => {
+            let _onnx_available = crate::search::embeddings_local::LocalEmbedder::is_available();
+            let subword_path = std::path::Path::new("subword");
+            let embedder = crate::search::embeddings_local::LocalEmbedder::new(subword_path, dims)
+                .unwrap_or_else(|_| {
+                    crate::search::embeddings_local::LocalEmbedder::with_subword(dims)
+                });
+            Ok(Box::new(embedder))
+        }
         "api" => {
             let api_key = std::env::var(&config.api_key_env).map_err(|_| {
                 MsError::Config(format!(
@@ -349,7 +354,7 @@ impl VectorIndex {
     }
 }
 
-fn tokenize(text: &str) -> Vec<String> {
+pub(crate) fn tokenize(text: &str) -> Vec<String> {
     let lowered = text.to_lowercase();
     lowered
         .split(|c: char| !(c.is_alphanumeric() || c == '+' || c == '#'))
@@ -358,7 +363,7 @@ fn tokenize(text: &str) -> Vec<String> {
         .collect()
 }
 
-fn accumulate_embedding(embedding: &mut [f32], token: &str, weight: f32) {
+pub(crate) fn accumulate_embedding(embedding: &mut [f32], token: &str, weight: f32) {
     let token_hash = fnv1a_hash(token.as_bytes());
 
     for (i, slot) in embedding.iter_mut().enumerate() {
