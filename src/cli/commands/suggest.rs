@@ -210,7 +210,10 @@ pub fn run(ctx: &AppContext, args: &SuggestArgs) -> Result<()> {
             1.0f32,
         )
     } else {
-        let bandit_ctx = crate::suggestions::bandit::SuggestionContext::default();
+        let bandit_ctx = crate::suggestions::bandit::SuggestionContext::from_collected(
+            &collected_context,
+            chrono::Utc::now(),
+        );
         let weights = signal_bandit.select_weights(&bandit_ctx);
         let boost = (weights.get(crate::suggestions::bandit::SignalType::ProjectMatch)
             + weights.get(crate::suggestions::bandit::SignalType::Bm25)

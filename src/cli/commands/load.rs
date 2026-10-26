@@ -1281,6 +1281,13 @@ fn determine_disclosure_plan(
             .as_deref()
             .is_some_and(|l| l.eq_ignore_ascii_case("auto"))
     {
+        let request_type = if args.auto {
+            crate::core::disclosure::RequestType::Suggestion
+        } else if !matches!(args.deps, DepsMode::Off) {
+            crate::core::disclosure::RequestType::Dependency
+        } else {
+            crate::core::disclosure::RequestType::Direct
+        };
         let context = crate::core::disclosure::DisclosureContext {
             explicit_level: None,
             pack_budget: None,
@@ -1292,7 +1299,7 @@ fn determine_disclosure_plan(
                 2000
             },
             usage_history: crate::core::disclosure::UsageHistory::default(),
-            request_type: crate::core::disclosure::RequestType::Direct,
+            request_type,
         };
         return crate::core::disclosure::optimal_disclosure(&context);
     }
@@ -1423,6 +1430,32 @@ fn record_usage(
             level: disclosure_level.to_string(),
         },
     );
+    collector.session.record_interaction(
+        skill_id,
+        crate::suggestions::tracking::InteractionType::ContentViewed,
+    );
+    if disclosure_level >= DisclosureLevel::Standard.level_num() {
+        collector.session.record_interaction(
+            skill_id,
+            crate::suggestions::tracking::InteractionType::RuleFollowed,
+        );
+    }
+    if disclosure_level >= DisclosureLevel::Full.level_num() {
+        collector.session.record_interaction(
+            skill_id,
+            crate::suggestions::tracking::InteractionType::ExampleUsed,
+        );
+        collector.session.record_interaction(
+            skill_id,
+            crate::suggestions::tracking::InteractionType::ChecklistProgressed,
+        );
+    }
+    if was_pending_suggestion {
+        collector.session.record_interaction(
+            skill_id,
+            crate::suggestions::tracking::InteractionType::Searched,
+        );
+    }
     if was_pending_suggestion {
         let bandit_path = default_bandit_path(&ctx.ms_root);
         let mut bandit =

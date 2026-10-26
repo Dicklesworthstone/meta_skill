@@ -225,14 +225,27 @@ impl SessionTracker {
     fn compute_implicit_feedback_static(session: &SkillSession) -> SkillFeedback {
         let end = session.unloaded_at.unwrap_or_else(Utc::now);
         let duration = end.signed_duration_since(session.loaded_at);
-        let minutes = duration.num_minutes().max(0) as u32;
+        let base_minutes = duration.num_minutes().max(0) as u32;
+        let bonus_minutes: u32 = session
+            .interactions
+            .iter()
+            .map(|i| match &i.interaction_type {
+                InteractionType::RuleFollowed
+                | InteractionType::ExampleUsed
+                | InteractionType::ChecklistProgressed => 2,
+                InteractionType::ContentViewed
+                | InteractionType::Searched
+                | InteractionType::LoadedAtLevel { .. } => 1,
+            })
+            .sum();
+        let minutes = base_minutes.saturating_add(bonus_minutes);
 
-        if minutes < 1 {
+        if minutes < 1 && session.interactions.is_empty() {
             SkillFeedback::UnloadedQuickly
         } else if session.interactions.is_empty() {
             SkillFeedback::LoadedOnly
         } else {
-            SkillFeedback::UsedDuration { minutes }
+            SkillFeedback::UsedDuration { minutes: minutes.max(1) }
         }
     }
 

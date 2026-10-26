@@ -82,6 +82,38 @@ pub struct SuggestionContext {
 
 impl SuggestionContext {
     #[must_use]
+    pub fn from_collected(
+        collected: &crate::context::CollectedContext,
+        now: chrono::DateTime<chrono::Utc>,
+    ) -> Self {
+        use chrono::Timelike;
+        let hour = now.hour();
+        let time_of_day = Some(match hour {
+            6..12 => TimeOfDay::Morning,
+            12..18 => TimeOfDay::Afternoon,
+            18..22 => TimeOfDay::Evening,
+            _ => TimeOfDay::Night,
+        });
+        let file_count = collected.recent_files.len();
+        let project_size = Some(match file_count {
+            0..10 => ProjectSize::Small,
+            10..50 => ProjectSize::Medium,
+            50..200 => ProjectSize::Large,
+            _ => ProjectSize::Massive,
+        });
+        let tech_stack = collected
+            .detected_projects
+            .first()
+            .map(|p| p.project_type.as_str().to_string());
+        Self {
+            tech_stack,
+            time_of_day,
+            project_size,
+            activity_pattern: None,
+        }
+    }
+
+    #[must_use]
     pub fn keys(&self) -> Vec<ContextKey> {
         let mut keys = Vec::new();
         if let Some(stack) = &self.tech_stack {
