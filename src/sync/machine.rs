@@ -49,6 +49,10 @@ impl MachineIdentity {
         name_override: Option<String>,
         description: Option<String>,
     ) -> Result<Self> {
+        let cfg = crate::sync::config::MachineConfig {
+            name: name_override,
+            description,
+        };
         let path = Self::identity_path()?;
         if path.exists() {
             let contents = std::fs::read_to_string(&path).map_err(|err| {
@@ -56,13 +60,13 @@ impl MachineIdentity {
             })?;
             let mut identity: Self = serde_json::from_str(&contents)?;
             let mut changed = false;
-            if let Some(name) = name_override {
+            if let Some(name) = cfg.name {
                 if identity.machine_name != name {
                     identity.machine_name = name;
                     changed = true;
                 }
             }
-            if let Some(desc) = description {
+            if let Some(desc) = cfg.description {
                 if identity.metadata.description.as_deref() != Some(desc.as_str()) {
                     identity.metadata.description = Some(desc);
                     changed = true;
@@ -73,8 +77,8 @@ impl MachineIdentity {
             }
             Ok(identity)
         } else {
-            let name = name_override.unwrap_or_else(Self::default_machine_name);
-            let identity = Self::generate(name, description);
+            let name = cfg.name.unwrap_or_else(Self::default_machine_name);
+            let identity = Self::generate(name, cfg.description);
             identity.save()?;
             Ok(identity)
         }
