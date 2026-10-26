@@ -293,7 +293,11 @@ fn run_interactive(
 
     println!("\n✓ Successfully updated to v{}", release.version);
     if let Some(backup) = &result.backup_path {
-        println!("  Previous binary backed up to: {}", backup.display());
+        if args.force {
+            let _ = installer.cleanup_backup();
+        } else {
+            println!("  Previous binary backed up to: {}", backup.display());
+        }
     }
     if result.restart_required {
         println!("\nPlease restart ms for changes to take effect.");

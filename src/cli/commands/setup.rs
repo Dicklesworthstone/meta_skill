@@ -18,6 +18,7 @@ use crate::agent_detection::{
 use crate::app::AppContext;
 use crate::cli::output::{OutputFormat, emit_json, robot_ok};
 use crate::error::{MsError, Result};
+#[cfg(test)]
 use crate::skill_md::SkillMdGenerator;
 
 /// Setup command arguments.
@@ -281,11 +282,11 @@ fn run_status(format: OutputFormat) -> Result<()> {
         println!("{}", "Agent Integration Status".bold());
         println!();
 
-        if agents.is_empty() {
+        if !summary.has_agents() {
             println!("No AI coding agents detected.");
             println!();
             println!("Supported agents:");
-            for agent in AgentType::all() {
+            for agent in service.supported_agents() {
                 println!("  - {}", agent.display_name());
             }
         } else {
@@ -320,7 +321,7 @@ fn run_status(format: OutputFormat) -> Result<()> {
             }
 
             println!();
-            if summary.needs_configuration > 0 {
+            if !summary.all_configured() {
                 println!(
                     "{} Run {} to configure all agents",
                     "→".cyan(),
@@ -331,9 +332,20 @@ fn run_status(format: OutputFormat) -> Result<()> {
             }
         }
     } else {
+        let integration_paths: Vec<serde_json::Value> = service
+            .get_all_integration_paths()
+            .into_iter()
+            .map(|(agent, paths)| {
+                serde_json::json!({
+                    "agent": agent.display_name(),
+                    "paths": paths.into_iter().map(|p| p.display().to_string()).collect::<Vec<_>>(),
+                })
+            })
+            .collect();
         emit_json(&robot_ok(serde_json::json!({
             "agents": agents,
             "summary": summary,
+            "integration_paths": integration_paths,
         })))?;
     }
 
@@ -583,9 +595,8 @@ fn setup_skill_md(project_root: &Path, args: &SetupArgs) -> Result<SetupAction> 
             ActionStatus::WouldCreate
         }
     } else {
-        let generator = SkillMdGenerator::new();
-        let content = generator.generate();
-        fs::write(&skill_md_path, content)?;
+        let path = crate::skill_md::generate_skill_md_for_project(project_root)?;
+        debug!(path = %path.display(), "Generated SKILL.md for project");
         ActionStatus::Created
     };
 

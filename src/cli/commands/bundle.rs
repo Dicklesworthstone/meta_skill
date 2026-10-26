@@ -344,7 +344,7 @@ fn run_create(ctx: &AppContext, args: &BundleCreateArgs) -> Result<()> {
         });
     }
 
-    let manifest = BundleManifest {
+    let mut manifest = BundleManifest {
         bundle: BundleInfo {
             id: bundle_id.clone(),
             name: args.name.clone(),
@@ -361,6 +361,29 @@ fn run_create(ctx: &AppContext, args: &BundleCreateArgs) -> Result<()> {
         checksum: None,
         signatures: Vec::new(),
     };
+    if let Some(dir) = &args.from_dir {
+        let yaml_candidate = dir.join("bundle.yaml");
+        let yml_candidate = dir.join("bundle.yml");
+        let existing_yaml = if yaml_candidate.exists() {
+            Some(yaml_candidate)
+        } else if yml_candidate.exists() {
+            Some(yml_candidate)
+        } else {
+            None
+        };
+        if let Some(yaml_path) = existing_yaml {
+            if let Ok(raw) = std::fs::read_to_string(&yaml_path) {
+                if let Ok(parsed) = BundleManifest::from_yaml_str(&raw) {
+                    manifest.bundle.description = parsed.bundle.description;
+                    manifest.bundle.authors = parsed.bundle.authors;
+                    manifest.bundle.license = parsed.bundle.license;
+                    manifest.bundle.repository = parsed.bundle.repository;
+                    manifest.bundle.keywords = parsed.bundle.keywords;
+                    manifest.dependencies = parsed.dependencies;
+                }
+            }
+        }
+    }
     manifest.validate()?;
 
     let bundle = Bundle::new(manifest, &root);
@@ -437,6 +460,7 @@ fn run_create(ctx: &AppContext, args: &BundleCreateArgs) -> Result<()> {
             )));
         }
         let toml = package.manifest.to_toml_string()?;
+        let _yaml = package.manifest.to_yaml_string()?;
         std::fs::write(&path, toml)
             .map_err(|err| MsError::Config(format!("write {}: {err}", path.display())))?;
         manifest_path = Some(path);

@@ -85,9 +85,13 @@ fn update_bandits_from_outcome(
     let tracking_path = FeedbackCollector::default_path(&ctx.ms_root);
     let mut collector = FeedbackCollector::load(&tracking_path);
 
-    let was_loaded = collector.is_skill_loaded(skill_id);
-    let load_mins = collector.skill_load_duration_minutes(skill_id).unwrap_or(0);
+    let was_loaded = collector.session.is_skill_loaded(skill_id);
+    let load_mins = collector
+        .session
+        .skill_load_duration_minutes(skill_id)
+        .unwrap_or(0);
     let was_top_suggestion = collector
+        .suggestions
         .all_suggestions()
         .iter()
         .any(|s| s.skill_id == skill_id && s.position == 0);

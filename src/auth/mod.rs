@@ -190,6 +190,17 @@ impl JfpAuthClient {
         Ok(())
     }
 
+    /// Run the full interactive device-code authentication flow and store credentials.
+    pub fn login_interactive(
+        &self,
+        display_callback: impl Fn(&device_code::DeviceCodeResponse),
+    ) -> Result<JfpCredentials> {
+        let creds =
+            device_code::run_device_code_flow(&self.http_client, &self.config, display_callback)?;
+        self.complete_login(creds.clone())?;
+        Ok(creds)
+    }
+
     /// Refresh the access token using the refresh token.
     pub fn refresh_token(&self) -> Result<JfpCredentials> {
         let creds = token_storage::load_credentials()?
