@@ -104,7 +104,7 @@ impl SuggestionContext {
         let tech_stack = collected
             .detected_projects
             .first()
-            .map(|p| p.project_type.as_str().to_string());
+            .map(|p| p.project_type.id().to_string());
         Self {
             tech_stack,
             time_of_day,
