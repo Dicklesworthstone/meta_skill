@@ -328,6 +328,8 @@ pub fn run(ctx: &AppContext, args: &SuggestArgs) -> Result<()> {
     let fp = fingerprint.as_u64();
     if !args.ignore_cooldowns {
         use crate::suggestions::CooldownStatus;
+        let candidate_ids: Vec<String> = suggestions.iter().map(|s| s.skill_id.clone()).collect();
+        let _partition = cache.partition_suggestions(fp, &candidate_ids);
         suggestions
             .retain(|s| !matches!(cache.status(fp, &s.skill_id), CooldownStatus::Active { .. }));
     }

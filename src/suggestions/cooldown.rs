@@ -125,6 +125,28 @@ impl SuggestionCooldownCache {
             .retain(|entry| cooldown_remaining_seconds(entry, now) > 0);
         before.saturating_sub(self.entries.len())
     }
+
+    #[must_use]
+    pub fn partition_suggestions(
+        &self,
+        fingerprint: u64,
+        candidate_ids: &[String],
+    ) -> SuggestionResponse {
+        let mut suggestions = Vec::new();
+        let mut suppressed = Vec::new();
+        for id in candidate_ids {
+            if matches!(self.status(fingerprint, id), CooldownStatus::Active { .. }) {
+                suppressed.push(id.clone());
+            } else {
+                suggestions.push(id.clone());
+            }
+        }
+        SuggestionResponse {
+            fingerprint,
+            suggestions,
+            suppressed,
+        }
+    }
 }
 
 fn cooldown_remaining_seconds(entry: &CooldownEntry, now: DateTime<Utc>) -> u64 {
