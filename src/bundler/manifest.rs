@@ -277,25 +277,19 @@ impl Ed25519Signer {
     /// Load a signer from an OpenSSH private key string.
     pub fn from_openssh_str(pem: &str) -> Result<Self> {
         let (seed, public_key_from_file) = parse_openssh_ed25519_key(pem)?;
-
-        let keypair =
-            ring::signature::Ed25519KeyPair::from_seed_unchecked(&seed).map_err(|_| {
-                MsError::ValidationFailed("invalid Ed25519 seed in SSH key".to_string())
-            })?;
+        let signer = Self::from_seed(&seed).map_err(|_| {
+            MsError::ValidationFailed("invalid Ed25519 seed in SSH key".to_string())
+        })?;
 
         // Verify the public key from the file matches the one derived from the seed.
         // This catches corrupted key files where the public key doesn't match the private key.
-        let derived_public_key = keypair.public_key().as_ref();
-        if derived_public_key != public_key_from_file {
+        if signer.public_key() != public_key_from_file {
             return Err(MsError::ValidationFailed(
                 "SSH key public key doesn't match private key (corrupted key file?)".to_string(),
             ));
         }
 
-        // Generate key_id from public key (hex-encoded first 8 bytes)
-        let key_id = format!("ed25519:{}", hex::encode(&public_key_from_file[..8]));
-
-        Ok(Self { keypair, key_id })
+        Ok(signer)
     }
 
     /// Construct a signer directly from a 32-byte Ed25519 seed.

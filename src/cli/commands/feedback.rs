@@ -86,7 +86,13 @@ fn run_add(ctx: &AppContext, args: &FeedbackAddArgs) -> Result<()> {
     )?;
 
     // Update the contextual and signal bandits with this feedback
-    if let Err(e) = update_bandits(ctx, &skill_id, &feedback_type, args.rating) {
+    if let Err(e) = update_bandits(
+        ctx,
+        &skill_id,
+        &feedback_type,
+        args.rating,
+        args.comment.as_deref(),
+    ) {
         // Log but don't fail - bandit update is best-effort
         eprintln!("Warning: Failed to update bandit: {e}");
     }
@@ -193,6 +199,7 @@ pub(crate) fn update_bandits(
     skill_id: &str,
     feedback_type: &str,
     rating: Option<i64>,
+    comment: Option<&str>,
 ) -> Result<()> {
     use crate::suggestions::bandit::{
         Reward, SignalBandit, SignalType, SuggestionContext as BanditSuggestionContext,
@@ -203,13 +210,11 @@ pub(crate) fn update_bandits(
     bandit.register_skill(skill_id);
 
     let feedback = match feedback_type {
-        "positive" => SkillFeedback::ExplicitHelpful,
-        "negative" => SkillFeedback::ExplicitNotHelpful { reason: None },
+        "positive" => SkillFeedback::helpful(),
+        "negative" => SkillFeedback::not_helpful(comment.map(str::to_string)),
         "rating" => {
             let stars = rating.unwrap_or(3) as u8;
-            SkillFeedback::Rating {
-                stars: stars.clamp(1, 5),
-            }
+            SkillFeedback::rating(stars.clamp(1, 5))
         }
         _ => SkillFeedback::LoadedOnly,
     };

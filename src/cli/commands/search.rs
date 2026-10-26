@@ -414,12 +414,17 @@ fn search_semantic(ctx: &AppContext, args: &SearchArgs, filters: &SearchFilters)
 }
 
 fn build_search_context(ctx: &AppContext) -> SearchContext {
-    use crate::context::{DefaultDetector, ProjectDetector};
+    use crate::context::{DefaultDetector, ProjectDetector, ProjectMarker, ProjectType};
     let cwd_path = std::env::current_dir().ok();
     let tech_stack = cwd_path
         .as_deref()
         .map(|dir| {
-            let detector = DefaultDetector::new();
+            let mut detector = DefaultDetector::new();
+            detector.add_marker(ProjectMarker::new(
+                "rust-toolchain.toml",
+                ProjectType::Rust,
+                0.9,
+            ));
             detector
                 .detect(dir)
                 .into_iter()
@@ -575,21 +580,23 @@ fn display_results(
 
     let start = std::time::Instant::now();
 
-    // Build SearchResults using the new formatter
-    let mut search_results = SearchResults::from_tuples(&args.query, search_type, results);
-
-    // Add snippets if requested
-    if args.snippets {
-        for (i, (skill, _)) in results.iter().enumerate() {
-            if !skill.body.is_empty() {
-                if let Some(snippet) = find_snippet(&skill.body, &args.query) {
-                    if i < search_results.results.len() {
-                        search_results.results[i].snippet = Some(snippet);
-                    }
-                }
+    // Build SearchResults using the formatter
+    let mut search_results = if args.snippets {
+        let mut sr = SearchResults::new(&args.query, search_type);
+        for (skill, score) in results {
+            if !skill.body.is_empty()
+                && let Some(snippet) = find_snippet(&skill.body, &args.query)
+            {
+                sr.add_result_with_snippet(skill.clone(), *score, snippet);
+            } else {
+                sr.add_result(skill.clone(), *score);
             }
         }
-    }
+        sr
+    } else {
+        SearchResults::from_tuples(&args.query, search_type, results)
+    };
+    search_results = search_results.with_duration(start.elapsed().as_millis() as u64);
 
     // Use the new output format
     println!("{}", search_results.format(ctx.output_format));

@@ -396,6 +396,7 @@ impl Database {
                 variant_id
             ],
         )?;
+        let _rowid = self.conn.last_insert_rowid()?;
         Ok(())
     }
 
@@ -462,6 +463,25 @@ impl Database {
         Ok(())
     }
 
+    /// Execute a closure inside an explicit SQLite transaction, committing on
+    /// `Ok` and rolling back on `Err`.
+    pub fn with_transaction<T, F>(&self, f: F) -> Result<T>
+    where
+        F: FnOnce(&Self) -> Result<T>,
+    {
+        self.conn.begin_transaction()?;
+        match f(self) {
+            Ok(val) => {
+                self.conn.commit_transaction()?;
+                Ok(val)
+            }
+            Err(err) => {
+                let _ = self.conn.rollback_transaction();
+                Err(err)
+            }
+        }
+    }
+
     pub fn delete_skill(&self, id: &str) -> Result<()> {
         // `PRAGMA foreign_keys = ON` is deliberately engaged on every
         // connection, and most child tables reference skills(id) WITHOUT
@@ -473,42 +493,44 @@ impl Database {
         //
         // skill_experiment_events references skill_experiments(id), so it is
         // a grandchild and must be cleared before its parent experiments.
-        self.conn.execute_compat(
-            "DELETE FROM skill_experiment_events WHERE experiment_id IN \
-             (SELECT id FROM skill_experiments WHERE skill_id = ?)",
-            params![id],
-        )?;
-        for sql in [
-            "DELETE FROM skill_experiments WHERE skill_id = ?",
-            "DELETE FROM skill_packs WHERE skill_id = ?",
-            "DELETE FROM skill_slices WHERE skill_id = ?",
-            "DELETE FROM skill_evidence WHERE skill_id = ?",
-            "DELETE FROM skill_rules WHERE skill_id = ?",
-            "DELETE FROM skill_usage WHERE skill_id = ?",
-            "DELETE FROM skill_usage_events WHERE skill_id = ?",
-            "DELETE FROM rule_outcomes WHERE skill_id = ?",
-            "DELETE FROM skill_dependencies WHERE skill_id = ? OR depends_on = ?",
-            "DELETE FROM skill_capabilities WHERE skill_id = ?",
-            "DELETE FROM skill_feedback WHERE skill_id = ?",
-            "DELETE FROM user_preferences WHERE skill_id = ?",
-            "DELETE FROM skill_embeddings WHERE skill_id = ?",
-            // Not FK-constrained, but derived state must not outlive the
-            // skill: an orphaned origin row would produce phantom
-            // stale-source reports, and a stale resolution cache entry would
-            // keep resolving a deleted skill.
-            "DELETE FROM skill_origins WHERE skill_id = ?",
-            "DELETE FROM resolved_skill_cache WHERE skill_id = ?",
-            "DELETE FROM skill_dependency_graph WHERE skill_id = ? OR depends_on = ?",
-        ] {
-            if sql.contains("OR depends_on") {
-                self.conn.execute_compat(sql, params![id, id])?;
-            } else {
-                self.conn.execute_compat(sql, params![id])?;
+        self.with_transaction(|db| {
+            db.conn.execute_compat(
+                "DELETE FROM skill_experiment_events WHERE experiment_id IN \
+                 (SELECT id FROM skill_experiments WHERE skill_id = ?)",
+                params![id],
+            )?;
+            for sql in [
+                "DELETE FROM skill_experiments WHERE skill_id = ?",
+                "DELETE FROM skill_packs WHERE skill_id = ?",
+                "DELETE FROM skill_slices WHERE skill_id = ?",
+                "DELETE FROM skill_evidence WHERE skill_id = ?",
+                "DELETE FROM skill_rules WHERE skill_id = ?",
+                "DELETE FROM skill_usage WHERE skill_id = ?",
+                "DELETE FROM skill_usage_events WHERE skill_id = ?",
+                "DELETE FROM rule_outcomes WHERE skill_id = ?",
+                "DELETE FROM skill_dependencies WHERE skill_id = ? OR depends_on = ?",
+                "DELETE FROM skill_capabilities WHERE skill_id = ?",
+                "DELETE FROM skill_feedback WHERE skill_id = ?",
+                "DELETE FROM user_preferences WHERE skill_id = ?",
+                "DELETE FROM skill_embeddings WHERE skill_id = ?",
+                // Not FK-constrained, but derived state must not outlive the
+                // skill: an orphaned origin row would produce phantom
+                // stale-source reports, and a stale resolution cache entry would
+                // keep resolving a deleted skill.
+                "DELETE FROM skill_origins WHERE skill_id = ?",
+                "DELETE FROM resolved_skill_cache WHERE skill_id = ?",
+                "DELETE FROM skill_dependency_graph WHERE skill_id = ? OR depends_on = ?",
+            ] {
+                if sql.contains("OR depends_on") {
+                    db.conn.execute_compat(sql, params![id, id])?;
+                } else {
+                    db.conn.execute_compat(sql, params![id])?;
+                }
             }
-        }
-        self.conn
-            .execute_compat("DELETE FROM skills WHERE id = ?", params![id])?;
-        Ok(())
+            db.conn
+                .execute_compat("DELETE FROM skills WHERE id = ?", params![id])?;
+            Ok(())
+        })
     }
 
     /// Record (or refresh) the filesystem origin of an indexed skill.

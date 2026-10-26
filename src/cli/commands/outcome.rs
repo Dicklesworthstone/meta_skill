@@ -122,12 +122,16 @@ fn update_bandits_from_outcome(
     } else {
         Reward::Failure
     };
+    let signal_reward_val = crate::suggestions::bandit::rewards::legacy_reward_to_f32(&reward);
     let bandit_ctx = BanditSuggestionContext::default();
     for signal in SignalType::all() {
         signal_bandit.update(*signal, reward, &bandit_ctx);
     }
     signal_bandit.save(&signal_path)?;
-    Ok((contextual_reward, aggregated_reward))
+    Ok((
+        contextual_reward,
+        f32::midpoint(aggregated_reward, signal_reward_val),
+    ))
 }
 
 fn resolve_skill_id(ctx: &AppContext, input: &str) -> Result<String> {

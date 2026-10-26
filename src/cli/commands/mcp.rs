@@ -1694,7 +1694,7 @@ fn handle_tool_feedback(ctx: &AppContext, args: &Value) -> Result<ToolResult> {
         .record_skill_feedback(skill_id, feedback_type, rating, comment)?;
 
     // Also update SignalBandit and ContextualBandit under ms_root
-    let _ = super::feedback::update_bandits(ctx, skill_id, feedback_type, rating);
+    let _ = super::feedback::update_bandits(ctx, skill_id, feedback_type, rating, comment);
 
     let output = serde_json::json!({
         "recorded": true,
