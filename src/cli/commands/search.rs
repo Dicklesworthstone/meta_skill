@@ -55,15 +55,21 @@ pub struct SearchArgs {
 
 pub fn run(ctx: &AppContext, args: &SearchArgs) -> Result<()> {
     // Build search filters
-    let mut filters = SearchFilters::new();
-
-    if let Some(ref tags_str) = args.tags {
-        filters = filters.tags(SearchFilters::parse_tags(tags_str));
-    }
+    let mut filters = if let Some(ref tags_str) = args.tags {
+        SearchFilters::with_tags(SearchFilters::parse_tags(tags_str))
+    } else if let Some(min_q) = args.min_quality {
+        SearchFilters::with_min_quality(min_q)
+    } else {
+        SearchFilters::new()
+    };
 
     if let Some(ref layer_str) = args.layer {
         if let Some(layer) = SearchLayer::from_str(layer_str) {
-            filters = filters.layer(layer);
+            filters = if filters.tags.is_empty() && filters.min_quality.is_none() {
+                SearchFilters::with_layer(layer)
+            } else {
+                filters.layer(layer)
+            };
         } else {
             let error_msg = format!(
                 "Invalid layer '{}'. Valid: base, org, project, user",
@@ -168,10 +174,12 @@ fn search_hybrid(ctx: &AppContext, args: &SearchArgs, filters: &SearchFilters) -
     // Increase limit to allow for filtering
     let fetch_limit = args.limit * 50;
 
-    let config = RrfConfig::with_weights(
+    let default_k = RrfConfig::with_k(60.0).k;
+    let mut config = RrfConfig::with_weights(
         ctx.config.search.bm25_weight,
         ctx.config.search.semantic_weight,
     );
+    config.k = default_k;
 
     let fused: Vec<HybridResult> =
         if let Some(cached) = ctx.cache.get_query(&args.query, fetch_limit) {
