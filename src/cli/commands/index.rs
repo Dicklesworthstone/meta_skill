@@ -915,7 +915,9 @@ fn index_skill_file(
                 // the source may have MOVED without a content change, and a
                 // stale origin path would otherwise false-positive in
                 // `ms doctor` / `ms prune stale-sources`.
-                record_skill_origin(ctx, &spec.metadata.id, skill)?;
+                record_skill_origin(ctx, &spec.metadata.id, skill, &new_hash)?;
+                let assets = discover_skill_assets(&skill.path);
+                let _ = ctx.db.update_skill_assets(&spec.metadata.id, &assets);
 
                 // Backfill a missing or stale embedding (databases indexed
                 // before embeddings were written, or after a backend switch)
@@ -953,7 +955,10 @@ fn index_skill_file(
     // is a serialized `SkillSpec` (also used by crash recovery), so threading
     // the discovered path through it would change the recovery format for no
     // durability benefit.
-    record_skill_origin(ctx, &spec.metadata.id, skill)?;
+    record_skill_origin(ctx, &spec.metadata.id, skill, &new_hash)?;
+
+    let assets = discover_skill_assets(&skill.path);
+    ctx.db.update_skill_assets(&spec.metadata.id, &assets)?;
 
     // Compute and persist quality score
     let scorer = crate::quality::QualityScorer::with_defaults();
@@ -1037,7 +1042,12 @@ fn search_record_for(
 /// skill's `SKILL.md` really lives and which configured root it was found
 /// under. Import/bundle/template paths never call this — absence of a row
 /// means "origin unknown" and is exempt from stale-source detection.
-fn record_skill_origin(ctx: &AppContext, skill_id: &str, skill: &DiscoveredSkill) -> Result<()> {
+fn record_skill_origin(
+    ctx: &AppContext,
+    skill_id: &str,
+    skill: &DiscoveredSkill,
+    content_hash: &str,
+) -> Result<()> {
     // Absolutize before persisting: users can run `ms index ./skills`, and a
     // relative origin would false-flag as missing whenever `ms doctor` /
     // `ms prune stale-sources` later runs from a different working directory.
@@ -1046,11 +1056,118 @@ fn record_skill_origin(ctx: &AppContext, skill_id: &str, skill: &DiscoveredSkill
     // path for filesystem reasons; fall back to the literal path if it does.
     let origin_path = std::path::absolute(&skill.path).unwrap_or_else(|_| skill.path.clone());
     let origin_root = std::path::absolute(&skill.root).unwrap_or_else(|_| skill.root.clone());
+    let source = crate::core::skill::SkillSource {
+        path: origin_path,
+        layer: skill.layer,
+        git_remote: None,
+        git_commit: None,
+        content_hash: content_hash.to_string(),
+    };
     ctx.db.record_skill_origin(
         skill_id,
-        &origin_path.display().to_string(),
+        &source.path.display().to_string(),
         &origin_root.display().to_string(),
     )
+}
+
+/// Discover `scripts/`, `references/`, and `tests/` subdirectories adjacent to a skill's `SKILL.md`.
+fn discover_skill_assets(skill_md: &Path) -> crate::core::SkillAssets {
+    let mut assets = crate::core::SkillAssets::default();
+    let Some(skill_dir) = skill_md.parent() else {
+        return assets;
+    };
+
+    let scripts_dir = skill_dir.join("scripts");
+    if scripts_dir.is_dir() {
+        if let Ok(entries) = std::fs::read_dir(&scripts_dir) {
+            let mut paths: Vec<PathBuf> = entries
+                .filter_map(std::result::Result::ok)
+                .map(|e| e.path())
+                .filter(|p| p.is_file())
+                .collect();
+            paths.sort();
+            for path in paths {
+                let rel_path = path
+                    .strip_prefix(skill_dir)
+                    .unwrap_or(&path)
+                    .to_path_buf();
+                let ext = path
+                    .extension()
+                    .and_then(|e| e.to_str())
+                    .unwrap_or("sh");
+                let language = match ext {
+                    "py" => "python",
+                    "rb" => "ruby",
+                    "js" | "mjs" => "javascript",
+                    "ts" => "typescript",
+                    "rs" => "rust",
+                    "sh" | "bash" | "zsh" => "bash",
+                    other => other,
+                }
+                .to_string();
+                assets.scripts.push(crate::core::skill::ScriptFile {
+                    path: rel_path,
+                    language,
+                    description: None,
+                });
+            }
+        }
+    }
+
+    let refs_dir = skill_dir.join("references");
+    if refs_dir.is_dir() {
+        if let Ok(entries) = std::fs::read_dir(&refs_dir) {
+            let mut paths: Vec<PathBuf> = entries
+                .filter_map(std::result::Result::ok)
+                .map(|e| e.path())
+                .filter(|p| p.is_file())
+                .collect();
+            paths.sort();
+            for path in paths {
+                let rel_path = path
+                    .strip_prefix(skill_dir)
+                    .unwrap_or(&path)
+                    .to_path_buf();
+                let file_type = path
+                    .extension()
+                    .and_then(|e| e.to_str())
+                    .unwrap_or("text")
+                    .to_string();
+                assets.references.push(crate::core::skill::ReferenceFile {
+                    path: rel_path,
+                    file_type,
+                });
+            }
+        }
+    }
+
+    let tests_dir = skill_dir.join("tests");
+    if tests_dir.is_dir() {
+        if let Ok(entries) = std::fs::read_dir(&tests_dir) {
+            let mut paths: Vec<PathBuf> = entries
+                .filter_map(std::result::Result::ok)
+                .map(|e| e.path())
+                .filter(|p| p.is_file())
+                .collect();
+            paths.sort();
+            for path in paths {
+                let rel_path = path
+                    .strip_prefix(skill_dir)
+                    .unwrap_or(&path)
+                    .to_path_buf();
+                let framework = path
+                    .extension()
+                    .and_then(|e| e.to_str())
+                    .map(std::string::ToString::to_string);
+                assets.tests.push(crate::core::skill::TestFile {
+                    path: rel_path,
+                    framework,
+                });
+            }
+        }
+    }
+
+    assets
 }
 
 /// Build a SkillRecord from a resolved SkillSpec for search indexing
@@ -1070,6 +1187,8 @@ fn build_skill_record_from_resolved(
 
     // Serialize metadata for the JSON field
     let metadata_json = serde_json::to_string(&spec.metadata).unwrap_or_default();
+    let assets = discover_skill_assets(&discovered.path);
+    let assets_json = serde_json::to_string(&assets).unwrap_or_else(|_| "{}".to_string());
 
     // Version may be empty string, convert to Option
     let version = if spec.metadata.version.is_empty() {
@@ -1091,9 +1210,9 @@ fn build_skill_record_from_resolved(
         content_hash: content_hash.to_string(),
         body,
         metadata_json,
-        assets_json: "[]".to_string(), // No assets in current SkillSpec
-        token_count: 0,                // Will be computed separately if needed
-        quality_score: 0.0,            // Will be updated by quality scorer
+        assets_json,
+        token_count: 0,     // Will be computed separately if needed
+        quality_score: 0.0, // Will be updated by quality scorer
         indexed_at: chrono::Utc::now().to_rfc3339(),
         modified_at: chrono::Utc::now().to_rfc3339(),
         is_deprecated: false, // Not tracked in current SkillMetadata
@@ -1870,5 +1989,35 @@ mod tests {
             infer_skill_layer(std::path::Path::new("/work/proj/.ms/skills/s2"), &config),
             SkillLayer::Org
         );
+    }
+
+    #[test]
+    fn test_discover_skill_assets_populates_scripts_refs_and_tests() {
+        use std::fs;
+        let temp = tempfile::tempdir().unwrap();
+        let pkg = temp.path().join("asset-skill");
+        fs::create_dir(&pkg).unwrap();
+        let skill_md = pkg.join("SKILL.md");
+        fs::write(&skill_md, "# Asset Skill").unwrap();
+
+        let scripts = pkg.join("scripts");
+        fs::create_dir(&scripts).unwrap();
+        fs::write(scripts.join("setup.py"), "print('ok')").unwrap();
+
+        let refs = pkg.join("references");
+        fs::create_dir(&refs).unwrap();
+        fs::write(refs.join("guide.md"), "# Guide").unwrap();
+
+        let tests = pkg.join("tests");
+        fs::create_dir(&tests).unwrap();
+        fs::write(tests.join("smoke.yaml"), "name: smoke").unwrap();
+
+        let assets = discover_skill_assets(&skill_md);
+        assert_eq!(assets.scripts.len(), 1);
+        assert_eq!(assets.scripts[0].language, "python");
+        assert_eq!(assets.references.len(), 1);
+        assert_eq!(assets.references[0].file_type, "md");
+        assert_eq!(assets.tests.len(), 1);
+        assert_eq!(assets.tests[0].framework.as_deref(), Some("yaml"));
     }
 }

@@ -1255,6 +1255,21 @@ impl Database {
         Ok(())
     }
 
+    /// Update the serialized `SkillAssets` (`assets_json`) for a skill.
+    pub fn update_skill_assets(
+        &self,
+        skill_id: &str,
+        assets: &crate::core::SkillAssets,
+    ) -> Result<()> {
+        let assets_json = serde_json::to_string(assets)
+            .map_err(|err| MsError::Serialization(format!("encode skill assets: {err}")))?;
+        self.conn.execute_compat(
+            "UPDATE skills SET assets_json = ?, modified_at = datetime('now') WHERE id = ?",
+            params![assets_json, skill_id],
+        )?;
+        Ok(())
+    }
+
     /// Upsert pre-sliced content blocks for token packing (`skill_slices`).
     pub fn upsert_skill_slices(
         &self,
