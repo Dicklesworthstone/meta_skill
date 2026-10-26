@@ -213,13 +213,16 @@ pub fn resolve_extends<R: SkillRepository + ?Sized>(
     let mut warnings = Vec::new();
 
     // Base case: no extends
-    let Some(parent_id) = &skill.extends else {
+    if !skill.has_parent() {
         return Ok(ResolvedSkillSpec {
             spec: skill.clone(),
             inheritance_chain: vec![skill.metadata.id.clone()],
             included_from: Vec::new(),
             warnings,
         });
+    }
+    let Some(parent_id) = &skill.extends else {
+        unreachable!("checked has_parent");
     };
 
     // Check for cycles first
@@ -459,13 +462,15 @@ pub fn resolve_full<R: SkillRepository + ?Sized>(
     }
 
     // Apply includes
-    resolve_includes(&mut resolved, repository)?;
+    if resolved.spec.has_includes() {
+        resolve_includes(&mut resolved, repository)?;
 
-    // Check for conflicts
-    check_include_conflicts(skill, &mut resolved.warnings);
+        // Check for conflicts
+        check_include_conflicts(skill, &mut resolved.warnings);
 
-    // Clear includes from resolved spec (they're now applied)
-    resolved.spec.includes = Vec::new();
+        // Clear includes from resolved spec (they're now applied)
+        resolved.spec.includes = Vec::new();
+    }
 
     Ok(resolved)
 }

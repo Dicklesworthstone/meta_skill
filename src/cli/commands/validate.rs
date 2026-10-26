@@ -38,7 +38,9 @@ pub struct ValidateArgs {
 }
 
 fn run_lint_engine(
+    ctx: &AppContext,
     spec: &mut crate::core::SkillSpec,
+    raw: &str,
     skill_md: &std::path::Path,
     apply_fixes: bool,
     strict_lint: bool,
@@ -52,9 +54,14 @@ fn run_lint_engine(
         engine.set_config(cfg);
     }
     for rule in all_rules() {
-        engine.register(rule);
+        engine = engine.with_rule(rule);
     }
-    let mut res = engine.validate(spec);
+    let repo = crate::core::resolution::GitSkillRepository::new(&ctx.git);
+    let val_ctx = crate::lint::ValidationContext::new(spec, engine.config())
+        .with_repository(&repo)
+        .with_source(raw)
+        .with_file_path(skill_md);
+    let mut res = engine.validate_with_context(&val_ctx);
     let mut fix_info = None;
     if apply_fixes && (!res.passed || res.warning_count() > 0) {
         let fix_res = engine.auto_fix(spec)?;
@@ -62,8 +69,12 @@ fn run_lint_engine(
         let all_ok = fix_res.all_succeeded();
         if fixed_count > 0 {
             let updated_md = compile_markdown(spec);
-            let _ = std::fs::write(skill_md, updated_md);
-            res = engine.validate(spec);
+            let _ = std::fs::write(skill_md, &updated_md);
+            let updated_ctx = crate::lint::ValidationContext::new(spec, engine.config())
+                .with_repository(&repo)
+                .with_source(&updated_md)
+                .with_file_path(skill_md);
+            res = engine.validate_with_context(&updated_ctx);
         }
         fix_info = Some((fixed_count, all_ok));
     }
@@ -94,7 +105,8 @@ pub fn run(ctx: &AppContext, args: &ValidateArgs) -> Result<()> {
                         .to_string(),
                 });
             }
-            let (lint_res, fix_info) = run_lint_engine(&mut spec, &skill_md, args.fix, args.lint)?;
+            let (lint_res, fix_info) =
+                run_lint_engine(ctx, &mut spec, &raw, &skill_md, args.fix, args.lint)?;
             let ubs_result = if args.ubs {
                 let gate = SafetyGate::from_context(ctx);
                 let client = UbsClient::new(None).with_safety(gate);
@@ -168,7 +180,8 @@ pub fn run(ctx: &AppContext, args: &ValidateArgs) -> Result<()> {
             message: "Markdown compilation roundtrip did not preserve spec semantics".to_string(),
         });
     }
-    let (lint_res, fix_info) = run_lint_engine(&mut spec, &skill_md, args.fix, args.lint)?;
+    let (lint_res, fix_info) =
+        run_lint_engine(ctx, &mut spec, &raw, &skill_md, args.fix, args.lint)?;
     let ubs_result = if args.ubs {
         let gate = SafetyGate::from_context(ctx);
         let client = UbsClient::new(None).with_safety(gate);

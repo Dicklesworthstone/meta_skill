@@ -625,7 +625,7 @@ impl ValidationRule for InputSanitizationRule {
 #[must_use]
 pub fn security_rules() -> Vec<Box<dyn ValidationRule>> {
     vec![
-        Box::new(NoSecretsRule::default()),
+        Box::new(NoSecretsRule::default().with_entropy_threshold(4.5)),
         Box::new(NoPromptInjectionRule::default()),
         Box::new(SafePathsRule::default()),
         Box::new(InputSanitizationRule),

@@ -98,7 +98,7 @@ impl ValidationRule for NoCycleRule {
 
     fn validate(&self, ctx: &ValidationContext<'_>) -> Vec<Diagnostic> {
         // Only check if the skill has inheritance
-        if ctx.skill.extends.is_none() {
+        if !ctx.skill.has_parent() {
             return vec![];
         }
 
@@ -200,7 +200,7 @@ impl ValidationRule for DeepInheritanceRule {
 
     fn validate(&self, ctx: &ValidationContext<'_>) -> Vec<Diagnostic> {
         // Only check if the skill has inheritance
-        if ctx.skill.extends.is_none() {
+        if !ctx.skill.has_parent() {
             return vec![];
         }
 

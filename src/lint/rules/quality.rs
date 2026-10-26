@@ -628,7 +628,7 @@ impl ValidationRule for EmbeddingQualityRule {
 #[must_use]
 pub fn quality_rules() -> Vec<Box<dyn ValidationRule>> {
     vec![
-        Box::new(MeaningfulDescriptionRule::default()),
+        Box::new(MeaningfulDescriptionRule::with_bounds(20, 500)),
         Box::new(ActionableRulesRule::default()),
         Box::new(ExamplesHaveCodeRule),
         Box::new(BalancedContentRule::default()),
@@ -639,7 +639,7 @@ pub fn quality_rules() -> Vec<Box<dyn ValidationRule>> {
 #[must_use]
 pub fn performance_rules() -> Vec<Box<dyn ValidationRule>> {
     vec![
-        Box::new(TokenBudgetRule::default()),
+        Box::new(TokenBudgetRule::with_thresholds(4000, 8000)),
         Box::new(EmbeddingQualityRule::default()),
     ]
 }
