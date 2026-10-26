@@ -245,7 +245,9 @@ impl SessionTracker {
         } else if session.interactions.is_empty() {
             SkillFeedback::LoadedOnly
         } else {
-            SkillFeedback::UsedDuration { minutes: minutes.max(1) }
+            SkillFeedback::UsedDuration {
+                minutes: minutes.max(1),
+            }
         }
     }
 
