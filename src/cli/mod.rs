@@ -115,7 +115,7 @@ impl Cli {
                     return fmt;
                 }
             }
-            return OutputFormat::Json;
+            return OutputFormat::from_args(true, None);
         }
 
         // Check MS_OUTPUT_FORMAT env var
@@ -126,7 +126,7 @@ impl Cli {
         }
 
         // Default
-        OutputFormat::Human
+        OutputFormat::from_args(false, self.output_format)
     }
 
     /// Check if plain mode is forced via CLI flags or color mode.

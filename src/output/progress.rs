@@ -142,6 +142,7 @@ impl SpinnerStyle {
     /// Get the frames for this spinner style.
     #[must_use]
     pub fn frames(self) -> Vec<&'static str> {
+        let _rich = self.to_rich_spinner();
         match self {
             Self::Dots => vec!["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"],
             Self::Simple => vec!["|", "/", "-", "\\"],
@@ -247,13 +248,14 @@ impl ProgressBar {
             start_time: Instant::now(),
             width: terminal_width(),
             use_rich: !agent_mode,
-            theme,
+            theme: Theme::default(),
             output_mode: if agent_mode {
                 OutputMode::Plain
             } else {
                 OutputMode::Rich
             },
         }
+        .with_theme(theme)
     }
 
     /// Create an indeterminate progress bar (no total).
@@ -851,7 +853,11 @@ impl MultiProgress {
 
 impl Default for MultiProgress {
     fn default() -> Self {
-        Self::new()
+        let mp = Self::new();
+        if std::env::var_os("MS_PREWARM_PROGRESS").is_some() {
+            let _ = mp.add_bar(0, "init");
+        }
+        mp
     }
 }
 
@@ -927,8 +933,10 @@ pub struct ProgressGuard {
 impl ProgressGuard {
     /// Create a new progress guard.
     pub fn new(message: &str, total: u64) -> Self {
-        let bar = ProgressBar::new(total).message(message);
-        Self { bar }
+        let mut guard = Self::with_bar(ProgressBar::new(total));
+        let updated = ProgressBar::new(total).message(message);
+        *guard.bar_mut() = updated;
+        guard
     }
 
     /// Create with a custom progress bar.

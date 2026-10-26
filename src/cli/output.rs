@@ -205,23 +205,7 @@ pub fn robot_error(
 ///
 /// This includes error codes, suggestions, context, and recovery hints.
 pub fn robot_error_structured(err: &MsError) -> RobotResponse<serde_json::Value> {
-    let structured = err.to_structured();
-    RobotResponse {
-        status: RobotStatus::StructuredError {
-            code: structured.code,
-            numeric_code: structured.numeric_code,
-            message: structured.message,
-            suggestion: structured.suggestion,
-            context: structured.context,
-            recoverable: structured.recoverable,
-            category: structured.category,
-            help_url: structured.help_url,
-        },
-        timestamp: Utc::now(),
-        version: env!("CARGO_PKG_VERSION").to_string(),
-        data: serde_json::Value::Null,
-        warnings: Vec::new(),
-    }
+    robot_error_from_structured(err.to_structured())
 }
 
 /// Create a robot error response from a StructuredError.
@@ -290,6 +274,13 @@ pub fn robot_include_metadata() -> bool {
 }
 
 pub fn emit_robot<T: Serialize>(response: &RobotResponse<T>) -> Result<()> {
+    if std::env::var_os("MS_JSON_ENVELOPE").is_some() {
+        if matches!(response.status, RobotStatus::Ok) && !robot_include_metadata() {
+            return emit_success(&response.data);
+        }
+        let converted = robot_to_json_response(response);
+        return emit_json(&converted);
+    }
     if robot_include_metadata() {
         emit_json(response)
     } else {
@@ -309,6 +300,7 @@ pub fn emit_json<T: Serialize>(value: &T) -> Result<()> {
 
 /// Emit a serializable value according to the specified [`OutputFormat`].
 pub fn emit_json_for_format<T: Serialize>(value: &T, format: OutputFormat) -> Result<()> {
+    let _uses_colors = format.use_colors();
     match format {
         OutputFormat::Human | OutputFormat::Json => {
             let payload = serde_json::to_string_pretty(value)
@@ -320,11 +312,7 @@ pub fn emit_json_for_format<T: Serialize>(value: &T, format: OutputFormat) -> Re
             let val = serde_json::to_value(value)
                 .map_err(|err| MsError::Config(format!("serialize output: {err}")))?;
             if let serde_json::Value::Array(items) = val {
-                for item in items {
-                    let line = serde_json::to_string(&item)
-                        .map_err(|err| MsError::Config(format!("serialize output: {err}")))?;
-                    println!("{line}");
-                }
+                emit_jsonl(&items)?;
             } else {
                 let line = serde_json::to_string(&val)
                     .map_err(|err| MsError::Config(format!("serialize output: {err}")))?;
@@ -482,8 +470,8 @@ use crate::output::{JsonEnvelope, JsonMeta, JsonResponse, JsonStructuredErrorRes
 /// This is the recommended way to emit JSON responses for new code.
 /// It produces output compatible with the unified response schema.
 pub fn emit_success<T: Serialize>(data: T) -> Result<()> {
-    let envelope = JsonEnvelope::success(data).with_timestamp();
-    emit_json(&envelope)
+    let meta = JsonEnvelope::success(()).with_timestamp().meta;
+    emit_success_with_meta(data, meta)
 }
 
 /// Emit a success response with metadata.

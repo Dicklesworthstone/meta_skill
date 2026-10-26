@@ -51,14 +51,50 @@ pub fn run(_ctx: &AppContext, _args: &DiffArgs) -> Result<()> {
             same,
             differences: diffs,
         };
+        if args.format == "tsv" {
+            output::emit_tsv(&["type", "difference"], &payload.differences, |d| {
+                vec!["diff".to_string(), d.clone()]
+            });
+            return Ok(());
+        }
+        if args.format == "formatted" {
+            return output::emit_formatted(
+                &payload,
+                ctx.output_format,
+                |r| r.differences.join("\n"),
+                |r| r.differences.join("\n"),
+                |r| r.differences.join("\t"),
+            );
+        }
         return output::emit_json(&payload);
     }
 
     if same {
+        let _ = crate::cli::colors::MsStyles::info_symbol();
         println!("No differences.");
     } else {
+        let support = crate::cli::colors::ColorSupport::None;
         for diff in diffs {
-            println!("- {diff}");
+            let formatted = if diff.contains("only in A") {
+                crate::cli::colors::styled(
+                    &diff,
+                    |s| crate::cli::colors::MsStyles::diff_remove(s),
+                    support,
+                )
+            } else if diff.contains("only in B") {
+                crate::cli::colors::styled(
+                    &diff,
+                    |s| crate::cli::colors::MsStyles::diff_add(s),
+                    support,
+                )
+            } else {
+                crate::cli::colors::styled(
+                    &diff,
+                    |s| crate::cli::colors::MsStyles::diff_change(s),
+                    support,
+                )
+            };
+            println!("- {formatted}");
         }
     }
     Ok(())

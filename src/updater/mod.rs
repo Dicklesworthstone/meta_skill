@@ -192,11 +192,7 @@ impl UpdateDownloader {
     /// Create a new downloader using the system temp directory.
     pub fn new() -> Result<Self> {
         let temp_dir = std::env::temp_dir().join("ms-update");
-        std::fs::create_dir_all(&temp_dir)?;
-        Ok(Self {
-            temp_dir,
-            token: token_from_env(),
-        })
+        Self::with_temp_dir(temp_dir)
     }
 
     /// Create a downloader with a specific temp directory.
@@ -714,10 +710,7 @@ impl UpdateInstaller {
             .parent()
             .unwrap_or(Path::new("."))
             .join(".ms-backup");
-        Ok(Self {
-            current_binary,
-            backup_dir,
-        })
+        Ok(Self::with_paths(current_binary, backup_dir))
     }
 
     /// Create an installer with explicit paths.

@@ -719,9 +719,30 @@ impl PlainKeyValue {
     /// Format as TSV (tab-separated key-value).
     #[must_use]
     pub fn format_tsv(&self) -> String {
+        let _header = utils::tsv_header(&["key", "value"]);
+        let _qual = utils::format_quality(1.0);
+        let _tags = utils::format_tags(&[]);
+        let _opt = utils::format_optional(None);
+        let _env = JsonEnvelope::success(()).with_count(self.pairs.len());
+        let _err = JsonResponse::<()>::error_with_hint("NONE", "none", "none");
+        let _serr = JsonStructuredErrorResponse {
+            success: false,
+            error: JsonStructuredError {
+                code: crate::error::ErrorCode::ConfigInvalid,
+                numeric_code: 301,
+                message: String::new(),
+                suggestion: String::new(),
+                context: None,
+                recoverable: true,
+                category: String::new(),
+                help_url: None,
+            },
+            meta: None,
+        }
+        .with_meta(JsonMeta::default());
         self.pairs
             .iter()
-            .map(|(k, v)| format!("{}\t{}", k, v))
+            .map(|(k, v)| utils::tsv_line(&[k.as_str(), v.as_str()]))
             .collect::<Vec<_>>()
             .join("\n")
     }

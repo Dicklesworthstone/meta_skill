@@ -56,6 +56,9 @@ impl Bm25Index {
     /// Open or create a BM25 index at the given path
     pub fn open(path: impl AsRef<Path>) -> Result<Self> {
         let path = path.as_ref();
+        if path.as_os_str() == ":memory:" {
+            return Self::open_in_memory();
+        }
         std::fs::create_dir_all(path)?;
 
         let schema = build_schema();

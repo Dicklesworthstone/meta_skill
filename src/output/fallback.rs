@@ -208,6 +208,14 @@ impl FallbackRenderer {
 
     /// Print a list of key-value pairs.
     pub fn key_value_list(&self, pairs: &[(&str, &str)]) {
+        if std::env::var_os("MS_FALLBACK_TSV").is_some() {
+            let rows: Vec<Vec<String>> = pairs
+                .iter()
+                .map(|(k, v)| vec![(*k).to_string(), (*v).to_string()])
+                .collect();
+            self.table_tsv(&["key", "value"], &rows);
+            return;
+        }
         let max_key_len = pairs.iter().map(|(k, _)| k.len()).max().unwrap_or(0);
 
         for (key, value) in pairs {

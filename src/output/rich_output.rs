@@ -673,31 +673,13 @@ impl RichOutput {
     /// Print a success message.
     pub fn success(&self, message: &str) {
         trace!(mode = ?self.mode, "success");
-
-        let icon = self.theme.icons.get("success", self.use_unicode);
-        if self.is_rich() {
-            let styled = self.render_style(&self.theme.colors.success, message);
-            println!("{icon} {styled}");
-        } else if icon.is_empty() {
-            println!("OK: {message}");
-        } else {
-            println!("{icon} {message}");
-        }
+        println!("{}", self.format_success(message));
     }
 
     /// Print an error message.
     pub fn error(&self, message: &str) {
         trace!(mode = ?self.mode, "error");
-
-        let icon = self.theme.icons.get("error", self.use_unicode);
-        if self.is_rich() {
-            let styled = self.render_style(&self.theme.colors.error, message);
-            eprintln!("{icon} {styled}");
-        } else if icon.is_empty() {
-            eprintln!("ERROR: {message}");
-        } else {
-            eprintln!("{icon} {message}");
-        }
+        eprintln!("{}", self.format_error(message));
     }
 
     /// Print a warning message.
@@ -718,16 +700,7 @@ impl RichOutput {
     /// Print an info message.
     pub fn info(&self, message: &str) {
         trace!(mode = ?self.mode, "info");
-
-        let icon = self.theme.icons.get("info", self.use_unicode);
-        if self.is_rich() {
-            let styled = self.render_style(&self.theme.colors.info, message);
-            println!("{icon} {styled}");
-        } else if icon.is_empty() {
-            println!("INFO: {message}");
-        } else {
-            println!("{icon} {message}");
-        }
+        println!("{}", self.format_info(message));
     }
 
     /// Print a hint message.
@@ -845,14 +818,11 @@ impl RichOutput {
     /// Print a key-value pair.
     pub fn key_value(&self, key: &str, value: &str) {
         trace!(mode = ?self.mode, key = key, "key_value");
-
-        if self.is_rich() {
-            let styled_key = self.render_style(&self.theme.colors.key, key);
-            let styled_value = self.render_style(&self.theme.colors.value, value);
-            println!("{styled_key}: {styled_value}");
-        } else {
-            println!("{key}: {value}");
+        if self.is_json() && std::env::var_os("MS_KV_JSON").is_some() {
+            self.json_value(&serde_json::json!({ key: value }));
+            return;
         }
+        println!("{}", self.format_key_value(key, value));
     }
 
     /// Print a list of key-value pairs.
@@ -1147,6 +1117,13 @@ impl RichOutput {
     /// Print a hyperlink followed by a newline.
     pub fn println_hyperlink(&self, text: &str, url: &str) {
         trace!(mode = ?self.mode, supports = self.supports_hyperlinks, "println_hyperlink");
+        if let Some(file_path) = url.strip_prefix("file://") {
+            println!(
+                "{}",
+                self.format_file_hyperlink(text, std::path::Path::new(file_path))
+            );
+            return;
+        }
 
         println!("{}", self.format_hyperlink(text, url));
     }

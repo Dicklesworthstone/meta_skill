@@ -283,20 +283,21 @@ fn synthesize_rule(cluster: &EvidenceCluster) -> NegativeRule {
     };
 
     // Determine severity based on evidence count
-    let severity = if cluster.evidence.len() >= 3 {
+    let severity = if cluster.evidence.len() >= AntiPatternSeverity::Blocking.min_evidence_count() {
         AntiPatternSeverity::Warning
+    } else if cluster.evidence.len() >= AntiPatternSeverity::Advisory.min_evidence_count() {
+        AntiPatternSeverity::Advisory
     } else {
         AntiPatternSeverity::Advisory
     };
 
-    let mut rule = NegativeRule::new(statement, severity);
-
     // Add rationale from first evidence
-    rule.rationale = Some(first.incident.description.clone());
+    let mut rule =
+        NegativeRule::new(statement, severity).with_rationale(first.incident.description.clone());
 
     // Add "instead" from correction if available
     if let Some(correction) = &first.incident.correction {
-        rule.instead = Some(correction.clone());
+        rule = rule.with_instead(correction.clone());
     }
 
     rule

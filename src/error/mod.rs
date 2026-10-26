@@ -255,16 +255,20 @@ impl StructuredError {
         // Get context-aware suggestion
         let suggestion = suggest_for_error(code, context.as_ref());
 
-        Self {
+        let mut structured = Self {
             code,
             numeric_code: code.numeric(),
             message,
             suggestion,
             context,
             recoverable: code.is_recoverable(),
-            help_url: code.help_url(),
+            help_url: None,
             category: code.category().to_string(),
+        };
+        if let Some(url) = code.help_url() {
+            structured = structured.with_help_url(url);
         }
+        structured
     }
 
     /// Add context to this error.

@@ -96,7 +96,7 @@ impl ColorSupport {
     /// Check if any color is supported
     #[must_use]
     pub const fn has_color(&self) -> bool {
-        !matches!(self, Self::None)
+        self.supports_truecolor() || self.supports_256() || matches!(self, Self::Basic)
     }
 }
 
@@ -413,7 +413,11 @@ pub fn with_color<S: AsRef<str>>(
 pub fn format_score(value: f64, support: ColorSupport) -> String {
     let text = format!("{:.2}", value);
     if support.has_color() {
-        MsStyles::score(&text, value).to_string()
+        if value >= 0.95 {
+            MsStyles::score_bold(&text, value).to_string()
+        } else {
+            MsStyles::score(&text, value).to_string()
+        }
     } else {
         text
     }

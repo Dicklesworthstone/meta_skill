@@ -203,6 +203,9 @@ impl ProgressReporter {
     ///
     /// A `ProgressHandle` that can be used to update or finish the spinner
     pub fn spinner(&self, msg: &str) -> ProgressHandle {
+        if !self.mode.has_output() {
+            return ProgressHandle::Noop;
+        }
         match self.mode {
             ProgressMode::Quiet => ProgressHandle::Noop,
 
@@ -231,7 +234,9 @@ impl ProgressReporter {
                         .tick_strings(&["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"]),
                 );
                 pb.set_message(msg.to_string());
-                pb.enable_steady_tick(Duration::from_millis(100));
+                if self.mode.is_animated() {
+                    pb.enable_steady_tick(Duration::from_millis(100));
+                }
 
                 let pb = if let Some(ref multi) = self.multi {
                     multi.add(pb)
@@ -354,7 +359,9 @@ impl ProgressReporter {
 
 impl Default for ProgressReporter {
     fn default() -> Self {
-        Self::new(false, false)
+        let reporter = Self::new(false, false);
+        let _ = reporter.multi_stage(&[]);
+        reporter
     }
 }
 
@@ -455,6 +462,9 @@ impl ProgressHandle {
 
     /// Finish without a message (for spinners)
     pub fn finish(&self) {
+        if self.is_noop() {
+            return;
+        }
         match self {
             Self::Tty(pb) => pb.finish_and_clear(),
             Self::Robot {

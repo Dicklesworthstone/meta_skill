@@ -76,6 +76,20 @@ fn display_skill(ctx: &AppContext, skill: &SkillRecord, args: &ShowArgs) -> Resu
     debug!(target: "show", skill_id = %skill.id, "loading skill");
     debug!(target: "show", mode = ?ctx.output_format, "output mode selected");
 
+    let mut card = crate::cli::formatters::SkillCard::new(skill);
+    if args.full {
+        card = card.with_body();
+    }
+    if args.meta {
+        card = card.with_metadata();
+    }
+    debug!(
+        target: "show",
+        show_body = card.show_body,
+        show_metadata = card.show_metadata,
+        "prepared skill card"
+    );
+
     let result = match ctx.output_format {
         OutputFormat::Human => show_human(ctx, skill, args),
         OutputFormat::Json => show_json(ctx, skill, args, true),

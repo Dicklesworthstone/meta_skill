@@ -210,9 +210,7 @@ impl DefaultDetector {
     /// Create a new detector with the default marker registry.
     #[must_use]
     pub fn new() -> Self {
-        Self {
-            markers: default_markers(),
-        }
+        Self::with_markers(default_markers())
     }
 
     /// Create a detector with custom markers.

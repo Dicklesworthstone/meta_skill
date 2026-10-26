@@ -577,8 +577,12 @@ impl OutputModeReport {
 
 /// Print debug output to stderr if MS_DEBUG_OUTPUT is set.
 pub fn maybe_print_debug_output(output_format: OutputFormat, robot_mode: bool) {
-    if std::env::var_os("MS_DEBUG_OUTPUT").is_some() {
+    if let Ok(val) = std::env::var("MS_DEBUG_OUTPUT") {
         let report = OutputModeReport::generate(output_format, robot_mode);
+        if val.eq_ignore_ascii_case("verbose") {
+            eprintln!("{}", report.format_text());
+            return;
+        }
         let mode = if report.decision.use_rich {
             "rich"
         } else {

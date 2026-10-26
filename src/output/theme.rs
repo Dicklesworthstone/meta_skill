@@ -58,7 +58,7 @@ pub struct Theme {
 impl Theme {
     #[must_use]
     pub fn default() -> Self {
-        ThemePreset::Default.to_theme()
+        Self::from_preset(ThemePreset::Default)
     }
 
     #[must_use]
@@ -92,6 +92,13 @@ impl Theme {
                 }
                 _ => {}
             }
+        }
+
+        if let Ok(accent) = std::env::var("MS_THEME_ACCENT") {
+            if let Ok(style) = Style::parse(&accent) {
+                theme = theme.with_color_override("primary", style);
+            }
+            let _ = theme.colors.set_str("accent", &accent);
         }
 
         let mut caps = detect_terminal_capabilities();

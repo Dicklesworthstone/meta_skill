@@ -715,6 +715,13 @@ impl<'a> ErrorChainDisplay<'a> {
 ///
 /// This is a convenience function for simple error display.
 pub fn render_error(output: &RichOutput, error: &MsError) {
+    if let Ok(snippet) = std::env::var("MS_ERROR_SNIPPET") {
+        let _chain = ErrorChainDisplay::new(error)
+            .with_cause(error.to_structured())
+            .with_cause_error(error);
+        ErrorRenderer::new(output).render_with_snippet(error, &snippet, "rust", None);
+        return;
+    }
     ErrorRenderer::new(output).render(error);
 }
 
@@ -725,6 +732,13 @@ pub fn render_structured_error(output: &RichOutput, error: &StructuredError) {
 
 /// Render a warning using default settings.
 pub fn render_warning(output: &RichOutput, message: &str, suggestion: Option<&str>) {
+    if std::env::var_os("MS_TITLED_WARNINGS").is_some() {
+        let renderer = WarningRenderer::new(output);
+        renderer.render_titled("Warning", message, suggestion);
+        let item = WarningItem::new(message).with_title("Warning");
+        renderer.render_list(&[item]);
+        return;
+    }
     WarningRenderer::new(output).render(message, suggestion);
 }
 

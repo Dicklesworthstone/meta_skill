@@ -486,8 +486,9 @@ impl<'a> StatusTracker<'a> {
 
     /// Mark the operation as failed with an error message.
     pub fn fail(&self, error: &str) {
+        let completed = self.step_count();
         trace!(
-            total_steps = self.current_step,
+            total_steps = completed,
             error = error,
             "StatusTracker::fail"
         );

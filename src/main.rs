@@ -30,6 +30,14 @@ fn main() -> ExitCode {
                     ms::MsError::DestructiveBlocked(msg) => ("destructive_blocked", msg.clone()),
                     _ => ("error", e.to_string()),
                 };
+                if std::env::var_os("MS_STRUCTURED_ERRORS").is_some() {
+                    let _ = ms::cli::output::robot_error(code, &message);
+                    let _ = ms::cli::output::robot_error_structured(&e);
+                    if ms::cli::output::emit_structured_error(&e).is_ok() {
+                        return ExitCode::FAILURE;
+                    }
+                    let _ = ms::cli::output::emit_error_response(code, &message);
+                }
                 let error_json = serde_json::json!({
                     "status": "error",
                     "error": true,

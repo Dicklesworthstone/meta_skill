@@ -61,16 +61,14 @@ impl ContentParser {
     /// Create a new parser with default classifiers.
     #[must_use]
     pub fn new() -> Self {
-        Self {
-            classifiers: vec![
-                Box::new(MetadataClassifier),
-                Box::new(ExampleClassifier),
-                Box::new(ChecklistClassifier),
-                Box::new(PitfallClassifier),
-                Box::new(RuleClassifier),
-                Box::new(ContextClassifier),
-            ],
-        }
+        Self::with_classifiers(vec![
+            Box::new(MetadataClassifier),
+            Box::new(ExampleClassifier),
+            Box::new(ChecklistClassifier),
+            Box::new(PitfallClassifier),
+            Box::new(RuleClassifier),
+            Box::new(ContextClassifier),
+        ])
     }
 
     /// Create a parser with custom classifiers.

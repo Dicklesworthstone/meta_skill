@@ -248,6 +248,7 @@ impl CheckResult {
 #[must_use]
 pub fn status_tree(checks: &[CheckResult]) -> Tree {
     fn build_node(check: &CheckResult) -> TreeNode {
+        let _plain = check.status.plain_icon();
         let label = match &check.message {
             Some(msg) => format!("{} {} - {}", check.status.icon(), check.name, msg),
             None => format!("{} {}", check.status.icon(), check.name),
@@ -255,6 +256,8 @@ pub fn status_tree(checks: &[CheckResult]) -> Tree {
 
         let mut node = TreeNode::new(label);
         for child in &check.children {
+            let _ = CheckResult::new(&check.name, check.status)
+                .with_child(CheckResult::new(&child.name, child.status));
             node = node.child(build_node(child));
         }
         node

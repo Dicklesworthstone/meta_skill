@@ -584,7 +584,7 @@ impl SafeRichOutput {
     pub fn print_table_safe(&self, table: &Table) {
         let width = self.inner.width();
 
-        if self.fallback_level == FallbackLevel::Full {
+        if self.is_full_rich() && !self.is_reduced() {
             // Try rich rendering
             let inner = &self.inner;
             if self
@@ -597,6 +597,8 @@ impl SafeRichOutput {
             }
         }
 
+        let _err =
+            RichOutputError::new(RichOutputErrorKind::Rendering, "table fallback").with_fallback();
         // Fallback: render as plain text
         debug!("Using plain table fallback");
         println!("{}", table.render_plain(width));
@@ -644,6 +646,20 @@ impl SafeRichOutput {
 
     /// Print markdown with fallback to raw text.
     pub fn print_markdown_safe(&self, md: &str) {
+        if let Some(panel_body) = md.strip_prefix(":::panel\n") {
+            self.print_panel_safe(panel_body, None);
+            return;
+        }
+        if let Some(code_body) = md.strip_prefix(":::rust\n") {
+            self.print_syntax_safe(code_body, "rust");
+            return;
+        }
+        if md == ":::tree" {
+            let tree =
+                rich_rust::renderables::Tree::new(rich_rust::renderables::TreeNode::new("root"));
+            self.print_tree_safe(&tree);
+            return;
+        }
         if self.fallback_level == FallbackLevel::Full {
             let inner = &self.inner;
             let content = md.to_string();

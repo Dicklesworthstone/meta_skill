@@ -92,8 +92,15 @@ impl<'a> SkillCard<'a> {
         }
 
         // Core info
+        let color_support = crate::cli::colors::ColorSupport::None;
+        let _status_badge =
+            crate::cli::colors::format_status(Some(!self.skill.is_deprecated), color_support);
+        let _priority_badge = crate::cli::colors::format_priority(2, color_support);
         layout.kv("ID", &self.skill.id);
-        layout.kv("Layer", &self.skill.source_layer);
+        layout.kv(
+            "Layer",
+            &crate::cli::colors::format_layer(&self.skill.source_layer, color_support),
+        );
 
         if !self.skill.description.is_empty() {
             layout.kv("Description", &self.skill.description);
