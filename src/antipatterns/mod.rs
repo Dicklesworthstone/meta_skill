@@ -174,6 +174,28 @@ impl EvidenceCluster {
 
         true
     }
+
+    fn to_anti_pattern_cluster(&self, idx: usize) -> Option<AntiPatternCluster> {
+        let first = self.evidence.first()?;
+        let to_ctx = |ev: &AntiPatternEvidence| AntiPatternContext {
+            failed_action: ev.incident.failed_action.clone(),
+            failure_reason: Some(ev.incident.description.clone()),
+            conditions: Vec::new(),
+            correction: ev.incident.correction.clone(),
+            session_id: ev.session_id.clone(),
+            message_idx: ev.incident.message_indices.first().copied().unwrap_or(0),
+        };
+        let centroid = to_ctx(first);
+        let members = self.evidence.iter().map(to_ctx).collect();
+        let synthesized_conditions = extract_trigger_conditions(&self.evidence);
+        Some(AntiPatternCluster {
+            id: format!("cluster-{idx}"),
+            centroid,
+            members,
+            synthesized_conditions,
+            cohesion: 1.0,
+        })
+    }
 }
 
 /// Compute similarity between two action descriptions
@@ -206,8 +228,10 @@ fn compute_action_similarity(a: &str, b: &str) -> f32 {
 fn synthesize_from_clusters(clusters: Vec<EvidenceCluster>) -> Vec<AntiPattern> {
     clusters
         .into_iter()
-        .filter(|c| !c.evidence.is_empty())
-        .map(|cluster| {
+        .enumerate()
+        .filter(|(_, c)| !c.evidence.is_empty())
+        .map(|(idx, cluster)| {
+            let typed_cluster = cluster.to_anti_pattern_cluster(idx);
             // Generate rule from cluster
             let rule = synthesize_rule(&cluster);
 
@@ -221,7 +245,10 @@ fn synthesize_from_clusters(clusters: Vec<EvidenceCluster>) -> Vec<AntiPattern> 
 
             // Extract failure modes and trigger conditions
             ap.failure_modes = extract_failure_modes(&ap.evidence);
-            ap.trigger_conditions = extract_trigger_conditions(&ap.evidence);
+            ap.trigger_conditions = typed_cluster.map_or_else(
+                || extract_trigger_conditions(&ap.evidence),
+                |tc| tc.synthesized_conditions,
+            );
 
             ap
         })
@@ -298,6 +325,13 @@ fn synthesize_rule(cluster: &EvidenceCluster) -> NegativeRule {
     // Add "instead" from correction if available
     if let Some(correction) = &first.incident.correction {
         rule = rule.with_instead(correction.clone());
+    }
+
+    if !first.incident.failed_action.trim().is_empty() {
+        rule.predicate = Some(Predicate {
+            kind: PredicateKind::CommandPattern,
+            params: vec![first.incident.failed_action.clone()],
+        });
     }
 
     rule

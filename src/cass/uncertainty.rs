@@ -365,7 +365,15 @@ impl QueryGenerator for DefaultQueryGenerator {
             UncertaintyReason::InsufficientInstances { .. } => (3usize, 1usize, 1usize),
             UncertaintyReason::HighVariance { .. } => (1, 2, 2),
             UncertaintyReason::CounterExampleFound { .. } => (2, 2, 1),
-            UncertaintyReason::AmbiguousScope { .. } => (1, 1, 3),
+            UncertaintyReason::AmbiguousScope { possible_scopes } => {
+                let default_scope = ScopeCandidate {
+                    scope: "project".to_string(),
+                    confidence: uncertainty.current_confidence,
+                    evidence_count: 1,
+                };
+                let _top_scope = possible_scopes.first().unwrap_or(&default_scope);
+                (1, 1, 3)
+            }
             UncertaintyReason::UnclearPreconditions { .. } => (2, 1, 2),
             UncertaintyReason::UnknownBoundaries { .. } => (1, 1, 3),
             UncertaintyReason::OvergeneralizationFlagged { .. } => (1, 3, 1),
