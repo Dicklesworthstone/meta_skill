@@ -1071,8 +1071,8 @@ fn record_skill_origin(
 }
 
 /// Discover `scripts/`, `references/`, and `tests/` subdirectories adjacent to a skill's `SKILL.md`.
-fn discover_skill_assets(skill_md: &Path) -> crate::core::SkillAssets {
-    let mut assets = crate::core::SkillAssets::default();
+fn discover_skill_assets(skill_md: &std::path::Path) -> crate::core::skill::SkillAssets {
+    let mut assets = crate::core::skill::SkillAssets::default();
     let Some(skill_dir) = skill_md.parent() else {
         return assets;
     };
@@ -1087,14 +1087,8 @@ fn discover_skill_assets(skill_md: &Path) -> crate::core::SkillAssets {
                 .collect();
             paths.sort();
             for path in paths {
-                let rel_path = path
-                    .strip_prefix(skill_dir)
-                    .unwrap_or(&path)
-                    .to_path_buf();
-                let ext = path
-                    .extension()
-                    .and_then(|e| e.to_str())
-                    .unwrap_or("sh");
+                let rel_path = path.strip_prefix(skill_dir).unwrap_or(&path).to_path_buf();
+                let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("sh");
                 let language = match ext {
                     "py" => "python",
                     "rb" => "ruby",
@@ -1124,10 +1118,7 @@ fn discover_skill_assets(skill_md: &Path) -> crate::core::SkillAssets {
                 .collect();
             paths.sort();
             for path in paths {
-                let rel_path = path
-                    .strip_prefix(skill_dir)
-                    .unwrap_or(&path)
-                    .to_path_buf();
+                let rel_path = path.strip_prefix(skill_dir).unwrap_or(&path).to_path_buf();
                 let file_type = path
                     .extension()
                     .and_then(|e| e.to_str())
@@ -1151,10 +1142,7 @@ fn discover_skill_assets(skill_md: &Path) -> crate::core::SkillAssets {
                 .collect();
             paths.sort();
             for path in paths {
-                let rel_path = path
-                    .strip_prefix(skill_dir)
-                    .unwrap_or(&path)
-                    .to_path_buf();
+                let rel_path = path.strip_prefix(skill_dir).unwrap_or(&path).to_path_buf();
                 let framework = path
                     .extension()
                     .and_then(|e| e.to_str())

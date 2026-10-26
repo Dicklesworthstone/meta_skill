@@ -1259,7 +1259,7 @@ impl Database {
     pub fn update_skill_assets(
         &self,
         skill_id: &str,
-        assets: &crate::core::SkillAssets,
+        assets: &crate::core::skill::SkillAssets,
     ) -> Result<()> {
         let assets_json = serde_json::to_string(assets)
             .map_err(|err| MsError::Serialization(format!("encode skill assets: {err}")))?;

@@ -328,8 +328,8 @@ fn synthesize_rule(cluster: &EvidenceCluster) -> NegativeRule {
     }
 
     if !first.incident.failed_action.trim().is_empty() {
-        rule.predicate = Some(Predicate {
-            kind: PredicateKind::CommandPattern,
+        rule.predicate = Some(types::Predicate {
+            kind: types::PredicateKind::CommandPattern,
             params: vec![first.incident.failed_action.clone()],
         });
     }

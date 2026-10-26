@@ -368,7 +368,7 @@ impl QueryGenerator for DefaultQueryGenerator {
             UncertaintyReason::AmbiguousScope { possible_scopes } => {
                 let default_scope = ScopeCandidate {
                     scope: "project".to_string(),
-                    confidence: uncertainty.current_confidence,
+                    confidence: uncertainty.confidence,
                     evidence_count: 1,
                 };
                 let _top_scope = possible_scopes.first().unwrap_or(&default_scope);
