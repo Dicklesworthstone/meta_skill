@@ -323,12 +323,7 @@ impl RelevanceScorer {
         context
             .detected_projects
             .iter()
-            .filter(|d| {
-                skill_context
-                    .project_types
-                    .iter()
-                    .any(|pt| pt.eq_ignore_ascii_case(d.project_type.id()))
-            })
+            .filter(|d| skill_context.matches_project_type(d.project_type.id()))
             .map(|d| d.confidence)
             .max_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal))
             .unwrap_or(0.0)
@@ -356,16 +351,12 @@ impl RelevanceScorer {
             return 0.0;
         }
 
-        let matches = skill_context
-            .tools
+        let matches = context
+            .detected_tools
             .iter()
-            .filter(|t| {
-                context
-                    .detected_tools
-                    .iter()
-                    .any(|dt| dt.eq_ignore_ascii_case(t))
-            })
-            .count();
+            .filter(|dt| skill_context.matches_tool(dt))
+            .count()
+            .min(skill_context.tools.len());
 
         matches as f32 / skill_context.tools.len() as f32
     }
@@ -380,7 +371,7 @@ impl RelevanceScorer {
             .signals
             .iter()
             .filter_map(|s| {
-                if context.matches_signal(&s.pattern) {
+                if s.compile_pattern().is_some() && context.matches_signal(&s.pattern) {
                     Some(s.weight)
                 } else {
                     None

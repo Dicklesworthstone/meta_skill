@@ -522,7 +522,11 @@ fn index_human(ctx: &AppContext, roots: &[SkillRoot], args: &IndexArgs) -> Resul
 
     // Create resolution cache and repository for resolving inherited/composed skills
     let resolution_cache = ResolutionCache::new();
-    let _ = resolution_cache.load_from_db(ctx.db.conn());
+    if args.force {
+        let _ = resolution_cache.clear_db(ctx.db.conn());
+    } else {
+        let _ = resolution_cache.load_from_db(ctx.db.conn());
+    }
     let repository = GitSkillRepository::new(&ctx.git);
 
     for skill in &skill_files {
@@ -607,7 +611,11 @@ fn index_robot(ctx: &AppContext, roots: &[SkillRoot], args: &IndexArgs) -> Resul
 
     // Create resolution cache and repository for resolving inherited/composed skills
     let resolution_cache = ResolutionCache::new();
-    let _ = resolution_cache.load_from_db(ctx.db.conn());
+    if args.force {
+        let _ = resolution_cache.clear_db(ctx.db.conn());
+    } else {
+        let _ = resolution_cache.load_from_db(ctx.db.conn());
+    }
     let repository = GitSkillRepository::new(&ctx.git);
 
     for skill in &skill_files {
