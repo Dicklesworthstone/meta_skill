@@ -617,6 +617,21 @@ impl BeadsTracker {
 
     /// Mark the bead as `in_progress` at build start.
     pub fn on_start(&self) -> Result<()> {
+        if let Ok(agent_name) = std::env::var("MS_AGENT_NAME") {
+            if !agent_name.trim().is_empty() {
+                let assign_req = UpdateIssueRequest::new()
+                    .with_status(IssueStatus::InProgress)
+                    .with_assignee(agent_name.trim());
+                let _ = self.client.update(&self.bead_id, &assign_req);
+            }
+        }
+        if let Ok(parent_id) = std::env::var("MS_BEAD_PARENT") {
+            if !parent_id.trim().is_empty() && self.client.show(&self.bead_id).is_err() {
+                let create_req = crate::beads::CreateIssueRequest::new(&self.bead_id)
+                    .with_parent(parent_id.trim());
+                let _ = self.client.create(&create_req);
+            }
+        }
         match self
             .client
             .update_status(&self.bead_id, IssueStatus::InProgress)
@@ -713,6 +728,11 @@ impl BeadsTracker {
         let note = completion.to_markdown();
         let combined = match self.client.show(&self.bead_id) {
             Ok(issue) => {
+                if issue.is_ready() {
+                    let _ = self
+                        .client
+                        .update_status(&self.bead_id, IssueStatus::InProgress);
+                }
                 if let Some(existing) = issue.notes {
                     if existing.trim().is_empty() {
                         note
