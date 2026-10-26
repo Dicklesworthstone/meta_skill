@@ -1226,7 +1226,15 @@ fn run_auto(
     }
 
     let search_limit = args.sessions * 3;
-    let session_matches = cass_client.search(&query, search_limit)?;
+    let session_matches = if query == "*" {
+        cass_client
+            .incremental_sessions(search_limit)
+            .ok()
+            .filter(|v| !v.is_empty())
+            .map_or_else(|| cass_client.search(&query, search_limit), Ok)?
+    } else {
+        cass_client.search(&query, search_limit)?
+    };
 
     session.phase_progress = 1.0;
     session.advance_phase(); // -> QualityFilter
@@ -1297,7 +1305,12 @@ fn run_auto(
         let is_exemplary = mark.is_some_and(|m| m.mark_type == "exemplary");
 
         match cass_client.get_session(&session_match.path) {
-            Ok(cass_session) => {
+            Ok(mut cass_session) => {
+                if cass_session.metadata.message_count == 0 {
+                    if let Ok(meta) = cass_client.session_metadata(&session_match.path) {
+                        cass_session.metadata.message_count = meta.message_count;
+                    }
+                }
                 let mut quality = match ctx.db.get_session_quality(&cass_session.id) {
                     Ok(Some(cached)) if cached.content_hash == cass_session.content_hash => {
                         crate::cass::SessionQuality {

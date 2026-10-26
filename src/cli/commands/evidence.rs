@@ -42,6 +42,10 @@ pub struct ShowEvidenceArgs {
     /// Show excerpts (not just pointers)
     #[arg(long)]
     pub excerpts: bool,
+
+    /// Expand full session context via CASS
+    #[arg(long)]
+    pub expand: bool,
 }
 
 #[derive(Args, Debug)]
@@ -82,6 +86,54 @@ pub fn run(ctx: &AppContext, args: &EvidenceArgs) -> Result<()> {
     result
 }
 
+fn hydrate_evidence_from_cass(
+    ctx: &AppContext,
+    refs: &mut [EvidenceRef],
+    want_excerpts: bool,
+    want_expand: bool,
+) {
+    if !want_excerpts && !want_expand {
+        return;
+    }
+    let client = crate::cass::CassClient::from_config(&ctx.config.cass);
+    if !client.is_available() {
+        return;
+    }
+    for eref in refs.iter_mut() {
+        if want_expand {
+            if let Ok(expanded) = client.expand_session(&eref.session_id, 3) {
+                let text = expanded
+                    .context_before
+                    .iter()
+                    .chain(expanded.session.messages.iter())
+                    .chain(expanded.context_after.iter())
+                    .map(|m| m.content.as_str())
+                    .filter(|s| !s.is_empty())
+                    .collect::<Vec<_>>()
+                    .join("\n");
+                if !text.is_empty() {
+                    eref.excerpt = Some(text);
+                    eref.level = EvidenceLevel::Expanded;
+                    continue;
+                }
+            }
+        }
+        if want_excerpts && eref.excerpt.is_none() {
+            if let Ok(txt) = client.view_excerpt(
+                &eref.session_id,
+                eref.message_range.0 as usize,
+                eref.message_range.1 as usize,
+            ) {
+                let trimmed = txt.trim();
+                if !trimmed.is_empty() {
+                    eref.excerpt = Some(trimmed.to_string());
+                    eref.level = EvidenceLevel::Excerpt;
+                }
+            }
+        }
+    }
+}
+
 fn run_show(ctx: &AppContext, args: &ShowEvidenceArgs) -> Result<()> {
     // Check if skill exists
     let skill = ctx
@@ -89,22 +141,30 @@ fn run_show(ctx: &AppContext, args: &ShowEvidenceArgs) -> Result<()> {
         .get_skill(&args.skill_id)?
         .ok_or_else(|| MsError::SkillNotFound(format!("skill not found: {}", args.skill_id)))?;
 
+    let show_excerpts = args.excerpts || args.expand;
+
     // Get evidence
     if let Some(ref rule_id) = args.rule {
         // Show evidence for specific rule
-        let evidence = ctx.db.get_rule_evidence(&args.skill_id, rule_id)?;
+        let mut evidence = ctx.db.get_rule_evidence(&args.skill_id, rule_id)?;
+        hydrate_evidence_from_cass(ctx, &mut evidence, args.excerpts, args.expand);
         if ctx.output_format != OutputFormat::Human {
             show_rule_evidence_robot(&skill.id, rule_id, &evidence)
         } else {
-            show_rule_evidence_human(&skill.id, rule_id, &evidence, args.excerpts)
+            show_rule_evidence_human(&skill.id, rule_id, &evidence, show_excerpts)
         }
     } else {
         // Show all evidence for skill
-        let index = ctx.db.get_evidence(&args.skill_id)?;
+        let mut index = ctx.db.get_evidence(&args.skill_id)?;
+        if show_excerpts {
+            for refs in index.rules.values_mut() {
+                hydrate_evidence_from_cass(ctx, refs, args.excerpts, args.expand);
+            }
+        }
         if ctx.output_format != OutputFormat::Human {
             show_evidence_index_robot(&skill.id, &index)
         } else {
-            show_evidence_index_human(&skill.id, &skill.name, &index, args.excerpts)
+            show_evidence_index_human(&skill.id, &skill.name, &index, show_excerpts)
         }
     }
 }
