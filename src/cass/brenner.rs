@@ -1176,6 +1176,9 @@ pub fn run_interactive(
                 println!("--- END PREVIEW ---");
 
                 println!("\nCommands:");
+                println!("  n [name] - rename draft skill");
+                println!("  d [desc] - update draft description");
+                println!("  k [note] - add calibration note");
                 println!("  t - run materialization test");
                 println!("  c - complete and save");
                 println!("  q - quit wizard");
@@ -1198,6 +1201,24 @@ pub fn run_interactive(
                         let output = wizard.complete(wizard.config.output_dir.clone())?;
                         return Ok(output);
                     }
+                    cmd if cmd.starts_with("n ") => {
+                        let mut updated = draft.clone();
+                        updated.name = cmd.trim_start_matches("n ").trim().to_string();
+                        wizard.update_draft(updated);
+                    }
+                    cmd if cmd.starts_with("d ") => {
+                        let mut updated = draft.clone();
+                        updated.description = cmd.trim_start_matches("d ").trim().to_string();
+                        wizard.update_draft(updated);
+                    }
+                    cmd if cmd.starts_with("k ") => {
+                        let mut updated = draft.clone();
+                        let note = cmd.trim_start_matches("k ").trim().to_string();
+                        if !note.is_empty() {
+                            updated.calibration.push(note);
+                            wizard.update_draft(updated);
+                        }
+                    }
                     _ => println!("Unknown command"),
                 }
             }
@@ -1217,12 +1238,32 @@ pub fn run_interactive(
 
                 println!("\nRunning tests for: {draft_name}");
 
-                // Simulate test
+                let rendered_md = wizard.generate_skill_md(&draft_clone);
+                let mut issues = Vec::new();
+                let mut validation_passed = true;
+                match crate::core::spec_lens::parse_markdown(&rendered_md) {
+                    Ok(spec) => {
+                        if let Ok(warnings) = crate::core::validation::validate(&spec) {
+                            for w in warnings {
+                                issues.push(format!("{}: {}", w.field, w.message));
+                            }
+                        }
+                    }
+                    Err(err) => {
+                        validation_passed = false;
+                        issues.push(format!("parse_markdown failed: {err}"));
+                    }
+                }
+                let passed_rules = draft_clone
+                    .rules
+                    .iter()
+                    .filter(|r| !r.description.trim().is_empty())
+                    .count();
                 let results = TestResults {
-                    retrieval_tests_passed: rules_len,
+                    retrieval_tests_passed: passed_rules,
                     retrieval_tests_total: rules_len,
-                    validation_passed: true,
-                    issues: Vec::new(),
+                    validation_passed,
+                    issues,
                 };
                 wizard.set_test_results(results.clone());
 

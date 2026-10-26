@@ -11,7 +11,7 @@ use crate::core::spec_lens::{SpecLens, compile_markdown, parse_markdown};
 use crate::core::validation::{ValidationWarning, validate, validate_with_ubs};
 use crate::error::{MsError, Result};
 use crate::lint::rules::all_rules;
-use crate::lint::{RuleCategory, ValidationEngine, ValidationResult};
+use crate::lint::{RuleCategory, Severity, ValidationConfig, ValidationEngine, ValidationResult};
 use crate::quality::ubs::{UbsClient, UbsFinding, UbsResult, UbsSeverity};
 use crate::security::SafetyGate;
 
@@ -41,8 +41,16 @@ fn run_lint_engine(
     spec: &mut crate::core::SkillSpec,
     skill_md: &std::path::Path,
     apply_fixes: bool,
+    strict_lint: bool,
 ) -> Result<(ValidationResult, Option<(usize, bool)>)> {
     let mut engine = ValidationEngine::with_defaults();
+    if strict_lint {
+        let cfg = ValidationConfig::new()
+            .strict()
+            .override_severity("no-secrets", Severity::Error)
+            .override_severity("no-prompt-injection", Severity::Error);
+        engine.set_config(cfg);
+    }
     for rule in all_rules() {
         engine.register(rule);
     }
@@ -86,7 +94,7 @@ pub fn run(ctx: &AppContext, args: &ValidateArgs) -> Result<()> {
                         .to_string(),
                 });
             }
-            let (lint_res, fix_info) = run_lint_engine(&mut spec, &skill_md, args.fix)?;
+            let (lint_res, fix_info) = run_lint_engine(&mut spec, &skill_md, args.fix, args.lint)?;
             let ubs_result = if args.ubs {
                 let gate = SafetyGate::from_context(ctx);
                 let client = UbsClient::new(None).with_safety(gate);
@@ -160,7 +168,7 @@ pub fn run(ctx: &AppContext, args: &ValidateArgs) -> Result<()> {
             message: "Markdown compilation roundtrip did not preserve spec semantics".to_string(),
         });
     }
-    let (lint_res, fix_info) = run_lint_engine(&mut spec, &skill_md, args.fix)?;
+    let (lint_res, fix_info) = run_lint_engine(&mut spec, &skill_md, args.fix, args.lint)?;
     let ubs_result = if args.ubs {
         let gate = SafetyGate::from_context(ctx);
         let client = UbsClient::new(None).with_safety(gate);

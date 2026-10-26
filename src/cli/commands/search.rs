@@ -122,14 +122,24 @@ pub fn run(ctx: &AppContext, args: &SearchArgs) -> Result<()> {
 /// older binary) or erroring (corrupt segment, unparsable query syntax). The
 /// fallback assigns descending pseudo-scores so downstream RRF fusion still
 /// sees a rank ordering (issue #144).
-fn bm25_ranked(ctx: &AppContext, query: &str, fetch_limit: usize) -> Result<Vec<(String, f32)>> {
+fn bm25_ranked(
+    ctx: &AppContext,
+    query: &str,
+    layer_filter: Option<&str>,
+    fetch_limit: usize,
+) -> Result<Vec<(String, f32)>> {
     if ctx.search.is_empty() {
         debug!(
             target: "search",
             "bm25: tantivy index empty; falling back to substring scan"
         );
     } else {
-        match ctx.search.search(query, fetch_limit) {
+        let search_res = if let Some(layer) = layer_filter {
+            ctx.search.search_with_layer(query, layer, fetch_limit)
+        } else {
+            ctx.search.search(query, fetch_limit)
+        };
+        match search_res {
             Ok(hits) => {
                 debug!(target: "search", backend = "tantivy", hits = hits.len(), "bm25 candidates");
                 return Ok(hits.into_iter().map(|r| (r.skill_id, r.score)).collect());
@@ -168,7 +178,7 @@ fn search_hybrid(ctx: &AppContext, args: &SearchArgs, filters: &SearchFilters) -
             cached
         } else {
             // BM25 search (Tantivy, with substring-scan fallback)
-            let bm25_results = bm25_ranked(ctx, &args.query, fetch_limit)?;
+            let bm25_results = bm25_ranked(ctx, &args.query, args.layer.as_deref(), fetch_limit)?;
 
             // Build semantic search using embeddings (with cache lookup)
             let embedder = build_embedder(&ctx.config.search)?;
@@ -258,7 +268,7 @@ fn search_hybrid(ctx: &AppContext, args: &SearchArgs, filters: &SearchFilters) -
 
 fn search_bm25(ctx: &AppContext, args: &SearchArgs, filters: &SearchFilters) -> Result<()> {
     // Increase limit to allow for filtering
-    let ranked = bm25_ranked(ctx, &args.query, args.limit * 50)?;
+    let ranked = bm25_ranked(ctx, &args.query, args.layer.as_deref(), args.limit * 50)?;
     let search_ctx = build_search_context(ctx);
     let mut filter_audit = FilterResult::new(ranked.len(), filters);
 

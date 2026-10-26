@@ -83,6 +83,17 @@ fn login(ctx: &AppContext, args: &LoginArgs) -> Result<()> {
         }
     }
 
+    if !device_code::is_tty() && ctx.output_format == OutputFormat::Human {
+        let creds = client.login_interactive(|dc| {
+            println!(
+                "To authenticate, visit {} and enter code: {}",
+                dc.verification_url, dc.user_code
+            );
+        })?;
+        println!("✓ Successfully authenticated as {}", creds.email);
+        return Ok(());
+    }
+
     // Request device code
     let device_code = client.start_device_code_flow()?;
 

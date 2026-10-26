@@ -179,7 +179,7 @@ fn parse_if_meta_skill(path: &Path) -> Result<Option<MetaSkill>> {
         return Ok(None);
     }
 
-    let meta = MetaSkillParser::parse_str(&content, path)?;
+    let meta = MetaSkillParser::parse_path(path)?;
     Ok(Some(meta))
 }
 

@@ -7,7 +7,7 @@ use std::time::{Duration, Instant};
 
 use serde::{Deserialize, Serialize};
 
-use super::definition::{Requirement, SkipCondition, TestDefinition};
+use super::definition::TestDefinition;
 use super::steps::StepExecutor;
 use crate::app::AppContext;
 use crate::error::{MsError, Result};
@@ -275,19 +275,19 @@ impl<'a> SkillTestRunner<'a> {
             }
 
             // Check skip conditions
-            if self.should_skip(&test) {
+            if let Some(reason) = test.should_skip() {
                 skipped += 1;
                 results.push(TestResult {
                     name: test.name.clone(),
                     status: TestStatus::Skipped,
                     duration_ms: 0,
-                    failures: vec!["Skipped by skip_if condition".to_string()],
+                    failures: vec![format!("Skipped by skip_if condition: {reason}")],
                 });
                 continue;
             }
 
             // Check requirements
-            if let Some(missing) = self.check_requirements(&test) {
+            if let Err(missing) = test.check_requirements() {
                 skipped += 1;
                 results.push(TestResult {
                     name: test.name.clone(),
@@ -394,17 +394,7 @@ impl<'a> SkillTestRunner<'a> {
                 .extension()
                 .is_some_and(|ext| ext == "yaml" || ext == "yml")
             {
-                let content = std::fs::read_to_string(&path).map_err(|e| {
-                    MsError::Config(format!("Failed to read {}: {e}", path.display()))
-                })?;
-
-                let test: TestDefinition = serde_yaml::from_str(&content).map_err(|e| {
-                    MsError::ValidationFailed(format!(
-                        "Failed to parse test {}: {e}",
-                        path.display()
-                    ))
-                })?;
-
+                let test = TestDefinition::from_file(&path)?;
                 tests.push(test);
             }
         }
@@ -416,10 +406,7 @@ impl<'a> SkillTestRunner<'a> {
     fn should_run_test(&self, test: &TestDefinition) -> bool {
         // If include tags specified, test must have at least one
         if !self.options.include_tags.is_empty() {
-            let has_include = test
-                .tags
-                .iter()
-                .any(|t| self.options.include_tags.contains(t));
+            let has_include = self.options.include_tags.iter().any(|t| test.has_tag(t));
             if !has_include {
                 return false;
             }
@@ -427,90 +414,13 @@ impl<'a> SkillTestRunner<'a> {
 
         // If exclude tags specified, test must not have any
         if !self.options.exclude_tags.is_empty() {
-            let has_exclude = test
-                .tags
-                .iter()
-                .any(|t| self.options.exclude_tags.contains(t));
+            let has_exclude = self.options.exclude_tags.iter().any(|t| test.has_tag(t));
             if has_exclude {
                 return false;
             }
         }
 
         true
-    }
-
-    /// Check skip conditions.
-    fn should_skip(&self, test: &TestDefinition) -> bool {
-        let conditions = match &test.skip_if {
-            Some(c) => c,
-            None => return false,
-        };
-
-        for condition in conditions {
-            match condition {
-                SkipCondition::Platform { platform } => {
-                    let current = std::env::consts::OS;
-                    if platform == current {
-                        return true;
-                    }
-                }
-                SkipCondition::CommandMissing {
-                    command_missing: cmd,
-                } => {
-                    if which::which(cmd).is_err() {
-                        return true;
-                    }
-                }
-                SkipCondition::FileMissing { file_missing: path } => {
-                    if !std::path::Path::new(path).exists() {
-                        return true;
-                    }
-                }
-                SkipCondition::EnvMissing { env_missing: var } => {
-                    if std::env::var(var).is_err() {
-                        return true;
-                    }
-                }
-            }
-        }
-
-        false
-    }
-
-    /// Check requirements and return the first missing one.
-    fn check_requirements(&self, test: &TestDefinition) -> Option<String> {
-        let requirements = match &test.requires {
-            Some(r) => r,
-            None => return None,
-        };
-
-        for req in requirements {
-            match req {
-                Requirement::Command { command: cmd } => {
-                    if which::which(cmd).is_err() {
-                        return Some(format!("command '{cmd}'"));
-                    }
-                }
-                Requirement::Env { env: var } => {
-                    if std::env::var(var).is_err() {
-                        return Some(format!("environment variable '{var}'"));
-                    }
-                }
-                Requirement::File { file: path } => {
-                    if !std::path::Path::new(path).exists() {
-                        return Some(format!("file '{path}'"));
-                    }
-                }
-                Requirement::Platform { platform } => {
-                    let current = std::env::consts::OS;
-                    if current != platform {
-                        return Some(format!("platform '{platform}' (current: {current})"));
-                    }
-                }
-            }
-        }
-
-        None
     }
 
     /// Run a single test.

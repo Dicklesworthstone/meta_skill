@@ -77,8 +77,7 @@ pub fn all_rules() -> Vec<BoxedRule> {
     let mut rules = structural_rules();
     rules.extend(reference_rules());
     rules.extend(security_rules());
-    rules.extend(quality_rules());
-    rules.extend(performance_rules());
+    rules.extend(quality::quality_and_performance_rules());
     rules
 }
 

@@ -283,7 +283,7 @@ impl SyncEngine {
     /// Discover and index `SKILL.md` files under the given RU repository paths.
     pub fn index_ru_repo_paths(&self, repo_paths: &[PathBuf]) -> Result<Vec<String>> {
         let tx_mgr = TxManager::new(self.db.clone(), self.git.clone(), self.ms_root.clone())?;
-        let mut indexed = Vec::new();
+        let mut specs = Vec::new();
         for root in repo_paths {
             if !root.exists() {
                 continue;
@@ -307,15 +307,15 @@ impl SyncEngine {
                                 }
                             }
                             if !spec.metadata.id.is_empty() {
-                                tx_mgr.write_skill_locked(&spec)?;
-                                indexed.push(spec.metadata.id);
+                                specs.push(spec);
                             }
                         }
                     }
                 }
             }
         }
-        Ok(indexed)
+        tx_mgr.write_skills_batch(&specs)?;
+        Ok(specs.into_iter().map(|s| s.metadata.id).collect())
     }
 
     fn sync_jfp_cloud(

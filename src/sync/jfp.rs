@@ -625,21 +625,18 @@ pub fn create_push_item(
     base_revision_id: Option<i64>,
     deleted: bool,
 ) -> Result<JfpPushItem> {
-    let spec_json = serde_json::to_value(spec)
-        .map_err(|e| MsError::Config(format!("Failed to serialize spec: {e}")))?;
-    let content_hash = hash_spec_json(&spec_json)?;
-    let skill_md = if deleted {
-        None
-    } else {
-        Some(crate::core::spec_lens::compile_markdown(spec))
-    };
+    let payload = skill_spec_to_payload(spec, "local")?;
 
     Ok(JfpPushItem {
-        ms_skill_id: spec.metadata.id.clone(),
-        content_hash,
+        ms_skill_id: payload.ms_skill_id,
+        content_hash: payload.content_hash,
         base_revision_id,
-        spec: if deleted { None } else { Some(spec_json) },
-        skill_md,
+        spec: if deleted { None } else { Some(payload.spec) },
+        skill_md: if deleted {
+            None
+        } else {
+            Some(payload.skill_md)
+        },
         deleted: if deleted { Some(true) } else { None },
     })
 }

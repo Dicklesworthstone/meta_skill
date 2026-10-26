@@ -936,6 +936,7 @@ fn run_redaction_report(ctx: &AppContext, args: &BuildArgs) -> Result<()> {
     let mut sessions_with_secrets = 0usize;
     let mut total_secrets_detected = 0usize;
     let mut by_type: std::collections::BTreeMap<String, usize> = std::collections::BTreeMap::new();
+    let mut masked_samples: Vec<String> = Vec::new();
 
     if client.is_available() {
         if let Ok(matches) = client.search(query, args.sessions.max(1) * 3) {
@@ -955,6 +956,13 @@ fn run_redaction_report(ctx: &AppContext, args: &BuildArgs) -> Result<()> {
                         for (k, v) in summary.by_type {
                             *by_type.entry(k.to_string()).or_insert(0) += v;
                         }
+                        if masked_samples.len() < 10 {
+                            for sm in crate::security::secret_scanner::scan_secrets(&combined) {
+                                if masked_samples.len() < 10 {
+                                    masked_samples.push(sm.masked_preview());
+                                }
+                            }
+                        }
                     }
                 }
             }
@@ -969,6 +977,7 @@ fn run_redaction_report(ctx: &AppContext, args: &BuildArgs) -> Result<()> {
         "sessions_with_secrets": sessions_with_secrets,
         "total_secrets_detected": total_secrets_detected,
         "by_type": by_type,
+        "masked_samples": masked_samples,
         "redaction_enabled": !args.no_redact,
     });
 

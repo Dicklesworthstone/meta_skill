@@ -165,6 +165,8 @@ struct ScanOutput {
     quarantined: bool,
     quarantine_id: Option<String>,
     content_hash: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    masked_secrets: Vec<String>,
 }
 
 pub fn run(ctx: &AppContext, args: &SecurityArgs) -> Result<()> {
@@ -311,6 +313,11 @@ fn scan(ctx: &AppContext, args: &ScanArgs) -> Result<()> {
         quarantined = true;
     }
 
+    let masked_secrets: Vec<String> = crate::security::secret_scanner::scan_secrets(&input)
+        .into_iter()
+        .map(|m| m.masked_preview())
+        .collect();
+
     let payload = ScanOutput {
         classification: analysis.classification,
         safe_excerpt: analysis.safe_excerpt,
@@ -318,6 +325,7 @@ fn scan(ctx: &AppContext, args: &ScanArgs) -> Result<()> {
         quarantined,
         quarantine_id,
         content_hash,
+        masked_secrets,
     };
     emit_output(ctx, &payload)
 }
@@ -650,6 +658,7 @@ mod tests {
             quarantined: true,
             quarantine_id: Some("q-abc123".to_string()),
             content_hash: "deadbeef".to_string(),
+            masked_secrets: Vec::new(),
         };
         let json = serde_json::to_string_pretty(&scan_output).unwrap();
         assert!(json.contains("Disallowed"));
@@ -770,6 +779,7 @@ mod tests {
             quarantined: false,
             quarantine_id: None,
             content_hash: "abc123def456".to_string(),
+            masked_secrets: Vec::new(),
         };
         assert!(!scan.content_hash.is_empty());
         assert!(!scan.quarantined);

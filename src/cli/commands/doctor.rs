@@ -876,6 +876,22 @@ fn run_comprehensive_check(
     // Update fixed count
     *issues_fixed += report.fixed;
 
+    if fix && !ctx.search.is_readonly() && ctx.search.is_empty() {
+        if let Ok(records) = ctx.db.list_skills(10_000, 0) {
+            if !records.is_empty() {
+                if let Ok(reindexed) = ctx.search.index_skills(&records) {
+                    say!(
+                        ctx,
+                        "  {} Rebuilt Tantivy search index ({} skills)",
+                        "[ok]",
+                        reindexed
+                    );
+                    *issues_fixed += 1;
+                }
+            }
+        }
+    }
+
     Ok(report.issues.len())
 }
 
