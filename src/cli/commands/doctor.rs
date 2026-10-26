@@ -855,7 +855,8 @@ fn run_comprehensive_check(
     let archive_path = ctx.ms_root.join("archive");
 
     // Build RecoveryManager with available resources
-    let mut manager = RecoveryManager::new(&ctx.ms_root);
+    let mut manager = RecoveryManager::new(&ctx.ms_root)
+        .with_retry_config(crate::core::recovery::RetryConfig::default());
 
     if let Ok(db) = crate::storage::Database::open(&db_path) {
         manager = manager.with_db(Arc::new(db));
