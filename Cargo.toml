@@ -95,7 +95,7 @@ ring = "0.17.14"
 # Parallelism
 rayon = "1.11.0"
 crossbeam-channel = "0.5.15"
-parking_lot = "0.12.5"
+parking_lot = "0.13.0"
 
 # Logging
 tracing = "0.1.44"
