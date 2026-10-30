@@ -263,7 +263,7 @@ dependencies = [
  "memchr",
  "nix 0.31.3",
  "nkeys",
- "parking_lot",
+ "parking_lot 0.12.5",
  "pin-project",
  "polling",
  "prost",
@@ -1208,7 +1208,7 @@ dependencies = [
  "derive_more",
  "document-features",
  "mio",
- "parking_lot",
+ "parking_lot 0.12.5",
  "rustix",
  "signal-hook 0.3.18",
  "signal-hook-mio",
@@ -1348,9 +1348,9 @@ dependencies = [
  "cfg-if",
  "crossbeam-utils",
  "hashbrown 0.14.5",
- "lock_api",
+ "lock_api 0.4.14",
  "once_cell",
- "parking_lot_core",
+ "parking_lot_core 0.9.12",
 ]
 
 [[package]]
@@ -2069,7 +2069,7 @@ dependencies = [
  "fsqlite-vfs",
  "fsqlite-wal",
  "nix 0.31.3",
- "parking_lot",
+ "parking_lot 0.12.5",
  "serde",
  "smallvec",
  "thiserror 2.0.21",
@@ -2084,7 +2084,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "5b6a7ee8aa2f0c9921e5b641365a8163cfbf32316b70587acd487ff619587a72"
 dependencies = [
  "fsqlite-types",
- "parking_lot",
+ "parking_lot 0.12.5",
  "serde",
  "tracing",
 ]
@@ -2108,7 +2108,7 @@ dependencies = [
  "fsqlite-vfs",
  "fsqlite-wal",
  "hashbrown 0.17.1",
- "parking_lot",
+ "parking_lot 0.12.5",
  "rand 0.10.3",
  "smallvec",
  "tracing",
@@ -2158,7 +2158,7 @@ dependencies = [
  "blake3",
  "fsqlite-error",
  "memchr",
- "parking_lot",
+ "parking_lot 0.12.5",
  "serde",
  "simdutf8",
  "smallvec",
@@ -2223,7 +2223,7 @@ dependencies = [
  "fsqlite-observability",
  "fsqlite-types",
  "fsqlite-vfs",
- "parking_lot",
+ "parking_lot 0.12.5",
  "rand 0.10.3",
  "serde",
  "tracing",
@@ -2452,7 +2452,7 @@ dependencies = [
  "gix-worktree-stream",
  "gix-zlib",
  "nonempty",
- "parking_lot",
+ "parking_lot 0.12.5",
  "signal-hook 0.4.4",
  "smallvec",
  "thiserror 2.0.21",
@@ -2675,7 +2675,7 @@ dependencies = [
  "gix-utils",
  "libc",
  "once_cell",
- "parking_lot",
+ "parking_lot 0.12.5",
  "prodash",
  "walkdir",
 ]
@@ -2746,7 +2746,7 @@ checksum = "78fccd6fea3bcf0b39c076bae60ae49b08daaf538b950202101a981f9d3c01d3"
 dependencies = [
  "gix-hash",
  "hashbrown 0.17.1",
- "parking_lot",
+ "parking_lot 0.12.5",
 ]
 
 [[package]]
@@ -2886,7 +2886,7 @@ dependencies = [
  "gix-quote",
  "gix-zlib",
  "memmap2",
- "parking_lot",
+ "parking_lot 0.12.5",
  "tempfile",
  "thiserror 2.0.21",
 ]
@@ -2908,7 +2908,7 @@ dependencies = [
  "gix-tempfile",
  "gix-zlib",
  "memmap2",
- "parking_lot",
+ "parking_lot 0.12.5",
  "smallvec",
  "thiserror 2.0.21",
 ]
@@ -2960,7 +2960,7 @@ checksum = "802256e13ecb2133ba5f9e6acbaa6b08bac027b1c5929f85f6adbb56ba3a4f28"
 dependencies = [
  "gix-command",
  "gix-config-value",
- "parking_lot",
+ "parking_lot 0.12.5",
  "rustix",
  "thiserror 2.0.21",
 ]
@@ -3144,7 +3144,7 @@ dependencies = [
  "dashmap",
  "gix-fs",
  "libc",
- "parking_lot",
+ "parking_lot 0.12.5",
  "signal-hook 0.4.4",
  "signal-hook-registry",
  "tempfile",
@@ -3275,7 +3275,7 @@ dependencies = [
  "gix-object",
  "gix-path",
  "gix-traverse",
- "parking_lot",
+ "parking_lot 0.12.5",
 ]
 
 [[package]]
@@ -4221,6 +4221,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "lock_api"
+version = "0.5.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "65d91b22da179613dcf4d6ec8349563f52a363f6849e03b00dd0a185ec4a59af"
+dependencies = [
+ "scopeguard",
+]
+
+[[package]]
 name = "log"
 version = "0.4.34"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4393,7 +4402,7 @@ dependencies = [
  "lru 0.18.5",
  "memchr",
  "open",
- "parking_lot",
+ "parking_lot 0.13.0",
  "predicates",
  "proptest",
  "proptest-derive",
@@ -4902,8 +4911,18 @@ version = "0.12.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "93857453250e3077bd71ff98b6a65ea6621a19bb0f559a85248955ac12c45a1a"
 dependencies = [
- "lock_api",
- "parking_lot_core",
+ "lock_api 0.4.14",
+ "parking_lot_core 0.9.12",
+]
+
+[[package]]
+name = "parking_lot"
+version = "0.13.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a9cf937ca4e1d0b7578784559063422fc39ae7c5a00f02471f2614d5486fd226"
+dependencies = [
+ "lock_api 0.5.0",
+ "parking_lot_core 0.10.0",
 ]
 
 [[package]]
@@ -4914,7 +4933,19 @@ checksum = "2621685985a2ebf1c516881c026032ac7deafcda1a2c9b7850dc81e3dfcb64c1"
 dependencies = [
  "cfg-if",
  "libc",
- "redox_syscall",
+ "redox_syscall 0.5.18",
+ "smallvec",
+ "windows-link",
+]
+
+[[package]]
+name = "parking_lot_core"
+version = "0.10.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "9cfff060068cc18aa7815010fcaf80c68c7fb9e85fc7f5c0f9bf142c21d19826"
+dependencies = [
+ "libc",
+ "redox_syscall 0.9.5",
  "smallvec",
  "windows-link",
 ]
@@ -5298,7 +5329,7 @@ version = "31.0.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "cf52d87428247c5aa3760ac8e7d8b13ec7b3579b955a8c3f311668b6860acba5"
 dependencies = [
- "parking_lot",
+ "parking_lot 0.12.5",
 ]
 
 [[package]]
@@ -5687,6 +5718,15 @@ name = "redox_syscall"
 version = "0.5.18"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ed2bf2547551a7053d6fdfafda3f938979645c44812fbfcda098faae3f1a362d"
+dependencies = [
+ "bitflags 2.13.2",
+]
+
+[[package]]
+name = "redox_syscall"
+version = "0.9.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "580c875845b41ecb1564ad1ae4703044cef774145e3d7a94dc2b3fa7c97868fd"
 dependencies = [
  "bitflags 2.13.2",
 ]
@@ -6728,7 +6768,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "9048a889effe34a5cddee0af7f53285198b16dca3be510858d38dfdb3e62a04e"
 dependencies = [
  "bitflags 2.13.2",
- "parking_lot",
+ "parking_lot 0.12.5",
  "rustix",
  "signal-hook 0.3.18",
  "windows-sys 0.61.2",
