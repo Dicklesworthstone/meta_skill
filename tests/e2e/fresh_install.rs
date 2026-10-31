@@ -234,3 +234,139 @@ fn test_load_missing_skill() -> Result<()> {
     fixture.generate_report();
     Ok(())
 }
+
+/// Every `ms setup` form that reaches `path` must fail and name the file and the reason.
+fn assert_setup_refuses(fixture: &mut E2EFixture, reason: &str) {
+    for mut args in [
+        vec!["setup", "--claude-code"],
+        vec!["setup", "--claude-code", "--force"],
+        vec!["setup", "--claude-code", "--dry-run"],
+    ] {
+        let human = fixture.run_ms(&args);
+        assert!(!human.success, "{args:?} must fail: {}", human.stdout);
+        assert!(
+            human.stdout.contains(reason),
+            "{args:?} must say why: {}",
+            human.stdout
+        );
+
+        args.insert(0, "--robot");
+        let robot = fixture.run_ms(&args);
+        assert!(!robot.success, "{args:?} must fail: {}", robot.stdout);
+        let message = robot.json()["message"]
+            .as_str()
+            .expect("error message")
+            .to_string();
+        assert!(
+            message.contains(".claude/config.json") && message.contains(reason),
+            "{args:?} must name the file and why: {message}"
+        );
+    }
+}
+
+/// Run `ms setup` against a Claude Code config holding `content`, which it must not change.
+fn assert_setup_leaves_config_alone(scenario: &str, content: &str, reason: &str) -> Result<()> {
+    let mut fixture = E2EFixture::new(scenario);
+    let output = fixture.init();
+    fixture.assert_success(&output, "init");
+
+    let config_dir = fixture.root.join(".claude");
+    std::fs::create_dir_all(&config_dir)?;
+    let config_path = config_dir.join("config.json");
+    std::fs::write(&config_path, content)?;
+
+    assert_setup_refuses(&mut fixture, reason);
+    assert_eq!(std::fs::read_to_string(&config_path)?, content);
+
+    fixture.generate_report();
+    Ok(())
+}
+
+#[test]
+fn test_setup_refuses_an_agent_config_with_comments() -> Result<()> {
+    assert_setup_leaves_config_alone(
+        "setup_config_with_comments",
+        "{\n  // kept by hand\n  \"theme\": \"dark\"\n}\n",
+        "is not valid JSON",
+    )
+}
+
+#[test]
+fn test_setup_refuses_an_agent_config_with_a_trailing_comma() -> Result<()> {
+    assert_setup_leaves_config_alone(
+        "setup_config_trailing_comma",
+        "{\"theme\": \"dark\",}\n",
+        "is not valid JSON",
+    )
+}
+
+#[test]
+fn test_setup_refuses_an_agent_config_that_is_not_an_object() -> Result<()> {
+    assert_setup_leaves_config_alone(
+        "setup_config_not_object",
+        "[\"theme\", \"dark\"]\n",
+        "is not a JSON object",
+    )
+}
+
+#[test]
+fn test_setup_refuses_an_agent_config_whose_servers_are_not_an_object() -> Result<()> {
+    assert_setup_leaves_config_alone(
+        "setup_config_servers_not_object",
+        "{\"theme\": \"dark\", \"mcpServers\": [\"other\"]}\n",
+        "mcpServers in",
+    )
+}
+
+#[test]
+fn test_setup_refuses_an_agent_config_it_cannot_read() -> Result<()> {
+    let mut fixture = E2EFixture::new("setup_config_unreadable");
+    let output = fixture.init();
+    fixture.assert_success(&output, "init");
+
+    // A directory at the path cannot be read, whichever user runs the test.
+    let config_path = fixture.root.join(".claude/config.json");
+    std::fs::create_dir_all(&config_path)?;
+    let inside = config_path.join("keep.txt");
+    std::fs::write(&inside, "keep")?;
+
+    assert_setup_refuses(&mut fixture, "cannot read");
+    assert_eq!(std::fs::read_to_string(&inside)?, "keep");
+
+    fixture.generate_report();
+    Ok(())
+}
+
+#[test]
+fn test_setup_keeps_the_rest_of_an_agent_config() -> Result<()> {
+    let mut fixture = E2EFixture::new("setup_config_merge");
+    let output = fixture.init();
+    fixture.assert_success(&output, "init");
+
+    let config_dir = fixture.root.join(".claude");
+    std::fs::create_dir_all(&config_dir)?;
+    let config_path = config_dir.join("config.json");
+    std::fs::write(
+        &config_path,
+        r#"{"theme": "dark", "mcpServers": {"other": {"command": "other-server"}}}"#,
+    )?;
+
+    let output = fixture.run_ms(&["--robot", "setup", "--claude-code"]);
+    fixture.assert_success(&output, "setup");
+    let json = output.json();
+    let action = json["data"]["actions_taken"]
+        .as_array()
+        .expect("actions")
+        .iter()
+        .find(|action| action["action_type"] == "configure_mcp_server")
+        .expect("agent action");
+    assert_eq!(action["status"], "updated");
+
+    let config: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(&config_path)?)?;
+    assert_eq!(config["theme"], "dark");
+    assert_eq!(config["mcpServers"]["other"]["command"], "other-server");
+    assert_eq!(config["mcpServers"]["ms"]["command"], "ms");
+
+    fixture.generate_report();
+    Ok(())
+}

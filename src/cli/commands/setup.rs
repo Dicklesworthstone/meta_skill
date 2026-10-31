@@ -567,14 +567,27 @@ fn run_setup(_ctx: &AppContext, format: OutputFormat, args: &SetupArgs) -> Resul
         next_steps,
     };
 
+    let failures: Vec<String> = report
+        .actions_taken
+        .iter()
+        .filter_map(|action| match &action.status {
+            ActionStatus::Failed(reason) => Some(reason.clone()),
+            _ => None,
+        })
+        .collect();
+
     // Output
     if format == OutputFormat::Human {
         print_setup_report(&report, args.dry_run);
-    } else {
+    } else if failures.is_empty() {
         emit_json(&robot_ok(report))?;
     }
 
-    Ok(())
+    if failures.is_empty() {
+        Ok(())
+    } else {
+        Err(MsError::Config(failures.join("; ")))
+    }
 }
 
 /// Setup SKILL.md file.
@@ -752,68 +765,82 @@ fn setup_agent_config(
     config_path: &Path,
     args: &SetupArgs,
 ) -> Result<SetupAction> {
+    let action = SetupAction::new(
+        SetupActionType::ConfigureMcpServer,
+        config_path.to_path_buf(),
+        format!("Configure MCP server for {}", agent_type.display_name()),
+    )
+    .with_agent(agent_type);
+
     let existed = config_path.exists();
+    let is_json = config_path
+        .extension()
+        .and_then(|e| e.to_str())
+        .is_some_and(|ext| ext.eq_ignore_ascii_case("json"));
+    let existing = if existed && is_json {
+        match read_agent_config(config_path) {
+            Ok(root) => Some(root),
+            Err(reason) => return Ok(action.with_status(ActionStatus::Failed(reason))),
+        }
+    } else {
+        None
+    };
+
     let status = if args.dry_run {
         if existed {
             ActionStatus::WouldUpdate
         } else {
             ActionStatus::WouldCreate
         }
-    } else {
-        let is_json = config_path
-            .extension()
-            .and_then(|e| e.to_str())
-            .is_some_and(|ext| ext.eq_ignore_ascii_case("json"));
-        if is_json {
-            let mut root: serde_json::Value = if existed {
-                let raw = fs::read_to_string(config_path).unwrap_or_default();
-                serde_json::from_str(&raw).unwrap_or_else(|_| serde_json::json!({}))
-            } else {
-                serde_json::json!({})
-            };
-            if !root.is_object() {
-                root = serde_json::json!({});
-            }
-            let obj = root.as_object_mut().expect("object");
-            let servers = obj
-                .entry("mcpServers")
-                .or_insert_with(|| serde_json::json!({}));
-            if !servers.is_object() {
-                *servers = serde_json::json!({});
-            }
-            let servers_obj = servers.as_object_mut().expect("object");
-            if servers_obj.contains_key("ms") && !args.force {
-                ActionStatus::Skipped
-            } else {
-                servers_obj.insert(
-                    "ms".to_string(),
-                    serde_json::json!({
-                        "command": "ms",
-                        "args": ["mcp", "serve"]
-                    }),
-                );
-                if let Some(parent) = config_path.parent() {
-                    fs::create_dir_all(parent)?;
-                }
-                fs::write(config_path, serde_json::to_string_pretty(&root)?)?;
-                if existed {
-                    ActionStatus::Updated
-                } else {
-                    ActionStatus::Created
-                }
-            }
-        } else {
+    } else if is_json {
+        let mut root = existing.unwrap_or_else(|| serde_json::json!({}));
+        let obj = root.as_object_mut().expect("object");
+        let servers = obj
+            .entry("mcpServers")
+            .or_insert_with(|| serde_json::json!({}));
+        let servers_obj = servers.as_object_mut().expect("object");
+        if servers_obj.contains_key("ms") && !args.force {
             ActionStatus::Skipped
+        } else {
+            servers_obj.insert(
+                "ms".to_string(),
+                serde_json::json!({
+                    "command": "ms",
+                    "args": ["mcp", "serve"]
+                }),
+            );
+            if let Some(parent) = config_path.parent() {
+                fs::create_dir_all(parent)?;
+            }
+            fs::write(config_path, serde_json::to_string_pretty(&root)?)?;
+            if existed {
+                ActionStatus::Updated
+            } else {
+                ActionStatus::Created
+            }
         }
+    } else {
+        ActionStatus::Skipped
     };
 
-    Ok(SetupAction::new(
-        SetupActionType::ConfigureMcpServer,
-        config_path.to_path_buf(),
-        format!("Configure MCP server for {}", agent_type.display_name()),
-    )
-    .with_agent(agent_type)
-    .with_status(status))
+    Ok(action.with_status(status))
+}
+
+/// Read an agent's JSON config, refusing any file `ms` could not write back intact. The
+/// file belongs to the agent, so a parse failure must never read as an empty config.
+fn read_agent_config(config_path: &Path) -> std::result::Result<serde_json::Value, String> {
+    let path = config_path.display();
+    let raw =
+        fs::read_to_string(config_path).map_err(|err| format!("cannot read {path}: {err}"))?;
+    let root: serde_json::Value =
+        serde_json::from_str(&raw).map_err(|err| format!("{path} is not valid JSON: {err}"))?;
+    if !root.is_object() {
+        return Err(format!("{path} is not a JSON object"));
+    }
+    if root.get("mcpServers").is_some_and(|s| !s.is_object()) {
+        return Err(format!("mcpServers in {path} is not a JSON object"));
+    }
+    Ok(root)
 }
 
 /// Detect the user's shell.
