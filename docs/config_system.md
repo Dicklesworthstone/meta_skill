@@ -24,6 +24,12 @@ Overrides:
 - `MS_CONFIG` sets an explicit config path (skips global + project unless CLI flag says otherwise).
 - `MS_ROOT` sets the ms root (affects default search paths).
 
+A project's `.ms/config.toml` can arrive with any repository, so `ms` ignores these keys in it
+and warns when one asks for something other than the default: `[safety]`, `[security]`, `[update]`,
+`agent_mail.endpoint`, `cass.cass_path`, `cm.cm_path`, `cm.default_flags`, `ru.ru_path`,
+`search.api_endpoint` and `search.api_key_env`. Set them in your global config, in a file named by
+`MS_CONFIG` or `--config`, or in the environment. `ms config set` refuses them in a project's config.
+
 ## File Structure (TOML)
 
 Top-level sections and purpose:

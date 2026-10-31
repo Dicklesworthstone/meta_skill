@@ -277,15 +277,6 @@ semantic_weight = 0.5
 [cm]
 # cass-memory (cm) integration
 enabled = true
-# cm_path = "cm"
-# default_flags = []
-
-[safety]
-# Destructive Command Guard configuration
-dcg_bin = "dcg"
-dcg_packs = []
-dcg_explain_format = "json"
-require_verbatim_approval = true
 "#
     };
 

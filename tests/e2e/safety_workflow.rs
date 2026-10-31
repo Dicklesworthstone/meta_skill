@@ -9,6 +9,284 @@
 use super::fixture::E2EFixture;
 use ms::error::Result;
 
+/// `ms_root` is the nearest `.ms`, so any repository can ship a config file. These run the
+/// real binary from inside such a repository, with no `MS_ROOT` or `MS_CONFIG`, against an
+/// executable that records every run, so "nothing ran" is observed, not assumed.
+#[cfg(unix)]
+mod repository_config {
+    use std::fs;
+    use std::os::unix::fs::PermissionsExt;
+    use std::path::{Path, PathBuf};
+    use std::process::{Command, Output};
+
+    use ms::error::Result;
+    use serde_json::Value;
+    use tempfile::TempDir;
+
+    const INIT_DEFAULTS: &str = "[safety]\ndcg_bin = \"dcg\"\ndcg_packs = []\n\
+                                 dcg_explain_format = \"json\"\n\
+                                 require_verbatim_approval = true\n";
+
+    struct Repository {
+        home: TempDir,
+    }
+
+    impl Repository {
+        fn new() -> Result<Self> {
+            let bench = Self {
+                home: TempDir::new()?,
+            };
+            fs::create_dir_all(bench.path().join(".ms"))?;
+            Ok(bench)
+        }
+
+        fn path(&self) -> PathBuf {
+            self.home.path().join("repository")
+        }
+
+        fn config_path(&self) -> PathBuf {
+            self.path().join(".ms/config.toml")
+        }
+
+        fn marker(&self) -> PathBuf {
+            self.home.path().join("planted-ran")
+        }
+
+        fn user_config_path(&self) -> PathBuf {
+            if cfg!(target_os = "macos") {
+                self.home
+                    .path()
+                    .join("Library/Application Support/ms/config.toml")
+            } else {
+                self.home.path().join(".config/ms/config.toml")
+            }
+        }
+
+        /// An executable that records that it ran.
+        fn plant(&self) -> Result<String> {
+            let path = self.home.path().join("planted");
+            let script = format!("#!/bin/sh\necho ran >> '{}'\n", self.marker().display());
+            write_executable(&path, &script)?;
+            Ok(path.to_str().unwrap().to_string())
+        }
+
+        /// A stand-in for dcg that allows every command.
+        fn gate(&self) -> Result<String> {
+            let path = self.home.path().join("stand-in-dcg");
+            let script = "#!/bin/sh\nif [ \"$1\" = --version ]; then echo 'dcg 0.0.0'; exit 0; fi\n\
+                          echo '{\"decision\":\"allow\"}'\n";
+            write_executable(&path, script)?;
+            Ok(path.to_str().unwrap().to_string())
+        }
+
+        fn ms(&self, args: &[&str], env: &[(&str, &str)]) -> Output {
+            let mut command = Command::new(env!("CARGO_BIN_EXE_ms"));
+            command
+                .args(args)
+                .current_dir(self.path())
+                .env("HOME", self.home.path())
+                .env("XDG_CONFIG_HOME", self.home.path().join(".config"))
+                .env("XDG_DATA_HOME", self.home.path().join(".local/share"))
+                .env_remove("MS_ROOT")
+                .env_remove("MS_CONFIG");
+            for (key, value) in env {
+                command.env(key, value);
+            }
+            command.output().expect("run ms")
+        }
+
+        fn safety_status(&self) -> (Value, String) {
+            let output = self.ms(&["--robot", "safety", "status"], &[]);
+            assert!(output.status.success(), "safety status: {output:?}");
+            let status = serde_json::from_slice(&output.stdout).expect("status JSON");
+            (status, stderr(&output))
+        }
+
+        fn planted_ran(&self) -> bool {
+            self.marker().exists()
+        }
+    }
+
+    fn write_executable(path: &Path, script: &str) -> Result<()> {
+        fs::write(path, script)?;
+        fs::set_permissions(path, fs::Permissions::from_mode(0o755))?;
+        Ok(())
+    }
+
+    fn stderr(output: &Output) -> String {
+        String::from_utf8_lossy(&output.stderr).to_string()
+    }
+
+    fn assert_warned(stderr: &str, key: &str) {
+        assert!(stderr.contains(key), "names {key}: {stderr}");
+        assert!(
+            stderr.contains(".ms/config.toml"),
+            "names the file: {stderr}"
+        );
+    }
+
+    #[test]
+    fn test_repository_config_cannot_choose_the_guard() -> Result<()> {
+        let bench = Repository::new()?;
+        let planted = bench.plant()?;
+        fs::write(
+            bench.config_path(),
+            format!("[safety]\ndcg_bin = \"{planted}\"\n"),
+        )?;
+
+        let (status, stderr) = bench.safety_status();
+        assert!(
+            !bench.planted_ran(),
+            "a repository must not choose the guard"
+        );
+        assert_eq!(status["dcg_bin"], "dcg");
+        assert_warned(&stderr, "safety.dcg_bin");
+        Ok(())
+    }
+
+    #[test]
+    fn test_repository_config_cannot_turn_approval_off() -> Result<()> {
+        let bench = Repository::new()?;
+        fs::write(
+            bench.config_path(),
+            "[safety]\nrequire_verbatim_approval = false\n",
+        )?;
+
+        let (status, stderr) = bench.safety_status();
+        assert_eq!(status["require_verbatim_approval"], true);
+        assert_warned(&stderr, "safety.require_verbatim_approval");
+        Ok(())
+    }
+
+    #[test]
+    fn test_repository_config_cannot_run_cm() -> Result<()> {
+        let bench = Repository::new()?;
+        let planted = bench.plant()?;
+        let gate = bench.gate()?;
+        fs::write(
+            bench.config_path(),
+            format!("[cm]\ncm_path = \"{planted}\"\n"),
+        )?;
+
+        let output = bench.ms(
+            &["--robot", "cm", "status"],
+            &[("MS_SAFETY_DCG_BIN", gate.as_str())],
+        );
+        assert!(!bench.planted_ran(), "a repository must not choose cm");
+        assert_warned(&stderr(&output), "cm.cm_path");
+        Ok(())
+    }
+
+    #[test]
+    fn test_repository_config_cannot_run_ru() -> Result<()> {
+        let bench = Repository::new()?;
+        let planted = bench.plant()?;
+        fs::write(
+            bench.config_path(),
+            format!("[ru]\nru_path = \"{planted}\"\n"),
+        )?;
+
+        let output = bench.ms(&["--robot", "index", "--from-ru"], &[]);
+        assert!(!bench.planted_ran(), "a repository must not choose ru");
+        assert_warned(&stderr(&output), "ru.ru_path");
+        Ok(())
+    }
+
+    #[test]
+    fn test_repository_config_cannot_run_cass() -> Result<()> {
+        let bench = Repository::new()?;
+        let planted = bench.plant()?;
+        fs::write(
+            bench.config_path(),
+            format!("[cass]\ncass_path = \"{planted}\"\n"),
+        )?;
+
+        let output = bench.ms(&["--robot", "antipatterns", "mine", "session-1"], &[]);
+        assert!(!bench.planted_ran(), "a repository must not choose cass");
+        assert_warned(&stderr(&output), "cass.cass_path");
+        Ok(())
+    }
+
+    #[test]
+    fn test_user_config_keeps_its_guard_inside_a_project() -> Result<()> {
+        let bench = Repository::new()?;
+        let gate = bench.gate()?;
+        let user_config = bench.user_config_path();
+        fs::create_dir_all(user_config.parent().unwrap())?;
+        fs::write(&user_config, format!("[safety]\ndcg_bin = \"{gate}\"\n"))?;
+        fs::write(bench.config_path(), INIT_DEFAULTS)?;
+
+        let (status, stderr) = bench.safety_status();
+        assert_eq!(status["dcg_bin"], gate.as_str());
+        assert!(
+            !stderr.contains("ignoring"),
+            "defaults stay quiet: {stderr}"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn test_init_leaves_user_only_keys_out_of_a_project() -> Result<()> {
+        let bench = Repository::new()?;
+        let output = bench.ms(&["--robot", "init", "--force"], &[]);
+        assert!(output.status.success(), "init: {output:?}");
+
+        let config = fs::read_to_string(bench.config_path())?;
+        assert!(!config.contains("[safety]"), "{config}");
+        assert!(!config.contains("cm_path"), "{config}");
+        assert!(config.contains("[skill_paths]"), "{config}");
+        Ok(())
+    }
+
+    #[test]
+    fn test_config_set_refuses_a_user_only_key_in_a_project() -> Result<()> {
+        let bench = Repository::new()?;
+        fs::write(bench.config_path(), "[disclosure]\ntoken_budget = 900\n")?;
+
+        let output = bench.ms(&["config", "set", "safety.dcg_bin", "/opt/dcg"], &[]);
+        assert_eq!(
+            fs::read_to_string(bench.config_path())?,
+            "[disclosure]\ntoken_budget = 900\n",
+            "a refused write changes nothing"
+        );
+        assert!(!output.status.success(), "must fail: {output:?}");
+        let text = format!(
+            "{}{}",
+            String::from_utf8_lossy(&output.stdout),
+            stderr(&output)
+        );
+        assert!(text.contains("safety.dcg_bin"), "names the key: {text}");
+        Ok(())
+    }
+
+    #[test]
+    fn test_config_add_refuses_a_user_only_key_in_a_project() -> Result<()> {
+        let bench = Repository::new()?;
+        fs::write(bench.config_path(), "[disclosure]\ntoken_budget = 900\n")?;
+
+        let output = bench.ms(&["config", "add", "cm.default_flags", "--x"], &[]);
+        assert_eq!(
+            fs::read_to_string(bench.config_path())?,
+            "[disclosure]\ntoken_budget = 900\n",
+            "a refused write changes nothing"
+        );
+        assert!(!output.status.success(), "must fail: {output:?}");
+        Ok(())
+    }
+
+    #[test]
+    fn test_config_set_still_writes_a_project_key() -> Result<()> {
+        let bench = Repository::new()?;
+        fs::write(bench.config_path(), "[disclosure]\ntoken_budget = 900\n")?;
+
+        let output = bench.ms(&["config", "set", "disclosure.token_budget", "1000"], &[]);
+        assert!(output.status.success(), "set: {output:?}");
+        let config = fs::read_to_string(bench.config_path())?;
+        assert!(config.contains("1000"), "{config}");
+        Ok(())
+    }
+}
+
 /// Test the safety status command.
 #[test]
 fn test_safety_status() -> Result<()> {

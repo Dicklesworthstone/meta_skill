@@ -7,7 +7,7 @@ use std::path::PathBuf;
 use crate::app::AppContext;
 use crate::cli::output;
 use crate::cli::output::OutputFormat;
-use crate::config::Config;
+use crate::config::{Config, is_project_config, is_user_only_key};
 use crate::error::Result;
 
 /// `ms config` accepts both the bare git/gh-style forms and explicit verbs:
@@ -157,6 +157,8 @@ pub fn run(ctx: &AppContext, args: &ConfigArgs) -> Result<()> {
         config: ctx.config.clone(),
         config_path: ctx.config_path.clone(),
         robot_mode: ctx.output_format != OutputFormat::Human,
+        project_config: std::env::var_os("MS_CONFIG").is_none()
+            && is_project_config(&ctx.config_path, &ctx.ms_root),
     };
 
     if args.list {
@@ -177,6 +179,20 @@ struct ConfigContext {
     config: Config,
     config_path: PathBuf,
     robot_mode: bool,
+    project_config: bool,
+}
+
+/// A project's config ignores user-only keys, so writing one would report a change that never
+/// takes effect.
+fn refuse_user_only_key(ctx: &ConfigContext, key: &str) -> Result<()> {
+    if ctx.project_config && is_user_only_key(key) {
+        return Err(crate::error::MsError::Config(format!(
+            "{key} can't be set in a project's config ({}), because ms ignores it there. \
+             Set it in your own config with `ms --config <path> config set`, or in the environment",
+            ctx.config_path.display()
+        )));
+    }
+    Ok(())
 }
 
 fn emit_config(ctx: &ConfigContext) -> Result<()> {
@@ -217,6 +233,7 @@ pub fn set_config_key_value(
 }
 
 fn set_key(ctx: &ConfigContext, key: &str, raw_value: &str) -> Result<()> {
+    refuse_user_only_key(ctx, key)?;
     let value = set_config_key_value(&ctx.config_path, key, raw_value)?;
 
     if ctx.robot_mode {
@@ -233,6 +250,7 @@ fn set_key(ctx: &ConfigContext, key: &str, raw_value: &str) -> Result<()> {
 }
 
 fn add_key(ctx: &ConfigContext, key: &str, raw_value: &str) -> Result<()> {
+    refuse_user_only_key(ctx, key)?;
     let mut doc = load_config_doc(&ctx.config_path)?;
     let item = parse_value(raw_value)?;
     let mut arr = match get_path(&doc, key).or_else(|_| config_value_at(&ctx.config, key))? {
@@ -468,6 +486,7 @@ mod tests {
             config: Config::default(),
             config_path: dir.join("config.toml"),
             robot_mode: false,
+            project_config: false,
         }
     }
 

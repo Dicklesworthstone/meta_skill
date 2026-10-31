@@ -1,10 +1,42 @@
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
+use std::sync::Once;
 
 use serde::{Deserialize, Serialize};
 
 use crate::error::{MsError, Result};
 use crate::security::{AcipConfig, TrustLevel};
+
+/// Keys only the user may set. `ms_root` is the nearest `.ms`, which can arrive with any
+/// repository, and each of these runs a program, turns a check off or sends a secret to an
+/// address. A table name covers every key in it, including keys added later.
+const USER_ONLY_KEYS: &[&str] = &[
+    "safety",
+    "security",
+    "update",
+    "agent_mail.endpoint",
+    "cass.cass_path",
+    "cm.cm_path",
+    "cm.default_flags",
+    "ru.ru_path",
+    "search.api_endpoint",
+    "search.api_key_env",
+];
+
+/// Whether `key` is one a repository's `.ms/config.toml` is not allowed to set.
+#[must_use]
+pub fn is_user_only_key(key: &str) -> bool {
+    USER_ONLY_KEYS.iter().any(|entry| {
+        key.strip_prefix(entry)
+            .is_some_and(|rest| rest.is_empty() || rest.starts_with('.'))
+    })
+}
+
+/// Whether `path` is the config file of a repository's `.ms`, the one `load_project` strips.
+#[must_use]
+pub fn is_project_config(path: &Path, ms_root: &Path) -> bool {
+    ms_root.ends_with(".ms") && path == ms_root.join("config.toml")
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct Config {
@@ -75,7 +107,33 @@ impl Config {
 
     fn load_project(ms_root: &Path) -> Result<Option<ConfigPatch>> {
         let path = ms_root.join("config.toml");
-        Self::load_patch(&path)
+        if !is_project_config(&path, ms_root) {
+            return Self::load_patch(&path);
+        }
+        if !path.exists() {
+            return Ok(None);
+        }
+
+        let raw = std::fs::read_to_string(&path)
+            .map_err(|err| MsError::Config(format!("read config {}: {err}", path.display())))?;
+        let mut doc: toml::Value = toml::from_str(&raw)
+            .map_err(|err| MsError::Config(format!("parse config {}: {err}", path.display())))?;
+        let ignored = strip_user_only_keys(&mut doc)?;
+        if !ignored.is_empty() {
+            static WARNED: Once = Once::new();
+            WARNED.call_once(|| {
+                tracing::warn!(
+                    path = %path.display(),
+                    keys = %ignored.join(", "),
+                    "ignoring settings a project's config can't make; \
+                     set them in your own config or the environment"
+                );
+            });
+        }
+        let patch = doc
+            .try_into()
+            .map_err(|err| MsError::Config(format!("parse config {}: {err}", path.display())))?;
+        Ok(Some(patch))
     }
 
     fn load_patch(path: &Path) -> Result<Option<ConfigPatch>> {
@@ -1177,6 +1235,42 @@ impl AcipConfig {
     }
 }
 
+/// Remove every user-only key from a project's config, and name the ones that asked for
+/// something other than the default. `ms init` writes default values, so those stay quiet.
+fn strip_user_only_keys(doc: &mut toml::Value) -> Result<Vec<String>> {
+    let defaults = toml::Value::try_from(Config::default())
+        .map_err(|err| MsError::Config(format!("serialize default config: {err}")))?;
+    let mut ignored = Vec::new();
+    let Some(root) = doc.as_table_mut() else {
+        return Ok(ignored);
+    };
+
+    for key in USER_ONLY_KEYS {
+        if let Some((table, leaf)) = key.split_once('.') {
+            let removed = root
+                .get_mut(table)
+                .and_then(toml::Value::as_table_mut)
+                .and_then(|values| values.remove(leaf));
+            if removed.is_some_and(|value| {
+                defaults.get(table).and_then(|values| values.get(leaf)) != Some(&value)
+            }) {
+                ignored.push((*key).to_string());
+            }
+        } else if let Some(removed) = root.remove(*key) {
+            let Some(values) = removed.as_table() else {
+                ignored.push((*key).to_string());
+                continue;
+            };
+            for (leaf, value) in values {
+                if defaults.get(*key).and_then(|table| table.get(leaf)) != Some(value) {
+                    ignored.push(format!("{key}.{leaf}"));
+                }
+            }
+        }
+    }
+    Ok(ignored)
+}
+
 fn merge_unique(values: Vec<String>, existing: &[String]) -> Vec<String> {
     let mut seen = HashSet::new();
     let mut out = Vec::new();
@@ -1876,5 +1970,205 @@ cold_start_threshold = 50
         assert_eq!(config.auto_load.cold_start_threshold, 50);
         // Other fields should remain default
         assert!((config.auto_load.exploration_rate - 0.1).abs() < f32::EPSILON);
+    }
+
+    // =========================================================================
+    // Keys a project's config can't set
+    // =========================================================================
+
+    fn load_with_root(root: &str, raw: &str) -> Config {
+        let temp = TempDir::new().unwrap();
+        let ms_root = temp.path().join(root);
+        std::fs::create_dir_all(&ms_root).unwrap();
+        std::fs::write(ms_root.join("config.toml"), raw).unwrap();
+        Config::load(None, &ms_root).unwrap()
+    }
+
+    fn load_from_project(raw: &str) -> Config {
+        load_with_root(".ms", raw)
+    }
+
+    #[test]
+    fn project_config_cannot_set_the_guard_binary() {
+        let config = load_from_project("[safety]\ndcg_bin = \"./not-the-guard\"\n");
+        assert_eq!(config.safety.dcg_bin, PathBuf::from("dcg"));
+    }
+
+    #[test]
+    fn project_config_cannot_turn_approval_off() {
+        let config = load_from_project("[safety]\nrequire_verbatim_approval = false\n");
+        assert!(config.safety.require_verbatim_approval);
+    }
+
+    #[test]
+    fn project_config_cannot_set_guard_packs() {
+        let config = load_from_project("[safety]\ndcg_packs = [\"nothing\"]\n");
+        assert!(config.safety.dcg_packs.is_empty());
+    }
+
+    #[test]
+    fn project_config_cannot_set_the_guard_output_format() {
+        let config = load_from_project("[safety]\ndcg_explain_format = \"text\"\n");
+        assert_eq!(config.safety.dcg_explain_format, "json");
+    }
+
+    #[test]
+    fn project_config_cannot_use_dotted_or_inline_forms() {
+        let config = load_from_project("safety.dcg_bin = \"./dotted\"\n");
+        assert_eq!(config.safety.dcg_bin, PathBuf::from("dcg"));
+        let config = load_from_project("safety = { dcg_bin = \"./inline\" }\n");
+        assert_eq!(config.safety.dcg_bin, PathBuf::from("dcg"));
+    }
+
+    #[test]
+    fn project_config_cannot_turn_acip_off() {
+        let default = Config::default().security.acip.enabled;
+        let raw = format!("[security.acip]\nenabled = {}\n", !default);
+        assert_eq!(load_from_project(&raw).security.acip.enabled, default);
+    }
+
+    #[test]
+    fn project_config_cannot_set_acip_audit_mode() {
+        let config = load_from_project("[security.acip]\naudit_mode = true\n");
+        assert!(!config.security.acip.audit_mode);
+    }
+
+    #[test]
+    fn project_config_cannot_replace_the_acip_prompt() {
+        let config = load_from_project("[security.acip]\nprompt_path = \"./prompt.md\"\n");
+        assert_eq!(
+            config.security.acip.prompt_path,
+            Config::default().security.acip.prompt_path
+        );
+    }
+
+    #[test]
+    fn project_config_cannot_trust_file_contents() {
+        let default = Config::default().security.acip.trust.file_contents;
+        let config = load_from_project("[security.acip.trust]\nfile_contents = \"trusted\"\n");
+        assert_eq!(config.security.acip.trust.file_contents, default);
+    }
+
+    #[test]
+    fn project_config_cannot_change_the_update_channel() {
+        let config = load_from_project("[update]\nchannel = \"nightly\"\n");
+        assert_eq!(config.update.channel, "stable");
+    }
+
+    #[test]
+    fn project_config_cannot_name_cass() {
+        let config = load_from_project("[cass]\ncass_path = \"./not-cass\"\n");
+        assert_eq!(config.cass.cass_path, None);
+    }
+
+    #[test]
+    fn project_config_cannot_name_cm() {
+        let config = load_from_project("[cm]\ncm_path = \"./not-cm\"\n");
+        assert_eq!(config.cm.cm_path, None);
+    }
+
+    #[test]
+    fn project_config_cannot_pass_flags_to_cm() {
+        let config = load_from_project("[cm]\ndefault_flags = [\"--config=./x\"]\n");
+        assert!(config.cm.default_flags.is_empty());
+    }
+
+    #[test]
+    fn project_config_cannot_name_ru() {
+        let config = load_from_project("[ru]\nru_path = \"./not-ru\"\n");
+        assert_eq!(config.ru.ru_path, None);
+    }
+
+    #[test]
+    fn project_config_cannot_choose_where_a_key_is_sent() {
+        let config = load_from_project("[search]\napi_endpoint = \"https://example.invalid\"\n");
+        assert_eq!(
+            config.search.api_endpoint,
+            Config::default().search.api_endpoint
+        );
+    }
+
+    #[test]
+    fn project_config_cannot_choose_which_key_is_sent() {
+        let config = load_from_project("[search]\napi_key_env = \"AWS_SECRET_ACCESS_KEY\"\n");
+        assert_eq!(
+            config.search.api_key_env,
+            Config::default().search.api_key_env
+        );
+    }
+
+    #[test]
+    fn project_config_cannot_choose_the_mail_endpoint() {
+        let config = load_from_project("[agent_mail]\nendpoint = \"https://example.invalid\"\n");
+        assert_eq!(
+            config.agent_mail.endpoint,
+            Config::default().agent_mail.endpoint
+        );
+    }
+
+    #[test]
+    fn project_config_keeps_the_rest_of_its_tables() {
+        let raw = "[cm]\nenabled = false\ncm_path = \"./not-cm\"\n\n\
+                   [search]\nbm25_weight = 0.25\n\n\
+                   [agent_mail]\nproject_key = \"this-repo\"\n";
+        let config = load_from_project(raw);
+        assert!(!config.cm.enabled);
+        assert_eq!(config.cm.cm_path, None);
+        assert!((config.search.bm25_weight - 0.25).abs() < f32::EPSILON);
+        assert_eq!(config.agent_mail.project_key, "this-repo");
+    }
+
+    #[test]
+    fn project_config_ignores_a_malformed_user_only_key() {
+        let config = load_from_project("safety = 1\n\n[disclosure]\ntoken_budget = 1500\n");
+        assert_eq!(config.disclosure.token_budget, 1500);
+    }
+
+    #[test]
+    fn a_root_that_is_not_a_project_keeps_every_key() {
+        let config = load_with_root("ms", "[safety]\ndcg_bin = \"/opt/dcg\"\n");
+        assert_eq!(config.safety.dcg_bin, PathBuf::from("/opt/dcg"));
+    }
+
+    #[test]
+    fn an_explicit_config_keeps_every_key() {
+        let temp = TempDir::new().unwrap();
+        let ms_root = temp.path().join(".ms");
+        std::fs::create_dir_all(&ms_root).unwrap();
+        let path = ms_root.join("config.toml");
+        std::fs::write(&path, "[safety]\ndcg_bin = \"/opt/dcg\"\n").unwrap();
+
+        let config = Config::load(Some(&path), &ms_root).unwrap();
+        assert_eq!(config.safety.dcg_bin, PathBuf::from("/opt/dcg"));
+    }
+
+    #[test]
+    fn strip_names_only_keys_that_differ_from_the_default() {
+        let mut doc: toml::Value = toml::from_str(
+            "[safety]\ndcg_bin = \"dcg\"\ndcg_packs = []\nrequire_verbatim_approval = false\n\n\
+             [cm]\nenabled = true\ncm_path = \"./not-cm\"\n",
+        )
+        .unwrap();
+
+        let ignored = strip_user_only_keys(&mut doc).unwrap();
+        assert_eq!(
+            ignored,
+            vec!["safety.require_verbatim_approval", "cm.cm_path"]
+        );
+        assert!(doc.get("safety").is_none());
+        assert_eq!(doc["cm"]["enabled"].as_bool(), Some(true));
+        assert!(doc["cm"].get("cm_path").is_none());
+    }
+
+    #[test]
+    fn user_only_keys_match_whole_path_segments() {
+        assert!(is_user_only_key("safety"));
+        assert!(is_user_only_key("safety.dcg_bin"));
+        assert!(is_user_only_key("security.acip.trust.file_contents"));
+        assert!(is_user_only_key("cm.default_flags"));
+        assert!(!is_user_only_key("safety_net"));
+        assert!(!is_user_only_key("cm.enabled"));
+        assert!(!is_user_only_key("cm.cm_path_extra"));
+        assert!(!is_user_only_key("search.bm25_weight"));
     }
 }
