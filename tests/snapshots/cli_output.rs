@@ -42,6 +42,7 @@ fn test_search_output_robot_json() {
     assert!(output.success, "search --robot failed: {}", output.stderr);
 
     let mut json = output.json();
+    assert!(json["duration_ms"].is_u64(), "{json}");
     sanitize_json(&mut json);
     assert_json_snapshot!("search_robot_json", json);
 }
@@ -71,10 +72,12 @@ fn sanitize_human(input: &str, temp_root: &std::path::Path) -> String {
     let re_iso = Regex::new(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z?").unwrap();
     let re_space = Regex::new(r"\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}").unwrap();
     let re_date = Regex::new(r"\d{4}-\d{2}-\d{2}").unwrap();
+    let re_duration = Regex::new(r"(?m) in \d+ms$").unwrap();
 
     let mut out = re_iso.replace_all(input, "[TIMESTAMP]").to_string();
     out = re_space.replace_all(&out, "[TIMESTAMP]").to_string();
     out = re_date.replace_all(&out, "[DATE]").to_string();
+    out = re_duration.replace_all(&out, " in [N]ms").to_string();
     out = out.replace(temp_root.to_string_lossy().as_ref(), "[TEMP_DIR]");
     // Snapshot path separators must be stable across Unix and Windows runners.
     out = out.replace('\\', "/");
@@ -91,6 +94,8 @@ fn sanitize_json(value: &mut Value) {
                 "created_at",
                 "updated_at",
                 "started_at",
+                // Wall-clock time of the search; differs on every run.
+                "duration_ms",
                 "source_path",
                 // Absolute discovery-time paths (issue #158) — machine-specific.
                 "origin_path",

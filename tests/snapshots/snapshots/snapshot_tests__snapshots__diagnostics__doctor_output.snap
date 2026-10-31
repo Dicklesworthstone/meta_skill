@@ -10,5 +10,6 @@ Checking Git archive... [ok] OK
 Checking db/archive skill-id agreement... [ok] OK (0 skills)
 Checking skill source origins... [ok] OK (0 tracked)
 Checking transactions... [ok] OK
+Checking system requirements... [ok] OK
 
 [ok] All checks passed

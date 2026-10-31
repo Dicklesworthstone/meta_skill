@@ -11,12 +11,13 @@ expression: json
     "description": "Use Result<T, E> for recoverable errors and panic! for unrecoverable ones.",
     "author": null,
     "layer": "project",
-    "deprecation_reason": null,
     "is_deprecated": false,
-    "quality_score": 0.48500001430511475,
+    "indexed_slices_count": 3,
+    "deprecation_reason": null,
     "git_remote": null,
     "git_commit": null,
     "content_hash": "3f3bce240b546ff4bf6bd021b7b81c739cdc311aeddf8c90d06fc3ab7a6d0c80",
-    "token_count": 87
+    "token_count": 87,
+    "quality_score": 0.48500001430511475
   }
 }
