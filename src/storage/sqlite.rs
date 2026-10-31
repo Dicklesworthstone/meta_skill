@@ -572,6 +572,19 @@ impl Database {
         Ok(result)
     }
 
+    /// Whether the recorded origin of a skill is the file at `path`.
+    pub fn skill_came_from(&self, skill_id: &str, path: &Path) -> Result<bool> {
+        let Some((origin, _)) = self.get_skill_origin(skill_id)? else {
+            return Ok(false);
+        };
+        let origin = Path::new(&origin);
+        Ok(origin == path
+            || matches!(
+                (origin.canonicalize(), path.canonicalize()),
+                (Ok(a), Ok(b)) if a == b
+            ))
+    }
+
     /// List all recorded skill origins, joined against live skill rows.
     ///
     /// The join guarantees callers only see origins for skills that still

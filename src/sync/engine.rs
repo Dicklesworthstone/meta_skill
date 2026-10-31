@@ -397,25 +397,12 @@ impl SyncEngine {
                 "no skill id in the file or its directory name".to_string(),
             ));
         }
-        if !force && self.git.skill_exists(id) && !self.came_from(id, path)? {
+        if !force && self.git.skill_exists(id) && !self.db.skill_came_from(id, path)? {
             return Err(MsError::ValidationFailed(format!(
                 "skill {id} already exists from another source; pass --force to replace it"
             )));
         }
         Ok(spec)
-    }
-
-    /// Whether the recorded origin of `id` is the file at `path`.
-    fn came_from(&self, id: &str, path: &Path) -> Result<bool> {
-        let Some((origin, _)) = self.db.get_skill_origin(id)? else {
-            return Ok(false);
-        };
-        let origin = Path::new(&origin);
-        Ok(origin == path
-            || matches!(
-                (origin.canonicalize(), path.canonicalize()),
-                (Ok(a), Ok(b)) if a == b
-            ))
     }
 
     fn sync_jfp_cloud(

@@ -1148,10 +1148,12 @@ mod ru_repositories {
         )
     }
 
-    /// A project with an ru remote whose stand-in reports `repo` as pulled.
+    /// A project with an ru remote whose stand-in reports `repo` as pulled and lists it, so a
+    /// sync runs both steps a real ru gets: the import, then the reindex.
     struct RuRemote {
         fixture: E2EFixture,
         repo: TempDir,
+        reindex: Value,
     }
 
     impl RuRemote {
@@ -1170,7 +1172,7 @@ mod ru_repositories {
                 &ru,
                 format!(
                     "#!/bin/sh\ncase \"$1\" in\n  --version) echo 'ru 1.2.0' ;;\n  \
-                     sync) printf '%s\\n' '{pulled}' ;;\nesac\n"
+                     sync) printf '%s\\n' '{pulled}' ;;\n  list) echo '{path}' ;;\nesac\n"
                 ),
             )?;
             fs::set_permissions(&ru, fs::Permissions::from_mode(0o755))?;
@@ -1187,7 +1189,11 @@ mod ru_repositories {
                 &[],
             );
             fixture.assert_success(&output, "remote add");
-            Ok(Self { fixture, repo })
+            Ok(Self {
+                fixture,
+                repo,
+                reindex: Value::Null,
+            })
         }
 
         fn write_skill(&self, dir: &str, content: impl AsRef<[u8]>) -> Result<PathBuf> {
@@ -1204,12 +1210,24 @@ mod ru_repositories {
             args.extend_from_slice(flags);
             let output = run_in_home(&mut self.fixture, &args, &[]);
             self.fixture.assert_success(&output, "ru sync");
-            output.json()["reports"][0]["errors"]
+            let report = output.json();
+            self.reindex = report["auto_reindex"].clone();
+            report["reports"][0]["errors"]
                 .as_array()
                 .expect("report errors")
                 .iter()
                 .map(|error| error.as_str().expect("error text").to_string())
                 .collect()
+        }
+
+        /// The reindex refused the file at `path`, and said so.
+        fn assert_reindex_refused(&self, path: &Path, reason: &str) {
+            assert_eq!(self.reindex["success"], false, "{}", self.reindex);
+            let errors = self.reindex["index"]["errors"].to_string();
+            assert!(
+                errors.contains(path.to_str().unwrap()) && errors.contains(reason),
+                "the reindex must name the file and {reason}: {errors}"
+            );
         }
 
         fn indexed_description(&self) -> Option<String> {
@@ -1227,6 +1245,11 @@ mod ru_repositories {
         let errors = ru.sync(&[]);
         assert_eq!(ru.indexed_description().as_deref(), Some("first"));
         assert_eq!(errors, Vec::<String>::new());
+        assert_eq!(ru.reindex["success"], true, "{}", ru.reindex);
+        assert_eq!(
+            ru.reindex["index"]["indexed"], 1,
+            "the reindex has to reach the repository, or these tests prove one step of two"
+        );
         Ok(())
     }
 
@@ -1266,6 +1289,27 @@ mod ru_repositories {
         );
         assert_eq!(errors.len(), 2, "a count and one problem: {errors:?}");
         assert!(errors[1].contains(link.to_str().unwrap()), "{errors:?}");
+        ru.assert_reindex_refused(&link, "symlink");
+        Ok(())
+    }
+
+    #[test]
+    fn test_ru_sync_refuses_a_directory_symlink_out_of_the_repository() -> Result<()> {
+        let mut ru = RuRemote::new("ru_sync_dir_symlink")?;
+        let outside = TempDir::new()?;
+        fs::write(
+            outside.path().join("SKILL.md"),
+            repository_skill("from outside"),
+        )?;
+        symlink(outside.path(), ru.repo.path().join("notes"))?;
+
+        ru.sync(&[]);
+        assert_eq!(
+            ru.indexed_description(),
+            None,
+            "the reindex follows directory links, so it has to check the repository root"
+        );
+        ru.assert_reindex_refused(&ru.repo.path().join("notes/SKILL.md"), "symlink");
         Ok(())
     }
 
@@ -1329,6 +1373,7 @@ mod ru_repositories {
             !local_spec(&ru.fixture, "repo-notes").exists(),
             "broken frontmatter must not be indexed under the heading's name"
         );
+        ru.assert_reindex_refused(&bad, "frontmatter");
         Ok(())
     }
 
@@ -1339,7 +1384,7 @@ mod ru_repositories {
             .create_skill("repo-notes", &repository_skill("mine"))?;
         let output = ru.fixture.run_ms(&["--robot", "index"]);
         ru.fixture.assert_success(&output, "index");
-        ru.write_skill("notes", repository_skill("theirs"))?;
+        let theirs = ru.write_skill("notes", repository_skill("theirs"))?;
 
         let errors = ru.sync(&[]);
         assert_eq!(
@@ -1349,6 +1394,51 @@ mod ru_repositories {
         );
         assert_eq!(errors.len(), 2, "a count and one problem: {errors:?}");
         assert!(errors[1].contains("--force"), "{errors:?}");
+        ru.assert_reindex_refused(&theirs, "--force");
+        Ok(())
+    }
+
+    #[test]
+    fn test_ru_sync_does_not_take_over_a_skill_with_an_identical_copy() -> Result<()> {
+        let mut ru = RuRemote::new("ru_sync_identical")?;
+        ru.fixture
+            .create_skill("repo-notes", &repository_skill("mine"))?;
+        let output = ru.fixture.run_ms(&["--robot", "index"]);
+        ru.fixture.assert_success(&output, "index");
+
+        ru.write_skill("notes", repository_skill("mine"))?;
+        ru.sync(&[]);
+        let theirs = ru.write_skill("notes", repository_skill("theirs"))?;
+        ru.sync(&[]);
+        assert_eq!(
+            ru.indexed_description().as_deref(),
+            Some("mine"),
+            "a first identical copy must not become the skill's origin"
+        );
+        ru.assert_reindex_refused(&theirs, "--force");
+        Ok(())
+    }
+
+    #[test]
+    fn test_index_from_ru_refuses_to_replace_a_skill_from_another_source() -> Result<()> {
+        let mut ru = RuRemote::new("index_from_ru_same_id")?;
+        ru.fixture
+            .create_skill("repo-notes", &repository_skill("mine"))?;
+        let output = ru.fixture.run_ms(&["--robot", "index"]);
+        ru.fixture.assert_success(&output, "index");
+        ru.write_skill("notes", repository_skill("theirs"))?;
+
+        let output = ru.fixture.run_ms(&["--robot", "index", "--from-ru"]);
+        assert_eq!(ru.indexed_description().as_deref(), Some("mine"));
+        assert_eq!(output.json()["status"], "partial", "{}", output.stdout);
+        assert!(output.stdout.contains("--force"), "{}", output.stdout);
+
+        let output = ru
+            .fixture
+            .run_ms(&["--robot", "index", "--from-ru", "--force"]);
+        ru.fixture
+            .assert_success(&output, "index --from-ru --force");
+        assert_eq!(ru.indexed_description().as_deref(), Some("theirs"));
         Ok(())
     }
 

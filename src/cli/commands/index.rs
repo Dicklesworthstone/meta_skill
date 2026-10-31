@@ -545,7 +545,7 @@ fn index_human(ctx: &AppContext, roots: &[SkillRoot], args: &IndexArgs) -> Resul
             &repository,
             embedder.as_deref(),
             skill,
-            args.force,
+            args,
         ) {
             Ok(outcome) => {
                 indexed += 1;
@@ -634,7 +634,7 @@ fn index_robot(
             &repository,
             embedder.as_deref(),
             skill,
-            args.force,
+            args,
         ) {
             Ok(outcome) => {
                 indexed += 1;
@@ -888,10 +888,14 @@ fn index_skill_file(
     repository: &GitSkillRepository<'_>,
     embedder: Option<&dyn Embedder>,
     skill: &DiscoveredSkill,
-    force: bool,
+    args: &IndexArgs,
 ) -> Result<SkillIndexOutcome> {
     if let Some(parent) = skill.path.parent() {
         crate::security::path_policy::deny_symlink_escape(&skill.path, parent)?;
+    }
+    // A repository is someone else's content, so the file has to stay inside all of it.
+    if args.from_ru {
+        crate::security::path_policy::deny_symlink_escape(&skill.path, &skill.root)?;
     }
 
     // Read the file
@@ -902,6 +906,15 @@ fn index_skill_file(
             path = %skill.path.display(),
             "potential secret or high-entropy credential detected in skill file"
         );
+    }
+
+    if args.from_ru {
+        if let Some(err) = crate::core::spec_lens::frontmatter_error(&content) {
+            return Err(MsError::InvalidSkill(format!(
+                "{}: frontmatter: {err}",
+                skill.path.display()
+            )));
+        }
     }
 
     // Parse the skill spec
@@ -915,9 +928,22 @@ fn index_skill_file(
         )));
     }
 
+    // Ahead of the unchanged check below, which would take over the recorded origin.
+    if args.from_ru
+        && !args.force
+        && ctx.git.skill_exists(&spec.metadata.id)
+        && !ctx.db.skill_came_from(&spec.metadata.id, &skill.path)?
+    {
+        return Err(MsError::InvalidSkill(format!(
+            "{}: skill {} already exists from another source; pass --force to replace it",
+            skill.path.display(),
+            spec.metadata.id
+        )));
+    }
+
     // Check if already indexed (unless force)
     let new_hash = compute_spec_hash(&spec)?;
-    if !force {
+    if !args.force {
         if let Ok(Some(existing)) = ctx.db.get_skill(&spec.metadata.id) {
             // Check content hash to skip unchanged skills
             let same_layer = existing.source_layer == skill.layer.as_str();

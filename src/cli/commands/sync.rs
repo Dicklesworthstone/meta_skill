@@ -90,7 +90,7 @@ pub fn run(ctx: &AppContext, args: &SyncArgs) -> Result<()> {
         // Auto-reindex if configured and there were changes
         if should_reindex {
             let mut index = serde_json::Value::Null;
-            let reindex_result = auto_reindex(ctx, Some(&mut index));
+            let reindex_result = auto_reindex(ctx, args.force, Some(&mut index));
             let refused_a_file = index["status"] == "partial";
             if let Some(obj) = payload.as_object_mut() {
                 obj.insert(
@@ -139,7 +139,7 @@ pub fn run(ctx: &AppContext, args: &SyncArgs) -> Result<()> {
         if should_reindex {
             println!();
             println!("{}", "Auto-reindexing skills from synced repos...".cyan());
-            match auto_reindex(ctx, None) {
+            match auto_reindex(ctx, args.force, None) {
                 Ok(()) => {
                     println!("{} Reindex finished", "✓".green().bold());
                 }
@@ -177,11 +177,15 @@ fn held_back_error(reports: &[SyncReport]) -> Option<MsError> {
 }
 
 /// Trigger auto-reindex of skills from ru-managed repositories
-fn auto_reindex(ctx: &AppContext, report: Option<&mut serde_json::Value>) -> Result<()> {
+fn auto_reindex(
+    ctx: &AppContext,
+    force: bool,
+    report: Option<&mut serde_json::Value>,
+) -> Result<()> {
     let index_args = IndexArgs {
         paths: Vec::new(),
         watch: false,
-        force: false,
+        force,
         all: false,
         from_ru: true,
     };
