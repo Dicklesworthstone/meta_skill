@@ -9,6 +9,111 @@
 use super::fixture::E2EFixture;
 use ms::error::Result;
 
+/// A skill's `run:` steps go to a shell, and skills reach a machine through imports, bundles
+/// and remotes. With no guard to ask, a step must not run.
+#[cfg(unix)]
+mod run_steps {
+    use std::fs;
+    use std::os::unix::fs::PermissionsExt;
+    use std::path::{Path, PathBuf};
+
+    use super::E2EFixture;
+    use ms::error::Result;
+    use serde_json::Value;
+
+    const SKILL: &str = "---\nname: Run Step\ndescription: A skill with a test\n\
+                         tags: [tools]\n---\n\n# Run Step\n\n## Usage\n\nA body.\n";
+
+    fn bench(scenario: &str) -> Result<(E2EFixture, PathBuf)> {
+        let mut fixture = E2EFixture::new(scenario);
+        let output = fixture.init();
+        fixture.assert_success(&output, "init");
+        fixture.create_skill("run-step", SKILL)?;
+        let output = fixture.run_ms(&["--robot", "index"]);
+        fixture.assert_success(&output, "index");
+
+        let marker = fixture.root.join("step-ran");
+        let tests = fixture.ms_root.join("archive/skills/by-id/run-step/tests");
+        fs::create_dir_all(&tests)?;
+        fs::write(
+            tests.join("run.yaml"),
+            format!(
+                "name: Run step\nsteps:\n  - run:\n      cmd: \"echo ran >> '{}'\"\n",
+                marker.display()
+            ),
+        )?;
+        Ok((fixture, marker))
+    }
+
+    fn stand_in_guard(fixture: &E2EFixture, decision: &str) -> Result<PathBuf> {
+        let path = fixture.root.join("stand-in-dcg");
+        write_executable(
+            &path,
+            &format!(
+                "#!/bin/sh\nif [ \"$1\" = --version ]; then echo 'dcg 0.0.0'; exit 0; fi\n\
+                 echo '{{\"decision\":\"{decision}\"}}'\n"
+            ),
+        )?;
+        Ok(path)
+    }
+
+    fn write_executable(path: &Path, script: &str) -> Result<()> {
+        fs::write(path, script)?;
+        fs::set_permissions(path, fs::Permissions::from_mode(0o755))?;
+        Ok(())
+    }
+
+    fn run_tests(fixture: &mut E2EFixture, guard: &Path) -> Value {
+        let guard = guard.to_str().unwrap();
+        let output = fixture.run_ms_with_env(
+            &["--robot", "test", "run-step"],
+            &[("MS_SAFETY_DCG_BIN", guard)],
+        );
+        fixture.assert_success(&output, "test");
+        output.json()["reports"][0].clone()
+    }
+
+    #[test]
+    fn test_run_step_is_refused_with_no_guard() -> Result<()> {
+        let (mut fixture, marker) = bench("run_step_no_guard")?;
+        let guard = fixture.root.join("no-such-dcg");
+
+        let report = run_tests(&mut fixture, &guard);
+        assert!(!marker.exists(), "the step must not run with no guard");
+        assert_eq!(report["failed"], 1, "{report}");
+        let failure = report["results"][0]["failures"][0]
+            .as_str()
+            .expect("reason");
+        assert!(
+            failure.contains("safety system unavailable"),
+            "says why: {failure}"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn test_run_step_is_refused_when_the_guard_denies() -> Result<()> {
+        let (mut fixture, marker) = bench("run_step_denied")?;
+        let guard = stand_in_guard(&fixture, "deny")?;
+
+        let report = run_tests(&mut fixture, &guard);
+        assert!(!marker.exists(), "a denied step must not run");
+        assert_eq!(report["failed"], 1, "{report}");
+        Ok(())
+    }
+
+    #[test]
+    fn test_run_step_runs_when_the_guard_allows() -> Result<()> {
+        let (mut fixture, marker) = bench("run_step_allowed")?;
+        let guard = stand_in_guard(&fixture, "allow")?;
+
+        let report = run_tests(&mut fixture, &guard);
+        assert!(marker.exists(), "an allowed step runs: {report}");
+        assert_eq!(report["passed"], 1, "{report}");
+        Ok(())
+    }
+}
+
 /// `ms_root` is the nearest `.ms`, so any repository can ship a config file. These run the
 /// real binary from inside such a repository, with no `MS_ROOT` or `MS_CONFIG`, against an
 /// executable that records every run, so "nothing ran" is observed, not assumed.

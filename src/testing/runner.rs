@@ -436,12 +436,11 @@ impl<'a> SkillTestRunner<'a> {
             eprintln!("[TEST] Running: {}", test.name);
         }
 
-        let mut executor =
-            StepExecutor::new(self.ctx, self.options.verbose).with_skill_id(skill_id.to_string());
-        let gate = crate::security::SafetyGate::from_context(self.ctx);
-        if gate.status().dcg_version.is_some() {
-            executor = executor.with_safety(gate);
-        }
+        // `run:` steps go to a shell. The gate fails closed, so with no dcg a step is refused
+        // and the test fails with the reason.
+        let mut executor = StepExecutor::new(self.ctx, self.options.verbose)
+            .with_skill_id(skill_id.to_string())
+            .with_safety(crate::security::SafetyGate::from_context(self.ctx));
         let mut failures = Vec::new();
 
         // Run setup steps
