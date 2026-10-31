@@ -43,7 +43,7 @@ pub enum SecurityCommand {
 
 #[derive(Args, Debug)]
 pub struct ScanArgs {
-    /// Optional positional skill ID, file path, or inline text to scan
+    /// Optional positional skill ID, file path, or inline text of two or more words to scan
     pub target: Option<String>,
     /// Input text to scan (mutually exclusive with --input-file)
     #[arg(long)]
@@ -277,6 +277,11 @@ fn test(ctx: &AppContext, input: &Option<String>, source: &str) -> Result<()> {
 
 fn scan(ctx: &AppContext, args: &ScanArgs) -> Result<()> {
     let input = resolve_input(ctx, args)?;
+    if input.trim().is_empty() {
+        return Err(MsError::Config(
+            "missing input: nothing to scan (use --input or --input-file)".to_string(),
+        ));
+    }
     let mut cfg = ctx.config.security.acip.clone();
     if args.audit_mode {
         cfg.audit_mode = true;
@@ -471,19 +476,30 @@ fn resolve_input(ctx: &AppContext, args: &ScanArgs) -> Result<String> {
                     })?;
                     return Ok(raw);
                 }
+                // One word that names no skill or file is a typo. Classifying it
+                // would report on a check that never ran.
+                if target.split_whitespace().count() < 2 {
+                    return Err(MsError::Config(format!(
+                        "no skill or file named {target:?} (use --input to scan it as text)"
+                    )));
+                }
                 return Ok(target.clone());
             }
             // Bare `ms security scan`: concatenate all indexed skills from archive
-            let skill_ids = ctx.git.list_skill_ids().unwrap_or_default();
+            let skill_ids = ctx.git.list_skill_ids()?;
             if skill_ids.is_empty() {
-                return Ok("No skills indexed.".to_string());
+                return Err(MsError::Config(
+                    "missing input: no skills indexed (use --input or --input-file)".to_string(),
+                ));
             }
             let mut combined = String::new();
             for id in skill_ids {
-                if let Ok(spec) = ctx.git.read_skill(&id) {
-                    combined.push_str(&crate::core::spec_lens::compile_markdown(&spec));
-                    combined.push('\n');
-                }
+                let spec = ctx
+                    .git
+                    .read_skill(&id)
+                    .map_err(|err| MsError::Config(format!("read skill {id}: {err}")))?;
+                combined.push_str(&crate::core::spec_lens::compile_markdown(&spec));
+                combined.push('\n');
             }
             Ok(combined)
         }
