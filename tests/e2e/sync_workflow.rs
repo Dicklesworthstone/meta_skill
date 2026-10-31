@@ -925,6 +925,7 @@ fn test_sync_still_propagates_a_deletion_that_leaves_skills_behind() -> Result<(
         output.json()["reports"][0]["pulled"],
         json!(["alpha-notes (deleted)"])
     );
+    assert_eq!(output.json()["auto_reindex"]["success"], true);
     Ok(())
 }
 

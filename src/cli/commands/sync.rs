@@ -9,7 +9,7 @@ use crate::cli::output::{HumanLayout, emit_human, emit_json};
 use crate::error::{MsError, Result};
 use crate::sync::{MachineIdentity, SyncConfig, SyncEngine, SyncOptions, SyncReport, SyncState};
 
-use super::index::{IndexArgs, run as run_index};
+use super::index::{IndexArgs, run_into as run_index_into};
 
 #[derive(Args, Debug, Default)]
 pub struct SyncArgs {
@@ -89,14 +89,17 @@ pub fn run(ctx: &AppContext, args: &SyncArgs) -> Result<()> {
 
         // Auto-reindex if configured and there were changes
         if should_reindex {
-            let reindex_result = auto_reindex(ctx);
+            let mut index = serde_json::Value::Null;
+            let reindex_result = auto_reindex(ctx, Some(&mut index));
+            let refused_a_file = index["status"] == "partial";
             if let Some(obj) = payload.as_object_mut() {
                 obj.insert(
                     "auto_reindex".to_string(),
                     serde_json::json!({
                         "triggered": true,
-                        "success": reindex_result.is_ok(),
+                        "success": reindex_result.is_ok() && !refused_a_file,
                         "error": reindex_result.err().map(|e| e.to_string()),
+                        "index": index,
                     }),
                 );
             }
@@ -136,9 +139,9 @@ pub fn run(ctx: &AppContext, args: &SyncArgs) -> Result<()> {
         if should_reindex {
             println!();
             println!("{}", "Auto-reindexing skills from synced repos...".cyan());
-            match auto_reindex(ctx) {
+            match auto_reindex(ctx, None) {
                 Ok(()) => {
-                    println!("{} Skills reindexed successfully", "✓".green().bold());
+                    println!("{} Reindex finished", "✓".green().bold());
                 }
                 Err(e) => {
                     println!("{} Failed to reindex skills: {}", "✗".red(), e);
@@ -174,7 +177,7 @@ fn held_back_error(reports: &[SyncReport]) -> Option<MsError> {
 }
 
 /// Trigger auto-reindex of skills from ru-managed repositories
-fn auto_reindex(ctx: &AppContext) -> Result<()> {
+fn auto_reindex(ctx: &AppContext, report: Option<&mut serde_json::Value>) -> Result<()> {
     let index_args = IndexArgs {
         paths: Vec::new(),
         watch: false,
@@ -182,7 +185,7 @@ fn auto_reindex(ctx: &AppContext) -> Result<()> {
         all: false,
         from_ru: true,
     };
-    run_index(ctx, &index_args)
+    run_index_into(ctx, &index_args, report)
 }
 
 fn status(ctx: &AppContext, _args: &SyncArgs) -> Result<()> {

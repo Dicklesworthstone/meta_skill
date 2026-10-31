@@ -93,6 +93,16 @@ fn is_skipped_skill_discovery_dir(name: &str) -> bool {
 }
 
 pub fn run(ctx: &AppContext, args: &IndexArgs) -> Result<()> {
+    run_into(ctx, args, None)
+}
+
+/// [`run`] for a caller that prints its own JSON. Stdout holds one document, so a
+/// non-human result goes in `report` and is not printed.
+pub fn run_into(
+    ctx: &AppContext,
+    args: &IndexArgs,
+    report: Option<&mut serde_json::Value>,
+) -> Result<()> {
     // Fail fast with a clear, actionable diagnostic if the search index is
     // read-only, BEFORE doing any work. `AppContext::from_cli` transparently
     // falls back to a read-only index when the writable open fails (e.g. a live
@@ -116,24 +126,17 @@ pub fn run(ctx: &AppContext, args: &IndexArgs) -> Result<()> {
     let roots = collect_index_paths(ctx, args)?;
 
     if roots.is_empty() {
-        if ctx.output_format == OutputFormat::Json {
-            println!(
-                "{}",
-                serde_json::to_string(&serde_json::json!({
-                    "status": "ok",
-                    "message": "No paths to index",
-                    "indexed": 0
-                }))?
-            );
+        let payload = serde_json::json!({
+            "status": "ok",
+            "message": "No paths to index",
+            "indexed": 0
+        });
+        if let Some(report) = report {
+            *report = payload;
+        } else if ctx.output_format == OutputFormat::Json {
+            println!("{}", serde_json::to_string(&payload)?);
         } else if ctx.output_format != OutputFormat::Human {
-            crate::cli::output::emit_json_for_format(
-                &serde_json::json!({
-                    "status": "ok",
-                    "message": "No paths to index",
-                    "indexed": 0
-                }),
-                ctx.output_format,
-            )?;
+            crate::cli::output::emit_json_for_format(&payload, ctx.output_format)?;
         } else {
             println!("{}", "No skill paths configured".yellow());
             println!();
@@ -144,7 +147,7 @@ pub fn run(ctx: &AppContext, args: &IndexArgs) -> Result<()> {
     }
 
     if ctx.output_format != OutputFormat::Human {
-        index_robot(ctx, &roots, args)?;
+        index_robot(ctx, &roots, args, report)?;
     } else {
         index_human(ctx, &roots, args)?;
     }
@@ -210,7 +213,7 @@ fn watch_and_reindex(ctx: &AppContext, roots: &[SkillRoot], args: &IndexArgs) ->
         if current_snapshot != last_snapshot {
             last_snapshot = current_snapshot;
             if ctx.output_format != OutputFormat::Human {
-                index_robot(ctx, roots, args)?;
+                index_robot(ctx, roots, args, None)?;
             } else {
                 index_human(ctx, roots, args)?;
             }
@@ -592,7 +595,12 @@ fn index_human(ctx: &AppContext, roots: &[SkillRoot], args: &IndexArgs) -> Resul
     Ok(())
 }
 
-fn index_robot(ctx: &AppContext, roots: &[SkillRoot], args: &IndexArgs) -> Result<()> {
+fn index_robot(
+    ctx: &AppContext,
+    roots: &[SkillRoot],
+    args: &IndexArgs,
+    report: Option<&mut serde_json::Value>,
+) -> Result<()> {
     let start = Instant::now();
     let mut indexed = 0;
     let mut embedded = 0;
@@ -669,7 +677,10 @@ fn index_robot(ctx: &AppContext, roots: &[SkillRoot], args: &IndexArgs) -> Resul
             "total_companion_files": total_companions,
         },
     });
-    if ctx.output_format == OutputFormat::Json {
+    if let Some(report) = report {
+        *report = payload;
+        Ok(())
+    } else if ctx.output_format == OutputFormat::Json {
         println!("{}", serde_json::to_string(&payload)?);
         Ok(())
     } else {
