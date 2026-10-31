@@ -9,6 +9,222 @@ All notable changes to **ms** (Meta Skill CLI) are documented here.
 
 ---
 
+## [v0.3.0] -- 2026-10-31
+
+### Security, install and deletion behaviour
+
+This release is the first in which `ms` deletes through sync, writes agent
+config files, opens a TCP port and runs tools named by a skill. Read this
+section before upgrading.
+
+- **`ms sync` now deletes.** A skill deleted on one side after a sync is deleted
+  on the other, on archive, git and JFP cloud remotes. v0.2.3 never deleted in a
+  sync. Two limits apply. A sync that could not read every skill deletes
+  nothing, lists what it held back and exits non-zero, even with `--force`. A
+  sync that would delete skills because one side is empty is refused, with the
+  count, unless you pass `--force`. Deletions sent by a JFP server are applied as
+  sent.
+- **What `ms sync` and `ms index --from-ru` take from a repository is now checked.**
+  With a ru remote, `ru.auto_index` is on by default, and each pulled repository's
+  `SKILL.md` is imported during sync. In v0.2.3 that import replaced any skill with
+  the same id, including one you wrote. Now a file replaces a skill only if that
+  skill came from that file, or with `--force`. A file that leaves its repository,
+  can't be read or has frontmatter that won't parse is left out and reported, and
+  the rest are still imported. A likely secret is reported, and the file is still
+  imported, as in `ms index`. After a sync that pulled or cloned on any remote, `ms`
+  also reindexes every ru repository, not only the ones that changed, under these
+  same rules. Set `auto_index = false` to stop the import and that reindex.
+- **`ms setup` now edits agent config files.** It adds an `ms` entry to
+  `mcpServers` in the config of each detected agent, for example
+  `~/.claude/config.json`, `~/.codex/config.json`, `~/.gemini/config.json` and
+  `~/.cursor/settings.json`. v0.2.3 skipped this step. The other settings in the
+  file stay, and no backup is written. If a file can't be read, isn't valid JSON
+  (comments or a trailing comma, say) or isn't an object, `ms setup` names the file
+  and the reason, changes nothing and exits non-zero. Use `--dry-run` to see what
+  it would change.
+- **`ms mcp serve --tcp-port <port>` now listens.** v0.2.3 accepted the flag and
+  ignored it. The listener binds 127.0.0.1 and has no authentication, so any local
+  process can call its tools. The MCP `config` tool is read-only: it offers `get`
+  and `list`, and `set` is refused. Use `ms config set`.
+- **Evaluating a skill can run a program.** `::: if :::` blocks, `requires` and
+  `context.tools` are now evaluated by `ms load`, MCP load and `ms requirements`,
+  and a version check runs `<tool> --version`. A tool name must be plain: it
+  starts with a letter or digit and holds only letters, digits and `._+-`. It is
+  looked up only in absolute `PATH` entries, and `--version` runs only if the
+  safety gate allows it. Without dcg nothing runs: a version condition reads as
+  unmet, so its block stays out, and a requirement is reported as found with no
+  version.
+- **`ms load` applies overlays** from `<ms_root>/overlays`. An overlay can replace,
+  remove or append blocks in one skill or, with `skill_id: "*"`, in all of them.
+  Overlays are not scanned, and a malformed one is skipped with no message.
+  `ms_root` is the nearest `.ms` directory, so a repository you work in can ship
+  overlays.
+- **A repository's `.ms/config.toml` can no longer choose what runs or what guards
+  it.** This closes a hole that was also in v0.2.3, where a repository you worked in
+  could name the safety binary, turn approval off or point `ms` at its own `ru`,
+  `cass` or `cm`. Inside a project's config, `ms` now ignores `safety`, `security`
+  and `update`, `ru.ru_path`, `cass.cass_path`, `cm.cm_path`, `cm.default_flags`,
+  `agent_mail.endpoint`, `search.api_endpoint` and `search.api_key_env`, and warns
+  once. Set them in your own config, or through `MS_CONFIG`, `--config` or the
+  environment. `ms config set` and `ms config add` refuse them in a project's
+  config, and `ms init` no longer writes them there.
+- **Signed bundles are verified instead of refused.** `ms bundle install` checks
+  signatures against the Ed25519 keys in `<ms_root>/trusted_keys`; `--no-verify`
+  installs an unsigned or untrusted bundle. `ms bundle verify` is new. It reports
+  `valid: true` for an unsigned bundle, with `signed: false` beside it, so read
+  both. `ms bundle create --sign` adds its own key to `trusted_keys`. Building a
+  bundle refuses a symlink that leaves its root and warns about likely secrets.
+- **`ms index`** refuses a skill file that is a symlink out of its directory, and
+  warns about likely secrets. It does not stop for a secret.
+- **`ms security scan`** takes a skill id, file or text as its argument. With no
+  input it scans every indexed skill, and it fails if any of them can't be read.
+  With nothing to scan it fails, as v0.2.3 did. Bare text must be two or more
+  words; a single word that names no skill or file is refused, so use `--input` to
+  scan it as text. A persisted scan with no `--session-id` now gets a `scan-<uuid>`
+  id, where v0.2.3 refused it.
+- **ACIP classification is stricter.** It matches more injection phrasing and
+  detects base64 and HTML-comment smuggling, so content that passed before can be
+  quarantined now.
+- **`ms test` runs a `run:` step only if the safety gate allows it.** With no dcg
+  installed the step doesn't run, and the refusal says why.
+- **`ms test` exits non-zero when a test fails or times out,** in human and robot
+  output. v0.2.3 and earlier exited 0 and left the failures in the report. The robot
+  document doesn't change, and `status` is still `partial`. A script that ignored the
+  report and relied on exit 0 will now see the failure.
+- **`ms meta update`** is new. It mines CASS sessions and usage into the `ms`
+  skill. Each mined line is redacted, and refused if a detector still fires, and a
+  pattern with any taint label is refused whole. The output reports `lines_refused`
+  and `cass_error`, with status `partial` when either applies.
+  **`ms build`** writes a synthesized `SKILL.md` with an anti-pattern section taken
+  from session text. That text can't close its code block or start a heading, and
+  redaction stays on unless you pass `--no-redact`. Messages the injection scan
+  flags are left out of that section, as they are from patterns, and out of
+  `ms antipatterns mine`. In v0.2.3 that command mined them. `--no-injection-filter`
+  brings back sensitive text, never injection. A session is now redacted before
+  mining as well as in the finished file, so a cut can't leave part of a token in
+  `SKILL.md`, `patterns.json` or `evidence.json`. `ms antipatterns mine` redacts
+  token-shaped secrets, which v0.2.3 printed, and so does `ms cross-project`, which
+  printed session text. Redaction catches only the shapes `redact_secrets` knows.
+  `mine --save` starts writing in this release and refuses a store it can't read.
+  An excerpt in the guided build is filtered and redacted the same way. Sessions
+  marked exemplary skip the quality threshold. Review what these commands wrote
+  before you share a skill.
+- `ms config reset` restores defaults, safety keys included. `ms safety check` now
+  logs each check, and `ms safety packs` lists packs. `ms doctor` checks bundle blob
+  integrity. Backup id and path checks moved to the shared path policy, as strict as
+  before, with different error text.
+
+### Other changes
+
+- API embeddings are now tied to the model and endpoint that produced them
+  ([#218](https://github.com/Dicklesworthstone/meta_skill/issues/218)). Every
+  API configuration used to store its vectors as `api`, so moving `api_model` or
+  `api_endpoint` to another space of the same width kept the old vectors and
+  ranked new queries against them with no error. Each configuration now has its
+  own identity. Rotating a key in the URL re-embeds nothing, because credentials,
+  query and fragment stay out of the identity.
+- `embedding_backend = "local"` now works. It hashes character 3-grams and
+  4-grams plus word unigrams and bigrams, where it used to return
+  `NotImplemented`. An `.onnx` path still returns `NotImplemented`, because the
+  ONNX runtime is not linked.
+- `ms index` reuses an embedding when its content hash, backend and dimensions
+  are already stored, and records each skill's `scripts/`, `references/` and
+  `tests/` files. `ms index --force` clears the resolution cache first.
+- Hybrid search keeps the configured BM25 and semantic weights when `k` is
+  applied. They used to fall back to the defaults.
+- `ms suggest` now gives its bandit the real time of day, project size and tech
+  stack, applies the suggestion budget and leaves skills in cooldown out of the
+  active list. `ms load --auto` scores with the git branch, recent commit
+  subjects, environment signals and past use, and a threshold at or below zero
+  keeps every skill. `ms outcome` reports contextual and aggregated rewards.
+- `ms build` writes `evidence.json` beside each skill, and the commit path records
+  it in `skill_evidence`. `ms validate` runs the 19-rule engine, and `--fix`
+  applies auto-fixes and revalidates. `--lint` makes lint errors count against a
+  clean result and can raise `no-secrets` and `no-prompt-injection` to errors.
+- Bundle updates name their conflict strategy. `--force` backs up and replaces;
+  without it, a conflicting update stops before any write, and a failed write
+  restores from backups. `ms bundle create` reads `bundle.yaml`.
+- Commands that were placeholders or ignored their flags now work: `ms requirements
+  <skill>` and `--all`, `ms antipatterns show`, `list`, `link` and `mine --save`,
+  `ms dedup merge` (it merges content into the primary), and `ms index --watch` in
+  human output. New: `ms coverage`, `ms mark`, `ms cm add`, `ms bundle search` and
+  the `ms inbox` `--register` and `--send-to` flags.
+- `ms load` packs with a CELF greedy pass and follows mandatory `requires`
+  transitively, so the same budget can select different blocks. `total_tokens` is
+  now a sum. `ms search` gains `--explain`, a query cache and a context boost.
+- `ms import` honours format hints, which can change how any file is parsed.
+  Older specs migrate through the 0.1 to 1.0 path. Frontmatter `extends`, `includes`
+  and `replace_*` are compiled. Lint auto-fix writes a description where it used to
+  write a TODO.
+- `ms fmt` fails when a skill doesn't survive a roundtrip. `ms validate` counts a
+  roundtrip failure against `clean`. `ms cm status` exits 0 with `available: false`
+  when cm is missing.
+- `--robot` errors are JSON on stdout for every non-human format, and JSON output
+  follows the global format. `MS_ROBOT`, `MS_ROBOT_FORMAT`, `MS_OUTPUT_FORMAT` and
+  `MS_CONFIG` are read from the environment. Some MCP error responses change code
+  from -32700 to -32603.
+- Bandit and cooldown state moved from the user data directory to `ms_root`, which
+  is the same place unless you run inside a project with its own `.ms`. There,
+  nothing is migrated and that history starts again. Fsqlite warnings are hidden
+  below `-vv`.
+- Deleting a skill now runs in one transaction, so a failure can no longer leave
+  a skill without its evidence or evidence without its skill. If its tombstone
+  can't be written, the delete stops and the skill stays. A pack file that can't be
+  written fails that skill's index with the reason, and `ms index --force` writes it
+  once the path is clear.
+- `ms bundle install --layer` refuses a layer it doesn't know, before anything is
+  written. It used to install to the project layer.
+- Embeddings are computed with SIMD, so float rounding can shift a search score
+  slightly.
+- `ms list` filters before it paginates, so `--limit` and `--offset` apply to the
+  filtered list, and it reads at most 10,000 skills.
+- `ms --robot sync` prints one JSON document. After a sync that changed anything,
+  it used to print the reindex result first, so a script reading stdout saw two. That
+  result is now at `auto_reindex.index`, and `auto_reindex.success` is false if the
+  reindex refused a file. `ms sync --force` also applies to that reindex.
+- `ms sync` human output gains a Summary line, and says the reindex finished where it
+  said the reindex succeeded. `ms prune` with no tracker now says "beads (br/bd) not
+  available (install beads_rust or configure PATH)".
+- `ms update` retries when the kernel reports the new binary as busy, and treats a
+  bad zip entry name as a validation error. A credential counts as authenticated
+  only while it is unexpired.
+- The installer removes its temp directory, which used to keep a copy of the
+  release archive after every install, and reads the latest tag from minified
+  GitHub API JSON.
+- Dependencies: tantivy 0.27, lru 0.19, rusqlite 0.41, zip 9, parking_lot 0.13,
+  vergen-gix 10, and a compatible refresh of the lock. `cargo audit` reports no
+  vulnerabilities and six unmaintained-crate notices. FrankenSQLite stays at
+  0.4.7, because no newer published version has been cleared for this release.
+- Upgrade note: run `ms index` once if you use the API backend. Rows written
+  before this release say only `api`, which can't be proved current, so the next
+  index recomputes them. Until then, semantic search for that configuration has
+  no vectors to rank rather than the wrong ones.
+
+### Known limitations
+
+- The injection scan reads message text and tool results, not tool call arguments.
+- Redaction can rewrite ordinary text: "bearer token" becomes `bearer [REDACTED]`, and
+  a long path can be replaced whole. `ms build` already did this to finished files;
+  `ms antipatterns mine` and `ms cross-project` text now get it too.
+- `ms index --watch` in a non-human format polls once and exits 0.
+- A `load_skill` test step passes on a stand-in skill when the real one is missing
+  or can't be read.
+- A bundle built with `--from-dir` reports installed but doesn't reach the database
+  or search. `ms bundle remove` can list a skill as removed after its delete failed.
+- `ms doctor` prints OK with 0 verified if it can't read the blob directories.
+  `ms safety packs` prints "(default packs enabled)" with no dcg installed.
+- A JFP pull with an invalid `spec` rebuilds the skill from its markdown, with no
+  message.
+- An error saving the dependency graph during `ms index` is dropped.
+- Qualification: on this release's source, the full test suite passed 3,652
+  tests, failed 3 and ignored 35. The same 3 fail the same way on v0.2.3, and
+  none fails only on this release. Two assume `/nonexistent` doesn't exist and
+  one assumes a mode-000 directory can't be read, and neither held where the
+  suite ran. One end-to-end test was corrected after that run, with no source
+  change, and its file passes in full.
+
+---
+
 ## [v0.2.3] -- 2026-10-02
 
 - Self-updates now require SHA256 metadata for the selected payload before
