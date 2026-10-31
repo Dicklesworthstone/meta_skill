@@ -16,6 +16,163 @@ use std::path::PathBuf;
 use super::fixture::E2EFixture;
 use ms::error::Result;
 
+/// `ms meta update` writes mined commands into the `ms` skill with no review. These run the
+/// real binary against a stand-in cass that serves one exported session.
+#[cfg(unix)]
+mod meta_update {
+    use std::fs;
+    use std::os::unix::fs::PermissionsExt;
+    use std::path::PathBuf;
+
+    use super::E2EFixture;
+    use ms::error::Result;
+    use serde_json::{Value, json};
+
+    const SESSION_PATH: &str = "/sessions/one.jsonl";
+    const GITHUB_TOKEN: &str = "ghp_abcdefghijklmnopqrstuvwxyz0123456789";
+
+    fn command_message(content: &str, command: &str) -> Value {
+        json!({
+            "role": "assistant",
+            "content": content,
+            "tool_calls": [{"id": "1", "name": "Bash", "arguments": {"command": command}}],
+        })
+    }
+
+    fn bench(scenario: &str, session: &Value) -> Result<(E2EFixture, PathBuf)> {
+        let mut fixture = E2EFixture::new(scenario);
+        let output = fixture.init();
+        fixture.assert_success(&output, "init");
+        let output = fixture.run_ms(&["--robot", "meta", "bootstrap"]);
+        fixture.assert_success(&output, "bootstrap");
+
+        let export = fixture.root.join("export.json");
+        fs::write(&export, session.to_string())?;
+        let cass = fixture.root.join("stand-in-cass");
+        let script = format!(
+            "#!/bin/sh\ncase \"$1\" in\n\
+             --version) echo 'cass 0.6.0' ;;\n\
+             search) echo '{{\"hits\":[{{\"source_path\":\"{SESSION_PATH}\"}}]}}' ;;\n\
+             export) [ \"$2\" = {SESSION_PATH} ] || exit 1; cat '{}' ;;\n\
+             *) exit 1 ;;\nesac\n",
+            export.display()
+        );
+        fs::write(&cass, script)?;
+        fs::set_permissions(&cass, fs::Permissions::from_mode(0o755))?;
+        Ok((fixture, cass))
+    }
+
+    fn update(fixture: &mut E2EFixture, cass: &PathBuf) -> Value {
+        let output = fixture.run_ms_with_env(
+            &["--robot", "meta", "update"],
+            &[("MS_CASS_PATH", cass.to_str().unwrap())],
+        );
+        fixture.assert_success(&output, "meta update");
+        output.json()
+    }
+
+    fn written_skill(fixture: &E2EFixture) -> String {
+        let path = fixture
+            .ms_root
+            .join("archive/skills/by-id/ms/skill.spec.json");
+        fs::read_to_string(path).expect("the ms skill")
+    }
+
+    fn patterns(report: &Value) -> Vec<String> {
+        report["patterns"]
+            .as_array()
+            .expect("patterns")
+            .iter()
+            .map(|p| p.as_str().expect("pattern").to_string())
+            .collect()
+    }
+
+    #[test]
+    fn test_meta_update_writes_a_clean_command() -> Result<()> {
+        let session = json!([command_message("", "ms search rust")]);
+        let (mut fixture, cass) = bench("meta_update_clean", &session)?;
+
+        let report = update(&mut fixture, &cass);
+        assert_eq!(report["sessions_examined"], 1, "{report}");
+        assert_eq!(patterns(&report), vec!["ms search rust"]);
+        assert_eq!(report["lines_refused"], 0, "{report}");
+        assert_eq!(report["status"], "ok", "{report}");
+        assert!(written_skill(&fixture).contains("ms search rust"));
+        Ok(())
+    }
+
+    #[test]
+    fn test_meta_update_redacts_a_secret_in_a_command() -> Result<()> {
+        let command = format!("ms load demo --header {GITHUB_TOKEN}");
+        let session = json!([command_message("", &command)]);
+        let (mut fixture, cass) = bench("meta_update_redacts", &session)?;
+
+        let report = update(&mut fixture, &cass);
+        assert!(
+            !written_skill(&fixture).contains(GITHUB_TOKEN),
+            "the token must not reach the skill"
+        );
+        assert_eq!(patterns(&report), vec!["ms load demo --header [REDACTED]"]);
+        assert_eq!(report["lines_refused"], 0, "{report}");
+        Ok(())
+    }
+
+    #[test]
+    fn test_meta_update_refuses_a_line_it_cannot_redact() -> Result<()> {
+        let session = json!([command_message("", "ms load --password hunter2hunter2")]);
+        let (mut fixture, cass) = bench("meta_update_refuses_line", &session)?;
+
+        let report = update(&mut fixture, &cass);
+        assert!(
+            !written_skill(&fixture).contains("hunter2hunter2"),
+            "the password must not reach the skill"
+        );
+        assert_eq!(report["lines_refused"], 1, "{report}");
+        assert_eq!(report["status"], "partial", "{report}");
+        Ok(())
+    }
+
+    #[test]
+    fn test_meta_update_refuses_a_pattern_with_sensitive_evidence() -> Result<()> {
+        let session = json!([command_message(
+            "the password is in the vault",
+            "ms search rust"
+        )]);
+        let (mut fixture, cass) = bench("meta_update_refuses_label", &session)?;
+
+        let report = update(&mut fixture, &cass);
+        assert!(
+            !written_skill(&fixture).contains("ms search rust"),
+            "a labelled pattern must not reach the skill"
+        );
+        assert_eq!(report["lines_refused"], 1, "{report}");
+        assert_eq!(report["status"], "partial", "{report}");
+        Ok(())
+    }
+
+    #[test]
+    fn test_meta_update_leaves_a_command_that_only_contains_the_letters() -> Result<()> {
+        let session = json!([command_message("", "cat terms of use")]);
+        let (mut fixture, cass) = bench("meta_update_letters", &session)?;
+
+        let report = update(&mut fixture, &cass);
+        assert!(patterns(&report).is_empty(), "{report}");
+        assert_eq!(report["lines_refused"], 0, "{report}");
+        Ok(())
+    }
+
+    #[test]
+    fn test_meta_update_reports_a_cass_failure() -> Result<()> {
+        let (mut fixture, _) = bench("meta_update_cass_failure", &json!([]))?;
+        let missing = fixture.root.join("no-such-cass");
+
+        let report = update(&mut fixture, &missing);
+        assert_eq!(report["status"], "partial", "{report}");
+        assert!(report["cass_error"].is_string(), "{report}");
+        Ok(())
+    }
+}
+
 /// Create a CASS session file in JSONL format from `tests/fixtures/cass/session-001.jsonl`.
 fn create_mock_session_file(path: &PathBuf, session_id: &str) {
     let fixture_path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))

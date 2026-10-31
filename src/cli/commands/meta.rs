@@ -7,9 +7,12 @@ use clap::{Args, Subcommand};
 use colored::Colorize;
 
 use crate::app::AppContext;
+use crate::cass::mining::TaintLabel;
 use crate::cli::output::{OutputFormat, emit_json};
 use crate::error::Result;
 use crate::meta_skills::{ConditionContext, MetaSkillManager, MetaSkillQuery, MetaSkillRegistry};
+use crate::security::contains_sensitive_data;
+use crate::security::secret_scanner::{contains_secrets, redact_secrets};
 use crate::utils::format::truncate_string;
 
 #[derive(Args, Debug)]
@@ -604,36 +607,38 @@ fn run_update(ctx: &AppContext, args: &UpdateArgs) -> Result<()> {
     let mut spec = ctx.git.read_skill("ms")?;
     let mut mined_patterns: Vec<String> = Vec::new();
     let mut sessions_examined = 0usize;
+    let mut lines_refused = 0usize;
+    let mut cass_error = None;
 
     // 1. Try mining CASS sessions for `ms` CLI usage patterns
     let client = match &ctx.config.cass.cass_path {
         Some(path) => crate::cass::CassClient::with_binary(std::path::PathBuf::from(path)),
         None => crate::cass::CassClient::new(),
     };
-    if let Ok(matches) = client.search("ms search OR ms load OR ms suggest", args.max_sessions) {
-        for m in matches.iter().take(args.max_sessions) {
-            if let Ok(session) = client.get_session(&m.session_id) {
-                sessions_examined += 1;
-                if let Ok(patterns) = crate::cass::mining::extract_from_session(&session) {
-                    for pat in &patterns {
-                        if let crate::cass::mining::PatternType::CommandPattern {
-                            commands, ..
-                        } = &pat.pattern_type
-                        {
-                            for cmd in commands {
-                                if cmd.contains("ms ") && mined_patterns.len() < 10 {
-                                    let snippet =
-                                        cmd.lines().next().unwrap_or("").trim().to_string();
-                                    if !snippet.is_empty() && !mined_patterns.contains(&snippet) {
-                                        mined_patterns.push(snippet);
-                                    }
-                                }
+    match client.search("ms search OR ms load OR ms suggest", args.max_sessions) {
+        Ok(matches) => {
+            for m in matches.iter().take(args.max_sessions) {
+                if let Ok(session) = client.get_session(&m.path) {
+                    sessions_examined += 1;
+                    if let Ok(patterns) = crate::cass::mining::extract_from_session(&session) {
+                        for pat in &patterns {
+                            if let crate::cass::mining::PatternType::CommandPattern {
+                                commands,
+                                ..
+                            } = &pat.pattern_type
+                            {
+                                lines_refused += mine_ms_commands(
+                                    commands,
+                                    pat.taint_label.as_ref(),
+                                    &mut mined_patterns,
+                                );
                             }
                         }
                     }
                 }
             }
         }
+        Err(err) => cass_error = Some(err.to_string()),
     }
 
     // 2. Also incorporate top frequently loaded skills from local usage telemetry
@@ -685,12 +690,15 @@ fn run_update(ctx: &AppContext, args: &UpdateArgs) -> Result<()> {
         }
     }
 
+    let complete = cass_error.is_none() && lines_refused == 0;
     let payload = serde_json::json!({
-        "status": "ok",
+        "status": if complete { "ok" } else { "partial" },
         "skill_id": "ms",
         "sessions_examined": sessions_examined,
         "patterns_added": mined_patterns.len(),
         "patterns": mined_patterns,
+        "lines_refused": lines_refused,
+        "cass_error": cass_error,
         "updated": updated && !args.dry_run,
         "dry_run": args.dry_run,
     });
@@ -706,7 +714,45 @@ fn run_update(ctx: &AppContext, args: &UpdateArgs) -> Result<()> {
         mined_patterns.len(),
         args.dry_run
     );
+    if lines_refused > 0 {
+        println!(
+            "{} Refused {lines_refused} command line(s) that may hold sensitive data",
+            "!".yellow()
+        );
+    }
+    if let Some(err) = &cass_error {
+        println!("{} Mined no sessions: {err}", "!".yellow());
+    }
     Ok(())
+}
+
+/// Add a session's `ms` commands to `mined` and return how many it refused. The skill is
+/// written with no review, so a pattern with sensitive evidence is refused whole: its label
+/// came from the message, and the line alone can't show it's clean. Any other line is
+/// redacted, and refused if a detector still fires on what's left.
+fn mine_ms_commands(
+    commands: &[String],
+    label: Option<&TaintLabel>,
+    mined: &mut Vec<String>,
+) -> usize {
+    let tainted = matches!(
+        label,
+        Some(TaintLabel::Sensitive | TaintLabel::RequiresReview)
+    );
+    let mut refused = 0;
+    for cmd in commands {
+        let line = cmd.lines().next().unwrap_or("").trim();
+        if !line.split_whitespace().any(|word| word == "ms") {
+            continue;
+        }
+        let redacted = redact_secrets(line);
+        if tainted || contains_secrets(&redacted) || contains_sensitive_data(&redacted) {
+            refused += 1;
+        } else if mined.len() < 10 && !mined.contains(&redacted) {
+            mined.push(redacted);
+        }
+    }
+    refused
 }
 
 fn run_validate(ctx: &AppContext, args: &ValidateArgs) -> Result<()> {
