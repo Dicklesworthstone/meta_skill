@@ -57,7 +57,7 @@ fsqlite-error = "0.4.0"
 # family owns the Asupersync 0.5 runtime behind this synchronous boundary.
 
 # Search
-tantivy = "0.26.1"
+tantivy = "0.27.0"
 
 # Git (use vendored-openssl for musl cross-compilation)
 git2 = { version = "0.21.0", features = ["vendored-openssl"] }
@@ -125,7 +125,7 @@ rand = "0.10"
 rand_distr = "0.6"
 which = "8.0.2"
 humantime-serde = "1.1.1"
-lru = "0.18"
+lru = "0.19"
 
 [build-dependencies]
 vergen-gix = { version = "10.0.3", features = ["build", "cargo", "rustc"] }
