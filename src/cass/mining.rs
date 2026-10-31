@@ -767,6 +767,32 @@ fn scan_for_tainted_messages(session: &Session) -> std::collections::HashMap<usi
     tainted
 }
 
+/// Copy a session with its tainted messages emptied, for miners outside `extract_from_session`.
+///
+/// Those miners also quote neighbouring messages, so filtering on evidence indices would miss
+/// text. Positions stay, so indices still point at the same messages, and the role goes too, so
+/// nothing is mined as a reply to an emptied turn. As with patterns, injection always goes, and
+/// sensitive text stays only with `keep_sensitive`, which is `--no-injection-filter`.
+#[must_use]
+pub fn without_tainted_messages(session: &Session, keep_sensitive: bool) -> Session {
+    let tainted = scan_for_tainted_messages(session);
+    let mut clean = session.clone();
+    for msg in &mut clean.messages {
+        let empty_it = match tainted.get(&msg.index) {
+            Some(MessageTaint::Injection) => true,
+            Some(MessageTaint::Sensitive) => !keep_sensitive,
+            None => false,
+        };
+        if empty_it {
+            msg.role.clear();
+            msg.content.clear();
+            msg.tool_calls.clear();
+            msg.tool_results.clear();
+        }
+    }
+    clean
+}
+
 /// Apply taint labels to patterns based on their evidence sources.
 fn apply_taint_labels(
     patterns: Vec<ExtractedPattern>,

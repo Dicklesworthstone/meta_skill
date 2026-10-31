@@ -1747,7 +1747,12 @@ fn run_auto(
     );
 
     if !args.no_antipatterns {
-        let raw_sessions: Vec<_> = quality_sessions.iter().map(|(s, _)| s.clone()).collect();
+        let raw_sessions: Vec<_> = quality_sessions
+            .iter()
+            .map(|(s, _)| {
+                crate::cass::mining::without_tainted_messages(s, args.no_injection_filter)
+            })
+            .collect();
         let detector = crate::antipatterns::DefaultDetector::default();
         if let Ok(mut antipatterns) =
             crate::antipatterns::mine_anti_patterns(&raw_sessions, &detector)

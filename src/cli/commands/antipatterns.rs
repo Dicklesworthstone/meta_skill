@@ -11,6 +11,7 @@ use crate::antipatterns::{
 };
 use crate::app::AppContext;
 use crate::cass::CassClient;
+use crate::cass::mining::without_tainted_messages;
 use crate::cli::output::OutputFormat;
 use crate::error::{MsError, Result};
 
@@ -159,6 +160,10 @@ fn run_mine(ctx: &AppContext, args: &MineArgs) -> Result<()> {
     }
 
     // Mine anti-patterns
+    let sessions: Vec<_> = sessions
+        .iter()
+        .map(|session| without_tainted_messages(session, false))
+        .collect();
     let detector = DefaultDetector::default();
     let anti_patterns = mine_anti_patterns(&sessions, &detector)?;
 
