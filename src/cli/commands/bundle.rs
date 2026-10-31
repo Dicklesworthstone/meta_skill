@@ -484,7 +484,22 @@ fn run_create(ctx: &AppContext, args: &BundleCreateArgs) -> Result<()> {
     Ok(())
 }
 
+fn parse_install_layer(layer: &str) -> Result<crate::core::SkillLayer> {
+    match layer.to_ascii_lowercase().as_str() {
+        "system" | "base" => Ok(crate::core::SkillLayer::Base),
+        "global" | "org" => Ok(crate::core::SkillLayer::Org),
+        "project" => Ok(crate::core::SkillLayer::Project),
+        "local" | "user" | "session" => Ok(crate::core::SkillLayer::User),
+        other => Err(MsError::ValidationFailed(format!(
+            "unknown layer: {other} (use system, global, project or local)"
+        ))),
+    }
+}
+
 fn run_install(ctx: &AppContext, args: &BundleInstallArgs) -> Result<()> {
+    // Checked first, because the install below writes to the archive
+    let target_layer = parse_install_layer(&args.layer)?;
+
     // Acquire lock to prevent concurrent modifications
     let _lock = GlobalLock::acquire(&ctx.ms_root)?;
 
@@ -596,12 +611,6 @@ fn run_install(ctx: &AppContext, args: &BundleInstallArgs) -> Result<()> {
     };
 
     // Persist installed skills into SQLite, GitArchive, and Tantivy search index
-    let target_layer = match args.layer.to_ascii_lowercase().as_str() {
-        "system" | "base" => crate::core::SkillLayer::Base,
-        "global" | "org" => crate::core::SkillLayer::Org,
-        "local" | "user" | "session" => crate::core::SkillLayer::User,
-        _ => crate::core::SkillLayer::Project,
-    };
     if !report.installed.is_empty() {
         let tx_mgr =
             crate::storage::TxManager::new(ctx.db.clone(), ctx.git.clone(), ctx.ms_root.clone())?;

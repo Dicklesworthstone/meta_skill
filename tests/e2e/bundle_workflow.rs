@@ -397,3 +397,51 @@ Content for reinstall testing.
     fixture.generate_report();
     Ok(())
 }
+
+/// A mistyped `--layer` stops the install before anything reaches the archive.
+#[test]
+fn test_bundle_install_refuses_an_unknown_layer() -> Result<()> {
+    let mut fixture = E2EFixture::new("bundle_unknown_layer");
+    let output = fixture.init();
+    fixture.assert_success(&output, "init");
+    fixture.create_skill(
+        "layer-skill",
+        "---\nname: Layer Skill\ndescription: Notes for the layer test\n---\n\n# Layer Skill\n\nBody.\n",
+    )?;
+
+    let bundle_path = fixture.root.join("layer-bundle.msb");
+    let skills_dir = fixture.skills_dirs.get("project").unwrap().clone();
+    let output = fixture.run_ms(&[
+        "--robot",
+        "bundle",
+        "create",
+        "layer-bundle",
+        "--from-dir",
+        skills_dir.to_str().unwrap(),
+        "--output",
+        bundle_path.to_str().unwrap(),
+    ]);
+    fixture.assert_success(&output, "bundle create");
+    // A `--from-dir` bundle installs under its own relative path.
+    let installed = fixture.ms_root.join("archive/layer-skill");
+
+    let bundle = bundle_path.to_str().unwrap();
+    let output = fixture.run_ms(&["--robot", "bundle", "install", bundle, "--layer", "projct"]);
+    assert!(
+        !installed.exists(),
+        "a mistyped layer must not install anything"
+    );
+    assert!(!output.success, "the install must fail: {}", output.stdout);
+    let message = output.json()["message"]
+        .as_str()
+        .unwrap_or_default()
+        .to_string();
+    assert!(message.contains("unknown layer: projct"), "{message}");
+
+    let output = fixture.run_ms(&["--robot", "bundle", "install", bundle, "--layer", "project"]);
+    fixture.assert_success(&output, "install with a real layer");
+    assert!(installed.exists(), "the real layer must still install");
+
+    fixture.generate_report();
+    Ok(())
+}
