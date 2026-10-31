@@ -69,8 +69,34 @@ mod run_steps {
             &["--robot", "test", "run-step"],
             &[("MS_SAFETY_DCG_BIN", guard)],
         );
-        fixture.assert_success(&output, "test");
-        output.json()["reports"][0].clone()
+        // One document either way: `json` refuses a second one after it
+        let document = output.json();
+        let report = document["reports"][0].clone();
+        let passed = report["failed"] == 0;
+        assert_eq!(
+            output.success, passed,
+            "the exit follows the report: {report}"
+        );
+        let status = if passed { "ok" } else { "partial" };
+        assert_eq!(document["status"], status, "{document}");
+        report
+    }
+
+    #[test]
+    fn test_a_failed_test_fails_the_command_in_human_output() -> Result<()> {
+        let (mut fixture, _) = bench("run_step_human_exit")?;
+        let guard = stand_in_guard(&fixture, "deny")?;
+        let guard = guard.to_str().unwrap();
+
+        let output =
+            fixture.run_ms_with_env(&["test", "run-step"], &[("MS_SAFETY_DCG_BIN", guard)]);
+        assert!(!output.success, "stdout: {}", output.stdout);
+        assert!(
+            output.stderr.contains("tests failed for 1 of 1 skill(s)"),
+            "stderr: {}",
+            output.stderr
+        );
+        Ok(())
     }
 
     #[test]

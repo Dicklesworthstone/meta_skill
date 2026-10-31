@@ -24,6 +24,10 @@ fn main() -> ExitCode {
         Err(e) => {
             let active_fmt = ms::cli::output::active_output_format();
             if active_fmt != ms::cli::OutputFormat::Human {
+                // `ms test` already printed its one document, and that says what failed
+                if matches!(e, ms::MsError::TestsFailed(_)) {
+                    return ExitCode::FAILURE;
+                }
                 // Structured error output to stdout for non-human modes
                 let (code, message) = match &e {
                     ms::MsError::ApprovalRequired(msg) => ("approval_required", msg.clone()),

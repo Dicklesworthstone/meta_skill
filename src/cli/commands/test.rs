@@ -5,7 +5,7 @@ use clap::Args;
 use crate::app::AppContext;
 use crate::cli::output::OutputFormat;
 use crate::cli::output::{HumanLayout, emit_json};
-use crate::error::Result;
+use crate::error::{MsError, Result};
 use crate::testing::{SkillTestRunner, TestOptions, TestStatus};
 
 #[derive(Args, Debug)]
@@ -56,22 +56,27 @@ pub fn run(ctx: &AppContext, args: &TestArgs) -> Result<()> {
         vec![runner.run_for_skill(args.skill.as_ref().unwrap())?]
     };
 
+    let failed = reports.iter().filter(|r| !r.success()).count();
+
     if ctx.output_format != OutputFormat::Human {
-        let status = if reports.iter().any(|r| !r.success()) {
-            "partial"
-        } else {
-            "ok"
-        };
+        let status = if failed > 0 { "partial" } else { "ok" };
         let payload = serde_json::json!({
             "status": status,
             "count": reports.len(),
             "reports": reports,
         });
-        emit_json(&payload)
+        emit_json(&payload)?;
     } else {
         render_human(&reports);
-        Ok(())
     }
+
+    if failed > 0 {
+        return Err(MsError::TestsFailed(format!(
+            "tests failed for {failed} of {} skill(s)",
+            reports.len()
+        )));
+    }
+    Ok(())
 }
 
 fn render_human(reports: &[crate::testing::SkillTestReport]) {

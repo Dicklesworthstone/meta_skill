@@ -112,6 +112,10 @@ pub enum MsError {
     #[error("Assertion failed: {0}")]
     AssertionFailed(String),
 
+    /// The report is already printed, so `main` only has to set the exit code.
+    #[error("{0}")]
+    TestsFailed(String),
+
     #[error("Cyclic inheritance detected for skill '{skill_id}': {}", .cycle.join(" -> "))]
     CyclicInheritance {
         skill_id: String,
@@ -159,7 +163,7 @@ impl MsError {
             Self::NotImplemented(_) => ErrorCode::NotImplemented,
             Self::NotFound(_) => ErrorCode::NotFound,
             Self::Timeout(_) => ErrorCode::Timeout,
-            Self::AssertionFailed(_) => ErrorCode::AssertionFailed,
+            Self::AssertionFailed(_) | Self::TestsFailed(_) => ErrorCode::AssertionFailed,
             Self::CyclicInheritance { .. } => ErrorCode::SkillCyclicDependency,
             Self::ParentSkillNotFound { .. } => ErrorCode::SkillParentNotFound,
             Self::Import(_) => ErrorCode::ImportFailed,
