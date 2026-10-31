@@ -355,6 +355,39 @@ test_binary_functionality() {
     cleanup_test_env "$temp_dir"
 }
 
+# Test 9: Installer removes its temp directory
+test_temp_dir_removed() {
+    if [[ "$DRY_RUN" == "true" ]]; then
+        skip "Skipping actual installation (--dry-run)"
+        return 0
+    fi
+
+    log "Testing temp directory cleanup..."
+
+    local temp_dir
+    temp_dir=$(create_test_env)
+    mkdir -p "$temp_dir/tmp"
+
+    local output exit_code=0
+    output=$(HOME="$temp_dir" INSTALL_DIR="$temp_dir/bin" TMPDIR="$temp_dir/tmp" \
+             VERSION="${TEST_VERSION:-latest}" \
+             timeout 120 "$SCRIPT_DIR/install.sh" 2>&1) || exit_code=$?
+
+    if [[ $exit_code -ne 0 ]]; then
+        fail "Installation failed"
+        cleanup_test_env "$temp_dir"
+        return
+    fi
+
+    if [[ -z "$(ls -A "$temp_dir/tmp")" ]]; then
+        pass "Installer removed its temp directory"
+    else
+        fail "Installer left files behind: $(ls -A "$temp_dir/tmp")"
+    fi
+
+    cleanup_test_env "$temp_dir"
+}
+
 # Run all tests
 info "System information:"
 info "  OS: $(uname -s)"
@@ -383,6 +416,7 @@ else
     test_specific_version
     test_idempotent_install
     test_binary_functionality
+    test_temp_dir_removed
 fi
 
 # Summary

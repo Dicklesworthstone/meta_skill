@@ -348,8 +348,7 @@ main() {
     VERSION=$(normalize_version "$VERSION")
     log "Installing version: ${GREEN}$VERSION${NC}"
 
-    # Create temp directory
-    local temp_dir
+    # Create temp directory (global: the EXIT trap runs after main returns)
     temp_dir=$(mktemp -d)
     trap 'rm -rf "${temp_dir:-}"' EXIT
 
