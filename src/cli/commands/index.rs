@@ -431,7 +431,7 @@ fn embedding_is_current(
 ) -> bool {
     match ctx.db.get_embedding(skill_id) {
         Ok(Some(existing)) => {
-            existing.embedder_type == embedder.name()
+            existing.embedder_type == embedder.identity()
                 && existing.dims == embedder.dims()
                 && existing.content_hash.as_deref() == Some(content_hash)
         }
@@ -455,7 +455,7 @@ fn store_skill_embedding(
 ) -> Result<bool> {
     let mut embedding = if let Ok(Some(existing)) =
         ctx.db
-            .get_embedding_by_hash(content_hash, embedder.name(), embedder.dims())
+            .get_embedding_by_hash(content_hash, embedder.identity(), embedder.dims())
     {
         existing.embedding
     } else {
@@ -478,7 +478,7 @@ fn store_skill_embedding(
         skill_id: record.id.clone(),
         dims: embedder.dims(),
         embedding,
-        embedder_type: embedder.name().to_string(),
+        embedder_type: embedder.identity().to_string(),
         content_hash: Some(content_hash.to_string()),
         computed_at: String::new(),
     })?;

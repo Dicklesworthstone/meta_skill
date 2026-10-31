@@ -1142,7 +1142,9 @@ fn handle_tool_search(ctx: &AppContext, args: &Value) -> Result<ToolResult> {
     // Fuse with semantic embeddings when enabled and available
     let ranked_pairs: Vec<(String, f32)> = if ctx.config.search.use_embeddings {
         if let Ok(embedder) = crate::search::build_embedder(&ctx.config.search) {
-            if let Ok(all_embeddings) = ctx.db.get_embeddings_for(embedder.name(), embedder.dims())
+            if let Ok(all_embeddings) = ctx
+                .db
+                .get_embeddings_for(embedder.identity(), embedder.dims())
             {
                 if !all_embeddings.is_empty() {
                     let query_emb = embedder.embed(query);

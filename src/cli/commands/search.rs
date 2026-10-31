@@ -190,7 +190,7 @@ fn search_hybrid(ctx: &AppContext, args: &SearchArgs, filters: &SearchFilters) -
 
             // Build semantic search using embeddings (with cache lookup)
             let embedder = build_embedder(&ctx.config.search)?;
-            let query_cache_key = format!("__query__:{}", embedder.name());
+            let query_cache_key = format!("__query__:{}", embedder.identity());
             let query_embedding = ctx
                 .cache
                 .get_embedding(&query_cache_key, &args.query)
@@ -205,7 +205,7 @@ fn search_hybrid(ctx: &AppContext, args: &SearchArgs, filters: &SearchFilters) -
             let mut vector_index = VectorIndex::new(embedder.dims());
             let all_embeddings = ctx
                 .db
-                .get_embeddings_for(embedder.name(), embedder.dims())?;
+                .get_embeddings_for(embedder.identity(), embedder.dims())?;
 
             for (id, embedding) in all_embeddings {
                 let _ = vector_index.insert(id, embedding);
@@ -332,7 +332,7 @@ fn search_bm25(ctx: &AppContext, args: &SearchArgs, filters: &SearchFilters) -> 
 
 fn search_semantic(ctx: &AppContext, args: &SearchArgs, filters: &SearchFilters) -> Result<()> {
     let embedder = build_embedder(&ctx.config.search)?;
-    let query_cache_key = format!("__query__:{}", embedder.name());
+    let query_cache_key = format!("__query__:{}", embedder.identity());
     let query_embedding = if let Some(q) = ctx
         .cache
         .get_embedding_quantized(&query_cache_key, &args.query)
@@ -352,15 +352,16 @@ fn search_semantic(ctx: &AppContext, args: &SearchArgs, filters: &SearchFilters)
     let mut vector_index = VectorIndex::new(embedder.dims());
     let all_embeddings = ctx
         .db
-        .get_embeddings_for(embedder.name(), embedder.dims())?;
+        .get_embeddings_for(embedder.identity(), embedder.dims())?;
 
     for (id, embedding) in all_embeddings {
-        if let Some(q) = ctx.cache.get_embedding_quantized(&id, embedder.name()) {
+        if let Some(q) = ctx.cache.get_embedding_quantized(&id, embedder.identity()) {
             let _ = vector_index.insert_quantized(id, &q);
         } else {
             let _ = vector_index.insert(id.clone(), embedding);
             if let Some(q) = vector_index.get_quantized(&id) {
-                ctx.cache.put_embedding_quantized(&id, embedder.name(), q);
+                ctx.cache
+                    .put_embedding_quantized(&id, embedder.identity(), q);
             }
         }
     }

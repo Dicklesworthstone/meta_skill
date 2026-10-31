@@ -6,6 +6,10 @@
 //! - Index with explicit path filters
 //! - Index status reporting (indexed count, errors, elapsed)
 
+use std::io::{BufRead, BufReader, Read, Write};
+use std::net::{TcpListener, TcpStream};
+use std::sync::{Arc, Mutex};
+
 use super::fixture::E2EFixture;
 use ms::error::Result;
 
@@ -610,6 +614,199 @@ fn test_index_writes_embeddings_for_every_skill() -> Result<()> {
         3,
         "unchanged skills must get their missing embeddings backfilled"
     );
+
+    fixture.generate_report();
+    Ok(())
+}
+
+/// A local OpenAI-style embedding endpoint. Its vector depends on the request
+/// path and model, so two configurations really produce different spaces, and
+/// it records every request it answers.
+struct EmbeddingService {
+    port: u16,
+    requests: Arc<Mutex<Vec<(String, String)>>>,
+}
+
+impl EmbeddingService {
+    fn start(dims: usize) -> Self {
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind embedding service");
+        let port = listener.local_addr().expect("service address").port();
+        let requests = Arc::new(Mutex::new(Vec::new()));
+        let log = Arc::clone(&requests);
+        std::thread::spawn(move || {
+            for stream in listener.incoming().flatten() {
+                answer_embedding_request(stream, dims, &log);
+            }
+        });
+        Self { port, requests }
+    }
+
+    fn calls(&self, path: &str, model: &str) -> usize {
+        let requests = self.requests.lock().expect("request log");
+        requests
+            .iter()
+            .filter(|(seen_path, seen_model)| seen_path == path && seen_model == model)
+            .count()
+    }
+}
+
+fn answer_embedding_request(
+    mut stream: TcpStream,
+    dims: usize,
+    log: &Mutex<Vec<(String, String)>>,
+) {
+    let mut reader = BufReader::new(stream.try_clone().expect("clone service stream"));
+    let mut request_line = String::new();
+    reader.read_line(&mut request_line).expect("request line");
+    let path = request_line
+        .split_whitespace()
+        .nth(1)
+        .unwrap_or_default()
+        .to_string();
+    let mut length = 0;
+    loop {
+        let mut header = String::new();
+        reader.read_line(&mut header).expect("request header");
+        let header = header.trim_end();
+        if header.is_empty() {
+            break;
+        }
+        if let Some((name, value)) = header.split_once(':') {
+            if name.eq_ignore_ascii_case("content-length") {
+                length = value.trim().parse().expect("content length");
+            }
+        }
+    }
+    let mut body = vec![0; length];
+    reader.read_exact(&mut body).expect("request body");
+    let request: serde_json::Value = serde_json::from_slice(&body).expect("JSON request");
+    let model = request["model"].as_str().unwrap_or_default().to_string();
+
+    let axis = format!("{path} {model}")
+        .bytes()
+        .map(usize::from)
+        .sum::<usize>()
+        % dims;
+    let mut embedding = vec![0.0_f32; dims];
+    embedding[axis] = 1.0;
+    let response = serde_json::json!({ "data": [{ "embedding": embedding }] }).to_string();
+    log.lock().expect("request log").push((path, model));
+    write!(
+        stream,
+        "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\
+         Connection: close\r\n\r\n{response}",
+        response.len()
+    )
+    .expect("write response");
+}
+
+/// Regression test for issue #218: unchanged skills kept their vectors when
+/// `api_model` or `api_endpoint` moved to another space of the same width,
+/// because freshness only compared the backend name `"api"`.
+#[test]
+fn test_index_recomputes_api_embeddings_when_their_vector_space_changes() -> Result<()> {
+    use ms::storage::Database;
+
+    const DIMS: usize = 16;
+    const KEY_ENV: &str = "MS_TEST_EMBEDDING_KEY";
+    let env = [(KEY_ENV, "not-a-real-key"), ("NO_PROXY", "127.0.0.1")];
+
+    let mut fixture = setup_index_fixture("index_api_embedding_identity")?;
+    let service = EmbeddingService::start(DIMS);
+    let config_path = fixture.config_path.clone();
+    let db_path = fixture.ms_root.join("ms.db");
+    let base_config = std::fs::read_to_string(&config_path)?;
+    let use_api = |path: &str, model: &str| -> Result<()> {
+        let mut config: toml::Table = base_config.parse().expect("generated config parses");
+        let search = config["search"].as_table_mut().expect("search table");
+        search.insert("embedding_backend".into(), "api".into());
+        search.insert("embedding_dims".into(), (DIMS as i64).into());
+        search.insert(
+            "api_endpoint".into(),
+            format!("http://127.0.0.1:{}{path}", service.port).into(),
+        );
+        search.insert("api_model".into(), model.into());
+        search.insert("api_key_env".into(), KEY_ENV.into());
+        std::fs::write(&config_path, config.to_string())?;
+        Ok(())
+    };
+    let identities = || -> Result<Vec<String>> {
+        let db = Database::open(&db_path)?;
+        let mut identities = Vec::new();
+        for skill in db.list_skills(100, 0)? {
+            let record = db.get_embedding(&skill.id)?.expect("embedding row");
+            assert_eq!(record.dims, DIMS);
+            identities.push(record.embedder_type);
+        }
+        identities.sort();
+        identities.dedup();
+        Ok(identities)
+    };
+
+    fixture.log_step("First index embeds every skill");
+    use_api("/one", "model-a")?;
+    let output = fixture.run_ms_with_env(&["--robot", "index"], &env);
+    fixture.assert_success(&output, "index");
+    assert_eq!(service.calls("/one", "model-a"), 3);
+    let first = identities()?;
+    assert_eq!(first.len(), 1, "one configuration, one identity: {first:?}");
+    assert!(first[0].starts_with("api:"), "{first:?}");
+    assert!(!first[0].contains("model-a") && !first[0].contains("127.0.0.1"));
+
+    fixture.log_step("An unchanged configuration reuses every embedding");
+    let output = fixture.run_ms_with_env(&["--robot", "index"], &env);
+    fixture.assert_success(&output, "re-index");
+    assert_eq!(service.calls("/one", "model-a"), 3);
+    assert_eq!(identities()?, first);
+
+    fixture.log_step("A new model at the same width recomputes every embedding");
+    use_api("/one", "model-b")?;
+    let output = fixture.run_ms_with_env(&["--robot", "index"], &env);
+    fixture.assert_success(&output, "index with a new model");
+    assert_eq!(service.calls("/one", "model-b"), 3);
+    let second = identities()?;
+    assert_eq!(second.len(), 1, "{second:?}");
+    assert_ne!(second, first);
+
+    fixture.log_step("A new endpoint at the same width recomputes every embedding");
+    use_api("/two", "model-b")?;
+    let output = fixture.run_ms_with_env(&["--robot", "index"], &env);
+    fixture.assert_success(&output, "index with a new endpoint");
+    assert_eq!(service.calls("/two", "model-b"), 3);
+    let third = identities()?;
+    assert_ne!(third, second);
+
+    fixture.log_step("Search only sees the current space");
+    let output = fixture.run_ms_with_env(
+        &[
+            "--robot",
+            "search",
+            "error handling",
+            "--search-type",
+            "semantic",
+        ],
+        &env,
+    );
+    fixture.assert_success(&output, "semantic search");
+    assert!(
+        !output.json()["results"]
+            .as_array()
+            .expect("results")
+            .is_empty(),
+        "the current space must be searchable"
+    );
+    assert_eq!(service.calls("/two", "model-b"), 4, "one query embedding");
+
+    fixture.log_step("A legacy row that only says `api` is recomputed, not trusted");
+    {
+        let db = Database::open(&db_path)?;
+        db.conn()
+            .execute("UPDATE skill_embeddings SET embedder_type = 'api'")?;
+    }
+    let output = fixture.run_ms_with_env(&["--robot", "index"], &env);
+    fixture.assert_success(&output, "index over legacy rows");
+    assert_eq!(service.calls("/two", "model-b"), 7);
+    assert_eq!(identities()?, third);
 
     fixture.generate_report();
     Ok(())

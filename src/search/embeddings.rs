@@ -10,6 +10,8 @@ use std::collections::HashMap;
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
+use sha2::{Digest, Sha256};
+
 use crate::config::SearchConfig;
 use crate::error::{MsError, Result};
 
@@ -18,6 +20,11 @@ pub trait Embedder: Send + Sync {
     fn embed(&self, text: &str) -> Vec<f32>;
     fn dims(&self) -> usize;
     fn name(&self) -> &str;
+    /// The vector space this backend produces, stored with each embedding and
+    /// used in its cache keys. Vectors are only comparable within one identity.
+    fn identity(&self) -> &str {
+        self.name()
+    }
 }
 
 /// Build an embedder from search config.
@@ -153,10 +160,32 @@ pub struct ApiEmbedder {
     model: String,
     api_key: String,
     dims: usize,
+    identity: String,
     /// Rate limiting: track last request time
     last_request: Mutex<Option<Instant>>,
     /// Minimum delay between requests (100ms default)
     min_delay: Duration,
+}
+
+/// `api:` plus a hash of the endpoint and model, so two API configurations
+/// never share vectors and the stored value names neither of them. The URL's
+/// credentials, query and fragment stay out because they can hold secrets.
+fn api_identity(endpoint: &str, model: &str) -> String {
+    let endpoint = reqwest::Url::parse(endpoint).map_or_else(
+        |_| endpoint.to_string(),
+        |mut url| {
+            let _ = url.set_username("");
+            let _ = url.set_password(None);
+            url.set_query(None);
+            url.set_fragment(None);
+            url.to_string()
+        },
+    );
+    let mut hasher = Sha256::new();
+    hasher.update(endpoint.as_bytes());
+    hasher.update([0]);
+    hasher.update(model.as_bytes());
+    format!("api:{}", hex::encode(&hasher.finalize()[..8]))
 }
 
 impl ApiEmbedder {
@@ -166,6 +195,7 @@ impl ApiEmbedder {
                 .timeout(Duration::from_secs(30))
                 .build()
                 .map_err(|e| MsError::Config(format!("failed to create HTTP client: {}", e)))?,
+            identity: api_identity(&endpoint, &model),
             endpoint,
             model,
             api_key,
@@ -264,6 +294,10 @@ impl Embedder for ApiEmbedder {
 
     fn name(&self) -> &'static str {
         "api"
+    }
+
+    fn identity(&self) -> &str {
+        &self.identity
     }
 }
 
@@ -633,5 +667,46 @@ mod tests {
         assert!(idx.insert_quantized("skill-q", &f16_vec));
         let fetched_q = idx.get_quantized("skill-q").expect("quantized present");
         assert_eq!(fetched_q, f16_vec);
+    }
+
+    fn api(endpoint: &str, model: &str, key: &str) -> ApiEmbedder {
+        ApiEmbedder::new(endpoint.to_string(), model.to_string(), key.to_string(), 8).unwrap()
+    }
+
+    #[test]
+    fn test_api_identity_changes_with_model_and_endpoint_at_the_same_dims() {
+        let base = api("https://one.example/v1/embeddings", "model-a", "key");
+        let other_model = api("https://one.example/v1/embeddings", "model-b", "key");
+        let other_endpoint = api("https://two.example/v1/embeddings", "model-a", "key");
+        assert_ne!(base.identity(), other_model.identity());
+        assert_ne!(base.identity(), other_endpoint.identity());
+        assert_ne!(other_model.identity(), other_endpoint.identity());
+        // A row written before identities existed says only "api".
+        assert_ne!(base.identity(), "api");
+    }
+
+    #[test]
+    fn test_api_identity_is_stable_and_holds_no_secret() {
+        let plain = api("https://one.example/v1/embeddings", "model-a", "first-key");
+        let rotated = api("https://one.example/v1/embeddings", "model-a", "second-key");
+        let with_url_secrets = api(
+            "https://user:secret@one.example/v1/embeddings?api_key=secret#fragment",
+            "model-a",
+            "first-key",
+        );
+        assert_eq!(plain.identity(), rotated.identity());
+        assert_eq!(plain.identity(), with_url_secrets.identity());
+        assert_eq!(plain.name(), "api");
+
+        let identity = plain.identity();
+        assert!(identity.starts_with("api:"), "{identity}");
+        for secret in ["first-key", "secret", "one.example", "model-a"] {
+            assert!(!identity.contains(secret), "{identity} contains {secret}");
+        }
+    }
+
+    #[test]
+    fn test_identity_defaults_to_the_backend_name() {
+        assert_eq!(HashEmbedder::new(8).identity(), "hash");
     }
 }
