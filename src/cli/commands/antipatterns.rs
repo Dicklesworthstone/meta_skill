@@ -11,7 +11,7 @@ use crate::antipatterns::{
 };
 use crate::app::AppContext;
 use crate::cass::CassClient;
-use crate::cass::mining::without_tainted_messages;
+use crate::cass::mining::{with_secrets_redacted, without_tainted_messages};
 use crate::cli::output::OutputFormat;
 use crate::error::{MsError, Result};
 
@@ -162,7 +162,7 @@ fn run_mine(ctx: &AppContext, args: &MineArgs) -> Result<()> {
     // Mine anti-patterns
     let sessions: Vec<_> = sessions
         .iter()
-        .map(|session| without_tainted_messages(session, false))
+        .map(|session| with_secrets_redacted(&without_tainted_messages(session, false)))
         .collect();
     let detector = DefaultDetector::default();
     let anti_patterns = mine_anti_patterns(&sessions, &detector)?;
@@ -174,7 +174,7 @@ fn run_mine(ctx: &AppContext, args: &MineArgs) -> Result<()> {
         .collect();
 
     if args.save {
-        let mut stored = load_stored_antipatterns(ctx).unwrap_or_default();
+        let mut stored = load_stored_antipatterns(ctx)?;
         for ap in &filtered {
             if let Some(existing) = stored.iter_mut().find(|item| item.id == ap.id) {
                 *existing = ap.clone();

@@ -735,10 +735,7 @@ fn mine_ms_commands(
     label: Option<&TaintLabel>,
     mined: &mut Vec<String>,
 ) -> usize {
-    let tainted = matches!(
-        label,
-        Some(TaintLabel::Sensitive | TaintLabel::RequiresReview)
-    );
+    let tainted = label.is_some();
     let mut refused = 0;
     for cmd in commands {
         let line = cmd.lines().next().unwrap_or("").trim();

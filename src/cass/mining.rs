@@ -12,7 +12,9 @@ use tracing::warn;
 
 use crate::error::Result;
 use crate::quality::ubs::UbsClient;
-use crate::security::{SafetyGate, contains_injection_patterns, contains_sensitive_data};
+use crate::security::{
+    SafetyGate, contains_injection_patterns, contains_sensitive_data, redact_secrets,
+};
 
 use super::client::Session;
 
@@ -672,10 +674,24 @@ fn pattern_content(pt: &PatternType) -> String {
     }
 }
 
-/// Extract patterns from a parsed session
+/// Extract patterns from a parsed session, with its secrets redacted first.
+///
+/// Patterns cut their text, and what's left of a cut token no longer matches the scan of a
+/// finished file, so the session is redacted before any extractor reads it. The taint scan
+/// reads the original, because a generic redaction can swallow the keyword beside a secret.
 pub fn extract_from_session(session: &Session) -> Result<Vec<ExtractedPattern>> {
+    extract_labelled(&with_secrets_redacted(session), session)
+}
+
+/// [`extract_from_session`] without the redaction, for `ms build --no-redact`.
+pub fn extract_from_session_unredacted(session: &Session) -> Result<Vec<ExtractedPattern>> {
+    extract_labelled(session, session)
+}
+
+/// Extract patterns from `session` and label them from the taint scan of `original`.
+fn extract_labelled(session: &Session, original: &Session) -> Result<Vec<ExtractedPattern>> {
     // ACIP pre-scan: identify messages with injection or sensitive content
-    let tainted_indices = scan_for_tainted_messages(session);
+    let tainted_indices = scan_for_tainted_messages(original);
 
     let mut patterns = Vec::new();
 
@@ -791,6 +807,33 @@ pub fn without_tainted_messages(session: &Session, keep_sensitive: bool) -> Sess
         }
     }
     clean
+}
+
+/// Copy a session with secrets redacted from its text, tool results and tool arguments.
+///
+/// This has to come before mining: a cut token no longer matches a scan of finished output.
+#[must_use]
+pub fn with_secrets_redacted(session: &Session) -> Session {
+    let mut clean = session.clone();
+    for msg in &mut clean.messages {
+        msg.content = redact_secrets(&msg.content);
+        for result in &mut msg.tool_results {
+            result.content = redact_secrets(&result.content);
+        }
+        for call in &mut msg.tool_calls {
+            redact_json_strings(&mut call.arguments);
+        }
+    }
+    clean
+}
+
+fn redact_json_strings(value: &mut serde_json::Value) {
+    match value {
+        serde_json::Value::String(text) => *text = redact_secrets(text),
+        serde_json::Value::Array(items) => items.iter_mut().for_each(redact_json_strings),
+        serde_json::Value::Object(fields) => fields.values_mut().for_each(redact_json_strings),
+        _ => {}
+    }
 }
 
 /// Apply taint labels to patterns based on their evidence sources.
@@ -2630,6 +2673,150 @@ And more text.
             extracted
                 .iter()
                 .any(|p| matches!(p.pattern_type, PatternType::ToolPattern { .. }))
+        );
+    }
+
+    const TOKEN: &str = "ghp_abcdefghijklmnopqrstuvwxyz0123456789";
+
+    /// One assistant turn, which is enough for a command, a decision or an error pattern.
+    fn one_message(content: &str, command: Option<&str>, result: Option<&str>) -> Session {
+        use super::super::client::{SessionMessage, ToolCall, ToolResult};
+        Session {
+            id: "session-redact".to_string(),
+            path: "/path/to/session.json".to_string(),
+            content_hash: "hash".to_string(),
+            messages: vec![SessionMessage {
+                index: 0,
+                role: "assistant".to_string(),
+                content: content.to_string(),
+                tool_calls: command
+                    .map(|command| ToolCall {
+                        id: "call-1".to_string(),
+                        name: "bash".to_string(),
+                        arguments: serde_json::json!({ "command": command }),
+                    })
+                    .into_iter()
+                    .collect(),
+                tool_results: result
+                    .map(|content| ToolResult {
+                        tool_call_id: "call-1".to_string(),
+                        content: content.to_string(),
+                        is_error: true,
+                    })
+                    .into_iter()
+                    .collect(),
+            }],
+            metadata: Default::default(),
+        }
+    }
+
+    fn to_json(patterns: &[ExtractedPattern]) -> String {
+        serde_json::to_string_pretty(patterns).expect("patterns serialize")
+    }
+
+    /// The longest piece of the token's body that `text` still holds.
+    fn kept_token_chars(text: &str) -> usize {
+        let body = &TOKEN[4..];
+        (0..body.len())
+            .flat_map(|start| (start..=body.len()).map(move |end| &body[start..end]))
+            .filter(|piece| text.contains(piece))
+            .map(str::len)
+            .max()
+            .unwrap_or(0)
+    }
+
+    /// The field has to reach a pattern, or redacting it would prove nothing.
+    #[track_caller]
+    fn assert_field_is_redacted(session: &Session) {
+        let raw = to_json(&extract_from_session_unredacted(session).expect("raw extraction"));
+        assert!(raw.contains(TOKEN), "the field reaches a pattern: {raw}");
+        let clean = to_json(&extract_from_session(session).expect("extraction"));
+        assert!(kept_token_chars(&clean) < 8, "the token goes: {clean}");
+    }
+
+    #[test]
+    fn test_extraction_redacts_message_text() {
+        let content = format!("If the deploy fails then sign it with {TOKEN} and retry\n");
+        assert_field_is_redacted(&one_message(&content, None, None));
+    }
+
+    #[test]
+    fn test_extraction_redacts_tool_results() {
+        let result = format!("error: refused {TOKEN}");
+        assert_field_is_redacted(&one_message(
+            "The deploy works now.",
+            Some("make deploy"),
+            Some(&result),
+        ));
+    }
+
+    #[test]
+    fn test_extraction_redacts_tool_arguments() {
+        let command = format!("make deploy --sign {TOKEN}");
+        assert_field_is_redacted(&one_message("", Some(&command), None));
+    }
+
+    /// A cut can land anywhere in a token, so this walks one across the 100-character cut of an
+    /// evidence snippet and the 50-character cut of a resolution step. Patterns are redacted
+    /// again when they're written, and that scan is the one a cut token gets past.
+    #[test]
+    fn test_no_cut_leaves_part_of_a_token() {
+        let mut past_the_final_scan = Vec::new();
+        for offset in 8..=110 {
+            let command = format!("{:<offset$}{TOKEN}", "make deploy");
+            let session = one_message(
+                "The deploy works now.",
+                Some(&command),
+                Some("error: deploy failed"),
+            );
+
+            let clean = to_json(&extract_from_session(&session).expect("extraction"));
+            let kept = kept_token_chars(&redact_secrets(&clean));
+            assert!(kept < 8, "offset {offset} keeps {kept} chars: {clean}");
+
+            let raw = extract_from_session_unredacted(&session).expect("raw extraction");
+            if kept_token_chars(&redact_secrets(&to_json(&raw))) >= 8 {
+                past_the_final_scan.push(offset);
+            }
+        }
+        let both_cuts: Vec<usize> = (16..=35).chain(66..=85).collect();
+        assert_eq!(past_the_final_scan, both_cuts);
+    }
+
+    /// Redacting `password=...` takes the word with it, so a scan of redacted text would find
+    /// nothing here.
+    #[test]
+    fn test_a_keyword_the_redaction_swallows_still_taints() {
+        let text = "export password=Zx9Qm2Lk7Vb4Nc8Rt1Yw5Pd3Hs6Fg0Jj";
+        assert!(contains_sensitive_data(text));
+        assert!(!contains_sensitive_data(&redact_secrets(text)));
+
+        let session = one_message(text, Some("make deploy"), None);
+        let patterns = extract_from_session(&session).expect("extraction");
+        let command = patterns
+            .iter()
+            .find(|p| matches!(p.pattern_type, PatternType::CommandPattern { .. }))
+            .expect("the command pattern");
+        assert!(
+            matches!(command.taint_label, Some(TaintLabel::RequiresReview)),
+            "{:?}",
+            command.taint_label
+        );
+    }
+
+    /// Ordinary text has to come out unchanged, or a clean session would mine different rules.
+    #[test]
+    fn test_redaction_leaves_a_clean_session_alone() {
+        let session = one_message(
+            "If the deploy fails then roll back to 4f2a9c1d and rerun the staging checks.",
+            Some(
+                "git log --oneline 1e818283fb01237b5a94a0efa6eca0a9a8159a15 -- src/cass/mining.rs",
+            ),
+            Some("error: build failed at /data/projects/meta_skill/target/debug/deps"),
+        );
+        assert_eq!(
+            serde_json::to_string(&with_secrets_redacted(&session)).expect("serialize"),
+            serde_json::to_string(&session).expect("serialize")
         );
     }
 }

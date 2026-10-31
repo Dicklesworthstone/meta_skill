@@ -1168,7 +1168,9 @@ fn run_auto(
     query_override: Option<&str>,
 ) -> Result<()> {
     use crate::cass::QualityConfig;
-    use crate::cass::mining::{ExtractedPattern, extract_from_session};
+    use crate::cass::mining::{
+        ExtractedPattern, extract_from_session, extract_from_session_unredacted,
+    };
 
     // Use query_override (from checkpoint resume) or fall back to args.from_cass
     let query = query_override
@@ -1503,7 +1505,12 @@ fn run_auto(
             }
         }));
 
-        match extract_from_session(cass_session) {
+        let extracted = if args.no_redact {
+            extract_from_session_unredacted(cass_session)
+        } else {
+            extract_from_session(cass_session)
+        };
+        match extracted {
             Ok(patterns) => {
                 let _ = cass_client
                     .mark_session_processed(&cass_session.id, &cass_session.content_hash);
@@ -1750,7 +1757,15 @@ fn run_auto(
         let raw_sessions: Vec<_> = quality_sessions
             .iter()
             .map(|(s, _)| {
-                crate::cass::mining::without_tainted_messages(s, args.no_injection_filter)
+                let clean =
+                    crate::cass::mining::without_tainted_messages(s, args.no_injection_filter);
+                // Before mining: a rule truncates its text, and a cut token no longer matches
+                // the scan of the finished file below
+                if args.no_redact {
+                    clean
+                } else {
+                    crate::cass::mining::with_secrets_redacted(&clean)
+                }
             })
             .collect();
         let detector = crate::antipatterns::DefaultDetector::default();
