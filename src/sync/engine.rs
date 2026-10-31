@@ -736,6 +736,14 @@ impl SyncEngine {
                     .map(|id| format!("{id} (remote copy)")),
             );
         }
+        if skill_ids.is_empty() && !deleted_ids.is_empty() && !options.force {
+            return Err(MsError::Config(format!(
+                "the local archive is empty, so this sync would delete {} skill(s) from remote \
+                 {}; check the archive, or pass --force to delete them",
+                deleted_ids.len(),
+                remote.name
+            )));
+        }
 
         for skill_id in deleted_ids {
             let base_revision = cloud_state.skill_revisions.get(&skill_id).copied();
@@ -996,6 +1004,44 @@ impl SyncEngine {
         for (id, st) in &self.state.skill_states {
             if st.remote_hashes.contains_key(&remote.name) {
                 all_ids.insert(id.clone());
+            }
+        }
+
+        if !hold_deletions && !options.force {
+            let mut local_deletes = 0;
+            let mut remote_deletes = 0;
+            for id in &all_ids {
+                let (local, remote_snap) = (local_map.get(id), remote_map.get(id));
+                let base_hash = self.state.skill_states.get(id).and_then(|state| {
+                    state
+                        .remote_hashes
+                        .get(&remote.name)
+                        .map(std::string::String::as_str)
+                });
+                let status = determine_sync_status(local, remote_snap, base_hash);
+                if local.is_some() != remote_snap.is_some()
+                    && deletes_missing_side(&status, allow_push, allow_pull, options)
+                {
+                    if local.is_some() {
+                        local_deletes += 1;
+                    } else {
+                        remote_deletes += 1;
+                    }
+                }
+            }
+            if remote_map.is_empty() && local_deletes > 0 {
+                return Err(MsError::Config(format!(
+                    "remote {} is empty, so this sync would delete {local_deletes} local \
+                     skill(s) synced with it; check the remote, or pass --force to delete them",
+                    remote.name
+                )));
+            }
+            if local_map.is_empty() && remote_deletes > 0 {
+                return Err(MsError::Config(format!(
+                    "the local archive is empty, so this sync would delete {remote_deletes} \
+                     skill(s) from remote {}; check the archive, or pass --force to delete them",
+                    remote.name
+                )));
             }
         }
 

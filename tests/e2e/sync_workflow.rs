@@ -13,7 +13,7 @@
 use std::fs;
 use std::io::{BufRead, BufReader, Read, Write};
 use std::net::{TcpListener, TcpStream};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
 use super::fixture::{CommandOutput, E2EFixture};
@@ -829,6 +829,105 @@ fn test_sync_force_holds_a_conflict_that_would_delete() -> Result<()> {
     Ok(())
 }
 
+/// Remove every skill directory on one side, leaving a valid and empty archive.
+fn empty_archive(by_id: &Path) -> Result<()> {
+    for entry in fs::read_dir(by_id)? {
+        fs::remove_dir_all(entry?.path())?;
+    }
+    Ok(())
+}
+
+#[test]
+fn test_sync_refuses_to_delete_local_skills_for_an_empty_remote() -> Result<()> {
+    let mut pair = SyncedPair::new("sync_refuse_empty_remote")?;
+    empty_archive(&pair.remote.path().join("skills/by-id"))?;
+    let local = [
+        pair.local_spec("alpha-notes"),
+        pair.local_spec("beta-notes"),
+    ];
+
+    for flags in [&[][..], &["--dry-run"][..]] {
+        let output = pair.sync(flags);
+        assert!(
+            local.iter().all(|spec| spec.exists()),
+            "an empty remote must not delete local skills ({flags:?})"
+        );
+        assert!(!output.success, "the sync must fail: {}", output.stdout);
+        let message = error_message(&output);
+        assert!(
+            message.contains("would delete 2 local skill(s)") && message.contains("--force"),
+            "the refusal must count the skills and name --force: {message}"
+        );
+    }
+
+    let output = pair.sync(&["--push-only"]);
+    pair.fixture
+        .assert_success(&output, "a push cannot delete local skills");
+    assert!(local.iter().all(|spec| spec.exists()));
+
+    let output = pair.sync(&["--force"]);
+    pair.fixture.assert_success(&output, "forced sync");
+    assert!(
+        !local.iter().any(|spec| spec.exists()),
+        "--force goes ahead with the deletions"
+    );
+    Ok(())
+}
+
+#[test]
+fn test_sync_refuses_to_delete_remote_skills_for_an_empty_archive() -> Result<()> {
+    let mut pair = SyncedPair::new("sync_refuse_empty_archive")?;
+    empty_archive(&pair.fixture.ms_root.join("archive/skills/by-id"))?;
+    let remote = [
+        pair.remote_spec("alpha-notes"),
+        pair.remote_spec("beta-notes"),
+    ];
+
+    for flags in [&[][..], &["--dry-run"][..]] {
+        let output = pair.sync(flags);
+        assert!(
+            remote.iter().all(|spec| spec.exists()),
+            "an empty archive must not delete remote skills ({flags:?})"
+        );
+        assert!(!output.success, "the sync must fail: {}", output.stdout);
+        let message = error_message(&output);
+        assert!(
+            message.contains("would delete 2 skill(s) from remote shared")
+                && message.contains("--force"),
+            "the refusal must count the skills and name --force: {message}"
+        );
+    }
+
+    let output = pair.sync(&["--pull-only"]);
+    pair.fixture
+        .assert_success(&output, "a pull cannot delete remote skills");
+    assert!(remote.iter().all(|spec| spec.exists()));
+
+    let output = pair.sync(&["--force"]);
+    pair.fixture.assert_success(&output, "forced sync");
+    assert!(
+        !remote.iter().any(|spec| spec.exists()),
+        "--force goes ahead with the deletions"
+    );
+    Ok(())
+}
+
+#[test]
+fn test_sync_still_propagates_a_deletion_that_leaves_skills_behind() -> Result<()> {
+    let mut pair = SyncedPair::new("sync_single_deletion")?;
+    fs::remove_dir_all(pair.remote.path().join("skills/by-id/alpha-notes"))?;
+
+    let output = pair.sync(&[]);
+    pair.fixture.assert_success(&output, "sync");
+    assert!(!pair.local_spec("alpha-notes").exists());
+    assert!(pair.local_spec("beta-notes").exists());
+    assert_eq!(
+        output.json()["reports"][0]["pulled"],
+        json!(["alpha-notes (deleted)"])
+    );
+    Ok(())
+}
+
 /// A local JFP Cloud service that accepts every push and records each pushed item.
 struct JfpService {
     port: u16,
@@ -956,6 +1055,30 @@ fn sync_cloud(fixture: &mut E2EFixture, flags: &[&str]) -> CommandOutput {
     let mut args = vec!["--robot", "sync", "cloud"];
     args.extend_from_slice(flags);
     run_in_home(fixture, &args, &[("JFP_CLOUD_TOKEN", "test-token")])
+}
+
+#[test]
+fn test_sync_refuses_to_delete_cloud_skills_for_an_empty_archive() -> Result<()> {
+    let (mut fixture, service) = jfp_fixture("sync_refuse_empty_archive_cloud")?;
+
+    let output = sync_cloud(&mut fixture, &[]);
+    assert_eq!(
+        service.deleted(),
+        Vec::<String>::new(),
+        "an empty archive must not delete cloud skills"
+    );
+    assert!(!output.success, "the sync must fail: {}", output.stdout);
+    let message = error_message(&output);
+    assert!(
+        message.contains("would delete 2 skill(s) from remote cloud")
+            && message.contains("--force"),
+        "the refusal must count the skills and name --force: {message}"
+    );
+
+    let output = sync_cloud(&mut fixture, &["--force"]);
+    fixture.assert_success(&output, "forced sync");
+    assert_eq!(service.deleted(), ["alpha-notes", "beta-notes"]);
+    Ok(())
 }
 
 #[test]
