@@ -1,12 +1,10 @@
 //! Environment and skill requirement checks
 
 use std::collections::HashSet;
-use std::process::Command;
 
 use serde::{Deserialize, Serialize};
-use which::which;
 
-use crate::core::skill::SkillSpec;
+use crate::core::skill::{SkillSpec, is_plain_tool_name, resolve_tool, run_tool_version};
 use crate::core::slicing::extract_block_directives;
 use crate::error::Result;
 
@@ -104,7 +102,7 @@ pub fn check_skill_requirements(
                 satisfied: true,
                 message: Some(format!("Skill or capability '{req_trimmed}' is indexed")),
             });
-        } else if which(req_trimmed).is_ok() {
+        } else if resolve_tool(req_trimmed).is_some() {
             let (_, msg) = check_binary(req_trimmed);
             checks.push(RequirementCheck {
                 name: req_trimmed.to_string(),
@@ -268,12 +266,12 @@ pub fn check_skill_requirements(
 }
 
 fn check_binary(bin: &str) -> (bool, String) {
-    match which(bin) {
-        Ok(path) => {
-            let version = Command::new(bin)
-                .arg("--version")
-                .output()
-                .ok()
+    if !is_plain_tool_name(bin) {
+        return (false, format!("'{bin}' is not a plain tool name"));
+    }
+    match resolve_tool(bin) {
+        Some(path) => {
+            let version = run_tool_version(&path)
                 .filter(|o| o.status.success())
                 .map(|o| {
                     String::from_utf8_lossy(&o.stdout)
@@ -290,7 +288,7 @@ fn check_binary(bin: &str) -> (bool, String) {
             };
             (true, msg)
         }
-        Err(err) => (false, err.to_string()),
+        None => (false, format!("'{bin}' not found on PATH")),
     }
 }
 

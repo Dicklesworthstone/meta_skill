@@ -7,9 +7,348 @@
 //! - Loading with --full and --complete flags
 //! - Loading with token budget (--pack)
 //! - Robot/JSON output format verification
+//! - Which programs a skill's tool checks can run
 
 use super::fixture::E2EFixture;
 use ms::error::Result;
+
+/// A skill can name a tool in a block condition, in `requires` or in `context.tools`, and
+/// skills reach a machine through imports, bundles and remotes. These run the real binary
+/// against an executable that records every run, so "nothing ran" is observed, not assumed.
+#[cfg(unix)]
+mod tool_checks {
+    use std::fs;
+    use std::os::unix::fs::PermissionsExt;
+    use std::path::{Path, PathBuf};
+
+    use super::E2EFixture;
+    use crate::fixture::CommandOutput;
+    use ms::error::Result;
+    use serde_json::Value;
+
+    const ALWAYS: &str = "Text every reader gets.";
+    const GATED: &str = "Text behind the tool check.";
+
+    fn skill_with_condition(condition: &str) -> String {
+        format!(
+            "---\nname: Tool Check\ndescription: A block that depends on a tool\n\
+             tags: [tools]\n---\n\n# Tool Check\n\n## Usage\n\n{ALWAYS}\n\n\
+             ::: if {condition} :::\n{GATED}\n::: endif :::\n"
+        )
+    }
+
+    fn skill_with_frontmatter(frontmatter: &str) -> String {
+        format!(
+            "---\nname: Tool Check\ndescription: A skill that names a tool\n\
+             tags: [tools]\n{frontmatter}\n---\n\n# Tool Check\n\n## Usage\n\n{ALWAYS}\n"
+        )
+    }
+
+    struct Bench {
+        fixture: E2EFixture,
+        marker: PathBuf,
+        tools: PathBuf,
+    }
+
+    impl Bench {
+        fn new(scenario: &str, skill: &str) -> Result<Self> {
+            let mut fixture = E2EFixture::new(scenario);
+            let output = fixture.init();
+            fixture.assert_success(&output, "init");
+            fixture.create_skill("tool-check", skill)?;
+            let output = fixture.run_ms(&["--robot", "index"]);
+            fixture.assert_success(&output, "index");
+
+            let tools = fixture.root.join("tools-on-path");
+            fs::create_dir_all(&tools)?;
+            let marker = fixture.root.join("tool-ran");
+            Ok(Self {
+                fixture,
+                marker,
+                tools,
+            })
+        }
+
+        /// An executable that reports version 2.5.0 and records that it ran.
+        fn plant(&self, path: &Path) -> Result<()> {
+            let script = format!(
+                "#!/bin/sh\necho ran >> '{}'\necho 'planted 2.5.0'\n",
+                self.marker.display()
+            );
+            write_executable(path, &script)
+        }
+
+        /// A stand-in for dcg that answers every `explain` with `decision`.
+        fn gate(&self, decision: &str) -> Result<String> {
+            let path = self.fixture.root.join("stand-in-dcg");
+            let script = format!(
+                "#!/bin/sh\nif [ \"$1\" = --version ]; then echo 'dcg 0.0.0'; exit 0; fi\n\
+                 echo '{{\"decision\":\"{decision}\"}}'\n"
+            );
+            write_executable(&path, &script)?;
+            Ok(path.to_str().unwrap().to_string())
+        }
+
+        fn no_gate(&self) -> String {
+            let path = self.fixture.root.join("no-such-dcg");
+            path.to_str().unwrap().to_string()
+        }
+
+        fn tools_on_path(&self) -> String {
+            self.tools.to_str().unwrap().to_string()
+        }
+
+        fn ms(&mut self, args: &[&str], gate: &str, path: &str) -> CommandOutput {
+            self.fixture
+                .run_ms_with_env(args, &[("MS_SAFETY_DCG_BIN", gate), ("PATH", path)])
+        }
+
+        fn load(&mut self, gate: &str, path: &str) -> String {
+            let output = self.ms(&["--robot", "load", "tool-check", "--full"], gate, path);
+            self.fixture.assert_success(&output, "load");
+            output.json()["data"]["content"]
+                .as_str()
+                .expect("content")
+                .to_string()
+        }
+
+        fn requirements(&mut self, gate: &str, path: &str) -> Value {
+            let output = self.ms(&["--robot", "requirements", "tool-check"], gate, path);
+            self.fixture.assert_success(&output, "requirements");
+            output.json()
+        }
+
+        fn tool_ran(&self) -> bool {
+            self.marker.exists()
+        }
+    }
+
+    fn write_executable(path: &Path, script: &str) -> Result<()> {
+        fs::write(path, script)?;
+        fs::set_permissions(path, fs::Permissions::from_mode(0o755))?;
+        Ok(())
+    }
+
+    fn check<'a>(report: &'a Value, name: &str) -> &'a Value {
+        report["checks"]
+            .as_array()
+            .expect("checks")
+            .iter()
+            .find(|check| check["name"] == name)
+            .unwrap_or_else(|| panic!("no check named {name}: {report}"))
+    }
+
+    fn assert_block_hidden(bench: &Bench, content: &str) {
+        assert!(!bench.tool_ran(), "the planted tool must not run");
+        assert!(content.contains(ALWAYS), "the rest stays: {content}");
+        assert!(!content.contains(GATED), "the block stays out: {content}");
+    }
+
+    #[test]
+    fn test_tool_condition_with_a_path_runs_nothing() -> Result<()> {
+        let skill = skill_with_condition("tool:./planted >= 1.0");
+        let mut bench = Bench::new("tool_condition_path", &skill)?;
+        bench.plant(&bench.fixture.root.join("planted"))?;
+        let (gate, path) = (bench.gate("allow")?, bench.tools_on_path());
+
+        let content = bench.load(&gate, &path);
+        assert_block_hidden(&bench, &content);
+        Ok(())
+    }
+
+    #[test]
+    fn test_tool_condition_with_a_leading_dash_runs_nothing() -> Result<()> {
+        let skill = skill_with_condition("tool:-planted >= 1.0");
+        let mut bench = Bench::new("tool_condition_dash", &skill)?;
+        bench.plant(&bench.tools.join("-planted"))?;
+        let (gate, path) = (bench.gate("allow")?, bench.tools_on_path());
+
+        let content = bench.load(&gate, &path);
+        assert_block_hidden(&bench, &content);
+        Ok(())
+    }
+
+    #[test]
+    fn test_tool_condition_ignores_a_dot_path_entry() -> Result<()> {
+        let skill = skill_with_condition("tool:planted >= 1.0");
+        let mut bench = Bench::new("tool_condition_dot_entry", &skill)?;
+        bench.plant(&bench.fixture.root.join("planted"))?;
+        let gate = bench.gate("allow")?;
+
+        let content = bench.load(&gate, ".");
+        assert_block_hidden(&bench, &content);
+        Ok(())
+    }
+
+    #[test]
+    fn test_tool_condition_ignores_an_empty_path_entry() -> Result<()> {
+        let skill = skill_with_condition("tool:planted >= 1.0");
+        let mut bench = Bench::new("tool_condition_empty_entry", &skill)?;
+        bench.plant(&bench.fixture.root.join("planted"))?;
+        let gate = bench.gate("allow")?;
+        let path = format!(":{}", bench.tools_on_path());
+
+        let content = bench.load(&gate, &path);
+        assert_block_hidden(&bench, &content);
+        Ok(())
+    }
+
+    #[test]
+    fn test_tool_condition_ignores_a_relative_path_entry() -> Result<()> {
+        let skill = skill_with_condition("tool:planted >= 1.0");
+        let mut bench = Bench::new("tool_condition_relative_entry", &skill)?;
+        bench.plant(&bench.tools.join("planted"))?;
+        let gate = bench.gate("allow")?;
+
+        let content = bench.load(&gate, "tools-on-path");
+        assert_block_hidden(&bench, &content);
+        Ok(())
+    }
+
+    #[test]
+    fn test_tool_condition_runs_a_tool_on_path_through_the_gate() -> Result<()> {
+        let skill = skill_with_condition("tool:planted >= 1.0");
+        let mut bench = Bench::new("tool_condition_allowed", &skill)?;
+        bench.plant(&bench.tools.join("planted"))?;
+        let (gate, path) = (bench.gate("allow")?, bench.tools_on_path());
+
+        let content = bench.load(&gate, &path);
+        assert!(bench.tool_ran(), "the gate allowed the version check");
+        assert!(content.contains(GATED), "the check passed: {content}");
+        Ok(())
+    }
+
+    #[test]
+    fn test_tool_condition_compares_the_version_it_reads() -> Result<()> {
+        let skill = skill_with_condition("tool:planted >= 9.0");
+        let mut bench = Bench::new("tool_condition_low_version", &skill)?;
+        bench.plant(&bench.tools.join("planted"))?;
+        let (gate, path) = (bench.gate("allow")?, bench.tools_on_path());
+
+        let content = bench.load(&gate, &path);
+        assert!(bench.tool_ran(), "the gate allowed the version check");
+        assert!(!content.contains(GATED), "2.5.0 is below 9.0: {content}");
+        Ok(())
+    }
+
+    #[test]
+    fn test_tool_condition_does_not_run_when_the_gate_refuses() -> Result<()> {
+        let skill = skill_with_condition("tool:planted >= 1.0");
+        let mut bench = Bench::new("tool_condition_refused", &skill)?;
+        bench.plant(&bench.tools.join("planted"))?;
+        let (gate, path) = (bench.gate("deny")?, bench.tools_on_path());
+
+        let content = bench.load(&gate, &path);
+        assert_block_hidden(&bench, &content);
+        Ok(())
+    }
+
+    #[test]
+    fn test_tool_condition_does_not_run_with_no_gate() -> Result<()> {
+        let skill = skill_with_condition("tool:planted >= 1.0");
+        let mut bench = Bench::new("tool_condition_no_gate", &skill)?;
+        bench.plant(&bench.tools.join("planted"))?;
+        let (gate, path) = (bench.no_gate(), bench.tools_on_path());
+
+        let content = bench.load(&gate, &path);
+        assert_block_hidden(&bench, &content);
+        Ok(())
+    }
+
+    #[test]
+    fn test_tool_presence_condition_needs_no_gate_because_nothing_runs() -> Result<()> {
+        let skill = skill_with_condition("tool:planted");
+        let mut bench = Bench::new("tool_condition_presence", &skill)?;
+        bench.plant(&bench.tools.join("planted"))?;
+        let (gate, path) = (bench.no_gate(), bench.tools_on_path());
+
+        let content = bench.load(&gate, &path);
+        assert!(!bench.tool_ran(), "a presence check runs nothing");
+        assert!(content.contains(GATED), "the tool is there: {content}");
+        Ok(())
+    }
+
+    #[test]
+    fn test_bare_requirement_with_a_path_runs_nothing() -> Result<()> {
+        let skill = skill_with_frontmatter("requires: [\"./planted\"]");
+        let mut bench = Bench::new("tool_requires_bare_path", &skill)?;
+        bench.plant(&bench.fixture.root.join("planted"))?;
+        let (gate, path) = (bench.gate("allow")?, bench.tools_on_path());
+
+        let report = bench.requirements(&gate, &path);
+        assert!(!bench.tool_ran(), "the planted tool must not run");
+        assert_eq!(check(&report, "./planted")["satisfied"], false);
+        Ok(())
+    }
+
+    #[test]
+    fn test_bin_requirement_with_a_path_runs_nothing() -> Result<()> {
+        let skill = skill_with_frontmatter("requires: [\"bin:./planted\"]");
+        let mut bench = Bench::new("tool_requires_bin_path", &skill)?;
+        bench.plant(&bench.fixture.root.join("planted"))?;
+        let (gate, path) = (bench.gate("allow")?, bench.tools_on_path());
+
+        let report = bench.requirements(&gate, &path);
+        assert!(!bench.tool_ran(), "the planted tool must not run");
+        let check = check(&report, "tool:./planted");
+        assert_eq!(check["satisfied"], false);
+        assert!(
+            check["message"]
+                .as_str()
+                .expect("message")
+                .contains("not a plain tool name"),
+            "the check must say why: {check}"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn test_context_tool_with_a_path_runs_nothing() -> Result<()> {
+        let skill = skill_with_frontmatter("context:\n  tools:\n    - ./planted");
+        let mut bench = Bench::new("tool_context_path", &skill)?;
+        bench.plant(&bench.fixture.root.join("planted"))?;
+        let (gate, path) = (bench.gate("allow")?, bench.tools_on_path());
+
+        let report = bench.requirements(&gate, &path);
+        assert!(!bench.tool_ran(), "the planted tool must not run");
+        assert_eq!(check(&report, "context_tool:./planted")["satisfied"], false);
+        Ok(())
+    }
+
+    #[test]
+    fn test_bin_requirement_reads_the_version_through_the_gate() -> Result<()> {
+        let skill = skill_with_frontmatter("requires: [\"bin:planted\"]");
+        let mut bench = Bench::new("tool_requires_allowed", &skill)?;
+        bench.plant(&bench.tools.join("planted"))?;
+        let (gate, path) = (bench.gate("allow")?, bench.tools_on_path());
+
+        let report = bench.requirements(&gate, &path);
+        assert!(bench.tool_ran(), "the gate allowed the version check");
+        let check = check(&report, "tool:planted");
+        assert_eq!(check["satisfied"], true);
+        assert!(
+            check["message"]
+                .as_str()
+                .expect("message")
+                .contains("planted 2.5.0"),
+            "the check reports the version: {check}"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn test_bin_requirement_is_met_without_running_when_the_gate_refuses() -> Result<()> {
+        let skill = skill_with_frontmatter("requires: [\"bin:planted\"]");
+        let mut bench = Bench::new("tool_requires_refused", &skill)?;
+        bench.plant(&bench.tools.join("planted"))?;
+        let (gate, path) = (bench.gate("deny")?, bench.tools_on_path());
+
+        let report = bench.requirements(&gate, &path);
+        assert!(!bench.tool_ran(), "the gate refused the version check");
+        assert_eq!(check(&report, "tool:planted")["satisfied"], true);
+        Ok(())
+    }
+}
 
 // ---------------------------------------------------------------------------
 // Test skill definitions

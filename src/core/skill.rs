@@ -949,16 +949,13 @@ impl SlicePredicate {
                 false
             }
             PredicateType::ToolVersion { tool, op, version } => {
-                let Ok(bin_path) = which::which(tool) else {
+                let Some(bin_path) = resolve_tool(tool) else {
                     return false;
                 };
                 if version == "0.0.0" || version == "*" {
                     return true;
                 }
-                let Ok(output) = std::process::Command::new(bin_path)
-                    .arg("--version")
-                    .output()
-                else {
+                let Some(output) = run_tool_version(&bin_path) else {
                     return false;
                 };
                 let stdout = String::from_utf8_lossy(&output.stdout);
@@ -970,6 +967,61 @@ impl SlicePredicate {
             }
         }
     }
+}
+
+/// Whether `name` is a plain program name. Skills arrive through imports, bundles and
+/// remotes, so a name one gives must not be able to pick a path or read as an option.
+#[must_use]
+pub fn is_plain_tool_name(name: &str) -> bool {
+    let mut chars = name.chars();
+    chars.next().is_some_and(|c| c.is_ascii_alphanumeric())
+        && chars.all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '+' | '-'))
+}
+
+/// Find a tool a skill names, looking only in the absolute `PATH` entries.
+///
+/// That way `.`, an empty entry or a relative one cannot serve it from the working directory.
+/// On Windows only an `.exe` counts, because `Command` runs `.bat` and `.cmd` files through a
+/// shell.
+#[must_use]
+pub fn resolve_tool(name: &str) -> Option<std::path::PathBuf> {
+    if !is_plain_tool_name(name) {
+        return None;
+    }
+    let file_name = format!("{name}{}", std::env::consts::EXE_SUFFIX);
+    std::env::split_paths(&std::env::var_os("PATH")?)
+        .filter(|dir| dir.is_absolute())
+        .map(|dir| dir.join(&file_name))
+        .find(|path| is_executable_file(path))
+}
+
+#[cfg(unix)]
+fn is_executable_file(path: &std::path::Path) -> bool {
+    use std::os::unix::fs::PermissionsExt;
+    std::fs::metadata(path)
+        .is_ok_and(|meta| meta.is_file() && meta.permissions().mode() & 0o111 != 0)
+}
+
+#[cfg(not(unix))]
+fn is_executable_file(path: &std::path::Path) -> bool {
+    path.is_file()
+}
+
+/// Run `<tool> --version` for a tool from [`resolve_tool`], if the safety gate allows it.
+/// With no gate to ask, nothing runs and the caller sees no version.
+#[must_use]
+pub fn run_tool_version(tool: &std::path::Path) -> Option<std::process::Output> {
+    let command = format!("{} --version", tool.display());
+    let allowed =
+        crate::security::SafetyGate::from_env().and_then(|gate| gate.enforce(&command, None));
+    if let Err(err) = allowed {
+        tracing::warn!("not running {command}: {err}");
+        return None;
+    }
+    std::process::Command::new(tool)
+        .arg("--version")
+        .output()
+        .ok()
 }
 
 fn parse_op_and_rhs(input: &str) -> Option<(VersionOp, String)> {
@@ -1130,6 +1182,34 @@ pub struct BlockLens {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_plain_tool_names() {
+        for name in ["git", "rustc", "gcc-14", "g++", "python3.12", "fd_find"] {
+            assert!(is_plain_tool_name(name), "{name} should pass");
+        }
+        for name in [
+            "",
+            ".",
+            "..",
+            "./x",
+            "../x",
+            "/usr/bin/git",
+            "a/b",
+            "a\\b",
+            "-x",
+            "--version",
+            ".hidden",
+            "git status",
+            "git;id",
+            "$(id)",
+            "`id`",
+            "a|b",
+            "é",
+        ] {
+            assert!(!is_plain_tool_name(name), "{name:?} should fail");
+        }
+    }
 
     #[test]
     fn test_skill_new() {
