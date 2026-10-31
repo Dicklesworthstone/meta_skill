@@ -928,6 +928,30 @@ fn test_sync_still_propagates_a_deletion_that_leaves_skills_behind() -> Result<(
     Ok(())
 }
 
+#[test]
+fn test_sync_keeps_a_skill_it_cannot_tombstone() -> Result<()> {
+    let mut pair = SyncedPair::new("sync_no_tombstone")?;
+    fs::remove_dir_all(pair.remote.path().join("skills/by-id/alpha-notes"))?;
+    let tombstones = pair.fixture.ms_root.join("tombstones");
+    if tombstones.exists() {
+        fs::rename(&tombstones, tombstones.with_extension("moved"))?;
+    }
+    fs::write(&tombstones, "a file where the directory goes")?;
+
+    let output = pair.sync(&[]);
+    assert!(
+        pair.local_spec("alpha-notes").exists(),
+        "a skill must not go without its tombstone"
+    );
+    assert!(!output.success, "the sync must fail: {}", output.stdout);
+    let message = error_message(&output);
+    assert!(
+        message.contains("alpha-notes was not deleted") && message.contains("tombstone"),
+        "{message}"
+    );
+    Ok(())
+}
+
 /// A local JFP Cloud service that accepts every push and records each pushed item.
 struct JfpService {
     port: u16,

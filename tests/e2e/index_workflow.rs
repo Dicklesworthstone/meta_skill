@@ -811,3 +811,35 @@ fn test_index_recomputes_api_embeddings_when_their_vector_space_changes() -> Res
     fixture.generate_report();
     Ok(())
 }
+
+/// A pack the index can't write is reported, and a later forced index writes it.
+#[test]
+fn test_index_reports_a_pack_it_cannot_write() -> Result<()> {
+    let mut fixture = E2EFixture::new("index_pack_error");
+    let output = fixture.init();
+    fixture.assert_success(&output, "init");
+    fixture.create_skill(
+        "pack-notes",
+        "---\nname: Pack Notes\ndescription: Notes for the pack test\n---\n\n# Pack Notes\n\nBody.\n",
+    )?;
+
+    let packs = fixture.ms_root.join("packs");
+    std::fs::write(&packs, "a file where the directory goes")?;
+    let output = fixture.run_ms(&["--robot", "index"]);
+    let result = output.json();
+    assert_eq!(
+        result["status"], "partial",
+        "a pack that wasn't written must not read as ok: {result}"
+    );
+    let error = result["errors"][0]["error"].as_str().unwrap_or_default();
+    assert!(error.contains("write pack for pack-notes"), "{result}");
+
+    std::fs::rename(&packs, packs.with_extension("moved"))?;
+    let output = fixture.run_ms(&["--robot", "index", "--force"]);
+    fixture.assert_success(&output, "index once the path is clear");
+    assert_eq!(output.json()["errors"], serde_json::json!([]));
+    assert!(packs.join("pack-notes.pack.json").exists());
+
+    fixture.generate_report();
+    Ok(())
+}

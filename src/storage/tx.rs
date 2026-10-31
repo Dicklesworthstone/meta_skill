@@ -583,12 +583,19 @@ impl TxManager {
                 .strip_prefix(&self.ms_root)
                 .map(|p| p.to_string_lossy().to_string())
                 .unwrap_or_else(|_| format!("archive/skills/by-id/{skill_id}"));
-            let _ = super::tombstone::TombstoneManager::new(&self.ms_root).record_copy(
-                &skill_dir,
-                Some(&rel_path),
-                Some("delete_skill"),
-                Some("tx"),
-            );
+            super::tombstone::TombstoneManager::new(&self.ms_root)
+                .record_copy(
+                    &skill_dir,
+                    Some(&rel_path),
+                    Some("delete_skill"),
+                    Some("tx"),
+                )
+                .map_err(|err| {
+                    MsError::TransactionFailed(format!(
+                        "skill {skill_id} was not deleted, because no tombstone could be \
+                         written: {err}"
+                    ))
+                })?;
         }
 
         // Phase 2: Commit - delete from Git (creates commit)
@@ -739,7 +746,10 @@ impl TxManager {
         let embedding_hash = hex::encode(Sha256::digest(body.as_bytes()));
 
         let packs_dir = self.ms_root.join("packs");
-        let _ = fs::create_dir_all(&packs_dir);
+        let pack_error = |err: std::io::Error| {
+            MsError::TransactionFailed(format!("write pack for {}: {err}", skill.metadata.id))
+        };
+        fs::create_dir_all(&packs_dir).map_err(pack_error)?;
         let pack_file = packs_dir.join(format!("{}.pack.json", skill.metadata.id));
         let skill_pack = crate::core::skill::SkillPack {
             skill_id: skill.metadata.id.clone(),
@@ -756,9 +766,9 @@ impl TxManager {
             "predicate_index_hash": predicate_index_hash,
             "slices": slice_index,
         });
-        if let Ok(pack_str) = serde_json::to_string_pretty(&pack_payload) {
-            let _ = fs::write(&skill_pack.pack_path, pack_str);
-        }
+        let pack_str = serde_json::to_string_pretty(&pack_payload)
+            .map_err(|e| MsError::TransactionFailed(format!("serialize pack: {e}")))?;
+        fs::write(&skill_pack.pack_path, pack_str).map_err(pack_error)?;
         self.db.upsert_skill_pack(
             &skill_pack.skill_id,
             &skill_pack.pack_path.to_string_lossy(),
