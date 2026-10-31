@@ -137,6 +137,20 @@ fn classify_markdown_block(
 }
 
 /// Parse a SKILL.md file into a `SkillSpec`.
+/// Why the frontmatter of `content` can't be read, if it can't. `parse_markdown` carries
+/// on without it, so a caller that takes files from elsewhere asks here first.
+#[must_use]
+pub fn frontmatter_error(content: &str) -> Option<String> {
+    let mut lines = content.lines();
+    if lines.next()?.trim() != "---" {
+        return None;
+    }
+    let yaml: Vec<&str> = lines.take_while(|line| line.trim() != "---").collect();
+    serde_yaml::from_str::<FrontmatterSpec>(&yaml.join("\n"))
+        .err()
+        .map(|err| err.to_string())
+}
+
 pub fn parse_markdown(content: &str) -> Result<SkillSpec> {
     let mut name = String::new();
     let mut description_lines = Vec::new();

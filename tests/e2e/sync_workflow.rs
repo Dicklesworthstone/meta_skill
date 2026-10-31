@@ -1107,3 +1107,251 @@ fn test_sync_holds_cloud_deletions_when_a_skill_cannot_be_read() -> Result<()> {
     );
     Ok(())
 }
+
+/// A sync through ru indexes whatever `SKILL.md` a pulled repository holds.
+#[cfg(unix)]
+mod ru_repositories {
+    use super::*;
+    use std::os::unix::fs::{PermissionsExt, symlink};
+
+    const GITHUB_TOKEN: &str = "ghp_abcdefghijklmnopqrstuvwxyz0123456789";
+
+    fn repository_skill(description: &str) -> String {
+        format!(
+            "---\nid: repo-notes\nname: Repo Notes\ndescription: {description}\n---\n\n\
+             # Repo Notes\n\nNotes kept in a repository.\n"
+        )
+    }
+
+    /// A project with an ru remote whose stand-in reports `repo` as pulled.
+    struct RuRemote {
+        fixture: E2EFixture,
+        repo: TempDir,
+    }
+
+    impl RuRemote {
+        fn new(scenario: &str) -> Result<Self> {
+            let mut fixture = E2EFixture::new(scenario);
+            let repo = TempDir::new()?;
+            let output = fixture.init();
+            fixture.assert_success(&output, "init");
+
+            let path = repo.path().to_str().unwrap();
+            let pulled = json!({
+                "repos": [{"name": path, "path": path, "action": "pull", "status": "updated"}]
+            });
+            let ru = fixture.root.join("stand-in-ru");
+            fs::write(
+                &ru,
+                format!(
+                    "#!/bin/sh\ncase \"$1\" in\n  --version) echo 'ru 1.2.0' ;;\n  \
+                     sync) printf '%s\\n' '{pulled}' ;;\nesac\n"
+                ),
+            )?;
+            fs::set_permissions(&ru, fs::Permissions::from_mode(0o755))?;
+            let mut config = fs::read_to_string(&fixture.config_path)?;
+            config.push_str(&format!(
+                "\n[ru]\nenabled = true\nru_path = \"{}\"\n",
+                ru.display()
+            ));
+            fs::write(&fixture.config_path, config)?;
+
+            let output = run_in_home(
+                &mut fixture,
+                &["--robot", "remote", "add", "repos", "ru", "--type", "ru"],
+                &[],
+            );
+            fixture.assert_success(&output, "remote add");
+            Ok(Self { fixture, repo })
+        }
+
+        fn write_skill(&self, dir: &str, content: impl AsRef<[u8]>) -> Result<PathBuf> {
+            let dir = self.repo.path().join(dir);
+            fs::create_dir_all(&dir)?;
+            let path = dir.join("SKILL.md");
+            fs::write(&path, content)?;
+            Ok(path)
+        }
+
+        /// Sync and return the errors the report carries.
+        fn sync(&mut self, flags: &[&str]) -> Vec<String> {
+            let mut args = vec!["--robot", "sync", "repos"];
+            args.extend_from_slice(flags);
+            let output = run_in_home(&mut self.fixture, &args, &[]);
+            self.fixture.assert_success(&output, "ru sync");
+            output.json()["reports"][0]["errors"]
+                .as_array()
+                .expect("report errors")
+                .iter()
+                .map(|error| error.as_str().expect("error text").to_string())
+                .collect()
+        }
+
+        fn indexed_description(&self) -> Option<String> {
+            let spec = fs::read_to_string(local_spec(&self.fixture, "repo-notes")).ok()?;
+            let spec: Value = serde_json::from_str(&spec).expect("spec json");
+            Some(spec["metadata"]["description"].as_str()?.to_string())
+        }
+    }
+
+    #[test]
+    fn test_ru_sync_indexes_a_repository_skill() -> Result<()> {
+        let mut ru = RuRemote::new("ru_sync_indexes")?;
+        ru.write_skill("notes", repository_skill("first"))?;
+
+        let errors = ru.sync(&[]);
+        assert_eq!(ru.indexed_description().as_deref(), Some("first"));
+        assert_eq!(errors, Vec::<String>::new());
+        Ok(())
+    }
+
+    #[test]
+    fn test_ru_sync_updates_a_skill_it_indexed() -> Result<()> {
+        let mut ru = RuRemote::new("ru_sync_updates")?;
+        ru.write_skill("notes", repository_skill("first"))?;
+        assert_eq!(ru.sync(&[]), Vec::<String>::new());
+
+        ru.write_skill("notes", repository_skill("second"))?;
+        let errors = ru.sync(&[]);
+        assert_eq!(
+            ru.indexed_description().as_deref(),
+            Some("second"),
+            "a repository updates its own skill without --force"
+        );
+        assert_eq!(errors, Vec::<String>::new());
+        Ok(())
+    }
+
+    #[test]
+    fn test_ru_sync_refuses_a_symlink_out_of_the_repository() -> Result<()> {
+        let mut ru = RuRemote::new("ru_sync_symlink")?;
+        let outside = TempDir::new()?;
+        let target = outside.path().join("private.md");
+        fs::write(&target, repository_skill("from outside"))?;
+        let dir = ru.repo.path().join("notes");
+        fs::create_dir_all(&dir)?;
+        let link = dir.join("SKILL.md");
+        symlink(&target, &link)?;
+
+        let errors = ru.sync(&[]);
+        assert_eq!(
+            ru.indexed_description(),
+            None,
+            "a file outside the repository must not reach the archive"
+        );
+        assert_eq!(errors.len(), 2, "a count and one problem: {errors:?}");
+        assert!(errors[1].contains(link.to_str().unwrap()), "{errors:?}");
+        Ok(())
+    }
+
+    #[test]
+    fn test_ru_sync_scans_a_repository_skill_for_secrets() -> Result<()> {
+        let mut ru = RuRemote::new("ru_sync_secret")?;
+        let path = ru.write_skill(
+            "notes",
+            format!(
+                "{}\nexport GITHUB_TOKEN={GITHUB_TOKEN}\n",
+                repository_skill("first")
+            ),
+        )?;
+
+        let errors = ru.sync(&[]);
+        assert_eq!(errors.len(), 2, "a count and one problem: {errors:?}");
+        assert!(
+            errors[1].contains(path.to_str().unwrap()) && errors[1].contains("secret"),
+            "the report must name the file: {errors:?}"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn test_ru_sync_counts_a_file_it_cannot_read() -> Result<()> {
+        let mut ru = RuRemote::new("ru_sync_unreadable")?;
+        ru.write_skill("notes", repository_skill("first"))?;
+        let bad = ru.write_skill("broken", [0xff, 0xfe, 0x00])?;
+
+        let errors = ru.sync(&[]);
+        assert_eq!(
+            errors.first().map(String::as_str),
+            Some("ru auto_index: 1 problem(s) in SKILL.md files"),
+            "{errors:?}"
+        );
+        assert!(errors[1].contains(bad.to_str().unwrap()), "{errors:?}");
+        assert_eq!(
+            ru.indexed_description().as_deref(),
+            Some("first"),
+            "one bad file must not stop the rest"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn test_ru_sync_counts_frontmatter_it_cannot_parse() -> Result<()> {
+        let mut ru = RuRemote::new("ru_sync_frontmatter")?;
+        let bad = ru.write_skill("notes", "---\nid: [unclosed\n---\n\n# Repo Notes\n")?;
+
+        let errors = ru.sync(&[]);
+        assert_eq!(
+            errors.first().map(String::as_str),
+            Some("ru auto_index: 1 problem(s) in SKILL.md files"),
+            "{errors:?}"
+        );
+        assert!(
+            errors[1].contains(bad.to_str().unwrap()) && errors[1].contains("frontmatter"),
+            "{errors:?}"
+        );
+        assert!(
+            !local_spec(&ru.fixture, "repo-notes").exists(),
+            "broken frontmatter must not be indexed under the heading's name"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn test_ru_sync_refuses_to_replace_a_skill_from_another_source() -> Result<()> {
+        let mut ru = RuRemote::new("ru_sync_same_id")?;
+        ru.fixture
+            .create_skill("repo-notes", &repository_skill("mine"))?;
+        let output = ru.fixture.run_ms(&["--robot", "index"]);
+        ru.fixture.assert_success(&output, "index");
+        ru.write_skill("notes", repository_skill("theirs"))?;
+
+        let errors = ru.sync(&[]);
+        assert_eq!(
+            ru.indexed_description().as_deref(),
+            Some("mine"),
+            "a repository must not replace a skill it did not write"
+        );
+        assert_eq!(errors.len(), 2, "a count and one problem: {errors:?}");
+        assert!(errors[1].contains("--force"), "{errors:?}");
+        Ok(())
+    }
+
+    #[test]
+    fn test_ru_sync_force_replaces_a_skill_from_another_source() -> Result<()> {
+        let mut ru = RuRemote::new("ru_sync_same_id_force")?;
+        ru.fixture
+            .create_skill("repo-notes", &repository_skill("mine"))?;
+        let output = ru.fixture.run_ms(&["--robot", "index"]);
+        ru.fixture.assert_success(&output, "index");
+        ru.write_skill("notes", repository_skill("theirs"))?;
+
+        let errors = ru.sync(&["--force"]);
+        assert_eq!(ru.indexed_description().as_deref(), Some("theirs"));
+        assert_eq!(errors, Vec::<String>::new());
+        Ok(())
+    }
+
+    #[test]
+    fn test_ru_sync_refuses_a_second_copy_of_an_id() -> Result<()> {
+        let mut ru = RuRemote::new("ru_sync_two_copies")?;
+        ru.write_skill("one", repository_skill("copy"))?;
+        ru.write_skill("two", repository_skill("copy"))?;
+
+        let errors = ru.sync(&[]);
+        assert_eq!(errors.len(), 2, "a count and one problem: {errors:?}");
+        assert!(errors[1].contains("also has id repo-notes"), "{errors:?}");
+        assert_eq!(ru.indexed_description().as_deref(), Some("copy"));
+        Ok(())
+    }
+}

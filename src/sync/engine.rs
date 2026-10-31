@@ -12,6 +12,7 @@ use tracing::{info, warn};
 use crate::config::RuConfig;
 use crate::core::SkillSpec;
 use crate::error::{MsError, Result};
+use crate::security::secret_scanner::contains_secrets;
 use crate::storage::{Database, GitArchive, TxManager};
 
 use super::SyncConfig;
@@ -33,6 +34,13 @@ pub struct SyncOptions {
     pub pull_only: bool,
     pub dry_run: bool,
     pub force: bool,
+}
+
+/// What indexing ru repositories did. One bad file never stops the rest.
+#[derive(Debug, Clone, Default)]
+pub struct RuIndexReport {
+    pub indexed: Vec<String>,
+    pub problems: Vec<String>,
 }
 
 #[derive(Debug, Clone, Default, Serialize)]
@@ -266,8 +274,18 @@ impl SyncEngine {
                         }
                     }
                     if !target_paths.is_empty() {
-                        if let Err(err) = self.index_ru_repo_paths(&target_paths) {
-                            report.errors.push(format!("ru auto_index failed: {err}"));
+                        match self.index_ru_repo_paths(&target_paths, options.force) {
+                            Ok(index) if index.problems.is_empty() => {}
+                            Ok(index) => {
+                                report.errors.push(format!(
+                                    "ru auto_index: {} problem(s) in SKILL.md files",
+                                    index.problems.len()
+                                ));
+                                report.errors.extend(index.problems);
+                            }
+                            Err(err) => {
+                                report.errors.push(format!("ru auto_index failed: {err}"));
+                            }
                         }
                     }
                 }
@@ -282,42 +300,122 @@ impl SyncEngine {
         }
     }
 
-    /// Discover and index `SKILL.md` files under the given RU repository paths.
-    pub fn index_ru_repo_paths(&self, repo_paths: &[PathBuf]) -> Result<Vec<String>> {
+    /// Discover and index `SKILL.md` files under the given RU repository paths. A repository
+    /// is someone else's content, so a file that can't be read, leaves its repository or
+    /// would replace a skill from another source is reported and left out. `force` allows
+    /// the replacement.
+    pub fn index_ru_repo_paths(
+        &self,
+        repo_paths: &[PathBuf],
+        force: bool,
+    ) -> Result<RuIndexReport> {
         let tx_mgr = TxManager::new(self.db.clone(), self.git.clone(), self.ms_root.clone())?;
-        let mut specs = Vec::new();
+        let mut report = RuIndexReport::default();
+        let mut found: Vec<(SkillSpec, &Path, PathBuf)> = Vec::new();
         for root in repo_paths {
             if !root.exists() {
                 continue;
             }
-            for entry in walkdir::WalkDir::new(root)
-                .max_depth(5)
-                .into_iter()
-                .filter_map(std::result::Result::ok)
-            {
+            for entry in walkdir::WalkDir::new(root).max_depth(5) {
+                let entry = match entry {
+                    Ok(entry) => entry,
+                    Err(err) => {
+                        report.problems.push(format!("{}: {err}", root.display()));
+                        continue;
+                    }
+                };
                 let path = entry.path();
-                if path.is_file()
-                    && path
+                if !path.is_file()
+                    || !path
                         .file_name()
                         .is_some_and(|n| n.eq_ignore_ascii_case("SKILL.md"))
                 {
-                    if let Ok(raw) = std::fs::read_to_string(path) {
-                        if let Ok(mut spec) = crate::core::spec_lens::parse_markdown(&raw) {
-                            if spec.metadata.id.is_empty() {
-                                if let Some(dir_name) = path.parent().and_then(|p| p.file_name()) {
-                                    spec.metadata.id = dir_name.to_string_lossy().to_string();
-                                }
-                            }
-                            if !spec.metadata.id.is_empty() {
-                                specs.push(spec);
-                            }
+                    continue;
+                }
+                let spec = self
+                    .read_ru_skill(path, root, force, &mut report.problems)
+                    .and_then(|spec| {
+                        if found
+                            .iter()
+                            .any(|(other, ..)| other.metadata.id == spec.metadata.id)
+                        {
+                            return Err(MsError::ValidationFailed(format!(
+                                "another SKILL.md in this sync also has id {}",
+                                spec.metadata.id
+                            )));
                         }
-                    }
+                        Ok(spec)
+                    });
+                match spec {
+                    Ok(spec) => found.push((spec, root.as_path(), path.to_path_buf())),
+                    Err(err) => report.problems.push(format!("{}: {err}", path.display())),
                 }
             }
         }
+
+        let specs: Vec<SkillSpec> = found.iter().map(|(spec, ..)| spec.clone()).collect();
         tx_mgr.write_skills_batch(&specs)?;
-        Ok(specs.into_iter().map(|s| s.metadata.id).collect())
+        for (spec, root, path) in found {
+            self.db.record_skill_origin(
+                &spec.metadata.id,
+                &path.to_string_lossy(),
+                &root.to_string_lossy(),
+            )?;
+            report.indexed.push(spec.metadata.id);
+        }
+        Ok(report)
+    }
+
+    fn read_ru_skill(
+        &self,
+        path: &Path,
+        root: &Path,
+        force: bool,
+        problems: &mut Vec<String>,
+    ) -> Result<SkillSpec> {
+        crate::security::path_policy::deny_symlink_escape(path, root)?;
+        let raw = std::fs::read_to_string(path)?;
+        if contains_secrets(&raw) {
+            warn!(path = %path.display(), "potential secret or high-entropy credential in a ru skill");
+            problems.push(format!(
+                "{}: potential secret or credential, indexed anyway",
+                path.display()
+            ));
+        }
+        if let Some(err) = crate::core::spec_lens::frontmatter_error(&raw) {
+            return Err(MsError::ValidationFailed(format!("frontmatter: {err}")));
+        }
+        let mut spec = crate::core::spec_lens::parse_markdown(&raw)?;
+        if spec.metadata.id.is_empty() {
+            if let Some(dir_name) = path.parent().and_then(|p| p.file_name()) {
+                spec.metadata.id = dir_name.to_string_lossy().to_string();
+            }
+        }
+        let id = &spec.metadata.id;
+        if id.is_empty() {
+            return Err(MsError::ValidationFailed(
+                "no skill id in the file or its directory name".to_string(),
+            ));
+        }
+        if !force && self.git.skill_exists(id) && !self.came_from(id, path)? {
+            return Err(MsError::ValidationFailed(format!(
+                "skill {id} already exists from another source; pass --force to replace it"
+            )));
+        }
+        Ok(spec)
+    }
+
+    /// Whether the recorded origin of `id` is the file at `path`.
+    fn came_from(&self, id: &str, path: &Path) -> Result<bool> {
+        let Some((origin, _)) = self.db.get_skill_origin(id)? else {
+            return Ok(false);
+        };
+        let origin = Path::new(&origin);
+        Ok(origin == path
+            || matches!(
+                (origin.canonicalize(), path.canonicalize()),
+                (Ok(a), Ok(b)) if a == b
+            ))
     }
 
     fn sync_jfp_cloud(
