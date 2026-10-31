@@ -395,13 +395,19 @@ mod repository_config {
         let bench = Repository::new()?;
         fs::write(bench.config_path(), "[disclosure]\ntoken_budget = 900\n")?;
 
-        let output = bench.ms(&["config", "add", "cm.default_flags", "--x"], &[]);
+        // `--` so the flag-shaped value reaches the config code instead of clap
+        let output = bench.ms(&["config", "add", "cm.default_flags", "--", "--x"], &[]);
         assert_eq!(
             fs::read_to_string(bench.config_path())?,
             "[disclosure]\ntoken_budget = 900\n",
             "a refused write changes nothing"
         );
         assert!(!output.status.success(), "must fail: {output:?}");
+        let text = stderr(&output);
+        assert!(
+            text.contains("cm.default_flags can't be set in a project's config"),
+            "refused as a user-only key: {text}"
+        );
         Ok(())
     }
 
