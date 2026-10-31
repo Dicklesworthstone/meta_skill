@@ -644,23 +644,19 @@ fn define_tools() -> Vec<Tool> {
         },
         Tool {
             name: "config".to_string(),
-            description: "Get or set ms configuration values".to_string(),
+            description: "Read ms configuration values".to_string(),
             input_schema: serde_json::json!({
                 "type": "object",
                 "properties": {
                     "action": {
                         "type": "string",
-                        "enum": ["get", "set", "list"],
+                        "enum": ["get", "list"],
                         "description": "Action to perform",
                         "default": "list"
                     },
                     "key": {
                         "type": "string",
-                        "description": "Configuration key (for get/set)"
-                    },
-                    "value": {
-                        "type": "string",
-                        "description": "Configuration value (for set)"
+                        "description": "Configuration key (for get)"
                     }
                 }
             }),
@@ -1819,7 +1815,6 @@ fn handle_tool_config(ctx: &AppContext, args: &Value) -> Result<ToolResult> {
         .unwrap_or("list");
 
     let key = args.get("key").and_then(|v| v.as_str());
-    let value = args.get("value").and_then(|v| v.as_str());
 
     match action {
         "list" => {
@@ -1880,24 +1875,13 @@ fn handle_tool_config(ctx: &AppContext, args: &Value) -> Result<ToolResult> {
             });
             Ok(ToolResult::text(serde_json::to_string_pretty(&output)?))
         }
-        "set" => {
-            let key = key.ok_or_else(|| {
-                MsError::ValidationFailed("'key' parameter required for set action".to_string())
-            })?;
-            let val = value.ok_or_else(|| {
-                MsError::ValidationFailed("'value' parameter required for set action".to_string())
-            })?;
-            super::config::set_config_key_value(&ctx.config_path, key, val)?;
-            let output = serde_json::json!({
-                "status": "ok",
-                "action": "set",
-                "key": key,
-                "value": val,
-            });
-            Ok(ToolResult::text(serde_json::to_string_pretty(&output)?))
-        }
+        // Config is read-only through MCP: the safety gate reads these keys, so a client
+        // must not be able to rewrite them.
+        "set" => Err(MsError::ValidationFailed(
+            "Config is read-only through MCP. Use 'ms config set' CLI.".to_string(),
+        )),
         _ => Err(MsError::ValidationFailed(format!(
-            "Unknown action: {action}. Valid actions: list, get, set"
+            "Unknown action: {action}. Valid actions: list, get"
         ))),
     }
 }
@@ -2198,7 +2182,10 @@ mod tests {
         let props = tool.input_schema.get("properties").unwrap();
         assert!(props.get("action").is_some());
         assert!(props.get("key").is_some());
-        assert!(props.get("value").is_some());
+        assert!(props.get("value").is_none());
+
+        let actions = props["action"]["enum"].as_array().unwrap();
+        assert!(!actions.iter().any(|action| action == "set"));
     }
 
     #[test]

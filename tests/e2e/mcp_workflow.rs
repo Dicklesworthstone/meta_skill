@@ -687,6 +687,66 @@ fn test_mcp_list_show_tools() -> Result<()> {
 }
 
 #[test]
+fn test_mcp_config_tool_cannot_write() -> Result<()> {
+    let mut fixture = setup_mcp_fixture("mcp_config_cannot_write")?;
+    let config_before = std::fs::read(&fixture.config_path)?;
+
+    fixture.log_step("The config tool advertises no way to write");
+    let mut client = McpClient::spawn(&fixture, false)?;
+    client.initialize()?;
+    let response = client.list_tools()?;
+    let tools = response.result().expect("tools/list result")["tools"]
+        .as_array()
+        .expect("tools array");
+    let config_tool = tools
+        .iter()
+        .find(|tool| tool["name"] == "config")
+        .expect("config tool");
+    assert_eq!(
+        config_tool["inputSchema"]["properties"]["action"]["enum"],
+        json!(["get", "list"])
+    );
+
+    fixture.log_step("Setting a key the safety gate reads is refused");
+    for (key, value) in [
+        ("safety.require_verbatim_approval", "false"),
+        ("safety.dcg_bin", "/tmp/not-the-guard"),
+        ("cass.cass_path", "/tmp/not-cass"),
+    ] {
+        let response = client.call_tool(
+            "config",
+            json!({ "action": "set", "key": key, "value": value }),
+        )?;
+        assert!(
+            response.raw.contains("read-only through MCP"),
+            "set {key} should be refused: {}",
+            response.raw
+        );
+        assert_eq!(
+            std::fs::read(&fixture.config_path)?,
+            config_before,
+            "set {key} must leave the config file alone"
+        );
+    }
+
+    fixture.log_step("The CLI can still write, and the tool reads what it wrote");
+    let response = client.call_tool("config", json!({ "action": "list" }))?;
+    assert!(response.is_success(), "list: {}", response.raw);
+    client.kill();
+
+    let output = fixture.run_ms(&[
+        "--robot",
+        "config",
+        "safety.require_verbatim_approval",
+        "false",
+    ]);
+    fixture.assert_success(&output, "config set through the CLI");
+    assert_ne!(std::fs::read(&fixture.config_path)?, config_before);
+
+    Ok(())
+}
+
+#[test]
 fn test_mcp_doctor_tool() -> Result<()> {
     let mut fixture = setup_mcp_fixture("mcp_doctor_tool")?;
 
