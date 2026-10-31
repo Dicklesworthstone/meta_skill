@@ -46,6 +46,8 @@ pub struct SyncReport {
     pub forked: Vec<String>,
     pub skipped: Vec<String>,
     pub errors: Vec<String>,
+    /// Deletions this sync did not make because it could not read every skill.
+    pub held_deletions: Vec<String>,
     pub duration_ms: u128,
 }
 
@@ -654,6 +656,7 @@ impl SyncEngine {
 
         let skill_ids = self.git.list_skill_ids()?;
         let skill_ids_set: HashSet<String> = skill_ids.iter().cloned().collect();
+        let mut hold_deletions = false;
 
         for skill_id in &skill_ids {
             if queued_ids.contains(skill_id) {
@@ -671,6 +674,7 @@ impl SyncEngine {
                     report
                         .errors
                         .push(format!("Failed to read skill {}: {}", skill_id, e));
+                    hold_deletions = true;
                     continue;
                 }
             };
@@ -724,6 +728,14 @@ impl SyncEngine {
             .filter(|id| !skill_ids_set.contains(id) && !queued_ids.contains(id))
             .collect();
         deleted_ids.sort();
+
+        if hold_deletions {
+            report.held_deletions.extend(
+                std::mem::take(&mut deleted_ids)
+                    .into_iter()
+                    .map(|id| format!("{id} (remote copy)")),
+            );
+        }
 
         for skill_id in deleted_ids {
             let base_revision = cloud_state.skill_revisions.get(&skill_id).copied();
@@ -972,6 +984,9 @@ impl SyncEngine {
         let (local_map, local_errors) = self.snapshot_archive(self.git.as_ref())?;
         let (remote_map, remote_errors) = self.snapshot_archive(remote_git)?;
 
+        // A skill that could not be read is missing from its snapshot, which looks exactly
+        // like a deletion, so a sync with any read error deletes nothing.
+        let hold_deletions = !local_errors.is_empty() || !remote_errors.is_empty();
         report.errors.extend(local_errors);
         report.errors.extend(remote_errors);
 
@@ -998,6 +1013,16 @@ impl SyncEngine {
             });
 
             let status = determine_sync_status(local, remote_snap, base_hash);
+
+            if hold_deletions
+                && local.is_some() != remote_snap.is_some()
+                && deletes_missing_side(&status, allow_push, allow_pull, options)
+            {
+                // Leave the sync state alone, so a clean sync can still decide this one.
+                let copy = if local.is_some() { "local" } else { "remote" };
+                report.held_deletions.push(format!("{id} ({copy} copy)"));
+                continue;
+            }
 
             let mut final_status = status.clone();
             let mut effective_local_hash = local.map(|s| s.hash.clone());
@@ -1376,6 +1401,21 @@ impl SyncEngine {
             map.insert(id.clone(), SkillSnapshot { hash, id, modified });
         }
         Ok((map, errors))
+    }
+}
+
+/// Whether syncing a skill that only one side has would delete the side that has it.
+fn deletes_missing_side(
+    status: &SkillSyncStatus,
+    allow_push: bool,
+    allow_pull: bool,
+    options: &SyncOptions,
+) -> bool {
+    match status {
+        SkillSyncStatus::LocalAhead => allow_push,
+        SkillSyncStatus::RemoteAhead => allow_pull,
+        SkillSyncStatus::Diverged | SkillSyncStatus::Conflict => options.force,
+        _ => false,
     }
 }
 

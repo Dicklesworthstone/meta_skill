@@ -11,9 +11,15 @@
 //! Uses filesystem remotes for network-independent testing.
 
 use std::fs;
+use std::io::{BufRead, BufReader, Read, Write};
+use std::net::{TcpListener, TcpStream};
+use std::path::PathBuf;
+use std::sync::{Arc, Mutex};
 
-use super::fixture::E2EFixture;
+use super::fixture::{CommandOutput, E2EFixture};
 use ms::error::Result;
+use ms::sync::{ConflictStrategy, SyncConfig};
+use serde_json::{Value, json};
 use tempfile::TempDir;
 
 /// Test syncing to a fresh filesystem remote.
@@ -591,5 +597,390 @@ fn test_sync_pull_only() -> Result<()> {
     println!("[PULL] Stderr: {}", output.stderr);
     fixture.checkpoint("post_pull");
 
+    Ok(())
+}
+
+const SKILL_ALPHA: &str = r#"---
+name: Alpha Notes
+description: Notes kept on both sides of a sync
+tags: [sync]
+---
+
+# Alpha Notes
+
+Alpha content for the deletion tests.
+"#;
+
+const SKILL_BETA: &str = r#"---
+name: Beta Notes
+description: More notes kept on both sides of a sync
+tags: [sync]
+---
+
+# Beta Notes
+
+Beta content for the deletion tests.
+"#;
+
+const SKILL_GAMMA: &str = r#"---
+name: Gamma Notes
+description: Notes that only this machine has
+tags: [sync]
+---
+
+# Gamma Notes
+
+Gamma content for the deletion tests.
+"#;
+
+/// Run `ms` with its sync config inside the fixture, whatever the host sets.
+fn run_in_home(fixture: &mut E2EFixture, args: &[&str], env: &[(&str, &str)]) -> CommandOutput {
+    let config_home = fixture.root.join(".config");
+    let mut vars = vec![("XDG_CONFIG_HOME", config_home.to_str().unwrap())];
+    vars.extend_from_slice(env);
+    fixture.run_ms_with_env(args, &vars)
+}
+
+fn local_spec(fixture: &E2EFixture, id: &str) -> PathBuf {
+    fixture
+        .ms_root
+        .join("archive/skills/by-id")
+        .join(id)
+        .join("skill.spec.json")
+}
+
+fn error_message(output: &CommandOutput) -> String {
+    output.json()["message"]
+        .as_str()
+        .expect("error message")
+        .to_string()
+}
+
+/// A project and a filesystem remote with two skills synced between them.
+struct SyncedPair {
+    fixture: E2EFixture,
+    remote: TempDir,
+}
+
+impl SyncedPair {
+    fn new(scenario: &str) -> Result<Self> {
+        let mut fixture = E2EFixture::new(scenario);
+        let remote = TempDir::new()?;
+        fs::create_dir_all(remote.path().join("skills/by-id"))?;
+
+        let output = fixture.init();
+        fixture.assert_success(&output, "init");
+        fixture.create_skill("alpha-notes", SKILL_ALPHA)?;
+        fixture.create_skill("beta-notes", SKILL_BETA)?;
+        let output = fixture.run_ms(&["--robot", "index"]);
+        fixture.assert_success(&output, "index");
+
+        let mut pair = Self { fixture, remote };
+        let url = pair.remote.path().to_str().unwrap().to_string();
+        let output = run_in_home(
+            &mut pair.fixture,
+            &[
+                "--robot",
+                "remote",
+                "add",
+                "shared",
+                &url,
+                "--remote-type",
+                "filesystem",
+            ],
+            &[],
+        );
+        pair.fixture.assert_success(&output, "remote add");
+
+        let output = pair.sync(&[]);
+        pair.fixture.assert_success(&output, "first sync");
+        for id in ["alpha-notes", "beta-notes"] {
+            assert!(
+                pair.remote_spec(id).exists(),
+                "{id} should reach the remote"
+            );
+        }
+        Ok(pair)
+    }
+
+    fn sync(&mut self, flags: &[&str]) -> CommandOutput {
+        let mut args = vec!["--robot", "sync", "shared"];
+        args.extend_from_slice(flags);
+        run_in_home(&mut self.fixture, &args, &[])
+    }
+
+    fn local_spec(&self, id: &str) -> PathBuf {
+        local_spec(&self.fixture, id)
+    }
+
+    fn remote_spec(&self, id: &str) -> PathBuf {
+        self.remote
+            .path()
+            .join("skills/by-id")
+            .join(id)
+            .join("skill.spec.json")
+    }
+
+    fn sync_config_path(&self) -> PathBuf {
+        let base = if cfg!(target_os = "macos") {
+            "Library/Application Support"
+        } else {
+            ".config"
+        };
+        self.fixture.root.join(base).join("ms/sync.toml")
+    }
+}
+
+fn assert_held(output: &CommandOutput, deletion: &str, unreadable: &str) {
+    assert!(!output.success, "the sync must fail: {}", output.stdout);
+    let message = error_message(output);
+    assert!(
+        message.contains("held back 1 deletion(s)")
+            && message.contains(deletion)
+            && message.contains(&format!("Failed to read skill {unreadable}")),
+        "the failure must name what was held and why: {message}"
+    );
+}
+
+#[test]
+fn test_sync_keeps_the_local_copy_when_the_remote_copy_cannot_be_read() -> Result<()> {
+    let mut pair = SyncedPair::new("sync_hold_local_copy")?;
+    let remote_spec = pair.remote_spec("alpha-notes");
+    let good = fs::read(&remote_spec)?;
+    fs::write(&remote_spec, "{ not json")?;
+
+    let output = pair.sync(&[]);
+    assert!(
+        pair.local_spec("alpha-notes").exists(),
+        "an unreadable remote copy must not delete the local one"
+    );
+    assert_held(&output, "alpha-notes (local copy)", "alpha-notes");
+
+    fs::write(&remote_spec, good)?;
+    let output = pair.sync(&[]);
+    pair.fixture
+        .assert_success(&output, "sync after the repair");
+    assert!(pair.local_spec("alpha-notes").exists());
+    assert_eq!(output.json()["reports"][0]["held_deletions"], json!([]));
+    Ok(())
+}
+
+#[test]
+fn test_sync_keeps_the_remote_copy_when_the_local_copy_cannot_be_read() -> Result<()> {
+    let mut pair = SyncedPair::new("sync_hold_remote_copy")?;
+    let spec = pair.local_spec("alpha-notes");
+    let good = fs::read(&spec)?;
+    fs::write(&spec, "{ not json")?;
+
+    let output = pair.sync(&[]);
+    assert!(
+        pair.remote_spec("alpha-notes").exists(),
+        "an unreadable local copy must not delete the remote one"
+    );
+    assert_held(&output, "alpha-notes (remote copy)", "alpha-notes");
+
+    fs::write(&spec, good)?;
+    let output = pair.sync(&[]);
+    pair.fixture
+        .assert_success(&output, "sync after the repair");
+    assert!(pair.remote_spec("alpha-notes").exists());
+    Ok(())
+}
+
+#[test]
+fn test_sync_force_does_not_delete_through_a_read_error() -> Result<()> {
+    let mut pair = SyncedPair::new("sync_hold_force")?;
+    fs::write(pair.remote_spec("alpha-notes"), "{ not json")?;
+
+    let output = pair.sync(&["--force"]);
+    assert!(
+        pair.local_spec("alpha-notes").exists(),
+        "--force must not delete through a read error"
+    );
+    assert_held(&output, "alpha-notes (local copy)", "alpha-notes");
+    Ok(())
+}
+
+#[test]
+fn test_sync_force_holds_a_conflict_that_would_delete() -> Result<()> {
+    let mut pair = SyncedPair::new("sync_hold_conflict")?;
+
+    // The local edit turns the missing remote copy into a conflict, and this strategy
+    // resolves that conflict by deleting the local copy.
+    let path = pair.sync_config_path();
+    let mut config = SyncConfig::load_from(&path)?;
+    config
+        .conflict_strategies
+        .insert("alpha-notes".to_string(), ConflictStrategy::PreferRemote);
+    config.save_to(&path)?;
+
+    let spec_path = pair.local_spec("alpha-notes");
+    let mut spec: Value = serde_json::from_str(&fs::read_to_string(&spec_path)?)?;
+    spec["metadata"]["description"] = json!("Edited on this machine");
+    fs::write(&spec_path, serde_json::to_string(&spec)?)?;
+    fs::write(pair.remote_spec("alpha-notes"), "{ not json")?;
+
+    let output = pair.sync(&["--force"]);
+    assert!(
+        spec_path.exists(),
+        "a forced conflict must not delete through a read error"
+    );
+    assert_held(&output, "alpha-notes (local copy)", "alpha-notes");
+    Ok(())
+}
+
+/// A local JFP Cloud service that accepts every push and records each pushed item.
+struct JfpService {
+    port: u16,
+    pushed: Arc<Mutex<Vec<Value>>>,
+}
+
+impl JfpService {
+    fn start() -> Self {
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind JFP service");
+        let port = listener.local_addr().expect("service address").port();
+        let pushed = Arc::new(Mutex::new(Vec::new()));
+        let log = Arc::clone(&pushed);
+        std::thread::spawn(move || {
+            for stream in listener.incoming().flatten() {
+                answer_jfp_request(stream, &log);
+            }
+        });
+        Self { port, pushed }
+    }
+
+    fn deleted(&self) -> Vec<String> {
+        let mut ids: Vec<String> = self
+            .pushed
+            .lock()
+            .expect("push log")
+            .iter()
+            .filter(|item| item["deleted"] == json!(true))
+            .map(|item| item["msSkillId"].as_str().expect("id").to_string())
+            .collect();
+        ids.sort();
+        ids
+    }
+}
+
+fn answer_jfp_request(mut stream: TcpStream, log: &Mutex<Vec<Value>>) {
+    let mut reader = BufReader::new(stream.try_clone().expect("clone service stream"));
+    let mut request_line = String::new();
+    reader.read_line(&mut request_line).expect("request line");
+    let path = request_line
+        .split_whitespace()
+        .nth(1)
+        .unwrap_or_default()
+        .to_string();
+    let mut length = 0;
+    loop {
+        let mut header = String::new();
+        reader.read_line(&mut header).expect("header");
+        if header.trim().is_empty() {
+            break;
+        }
+        if let Some((name, value)) = header.split_once(':') {
+            if name.eq_ignore_ascii_case("content-length") {
+                length = value.trim().parse().expect("content length");
+            }
+        }
+    }
+    let mut body = vec![0; length];
+    reader.read_exact(&mut body).expect("request body");
+    let request: Value = serde_json::from_slice(&body).expect("request JSON");
+
+    let now = "2026-10-31T00:00:00Z";
+    let response = match path.as_str() {
+        "/handshake" => json!({
+            "serverTime": now,
+            "minProtocolVersion": "1.0",
+            "protocolVersion": "1.0",
+            "capabilities": {},
+            "device": request["device"],
+        }),
+        "/changes" => json!({ "serverTime": now, "hasMore": false, "skills": [] }),
+        "/push" => {
+            let items = request["items"].as_array().expect("push items");
+            log.lock().expect("push log").extend(items.iter().cloned());
+            let results: Vec<Value> = items
+                .iter()
+                .map(|item| json!({ "msSkillId": item["msSkillId"], "status": "applied" }))
+                .collect();
+            json!({ "serverTime": now, "results": results })
+        }
+        other => panic!("unexpected request: {other}"),
+    }
+    .to_string();
+    write!(
+        stream,
+        "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\
+         Connection: close\r\n\r\n{response}",
+        response.len()
+    )
+    .expect("response");
+}
+
+/// A project with a JFP Cloud remote that remembers two skills this archive no longer has.
+fn jfp_fixture(scenario: &str) -> Result<(E2EFixture, JfpService)> {
+    let mut fixture = E2EFixture::new(scenario);
+    let output = fixture.init();
+    fixture.assert_success(&output, "init");
+
+    let service = JfpService::start();
+    let state_dir = fixture.ms_root.join("sync");
+    fs::create_dir_all(&state_dir)?;
+    fs::write(
+        state_dir.join("jfp-cloud-state.json"),
+        json!({ "skillRevisions": { "alpha-notes": 3, "beta-notes": 4 } }).to_string(),
+    )?;
+
+    let url = format!("http://127.0.0.1:{}", service.port);
+    let output = run_in_home(
+        &mut fixture,
+        &[
+            "--robot",
+            "remote",
+            "add",
+            "cloud",
+            &url,
+            "--remote-type",
+            "jfp-cloud",
+        ],
+        &[],
+    );
+    fixture.assert_success(&output, "remote add");
+    Ok((fixture, service))
+}
+
+fn sync_cloud(fixture: &mut E2EFixture, flags: &[&str]) -> CommandOutput {
+    let mut args = vec!["--robot", "sync", "cloud"];
+    args.extend_from_slice(flags);
+    run_in_home(fixture, &args, &[("JFP_CLOUD_TOKEN", "test-token")])
+}
+
+#[test]
+fn test_sync_holds_cloud_deletions_when_a_skill_cannot_be_read() -> Result<()> {
+    let (mut fixture, service) = jfp_fixture("sync_hold_cloud")?;
+    fixture.create_skill("gamma-notes", SKILL_GAMMA)?;
+    let output = fixture.run_ms(&["--robot", "index"]);
+    fixture.assert_success(&output, "index");
+    let spec = local_spec(&fixture, "gamma-notes");
+    fs::write(&spec, "{ not json")?;
+
+    let output = sync_cloud(&mut fixture, &["--force"]);
+    assert_eq!(
+        service.deleted(),
+        Vec::<String>::new(),
+        "a read error must hold cloud deletions, even with --force"
+    );
+    assert!(!output.success, "the sync must fail: {}", output.stdout);
+    let message = error_message(&output);
+    assert!(
+        message.contains("held back 2 deletion(s)")
+            && message.contains("alpha-notes (remote copy)")
+            && message.contains("beta-notes (remote copy)")
+            && message.contains("Failed to read skill gamma-notes"),
+        "the failure must name what was held and why: {message}"
+    );
     Ok(())
 }

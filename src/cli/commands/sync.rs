@@ -6,8 +6,8 @@ use colored::Colorize;
 use crate::app::AppContext;
 use crate::cli::output::OutputFormat;
 use crate::cli::output::{HumanLayout, emit_human, emit_json};
-use crate::error::Result;
-use crate::sync::{MachineIdentity, SyncConfig, SyncEngine, SyncOptions, SyncState};
+use crate::error::{MsError, Result};
+use crate::sync::{MachineIdentity, SyncConfig, SyncEngine, SyncOptions, SyncReport, SyncState};
 
 use super::index::{IndexArgs, run as run_index};
 
@@ -79,6 +79,8 @@ pub fn run(ctx: &AppContext, args: &SyncArgs) -> Result<()> {
             .iter()
             .any(|r| !r.cloned.is_empty() || !r.pulled.is_empty());
 
+    let held_back = held_back_error(&reports);
+
     if ctx.output_format != OutputFormat::Human {
         let mut payload = serde_json::json!({
             "status": "ok",
@@ -100,7 +102,10 @@ pub fn run(ctx: &AppContext, args: &SyncArgs) -> Result<()> {
             }
         }
 
-        emit_json(&payload)
+        match held_back {
+            Some(err) => Err(err),
+            None => emit_json(&payload),
+        }
     } else {
         let mut layout = HumanLayout::new();
         layout.title("Sync Report");
@@ -114,7 +119,14 @@ pub fn run(ctx: &AppContext, args: &SyncArgs) -> Result<()> {
                 .kv("Resolved", &report.resolved.len().to_string())
                 .kv("Conflicts", &report.conflicts.len().to_string())
                 .kv("Forked", &report.forked.len().to_string())
-                .kv("Skipped", &report.skipped.len().to_string())
+                .kv("Skipped", &report.skipped.len().to_string());
+            for error in &report.errors {
+                layout.kv("Error", error);
+            }
+            for deletion in &report.held_deletions {
+                layout.kv("Held back", deletion);
+            }
+            layout
                 .kv("Duration (ms)", &report.duration_ms.to_string())
                 .blank();
         }
@@ -134,8 +146,31 @@ pub fn run(ctx: &AppContext, args: &SyncArgs) -> Result<()> {
             }
         }
 
-        Ok(())
+        held_back.map_or(Ok(()), Err)
     }
+}
+
+/// A sync that held back deletions is unfinished, so it must not exit as a success.
+fn held_back_error(reports: &[SyncReport]) -> Option<MsError> {
+    let held: Vec<&str> = reports
+        .iter()
+        .flat_map(|report| &report.held_deletions)
+        .map(String::as_str)
+        .collect();
+    if held.is_empty() {
+        return None;
+    }
+    let errors: Vec<&str> = reports
+        .iter()
+        .flat_map(|report| &report.errors)
+        .map(String::as_str)
+        .collect();
+    Some(MsError::Config(format!(
+        "sync held back {} deletion(s) because not every skill could be read: {}. Read errors: {}",
+        held.len(),
+        held.join(", "),
+        errors.join("; ")
+    )))
 }
 
 /// Trigger auto-reindex of skills from ru-managed repositories
