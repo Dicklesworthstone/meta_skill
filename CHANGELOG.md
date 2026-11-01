@@ -9,7 +9,7 @@ All notable changes to **ms** (Meta Skill CLI) are documented here.
 
 ---
 
-## [v0.3.0] -- 2026-10-31
+## [v0.3.0] -- 2026-11-01
 
 ### Security, install and deletion behaviour
 
@@ -172,6 +172,9 @@ section before upgrading.
   can't be written, the delete stops and the skill stays. A pack file that can't be
   written fails that skill's index with the reason, and `ms index --force` writes it
   once the path is clear.
+- `ms index` checkpoints the database's write-ahead log when it finishes, so later
+  commands don't replay that log each time they open the database. `ms show`
+  reports `indexed_slices_count`, counted from the skill's pack file.
 - `ms bundle install --layer` refuses a layer it doesn't know, before anything is
   written. It used to install to the project layer.
 - Embeddings are computed with SIMD, so float rounding can shift a search score
@@ -193,8 +196,10 @@ section before upgrading.
   GitHub API JSON.
 - Dependencies: tantivy 0.27, lru 0.19, rusqlite 0.41, zip 9, parking_lot 0.13,
   vergen-gix 10, and a compatible refresh of the lock. `cargo audit` reports no
-  vulnerabilities and six unmaintained-crate notices. FrankenSQLite stays at
-  0.4.7, because no newer published version has been cleared for this release.
+  vulnerabilities and six unmaintained-crate notices. The FrankenSQLite engine
+  stays at 0.4.7, because no newer published version has been cleared for this
+  release; its `fsqlite-types` and `fsqlite-error` crates, which ms also uses
+  directly, move to 0.4.9 and 0.4.12.
 - Upgrade note: run `ms index` once if you use the API backend. Rows written
   before this release say only `api`, which can't be proved current, so the next
   index recomputes them. Until then, semantic search for that configuration has
@@ -216,12 +221,37 @@ section before upgrading.
 - A JFP pull with an invalid `spec` rebuilds the skill from its markdown, with no
   message.
 - An error saving the dependency graph during `ms index` is dropped.
-- Qualification: on this release's source, the full test suite passed 3,652
-  tests, failed 3 and ignored 35. The same 3 fail the same way on v0.2.3, and
-  none fails only on this release. Two assume `/nonexistent` doesn't exist and
-  one assumes a mode-000 directory can't be read, and neither held where the
-  suite ran. One end-to-end test was corrected after that run, with no source
-  change, and its file passes in full.
+- `BeadsClient::sync()`, part of the library API, fails with br 0.2.18 and later.
+  It runs a bare `br sync`, which br now rejects without a mode. The `ms` CLI
+  doesn't call it.
+- `ms index` takes about 12% longer than in 0.2.3 (302 s → 338 s on a 2,000-skill
+  corpus), and the index is about 18% larger on disk (244 → 288 MB).
+- Qualification: the full test suite ran on this release's source before the
+  search fix (the `ms index` checkpoint and the pack-file slice count): 3,652
+  passed (3,598 ran, 54 returned early because a tool they need, `br`, `bv` or a
+  live cass index, wasn't installed), 3 failed, 35 ignored. The same 3 fail the
+  same way on v0.2.3, and none fails only on this release. Two assume
+  `/nonexistent` doesn't exist and one assumes a mode-000 directory can't be
+  read, and neither held where the suite ran. Run again with a pinned `br`, 37 of
+  the 39 `br` tests ran and passed, and 2 passed only after their sync call
+  failed (see the `sync()` limitation above). The 9 tests that need a live cass
+  index and the 6 that need `bv` were not run. After the search fix, the CLI,
+  end-to-end, integration and snapshot test targets ran again with the same
+  counts as the full run (621 passed, 31 of them returning early at a tool
+  check; the mode-000 test failed again), and so did the unit tests of the
+  changed modules (165 passed (165 ran, 0 returned early at a tool check), 0
+  failed, 0 ignored; expected = 1 for the 2PC test). One end-to-end test was
+  corrected after the full run, with no source change, and its file passes in
+  full.
+- ms's cass invocation and its `bv` code are unchanged since 0.2.3. The new
+  filtering and mining code is covered by fixture and unit tests, but the
+  cass-backed paths of `ms cross-project` ran in no test. A manual smoke of
+  `ms cross-project` against a stand-in cass ran 16 commands, all exiting 0 with
+  no panic. The 9 command shapes of the end-to-end tests return empty results,
+  because the stand-in's session has no project; with `--include-unknown` the
+  session is exported, mined and aggregated. The one graph change, a separator
+  line in `ms graph` table output, prints only on a rich terminal or with
+  `MS_FORCE_RICH`, so no gate test reaches it.
 
 ---
 
