@@ -728,10 +728,11 @@ impl TxManager {
             let _ = res_cache.invalidate_from_db(self.db.conn(), &skill.metadata.id);
         }
 
-        // Populate pre-sliced content blocks and runtime skillpack cache
+        // Pre-sliced content blocks go to the runtime skillpack file below, not to SQLite.
+        // A search process reads every table that references `skills` in full, so a copy
+        // of every skill's slices in `skill_slices` cost each `ms search` about 100 ms on a
+        // 2,000-skill index. `ms show` counts slices from the pack file instead.
         let slice_index = SkillSlicer::slice(&skill);
-        self.db
-            .upsert_skill_slices(&skill.metadata.id, &slice_index)?;
 
         let slices_json = serde_json::to_string(&slice_index)
             .map_err(|e| MsError::TransactionFailed(format!("serialize slices: {e}")))?;
@@ -1402,10 +1403,17 @@ mod tests {
         assert_ne!(slices_str.trim(), "[]");
         assert_ne!(evidence_str.trim(), "{}");
 
-        // 2. Verify skill_slices and packs/<id>.pack.json are populated
+        // 2. Verify the slices live in packs/<id>.pack.json, not in the skill_slices table
         let db_slices = db.get_skill_slices("2pc-full-artifacts").unwrap();
-        assert!(db_slices.is_some());
-        assert!(ms_root.join("packs/2pc-full-artifacts.pack.json").exists());
+        assert!(db_slices.is_none(), "skill_slices must not be written");
+        let pack_raw =
+            fs::read_to_string(ms_root.join("packs/2pc-full-artifacts.pack.json")).unwrap();
+        let pack: serde_json::Value = serde_json::from_str(&pack_raw).unwrap();
+        let pack_slices = pack
+            .pointer("/slices/slices")
+            .and_then(|s| s.as_array())
+            .expect("pack file holds the slice index");
+        assert!(!pack_slices.is_empty());
 
         // 3. Delete skill and verify TombstoneManager lists it
         tx_mgr.delete_skill_locked("2pc-full-artifacts").unwrap();

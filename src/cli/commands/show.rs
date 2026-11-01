@@ -372,8 +372,21 @@ fn show_json(ctx: &AppContext, skill: &SkillRecord, args: &ShowArgs, pretty: boo
         }
     }
 
-    if let Ok(Some(slice_idx)) = ctx.db.get_skill_slices(&skill.id) {
-        output["skill"]["indexed_slices_count"] = serde_json::json!(slice_idx.slices.len());
+    // The index writes each skill's slice index to its pack file (not to SQLite).
+    let pack_path = ctx
+        .ms_root
+        .join("packs")
+        .join(format!("{}.pack.json", skill.id));
+    if let Some(count) = std::fs::read_to_string(&pack_path)
+        .ok()
+        .and_then(|raw| serde_json::from_str::<serde_json::Value>(&raw).ok())
+        .and_then(|pack| {
+            pack.pointer("/slices/slices")
+                .and_then(serde_json::Value::as_array)
+                .map(Vec::len)
+        })
+    {
+        output["skill"]["indexed_slices_count"] = serde_json::json!(count);
     }
 
     // Surface multi-layer override candidates, overlays, and section conflicts if present

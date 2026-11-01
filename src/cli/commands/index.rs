@@ -152,6 +152,17 @@ pub fn run_into(
         index_human(ctx, &roots, args)?;
     }
 
+    // An index run leaves its whole write-ahead log in place, and every later process
+    // replays it when it opens ms.db (about 34 ms per `ms search` on a 2,000-skill index).
+    // Fold it into ms.db once here. Best effort: if a reader holds it, the WAL stays.
+    if let Err(err) = ctx
+        .db
+        .conn()
+        .execute_batch("PRAGMA wal_checkpoint(TRUNCATE);")
+    {
+        tracing::debug!(error = %err, "wal checkpoint after index failed");
+    }
+
     if args.watch {
         watch_and_reindex(ctx, &roots, args)?;
     }
