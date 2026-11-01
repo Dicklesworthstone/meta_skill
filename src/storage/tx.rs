@@ -1391,7 +1391,13 @@ mod tests {
         let git = Arc::new(GitArchive::open(&archive_path).unwrap());
         let tx_mgr = TxManager::new(db.clone(), git.clone(), ms_root.clone()).unwrap();
 
-        let skill = sample_skill("2pc-full-artifacts");
+        let mut skill = sample_skill("2pc-full-artifacts");
+        // One content block, so the slicer has something to slice.
+        skill.sections[0].blocks.push(crate::core::SkillBlock {
+            id: "run-tests".to_string(),
+            block_type: crate::core::BlockType::Rule,
+            content: "Run the full test suite before committing.".to_string(),
+        });
         tx_mgr.write_skill(&skill).unwrap();
 
         // 1. Verify GitArchive artifacts are non-placeholder JSON
@@ -1413,7 +1419,12 @@ mod tests {
             .pointer("/slices/slices")
             .and_then(|s| s.as_array())
             .expect("pack file holds the slice index");
-        assert!(!pack_slices.is_empty());
+        let expected = SkillSlicer::slice(&skill).slices.len();
+        assert!(
+            expected > 0,
+            "the test skill must produce at least one slice"
+        );
+        assert_eq!(pack_slices.len(), expected);
 
         // 3. Delete skill and verify TombstoneManager lists it
         tx_mgr.delete_skill_locked("2pc-full-artifacts").unwrap();
