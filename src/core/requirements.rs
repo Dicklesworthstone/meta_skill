@@ -4,7 +4,9 @@ use std::collections::HashSet;
 
 use serde::{Deserialize, Serialize};
 
-use crate::core::skill::{SkillSpec, is_plain_tool_name, resolve_tool, run_tool_version};
+use crate::core::skill::{
+    SkillSpec, ToolVersionProbe, is_plain_tool_name, probe_tool_version, resolve_tool,
+};
 use crate::core::slicing::extract_block_directives;
 use crate::error::Result;
 
@@ -271,20 +273,29 @@ fn check_binary(bin: &str) -> (bool, String) {
     }
     match resolve_tool(bin) {
         Some(path) => {
-            let version = run_tool_version(&path)
-                .filter(|o| o.status.success())
-                .map(|o| {
-                    String::from_utf8_lossy(&o.stdout)
+            let msg = match probe_tool_version(&path) {
+                ToolVersionProbe::Output(o) if o.status.success() => {
+                    let v = String::from_utf8_lossy(&o.stdout)
                         .lines()
                         .next()
                         .unwrap_or("")
                         .trim()
-                        .to_string()
-                })
-                .filter(|v| !v.is_empty());
-            let msg = match version {
-                Some(v) => format!("Found at {} ({v})", path.display()),
-                None => format!("Found at {}", path.display()),
+                        .to_string();
+                    if v.is_empty() {
+                        format!("Found at {}", path.display())
+                    } else {
+                        format!("Found at {} ({v})", path.display())
+                    }
+                }
+                ToolVersionProbe::SafetyUnavailable => {
+                    format!(
+                        "Found at {} (version not checked: dcg unavailable)",
+                        path.display()
+                    )
+                }
+                ToolVersionProbe::Output(_) | ToolVersionProbe::Unavailable => {
+                    format!("Found at {}", path.display())
+                }
             };
             (true, msg)
         }

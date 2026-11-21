@@ -247,6 +247,11 @@ pub fn scan_secrets(content: &str) -> Vec<SecretMatch> {
             let Some(matched) = primary else {
                 continue;
             };
+            if pattern.secret_type == SecretType::BearerToken
+                && !is_likely_bearer_credential(matched.as_str())
+            {
+                continue;
+            }
             matches.push(SecretMatch {
                 secret_type: pattern.secret_type,
                 start: matched.start(),
@@ -287,6 +292,9 @@ fn scan_high_entropy(content: &str) -> Vec<SecretMatch> {
 
     for cap in HIGH_ENTROPY_RE.find_iter(content) {
         let text = cap.as_str();
+        if is_likely_filesystem_path(text) {
+            continue;
+        }
         let entropy = calculate_entropy(text);
 
         // High entropy threshold (typically secrets have entropy > 4.5)
@@ -370,16 +378,102 @@ fn is_likely_hex(s: &str) -> bool {
 /// Check if content contains any secrets.
 ///
 /// A quick check that returns true if any secrets are found.
-pub fn contains_secrets(content: &str) -> bool {
-    // Quick check with patterns first
-    for pattern in SECRET_PATTERNS.iter() {
-        if pattern.regex.is_match(content) {
-            return true;
+/// Returns true if the token following `bearer ` looks like a credential rather
+/// than ordinary prose (e.g. "use a bearer token for the staging API", meta_skill-yvz6).
+fn is_likely_bearer_credential(token: &str) -> bool {
+    const PROSE_WORDS: &[&str] = &[
+        "token",
+        "tokens",
+        "auth",
+        "authentication",
+        "authorization",
+        "header",
+        "headers",
+        "scheme",
+        "credential",
+        "credentials",
+        "string",
+        "value",
+        "format",
+        "prefix",
+        "flow",
+        "key",
+        "keys",
+        "secret",
+        "secrets",
+        "based",
+        "type",
+        "mode",
+        "only",
+        "for",
+        "with",
+        "from",
+        "into",
+        "using",
+        "and",
+        "or",
+        "is",
+        "are",
+        "was",
+        "be",
+        "to",
+        "in",
+        "of",
+        "the",
+        "a",
+        "an",
+    ];
+    let lower = token.to_ascii_lowercase();
+    if PROSE_WORDS.contains(&lower.as_str()) {
+        return false;
+    }
+    if token.len() < 8 {
+        return false;
+    }
+    // Pure single-case alphabetic English words under 20 chars are prose, not credentials.
+    let all_ascii_alpha = token.bytes().all(|b| b.is_ascii_alphabetic());
+    if all_ascii_alpha && token.len() < 20 {
+        let is_plain_word = token.bytes().all(|b| b.is_ascii_lowercase())
+            || token.bytes().enumerate().all(|(i, b)| {
+                if i == 0 {
+                    b.is_ascii_uppercase()
+                } else {
+                    b.is_ascii_lowercase()
+                }
+            });
+        if is_plain_word {
+            return false;
         }
     }
+    true
+}
 
-    // Check high entropy
-    !scan_high_entropy(content).is_empty()
+/// Returns true if a candidate high-entropy run looks like a `/`-separated
+/// filesystem path rather than a Base64 credential (meta_skill-yvz6).
+fn is_likely_filesystem_path(s: &str) -> bool {
+    if s.contains('+') || s.contains('=') {
+        return false;
+    }
+    let slash_count = s.bytes().filter(|&b| b == b'/').count();
+    if slash_count < 2 {
+        return false;
+    }
+    let segments: Vec<&str> = s.split('/').filter(|seg| !seg.is_empty()).collect();
+    if segments.len() < 2 {
+        return false;
+    }
+    // Each segment in a readable path is either short or word-like with separators.
+    segments.iter().all(|seg| {
+        seg.len() <= 28
+            && seg.bytes().any(|b| b.is_ascii_alphabetic())
+            && seg
+                .bytes()
+                .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'-' | b'_' | b'.'))
+    })
+}
+
+pub fn contains_secrets(content: &str) -> bool {
+    !scan_secrets(content).is_empty()
 }
 
 /// Redact all detected secrets in content.
@@ -616,6 +710,23 @@ mod tests {
 
         // High entropy (random-looking)
         assert!(calculate_entropy("aB3dE5fG7hI9jK1lM3nO5p") > 4.0);
+    }
+
+    #[test]
+    fn test_clean_prose_bearer_and_paths_not_redacted() {
+        let s1 = "No, use a bearer token for the staging API, not the shared login.";
+        assert_eq!(redact_secrets(s1), s1);
+        assert!(!contains_secrets(s1));
+
+        let s2 = "No, the deploy script lives in /opt/builds/Release-2026/Payments_Gateway/Deploy-Scripts/x86_64-Linux and not here.";
+        assert_eq!(redact_secrets(s2), s2);
+        assert!(!contains_secrets(s2));
+
+        // Real bearer credentials must still be redacted.
+        let real_bearer = "Authorization: Bearer sk_live_abc123def456ghi789";
+        let redacted = redact_secrets(real_bearer);
+        assert!(!redacted.contains("sk_live_abc123def456ghi789"));
+        assert!(contains_secrets(real_bearer));
     }
 
     #[test]

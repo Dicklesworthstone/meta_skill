@@ -422,11 +422,20 @@ fn run_create(ctx: &AppContext, args: &BundleCreateArgs) -> Result<()> {
         // Persist signer public key in <ms_root>/trusted_keys so locally signed
         // bundles can be verified and installed without --no-verify.
         let trusted_dir = ctx.ms_root.join("trusted_keys");
-        if std::fs::create_dir_all(&trusted_dir).is_ok() {
-            let safe_id = signer.key_id().replace(':', "_");
-            let pub_path = trusted_dir.join(format!("{safe_id}.pub"));
-            let _ = std::fs::write(&pub_path, hex::encode(signer.public_key()));
-        }
+        std::fs::create_dir_all(&trusted_dir).map_err(|err| {
+            MsError::Config(format!(
+                "create trusted_keys directory {}: {err}",
+                trusted_dir.display()
+            ))
+        })?;
+        let safe_id = signer.key_id().replace(':', "_");
+        let pub_path = trusted_dir.join(format!("{safe_id}.pub"));
+        std::fs::write(&pub_path, hex::encode(signer.public_key())).map_err(|err| {
+            MsError::Config(format!(
+                "write trusted signer key {}: {err}",
+                pub_path.display()
+            ))
+        })?;
 
         if ctx.output_format == OutputFormat::Human {
             eprintln!("Signed bundle with key: {}", key_path.display());
@@ -610,20 +619,62 @@ fn run_install(ctx: &AppContext, args: &BundleInstallArgs) -> Result<()> {
         crate::bundler::install_with_options(&package, ctx.git.root(), &only, &options)?
     };
 
-    // Persist installed skills into SQLite, GitArchive, and Tantivy search index
+    // Persist installed skills into SQLite, GitArchive, and Tantivy search index.
+    // `--from-dir` bundles extract to `<archive>/<relative_path>/SKILL.md` rather than
+    // `<archive>/skills/by-id/<id>/skill.spec.json`, so fall back to parsing that installed
+    // directory when `git.read_skill` does not find a pre-existing archive spec (meta_skill-cjjp).
     if !report.installed.is_empty() {
         let tx_mgr =
             crate::storage::TxManager::new(ctx.db.clone(), ctx.git.clone(), ctx.ms_root.clone())?;
         let _ = tx_mgr.recover();
+        let mut indexed_any = false;
         for skill_id in &report.installed {
-            if let Ok(skill_spec) = ctx.git.read_skill(skill_id) {
-                tx_mgr.write_skill_with_layer(&skill_spec, target_layer)?;
-                if let Ok(Some(record)) = ctx.db.get_skill(skill_id) {
-                    let _ = ctx.search.index_skill(&record);
+            let loaded_spec = match ctx.git.read_skill(skill_id) {
+                Ok(spec) => Ok(spec),
+                Err(archive_err) => {
+                    let rel_path = package
+                        .manifest
+                        .skills
+                        .iter()
+                        .find(|s| s.name == *skill_id)
+                        .map(|s| s.path.clone())
+                        .filter(|p| !p.as_os_str().is_empty());
+                    if let Some(rel) = rel_path {
+                        let installed_dir = ctx.git.root().join(&rel);
+                        let spec_json = installed_dir.join("skill.spec.json");
+                        let skill_md = installed_dir.join("SKILL.md");
+                        if spec_json.is_file() {
+                            std::fs::read_to_string(&spec_json)
+                                .map_err(MsError::from)
+                                .and_then(|s| serde_json::from_str(&s).map_err(MsError::from))
+                        } else if skill_md.is_file() {
+                            std::fs::read_to_string(&skill_md)
+                                .map_err(MsError::from)
+                                .and_then(|s| crate::core::spec_lens::parse_markdown(&s))
+                                .map(|mut spec| {
+                                    if spec.metadata.id.is_empty() {
+                                        spec.metadata.id = skill_id.clone();
+                                    }
+                                    spec
+                                })
+                        } else {
+                            Err(archive_err)
+                        }
+                    } else {
+                        Err(archive_err)
+                    }
                 }
+            };
+            let skill_spec = loaded_spec?;
+            tx_mgr.write_skill_with_layer(&skill_spec, target_layer)?;
+            if let Some(record) = ctx.db.get_skill(&skill_spec.metadata.id)? {
+                ctx.search.index_skill(&record)?;
+                indexed_any = true;
             }
         }
-        let _ = ctx.search.commit();
+        if indexed_any {
+            ctx.search.commit()?;
+        }
     }
 
     // Register the installation
@@ -709,16 +760,18 @@ fn run_remove(ctx: &AppContext, args: &BundleRemoveArgs) -> Result<()> {
                                     std::fs::remove_dir_all(&skill_path)?;
                                 }
                             }
-                            let _ = ctx.db.delete_skill(skill_id);
+                            ctx.db.delete_skill(skill_id)?;
                         }
                     } else {
-                        let _ = ctx.db.delete_skill(skill_id);
+                        ctx.db.delete_skill(skill_id)?;
                     }
-                    let _ = ctx.search.delete_skill(skill_id);
+                    ctx.search.delete_skill(skill_id)?;
                     removed_skills.push(skill_id.clone());
                 }
             }
-            let _ = ctx.search.commit();
+            if !removed_skills.is_empty() {
+                ctx.search.commit()?;
+            }
         }
     }
 
@@ -1344,12 +1397,23 @@ fn run_verify(ctx: &AppContext, args: &BundleVerifyArgs) -> Result<()> {
     }
 
     let mut cached_blobs_verified = 0usize;
+    let mut corrupt_cached_blobs = Vec::new();
     if let Ok(store) = crate::bundler::blob::BlobStore::open(ctx.git.root().join("bundles")) {
         for blob in &package.blobs {
-            if store.has_blob(&blob.hash) && store.verify_blob(&blob.hash).unwrap_or(false) {
-                cached_blobs_verified += 1;
+            if store.has_blob(&blob.hash) {
+                if store.verify_blob(&blob.hash).unwrap_or(false) {
+                    cached_blobs_verified += 1;
+                } else {
+                    corrupt_cached_blobs.push(blob.hash.clone());
+                }
             }
         }
+    }
+    if !corrupt_cached_blobs.is_empty() {
+        return Err(MsError::ValidationFailed(format!(
+            "corrupt cached bundle blob(s): {}",
+            corrupt_cached_blobs.join(", ")
+        )));
     }
     let archive_hash = crate::bundler::blob::BlobStore::hash_path(&path).ok();
 

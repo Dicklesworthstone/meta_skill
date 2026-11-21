@@ -129,7 +129,7 @@ fn test_serial_access_baseline() {
     }
 
     // Sync after batch (as recommended)
-    let _ = client.sync(); // May fail without git, that's OK
+    client.sync().expect("BeadsClient::sync() must succeed");
 
     // Verify issues exist via list
     let filter = WorkFilter::default();
@@ -391,12 +391,9 @@ fn test_sync_after_each_agent_pattern() {
 
         // Sync immediately after agent completes (REQUIRED pattern from AGENTS.md)
         log.info("SYNC", &format!("Agent {} syncing", agent_id), None);
-        let sync_result = client.sync();
-        log.debug(
-            "SYNC",
-            &format!("Sync result: {:?}", sync_result.is_ok()),
-            None,
-        );
+        client
+            .sync()
+            .expect("BeadsClient::sync() must succeed after agent batch");
 
         log.info(
             "AGENT",

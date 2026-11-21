@@ -60,31 +60,38 @@ impl<'a> StepExecutor<'a> {
     pub fn execute(&mut self, step: &TestStep) -> Result<()> {
         if let TestStep::LoadSkill { load_skill } = step {
             if let Some(ref skill_id) = self.skill_id {
-                if let Ok(spec) = self.ctx.git.read_skill(skill_id) {
-                    if self.verbose {
-                        println!(
-                            "[STEP] load_skill id={} level={}",
-                            skill_id, load_skill.level
-                        );
-                    }
-                    let md = crate::core::spec_lens::compile_markdown(&spec);
-                    let sections = spec
-                        .sections
-                        .iter()
-                        .map(|s| s.id.clone())
-                        .collect::<Vec<_>>();
-                    let estimated_tokens = (md.len() / 4).max(1);
-                    let tokens = load_skill
-                        .budget
-                        .map_or(estimated_tokens, |b| b.min(estimated_tokens));
-                    self.test_ctx.loaded_skill = Some(LoadedSkillInfo {
-                        skill_id: skill_id.clone(),
-                        sections,
-                        content_length: md.len(),
-                    });
-                    self.test_ctx.tokens_used = tokens;
-                    return Ok(());
+                let spec = self.ctx.git.read_skill(skill_id).map_err(|err| {
+                    MsError::SkillNotFound(format!(
+                        "load_skill test step could not read skill '{skill_id}': {err}"
+                    ))
+                })?;
+                if self.verbose {
+                    println!(
+                        "[STEP] load_skill id={} level={}",
+                        skill_id, load_skill.level
+                    );
                 }
+                let md = crate::core::spec_lens::compile_markdown(&spec);
+                let sections = spec
+                    .sections
+                    .iter()
+                    .map(|s| s.id.clone())
+                    .collect::<Vec<_>>();
+                let estimated_tokens = (md.len() / 4).max(1);
+                if let Some(budget) = load_skill.budget {
+                    if estimated_tokens > budget {
+                        return Err(MsError::ValidationFailed(format!(
+                            "skill '{skill_id}' estimated {estimated_tokens} tokens exceeds load_skill budget {budget}"
+                        )));
+                    }
+                }
+                self.test_ctx.loaded_skill = Some(LoadedSkillInfo {
+                    skill_id: skill_id.clone(),
+                    sections,
+                    content_length: md.len(),
+                });
+                self.test_ctx.tokens_used = estimated_tokens;
+                return Ok(());
             }
         }
         execute_step(step, &mut self.test_ctx, self.verbose, self.safety.as_ref())

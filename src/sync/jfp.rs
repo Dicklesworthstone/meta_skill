@@ -592,11 +592,20 @@ pub fn skill_spec_to_payload(spec: &SkillSpec, device_id: &str) -> Result<JfpSki
 /// Convert JfpSkillPayload to SkillSpec.
 pub fn payload_to_skill_spec(payload: &JfpSkillPayload) -> Result<SkillSpec> {
     if !payload.spec.is_null() {
-        if let Ok(mut spec) = serde_json::from_value::<SkillSpec>(payload.spec.clone()) {
-            if spec.metadata.id.is_empty() {
-                spec.metadata.id = payload.ms_skill_id.clone();
+        match serde_json::from_value::<SkillSpec>(payload.spec.clone()) {
+            Ok(mut spec) => {
+                if spec.metadata.id.is_empty() {
+                    spec.metadata.id = payload.ms_skill_id.clone();
+                }
+                return Ok(spec);
             }
-            return Ok(spec);
+            Err(err) => {
+                tracing::warn!(
+                    skill_id = %payload.ms_skill_id,
+                    error = %err,
+                    "JFP skill spec failed to parse; falling back to skill_md"
+                );
+            }
         }
     }
     if !payload.skill_md.trim().is_empty() {

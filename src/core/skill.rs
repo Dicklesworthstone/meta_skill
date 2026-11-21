@@ -1007,21 +1007,47 @@ fn is_executable_file(path: &std::path::Path) -> bool {
     path.is_file()
 }
 
-/// Run `<tool> --version` for a tool from [`resolve_tool`], if the safety gate allows it.
-/// With no gate to ask, nothing runs and the caller sees no version.
+/// Outcome of probing `<tool> --version` through the safety gate.
+#[derive(Debug)]
+pub enum ToolVersionProbe {
+    /// Command executed and returned process output.
+    Output(std::process::Output),
+    /// Safety gate (`dcg`) was unavailable, so the probe was not executed.
+    SafetyUnavailable,
+    /// Command was blocked by policy or failed to execute.
+    Unavailable,
+}
+
+/// Probe `<tool> --version` for a tool from [`resolve_tool`], distinguishing
+/// missing `dcg` from policy refusals (meta_skill-eri5).
 #[must_use]
-pub fn run_tool_version(tool: &std::path::Path) -> Option<std::process::Output> {
+pub fn probe_tool_version(tool: &std::path::Path) -> ToolVersionProbe {
     let command = format!("{} --version", tool.display());
     let allowed =
         crate::security::SafetyGate::from_env().and_then(|gate| gate.enforce(&command, None));
     if let Err(err) = allowed {
+        let msg = err.to_string();
+        if msg.contains("safety system unavailable") || msg.contains("dcg unavailable") {
+            tracing::warn!("not running {command}: command safety unavailable (dcg not found)");
+            return ToolVersionProbe::SafetyUnavailable;
+        }
         tracing::warn!("not running {command}: {err}");
-        return None;
+        return ToolVersionProbe::Unavailable;
     }
-    std::process::Command::new(tool)
-        .arg("--version")
-        .output()
-        .ok()
+    match std::process::Command::new(tool).arg("--version").output() {
+        Ok(out) => ToolVersionProbe::Output(out),
+        Err(_) => ToolVersionProbe::Unavailable,
+    }
+}
+
+/// Run `<tool> --version` for a tool from [`resolve_tool`], if the safety gate allows it.
+/// With no gate to ask, nothing runs and the caller sees no version.
+#[must_use]
+pub fn run_tool_version(tool: &std::path::Path) -> Option<std::process::Output> {
+    match probe_tool_version(tool) {
+        ToolVersionProbe::Output(out) => Some(out),
+        ToolVersionProbe::SafetyUnavailable | ToolVersionProbe::Unavailable => None,
+    }
 }
 
 fn parse_op_and_rhs(input: &str) -> Option<(VersionOp, String)> {

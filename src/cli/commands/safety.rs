@@ -85,7 +85,9 @@ fn run_packs(ctx: &AppContext) -> Result<()> {
     } else {
         println!("{}", "Configured DCG Safety Packs".bold());
         println!("{}", "─".repeat(30));
-        if status.packs.is_empty() {
+        if status.dcg_version.is_none() {
+            println!("  (dcg not installed; no safety packs active)");
+        } else if status.packs.is_empty() {
             println!("  (default packs enabled)");
         } else {
             for pack in &status.packs {

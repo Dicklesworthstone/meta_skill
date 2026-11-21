@@ -194,9 +194,27 @@ pub fn load_overlays_for_skill(ms_root: &std::path::Path, skill_id: &str) -> Vec
                 .unwrap_or("")
                 .to_ascii_lowercase();
             let parsed: Option<SkillOverlay> = match ext.as_str() {
-                "json" => serde_json::from_str(&content).ok(),
-                "toml" => toml::from_str(&content).ok(),
-                "yaml" | "yml" => serde_yaml::from_str(&content).ok(),
+                "json" => match serde_json::from_str(&content) {
+                    Ok(o) => Some(o),
+                    Err(err) => {
+                        tracing::warn!(path = %path.display(), error = %err, "skipping malformed JSON overlay");
+                        None
+                    }
+                },
+                "toml" => match toml::from_str(&content) {
+                    Ok(o) => Some(o),
+                    Err(err) => {
+                        tracing::warn!(path = %path.display(), error = %err, "skipping malformed TOML overlay");
+                        None
+                    }
+                },
+                "yaml" | "yml" => match serde_yaml::from_str(&content) {
+                    Ok(o) => Some(o),
+                    Err(err) => {
+                        tracing::warn!(path = %path.display(), error = %err, "skipping malformed YAML overlay");
+                        None
+                    }
+                },
                 _ => None,
             };
             if let Some(overlay) = parsed {

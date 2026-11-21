@@ -514,7 +514,13 @@ fn verify_blob_store(store_root: &Path) -> Result<(usize, Vec<String>)> {
     let mut candidate_hashes = Vec::new();
 
     let sha256_dir = blobs_dir.join("sha256");
-    if let Ok(entries) = std::fs::read_dir(&sha256_dir) {
+    if sha256_dir.exists() {
+        let entries = std::fs::read_dir(&sha256_dir).map_err(|err| {
+            crate::error::MsError::Config(format!(
+                "cannot read bundle blobs directory {}: {err}",
+                sha256_dir.display()
+            ))
+        })?;
         for entry in entries.flatten() {
             if entry.path().is_file() {
                 if let Some(name) = entry.file_name().to_str() {
@@ -526,13 +532,17 @@ fn verify_blob_store(store_root: &Path) -> Result<(usize, Vec<String>)> {
         }
     }
 
-    if let Ok(entries) = std::fs::read_dir(&blobs_dir) {
-        for entry in entries.flatten() {
-            if entry.path().is_file() {
-                if let Some(name) = entry.file_name().to_str() {
-                    if name.starts_with("sha256:") {
-                        candidate_hashes.push(name.to_string());
-                    }
+    let entries = std::fs::read_dir(&blobs_dir).map_err(|err| {
+        crate::error::MsError::Config(format!(
+            "cannot read bundle blobs directory {}: {err}",
+            blobs_dir.display()
+        ))
+    })?;
+    for entry in entries.flatten() {
+        if entry.path().is_file() {
+            if let Some(name) = entry.file_name().to_str() {
+                if name.starts_with("sha256:") {
+                    candidate_hashes.push(name.to_string());
                 }
             }
         }

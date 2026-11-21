@@ -425,9 +425,26 @@ impl BeadsClient {
         Ok(())
     }
 
-    /// Sync beads state with git.
+    fn is_legacy_bd_binary(&self) -> bool {
+        self.bd_bin
+            .file_name()
+            .and_then(|n| n.to_str())
+            .is_some_and(|n| n.eq_ignore_ascii_case("bd") || n.eq_ignore_ascii_case("bd.exe"))
+    }
+
+    /// Sync beads state (flushes JSONL on `br` via `--flush-only`, or runs `bd sync` on legacy `bd`).
     pub fn sync(&self) -> Result<()> {
-        self.run_command(&["sync"])?;
+        if self.is_legacy_bd_binary() {
+            self.run_command(&["sync"])?;
+            Ok(())
+        } else {
+            self.sync_with_mode(SyncMode::FlushOnly)
+        }
+    }
+
+    /// Sync beads state with an explicit `br sync` mode.
+    pub fn sync_with_mode(&self, mode: SyncMode) -> Result<()> {
+        self.run_command(&["sync", mode.as_flag()])?;
         Ok(())
     }
 
@@ -564,7 +581,29 @@ impl super::mock::BeadsOperations for BeadsClient {
     }
 }
 
-/// Sync status for beads.
+/// Explicit sync mode for `br sync` (required since br v0.2.18).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SyncMode {
+    /// Export database state to `.beads/issues.jsonl` (`--flush-only`).
+    FlushOnly,
+    /// Import `.beads/issues.jsonl` into the database (`--import-only`).
+    ImportOnly,
+    /// Three-way merge between database and JSONL (`--merge`).
+    Merge,
+}
+
+impl SyncMode {
+    #[must_use]
+    pub const fn as_flag(self) -> &'static str {
+        match self {
+            Self::FlushOnly => "--flush-only",
+            Self::ImportOnly => "--import-only",
+            Self::Merge => "--merge",
+        }
+    }
+}
+
+/// Status of beads sync.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SyncStatus {
     /// No uncommitted changes

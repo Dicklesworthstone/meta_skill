@@ -609,8 +609,12 @@ fn test_real_beads_sync_persistence() {
         let _ = client.create(&req);
     }
 
-    // Call sync (may fail without git, that's OK)
-    let _ = client.sync();
+    // Call sync and assert it flushed JSONL cleanly (needs no git repo).
+    client.sync().expect("BeadsClient::sync() must succeed");
+    assert!(
+        env.project_dir.join(".beads").join("issues.jsonl").exists(),
+        "sync must flush .beads/issues.jsonl"
+    );
 
     // Verify data persists with a fresh client
     let fresh_client = env.client();

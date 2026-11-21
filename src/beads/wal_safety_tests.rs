@@ -324,17 +324,15 @@ fn test_sync_persistence() {
         return;
     }
 
-    // Call sync explicitly (as agents should do)
+    // Call sync explicitly (as agents should do); flushing JSONL needs no git repo.
     let sync_result = client.sync();
-    match &sync_result {
-        Ok(status) => {
-            log.info("SYNC", &format!("Sync completed: {:?}", status), None);
-        }
-        Err(e) => {
-            // Sync may fail if no git repo - that's OK for this test
-            log.warn("SYNC", &format!("Sync result: {}", e), None);
-        }
-    }
+    assert!(
+        sync_result.is_ok(),
+        "BeadsClient::sync() must succeed: {sync_result:?}"
+    );
+    log.info("SYNC", "Sync completed", None);
+    let jsonl_path = env.temp_dir.path().join(".beads").join("issues.jsonl");
+    assert!(jsonl_path.exists(), "sync must flush .beads/issues.jsonl");
 
     // Verify data is persisted (can query from fresh client with same env)
     let fresh_client = env.client();
