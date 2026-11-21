@@ -187,7 +187,7 @@ The release build optimizes for binary size (this is a CLI tool):
 
 ```toml
 [profile.release]
-opt-level = "z"       # Optimize for size
+opt-level = 3         # Optimize for maximum runtime performance
 lto = true            # Link-time optimization
 codegen-units = 1     # Single codegen unit for better optimization
 panic = "abort"       # Abort on panic (smaller binary)
