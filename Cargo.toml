@@ -50,11 +50,11 @@ toon_rust = { package = "tru", git = "https://github.com/Dicklesworthstone/toon_
 # asupersync, not tokio). `ms` stays synchronous and goes through
 # `fsqlite::AsyncConnection`'s `*_sync` worker-thread surface instead — see
 # `src/storage/conn.rs` — which is what the `async-api` feature gates.
-fsqlite = { version = "0.5.0", features = ["fts5", "async-api"] }
-fsqlite-types = "0.4.0"
-fsqlite-error = "0.4.0"
-# Keep the facade, value types, and error type in the same family. The 0.4
-# family owns the Asupersync 0.5 runtime behind this synchronous boundary.
+fsqlite = { version = "0.5.1", features = ["fts5", "async-api"] }
+fsqlite-types = "0.5.1"
+fsqlite-error = "0.5.1"
+# Keep the facade, value types, and error type in the same family. The 0.5
+# family owns the Asupersync runtime behind this synchronous boundary.
 
 # Search
 tantivy = "0.27.0"
