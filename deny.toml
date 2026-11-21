@@ -27,6 +27,18 @@ ignore = [
     # considers 1.3.3 a complete release (not a vulnerability). Reached transitively
     # via syntect -> rich_rust; no safe upgrade path (bincode 2.x is a breaking API).
     "RUSTSEC-2025-0141",
+    # unsafe-libyaml is unmaintained (pulled in via serde_yaml); no drop-in upgrade.
+    "RUSTSEC-2024-0449",
+    # zvariant / zbus_names / zvariant_derive 4.x/5.x are unmaintained standalone crates
+    # merged into zbus 6.x; reached transitively via keyring -> secret-service -> zbus 5.x.
+    "RUSTSEC-2026-0370",
+    "RUSTSEC-2026-0371",
+    "RUSTSEC-2026-0372",
+    # humantime is unmaintained (via humantime-serde); no safe drop-in upgrade.
+    "RUSTSEC-2026-0542",
+    # chrono is unmaintained (used directly and transitively via fsqlite-func);
+    # no drop-in upgrade without migrating the workspace and fsqlite to jiff/time.
+    "RUSTSEC-2026-0543",
 ]
 
 [licenses]
