@@ -9,6 +9,63 @@ All notable changes to **ms** (Meta Skill CLI) are documented here.
 
 ---
 
+## [v0.4.0] -- 2026-11-21
+
+### Indexing, storage and read-only queries
+
+- **Batched 2PC indexing and zero-write unchanged runs (#249).** `ms index` now
+  writes changed skills through a single 2PC transaction journal and a single Git
+  archive commit instead of creating one transaction journal and commit per skill,
+  reducing transaction `fsync` calls from `O(N)` to `O(1)`. Advisory lock file
+  creation no longer calls `sync_all`, Tantivy uses a single-threaded index writer
+  to avoid multi-segment fsync amplification, and unchanged index runs skip
+  database writes, graph rewrites, Tantivy commits, and WAL checkpoints.
+- **Read-only store opens and `ms load --no-track` (#249).** `ms list`, `ms show`,
+  and `ms search` now open both SQLite (`Database::open_readonly`) and Tantivy in
+  read-only mode with zero database sync calls. `ms load` adds `--no-track` to
+  skip usage recording and keep the store read-only.
+- **Reconcile superseded skill IDs on H1 retitle (#244).** When a markdown skill
+  file's H1 heading changes, `ms index` (both incremental and `--force`) now
+  deprecates superseded skill IDs previously indexed from that origin path and
+  un-deprecates restored or force-reindexed IDs. `ms show` excludes deprecated
+  skills when active skills match a frontmatter `name` lookup.
+
+### Reliability, safety and CLI fixes
+
+- **Beads sync defaults to `--flush-only`.** `BeadsClient::sync()` now invokes
+  `br sync --flush-only` instead of bare `br sync`, and exposes `SyncMode` /
+  `sync_with_mode` for explicit sync modes.
+- **Secret redaction false-positive fixes.** `SecretScanner` no longer redacts
+  clean prose references to `"bearer token"` or long filesystem paths when mining
+  antipatterns.
+- **Tool-version probing and `dcg` reporting.** Added `probe_tool_version` /
+  `ToolVersionProbe` so `ms doctor` clearly reports skipped version checks when
+  `dcg` is unavailable instead of reporting a blocked destructive operation, and
+  `ms safety status` clearly states when `dcg` is not installed and no safety
+  packs are active.
+- **Bundle, doctor, indexing and testing hardening.** `ms bundle install --from-dir`
+  now indexes installed skills into SQLite, the Git archive, and Tantivy; `ms bundle
+  remove`, `ms bundle create --sign`, `ms doctor`, and `ms index` (dependency graph
+  save) now propagate storage and I/O errors instead of dropping them; `ms bundle
+  verify` fails on corrupt cached blobs; `ms index --watch` no longer exits after a
+  single poll in non-human output modes; malformed overlays and JFP spec fallbacks
+  emit explicit warnings; and `StepExecutor` fails closed on missing skills or
+  exceeded token budgets.
+
+### Performance and dependencies
+
+- **Release profile switched to `opt-level = 3`.** Release binaries now compile
+  with `opt-level = 3` (previously `"z"`) for faster indexing, search, and CLI
+  execution.
+- **Dependency alignment and security updates (#250).** Aligned `fsqlite`,
+  `fsqlite-types`, and `fsqlite-error` to `0.5.1`; refreshed 145 crates including
+  `libz-sys 1.1.33` (fixing `RUSTSEC-2026-0544`), `async-executor 1.14.1`
+  (removing a yanked version), `rusqlite 0.43.0`, `zip 9.8.1`, `toml 1.2.2`,
+  `clap 4.6.9`, `regex 1.13.2`, `rustls-webpki 0.103.17`, and `openssl-sys 0.9.118`;
+  and removed the stale `RUSTSEC-2025-0140` ignore entry from `deny.toml`.
+
+---
+
 ## [v0.3.0] -- 2026-11-01
 
 ### Security, install and deletion behaviour
