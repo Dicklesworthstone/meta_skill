@@ -49,18 +49,30 @@ pub fn run(ctx: &AppContext, args: &ShowArgs) -> Result<()> {
             // can differ from the canonical id — `ms list` prints names, so the
             // ids users copy from a listing must resolve here (issue #172).
             let mut by_name = ctx.db.get_skills_by_name(&args.skill)?;
-            match by_name.len() {
+            // Exclude deprecated skills when active (non-deprecated) skills match
+            // so retiring a superseded ID resolves ordinary name lookups (issue #244).
+            let mut active: Vec<SkillRecord> = by_name
+                .iter()
+                .filter(|s| !s.is_deprecated)
+                .cloned()
+                .collect();
+            let candidates = if active.is_empty() {
+                &mut by_name
+            } else {
+                &mut active
+            };
+            match candidates.len() {
                 0 => {
                     return Err(MsError::SkillNotFound(format!(
                         "skill not found: {}",
                         args.skill
                     )));
                 }
-                1 => by_name.remove(0),
+                1 => candidates.remove(0),
                 _ => {
-                    let ids: Vec<String> = by_name.iter().map(|s| s.id.clone()).collect();
+                    let ids: Vec<String> = candidates.iter().map(|s| s.id.clone()).collect();
                     return Err(MsError::SkillNotFound(format!(
-                        "name '{}' is ambiguous; matching skill ids: {}",
+                        "name {} is ambiguous; matching skill ids: {}",
                         args.skill,
                         ids.join(", ")
                     )));

@@ -517,6 +517,7 @@ fn auto_load_suggestions(
         let load_args = LoadArgs {
             skill: Some(suggestion.skill_id.clone()),
             auto: false,
+            no_track: false,
             threshold: 0.3,
             confirm: false,
             dry_run: false,

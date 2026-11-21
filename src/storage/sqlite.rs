@@ -220,6 +220,31 @@ impl Database {
         })
     }
 
+    /// Open an existing up-to-date database in read-only mode without issuing
+    /// write pragmas or migrations. Falls back to [`Self::open`] if the file
+    /// does not exist yet, requires schema migrations, or cannot be opened
+    /// read-only.
+    pub fn open_readonly(path: impl AsRef<Path>) -> Result<Self> {
+        let path = path.as_ref();
+        if !path.exists() {
+            return Self::open(path);
+        }
+        if let Ok(conn) = Connection::open_readonly(path.to_string_lossy().into_owned()) {
+            let version = conn
+                .query_row("PRAGMA user_version;")
+                .and_then(|row| row.get_typed::<u32>(0));
+            if let Ok(ver) = version
+                && ver >= migrations::SCHEMA_VERSION
+            {
+                return Ok(Self {
+                    conn,
+                    schema_version: ver,
+                });
+            }
+        }
+        Self::open(path)
+    }
+
     /// Get a reference to the connection
     pub const fn conn(&self) -> &Connection {
         &self.conn
@@ -583,6 +608,36 @@ impl Database {
                 (origin.canonicalize(), path.canonicalize()),
                 (Ok(a), Ok(b)) if a == b
             ))
+    }
+
+    /// Return all live `skill_id`s whose recorded filesystem origin refers to `path`.
+    ///
+    /// Used by `ms index` to detect and retire superseded IDs when an existing
+    /// `SKILL.md` changes its derived ID (for example, after an H1 title change,
+    /// issue #244).
+    pub fn find_skill_ids_by_origin_path(&self, path: &Path) -> Result<Vec<String>> {
+        let abs_path = std::path::absolute(path).unwrap_or_else(|_| path.to_path_buf());
+        let abs_str = abs_path.display().to_string();
+        let raw_str = path.display().to_string();
+        let target_canon = path.canonicalize().ok();
+
+        let origins = self.list_skill_origins()?;
+        let mut matches = Vec::new();
+        for origin in origins {
+            let origin_p = Path::new(&origin.origin_path);
+            let same = origin.origin_path == abs_str
+                || origin.origin_path == raw_str
+                || origin_p == path
+                || origin_p == abs_path
+                || match (&target_canon, origin_p.canonicalize()) {
+                    (Some(a), Ok(b)) => a == &b,
+                    _ => false,
+                };
+            if same {
+                matches.push(origin.skill_id);
+            }
+        }
+        Ok(matches)
     }
 
     /// List all recorded skill origins, joined against live skill rows.

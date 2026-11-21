@@ -112,6 +112,10 @@ pub struct LoadArgs {
     #[arg(long)]
     pub auto: bool,
 
+    /// Do not record usage telemetry or feedback (keeps store read-only)
+    #[arg(long)]
+    pub no_track: bool,
+
     /// Minimum relevance score for auto-loading (0.0-1.0)
     #[arg(long, default_value = "0.3")]
     pub threshold: f32,
@@ -1024,13 +1028,15 @@ pub(crate) fn load_skill(ctx: &AppContext, args: &LoadArgs, skill_ref: &str) -> 
         warnings,
     };
 
-    record_usage(
-        ctx,
-        &skill.id,
-        &disclosure_plan,
-        experiment_id.as_deref(),
-        variant_id.as_deref(),
-    );
+    if !args.no_track {
+        record_usage(
+            ctx,
+            &skill.id,
+            &disclosure_plan,
+            experiment_id.as_deref(),
+            variant_id.as_deref(),
+        );
+    }
 
     Ok(result)
 }
@@ -2169,6 +2175,7 @@ mod tests {
         let base_args = LoadArgs {
             skill: Some("test".to_string()),
             auto: false,
+            no_track: false,
             threshold: 0.3,
             confirm: false,
             dry_run: false,

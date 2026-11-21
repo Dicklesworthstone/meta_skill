@@ -42,6 +42,15 @@ impl Connection {
         })
     }
 
+    /// Open an existing database in read-only schema-only mode, permitting only
+    /// derived WAL-index recovery. Avoids write-side pragma/migration syncs and
+    /// avoids eagerly materializing unused tables for read-only commands.
+    pub fn open_readonly(path: impl Into<String>) -> Result<Self, FrankenError> {
+        Ok(Self {
+            inner: AsyncConnection::open_schema_only_with_wal_index_recovery_sync(path)?,
+        })
+    }
+
     /// Execute a single statement, returning the number of rows it changed.
     pub fn execute(&self, sql: &str) -> Result<usize, FrankenError> {
         self.inner.execute_sync(sql)

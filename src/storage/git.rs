@@ -318,6 +318,85 @@ impl GitArchive {
         })
     }
 
+    /// Write multiple skill specs + compiled markdown into the archive in a single commit.
+    pub fn write_skills_batch(&self, specs: &[&SkillSpec]) -> Result<SkillCommit> {
+        if specs.is_empty() {
+            return Err(MsError::ValidationFailed(
+                "cannot commit an empty skill batch".to_string(),
+            ));
+        }
+
+        for spec in specs {
+            let skill_id = spec.metadata.id.trim();
+            if skill_id.is_empty() {
+                return Err(MsError::ValidationFailed(
+                    "skill id must be non-empty".to_string(),
+                ));
+            }
+            if skill_id.contains("..") || skill_id.contains('/') || skill_id.contains('\\') {
+                return Err(MsError::ValidationFailed(
+                    "skill id must not contain path traversal sequences".to_string(),
+                ));
+            }
+        }
+
+        let mut index = self.repo.index()?;
+        for spec in specs {
+            let skill_id = spec.metadata.id.trim();
+            let skill_dir = self.root.join("skills/by-id").join(skill_id);
+            fs::create_dir_all(&skill_dir)?;
+            fs::create_dir_all(skill_dir.join("evidence"))?;
+            fs::create_dir_all(skill_dir.join("tests"))?;
+
+            let metadata_path = skill_dir.join("metadata.yaml");
+            let spec_path = skill_dir.join("skill.spec.json");
+            let lens_path = skill_dir.join("spec.lens.json");
+            let markdown_path = skill_dir.join("SKILL.md");
+            let evidence_path = skill_dir.join("evidence.json");
+            let slices_path = skill_dir.join("slices.json");
+            let usage_log_path = skill_dir.join("usage-log.jsonl");
+
+            let compiled_markdown = render_skill_markdown(spec);
+            let lens_mapping = build_spec_lens_mapping(spec, &compiled_markdown);
+            let slice_index = crate::core::slicing::SkillSlicer::slice(spec);
+            let evidence_index = build_default_evidence_index(spec, &evidence_path);
+
+            write_string(&metadata_path, &serde_yaml::to_string(&spec.metadata)?)?;
+            write_string(&spec_path, &serde_json::to_string_pretty(spec)?)?;
+            write_string(&markdown_path, &compiled_markdown)?;
+            write_string(&lens_path, &serde_json::to_string_pretty(&lens_mapping)?)?;
+            write_string(
+                &evidence_path,
+                &serde_json::to_string_pretty(&evidence_index)?,
+            )?;
+            write_string(&slices_path, &serde_json::to_string_pretty(&slice_index)?)?;
+            ensure_file(&usage_log_path)?;
+
+            add_path(&mut index, &self.root, &metadata_path)?;
+            add_path(&mut index, &self.root, &spec_path)?;
+            add_path(&mut index, &self.root, &lens_path)?;
+            add_path(&mut index, &self.root, &markdown_path)?;
+            add_path(&mut index, &self.root, &evidence_path)?;
+            add_path(&mut index, &self.root, &slices_path)?;
+            add_path(&mut index, &self.root, &usage_log_path)?;
+        }
+
+        index.write()?;
+        let tree_id = index.write_tree()?;
+        let tree = self.repo.find_tree(tree_id)?;
+        let message = if specs.len() == 1 {
+            format!("Update skill {}", specs[0].metadata.id.trim())
+        } else {
+            format!("Update {} skills", specs.len())
+        };
+        let oid = commit_with_parents(&self.repo, &self.signature, &tree, &message)?;
+
+        Ok(SkillCommit {
+            oid: oid.to_string(),
+            message,
+        })
+    }
+
     /// Read a skill spec from the archive.
     pub fn read_skill(&self, skill_id: &str) -> Result<SkillSpec> {
         let skill_path = self.skill_path(skill_id).ok_or_else(|| {

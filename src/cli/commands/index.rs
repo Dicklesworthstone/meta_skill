@@ -146,21 +146,23 @@ pub fn run_into(
         return Ok(());
     }
 
-    if ctx.output_format != OutputFormat::Human {
-        index_robot(ctx, &roots, args, report)?;
+    let mutated_db = if ctx.output_format != OutputFormat::Human {
+        index_robot(ctx, &roots, args, report)?
     } else {
-        index_human(ctx, &roots, args)?;
-    }
+        index_human(ctx, &roots, args)?
+    };
 
     // An index run leaves its whole write-ahead log in place, and every later process
     // replays it when it opens ms.db (about 34 ms per `ms search` on a 2,000-skill index).
-    // Fold it into ms.db once here. Best effort: if a reader holds it, the WAL stays.
-    if let Err(err) = ctx
-        .db
-        .conn()
-        .execute_batch("PRAGMA wal_checkpoint(TRUNCATE);")
-    {
-        tracing::debug!(error = %err, "wal checkpoint after index failed");
+    // Fold it into ms.db once here when the DB actually changed (issue #249).
+    if mutated_db {
+        if let Err(err) = ctx
+            .db
+            .conn()
+            .execute_batch("PRAGMA wal_checkpoint(TRUNCATE);")
+        {
+            tracing::debug!(error = %err, "wal checkpoint after index failed");
+        }
     }
 
     if args.watch {
@@ -190,7 +192,7 @@ fn watch_and_reindex(ctx: &AppContext, roots: &[SkillRoot], args: &IndexArgs) ->
         .ok()
         .and_then(|v| v.parse().ok())
         .or_else(|| {
-            if std::env::var("MS_WATCH_ONCE").is_ok() || ctx.output_format != OutputFormat::Human {
+            if std::env::var("MS_WATCH_ONCE").is_ok() {
                 Some(1)
             } else {
                 None
@@ -405,13 +407,6 @@ fn expand_path(input: &str) -> PathBuf {
     PathBuf::from(input)
 }
 
-/// What one `index_skill_file` call did, for progress accounting.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
-struct SkillIndexOutcome {
-    /// An embedding row was written (or refreshed) for the skill.
-    embedded: bool,
-}
-
 /// Build the embedding backend once per index run.
 ///
 /// Semantic search reads `skill_embeddings`, so indexing must populate it
@@ -499,21 +494,18 @@ fn store_skill_embedding(
     Ok(true)
 }
 
-fn index_human(ctx: &AppContext, roots: &[SkillRoot], args: &IndexArgs) -> Result<()> {
+fn index_human(ctx: &AppContext, roots: &[SkillRoot], args: &IndexArgs) -> Result<bool> {
     println!("{}", "Indexing skills...".bold());
     println!();
 
     let start = Instant::now();
-    let mut indexed = 0;
-    let mut embedded = 0;
-    let mut errors = 0;
 
     // First pass: discover all SKILL.md files
     let skill_files = discover_skill_files(roots);
 
     if skill_files.is_empty() {
         println!("{}", "No SKILL.md files found".yellow());
-        return Ok(());
+        return Ok(false);
     }
 
     let embedder = build_index_embedder(ctx);
@@ -527,58 +519,8 @@ fn index_human(ctx: &AppContext, roots: &[SkillRoot], args: &IndexArgs) -> Resul
             .progress_chars("#>-"),
     );
 
-    // Create transaction manager
-    let tx_mgr = TxManager::new(
-        Arc::clone(&ctx.db),
-        Arc::clone(&ctx.git),
-        ctx.ms_root.clone(),
-    )?;
-
-    // Create resolution cache and repository for resolving inherited/composed skills
-    let resolution_cache = ResolutionCache::new();
-    if args.force {
-        let _ = resolution_cache.clear_db(ctx.db.conn());
-    } else {
-        let _ = resolution_cache.load_from_db(ctx.db.conn());
-    }
-    let repository = GitSkillRepository::new(&ctx.git);
-
-    for skill in &skill_files {
-        pb.set_message(format!(
-            "{}",
-            skill.path.file_name().unwrap_or_default().to_string_lossy()
-        ));
-
-        match index_skill_file(
-            ctx,
-            &tx_mgr,
-            &resolution_cache,
-            &repository,
-            embedder.as_deref(),
-            skill,
-            args,
-        ) {
-            Ok(outcome) => {
-                indexed += 1;
-                if outcome.embedded {
-                    embedded += 1;
-                }
-            }
-            Err(e) => {
-                errors += 1;
-                pb.println(format!("{} {} - {}", "✗".red(), skill.path.display(), e));
-            }
-        }
-
-        pb.inc(1);
-    }
-
+    let pass = run_index_pass(ctx, &skill_files, embedder.as_deref(), args, Some(&pb))?;
     pb.finish_and_clear();
-
-    // Commit Tantivy index, persist dependency graph, and clear stale query cache
-    let _ = resolution_cache.save_graph_to_db(ctx.db.conn());
-    ctx.search.commit()?;
-    ctx.cache.clear();
 
     let elapsed = start.elapsed();
 
@@ -586,24 +528,28 @@ fn index_human(ctx: &AppContext, roots: &[SkillRoot], args: &IndexArgs) -> Resul
     println!(
         "{} Indexed {} skills in {:.2}s ({} errors)",
         "✓".green().bold(),
-        indexed,
+        pass.indexed,
         elapsed.as_secs_f64(),
-        errors
+        pass.errors.len()
     );
     if let Some(embedder) = &embedder {
         println!(
             "  {} embeddings written via `{}` backend",
-            embedded,
+            pass.embedded,
             embedder.name()
         );
     }
 
-    if errors > 0 {
+    if !pass.errors.is_empty() {
         println!();
-        println!("{} {} skills failed to index", "!".yellow(), errors);
+        println!(
+            "{} {} skills failed to index",
+            "!".yellow(),
+            pass.errors.len()
+        );
     }
 
-    Ok(())
+    Ok(pass.mutated_db)
 }
 
 fn index_robot(
@@ -611,61 +557,14 @@ fn index_robot(
     roots: &[SkillRoot],
     args: &IndexArgs,
     report: Option<&mut serde_json::Value>,
-) -> Result<()> {
+) -> Result<bool> {
     let start = Instant::now();
-    let mut indexed = 0;
-    let mut embedded = 0;
-    let mut errors: Vec<serde_json::Value> = Vec::new();
 
     // Discover skill files
     let skill_files = discover_skill_files(roots);
     let embedder = build_index_embedder(ctx);
 
-    // Create transaction manager
-    let tx_mgr = TxManager::new(
-        Arc::clone(&ctx.db),
-        Arc::clone(&ctx.git),
-        ctx.ms_root.clone(),
-    )?;
-
-    // Create resolution cache and repository for resolving inherited/composed skills
-    let resolution_cache = ResolutionCache::new();
-    if args.force {
-        let _ = resolution_cache.clear_db(ctx.db.conn());
-    } else {
-        let _ = resolution_cache.load_from_db(ctx.db.conn());
-    }
-    let repository = GitSkillRepository::new(&ctx.git);
-
-    for skill in &skill_files {
-        match index_skill_file(
-            ctx,
-            &tx_mgr,
-            &resolution_cache,
-            &repository,
-            embedder.as_deref(),
-            skill,
-            args,
-        ) {
-            Ok(outcome) => {
-                indexed += 1;
-                if outcome.embedded {
-                    embedded += 1;
-                }
-            }
-            Err(e) => {
-                errors.push(serde_json::json!({
-                    "path": skill.path.display().to_string(),
-                    "error": e.to_string()
-                }));
-            }
-        }
-    }
-
-    // Commit Tantivy index, persist dependency graph, and clear stale query cache
-    let _ = resolution_cache.save_graph_to_db(ctx.db.conn());
-    ctx.search.commit()?;
-    ctx.cache.clear();
+    let pass = run_index_pass(ctx, &skill_files, embedder.as_deref(), args, None)?;
 
     let elapsed = start.elapsed();
 
@@ -673,14 +572,25 @@ fn index_robot(
     let skills_with_companions: usize =
         skill_files.iter().filter(|s| s.companion_count > 0).count();
 
+    let errors: Vec<serde_json::Value> = pass
+        .errors
+        .iter()
+        .map(|(path, err)| {
+            serde_json::json!({
+                "path": path,
+                "error": err
+            })
+        })
+        .collect();
+
     let payload = serde_json::json!({
         "status": if errors.is_empty() { "ok" } else { "partial" },
-        "indexed": indexed,
+        "indexed": pass.indexed,
         "errors": errors,
         "elapsed_ms": elapsed.as_millis() as u64,
         "embeddings": {
             "backend": embedder.as_ref().map(|e| e.name().to_string()),
-            "written": embedded,
+            "written": pass.embedded,
         },
         "package_summary": {
             "skills_discovered": skill_files.len(),
@@ -690,13 +600,228 @@ fn index_robot(
     });
     if let Some(report) = report {
         *report = payload;
-        Ok(())
     } else if ctx.output_format == OutputFormat::Json {
         println!("{}", serde_json::to_string(&payload)?);
-        Ok(())
     } else {
-        crate::cli::output::emit_json_for_format(&payload, ctx.output_format)
+        crate::cli::output::emit_json_for_format(&payload, ctx.output_format)?;
     }
+    Ok(pass.mutated_db)
+}
+
+struct IndexPassSummary {
+    indexed: usize,
+    embedded: usize,
+    errors: Vec<(String, String)>,
+    mutated_db: bool,
+}
+
+struct PreparedSkill<'a> {
+    skill: &'a DiscoveredSkill,
+    spec: crate::core::SkillSpec,
+    new_hash: String,
+    was_deprecated: bool,
+}
+
+enum PrepareOutcome<'a> {
+    Unchanged {
+        embedded: bool,
+        mutated_db: bool,
+        mutated_search: bool,
+    },
+    Write(PreparedSkill<'a>),
+}
+
+fn run_index_pass(
+    ctx: &AppContext,
+    skill_files: &[DiscoveredSkill],
+    embedder: Option<&dyn Embedder>,
+    args: &IndexArgs,
+    pb: Option<&ProgressBar>,
+) -> Result<IndexPassSummary> {
+    let mut indexed = 0usize;
+    let mut embedded = 0usize;
+    let mut errors: Vec<(String, String)> = Vec::new();
+    let mut mutated_db = args.force;
+    let mut mutated_search = false;
+
+    let tx_mgr = TxManager::new(
+        Arc::clone(&ctx.db),
+        Arc::clone(&ctx.git),
+        ctx.ms_root.clone(),
+    )?;
+
+    let resolution_cache = ResolutionCache::new();
+    if args.force {
+        let _ = resolution_cache.clear_db(ctx.db.conn());
+    } else {
+        let _ = resolution_cache.load_from_db(ctx.db.conn());
+    }
+    let repository = GitSkillRepository::new(&ctx.git);
+
+    let mut prepared: Vec<PreparedSkill<'_>> = Vec::new();
+    let mut seen_batch_ids: std::collections::HashMap<String, PathBuf> =
+        std::collections::HashMap::new();
+
+    for skill in skill_files {
+        if let Some(pb) = pb {
+            pb.set_message(format!(
+                "{}",
+                skill.path.file_name().unwrap_or_default().to_string_lossy()
+            ));
+        }
+
+        match prepare_skill_file(
+            ctx,
+            &tx_mgr,
+            &resolution_cache,
+            &repository,
+            embedder,
+            skill,
+            args,
+            &mut seen_batch_ids,
+        ) {
+            Ok(PrepareOutcome::Unchanged {
+                embedded: did_embed,
+                mutated_db: did_db,
+                mutated_search: did_search,
+            }) => {
+                indexed += 1;
+                if did_embed {
+                    embedded += 1;
+                }
+                mutated_db |= did_db;
+                mutated_search |= did_search;
+                if let Some(pb) = pb {
+                    pb.inc(1);
+                }
+            }
+            Ok(PrepareOutcome::Write(item)) => {
+                prepared.push(item);
+            }
+            Err(e) => {
+                if let Some(pb) = pb {
+                    pb.println(format!("{} {} - {}", "✗".red(), skill.path.display(), e));
+                    pb.inc(1);
+                }
+                errors.push((skill.path.display().to_string(), e.to_string()));
+            }
+        }
+    }
+
+    if !prepared.is_empty() {
+        let batch_refs: Vec<(&crate::core::SkillSpec, SkillLayer)> = prepared
+            .iter()
+            .map(|item| (&item.spec, item.skill.layer))
+            .collect();
+
+        let written: Vec<PreparedSkill<'_>> =
+            match tx_mgr.write_skills_batch_with_layers(&batch_refs) {
+                Ok(()) => prepared,
+                Err(_) => {
+                    let mut ok_items = Vec::with_capacity(prepared.len());
+                    for item in prepared {
+                        match tx_mgr.write_skill_with_layer(&item.spec, item.skill.layer) {
+                            Ok(()) => ok_items.push(item),
+                            Err(e) => {
+                                if let Some(pb) = pb {
+                                    pb.println(format!(
+                                        "{} {} - {}",
+                                        "✗".red(),
+                                        item.skill.path.display(),
+                                        e
+                                    ));
+                                    pb.inc(1);
+                                }
+                                errors.push((item.skill.path.display().to_string(), e.to_string()));
+                            }
+                        }
+                    }
+                    ok_items
+                }
+            };
+
+        if !written.is_empty() {
+            mutated_db = true;
+            mutated_search = true;
+
+            let scorer = crate::quality::QualityScorer::with_defaults();
+            let mut retired_counts = Vec::with_capacity(written.len());
+            for item in &written {
+                resolution_cache.invalidate(&item.spec.metadata.id);
+                let retired = reconcile_superseded_origin_skills(
+                    ctx,
+                    &tx_mgr,
+                    &resolution_cache,
+                    &item.spec.metadata.id,
+                    &item.skill.path,
+                )?;
+                retired_counts.push(retired);
+            }
+
+            ctx.db.with_transaction(|_| {
+                for (item, &retired) in written.iter().zip(retired_counts.iter()) {
+                    if item.was_deprecated && (args.force || retired > 0) {
+                        ctx.db
+                            .update_skill_deprecation(&item.spec.metadata.id, false, None)?;
+                    }
+                    record_skill_origin(ctx, &item.spec.metadata.id, item.skill, &item.new_hash)?;
+                    let assets = discover_skill_assets(&item.skill.path);
+                    ctx.db
+                        .update_skill_assets(&item.spec.metadata.id, &assets)?;
+
+                    let quality =
+                        scorer.score_spec(&item.spec, &crate::quality::QualityContext::default());
+                    let quality_f64 = if quality.overall.to_bits() == 0.365_f32.to_bits() {
+                        0.365_000_009_536_743_2_f64
+                    } else {
+                        f64::from(quality.overall)
+                    };
+                    ctx.db
+                        .update_skill_quality(&item.spec.metadata.id, quality_f64)?;
+                }
+                Ok(())
+            })?;
+
+            for item in &written {
+                if let Some(record) = search_record_for(
+                    ctx,
+                    &resolution_cache,
+                    &repository,
+                    &item.spec,
+                    item.skill,
+                    &item.new_hash,
+                )? {
+                    ctx.search.index_skill(&record)?;
+                    if let Some(embedder) = embedder {
+                        if store_skill_embedding(ctx, embedder, &record, &item.new_hash)? {
+                            embedded += 1;
+                        }
+                    }
+                }
+                indexed += 1;
+                if let Some(pb) = pb {
+                    pb.inc(1);
+                }
+            }
+        }
+    }
+
+    if mutated_db || args.force {
+        resolution_cache.save_graph_to_db(ctx.db.conn())?;
+    }
+    if mutated_search {
+        ctx.search.commit()?;
+    }
+    if mutated_db || mutated_search {
+        ctx.cache.clear();
+    }
+
+    Ok(IndexPassSummary {
+        indexed,
+        embedded,
+        errors,
+        mutated_db,
+    })
 }
 
 fn discover_skill_files(roots: &[SkillRoot]) -> Vec<DiscoveredSkill> {
@@ -892,24 +1017,66 @@ fn count_companion_files(skill_md: &std::path::Path) -> usize {
     count
 }
 
-fn index_skill_file(
+fn origin_matches_recorded(ctx: &AppContext, skill_id: &str, skill: &DiscoveredSkill) -> bool {
+    let origin_path = std::path::absolute(&skill.path)
+        .unwrap_or_else(|_| skill.path.clone())
+        .display()
+        .to_string();
+    let origin_root = std::path::absolute(&skill.root)
+        .unwrap_or_else(|_| skill.root.clone())
+        .display()
+        .to_string();
+    matches!(
+        ctx.db.get_skill_origin(skill_id),
+        Ok(Some((p, r))) if p == origin_path && r == origin_root
+    )
+}
+
+/// Retire any previously indexed skill IDs whose recorded origin is `source_path`
+/// but whose ID differs from `current_skill_id` (e.g. after an H1 title change at
+/// an existing `SKILL.md` path — issue #244).
+fn reconcile_superseded_origin_skills(
+    ctx: &AppContext,
+    tx_mgr: &TxManager,
+    resolution_cache: &ResolutionCache,
+    current_skill_id: &str,
+    source_path: &std::path::Path,
+) -> Result<usize> {
+    let mut retired = 0usize;
+    for old_id in ctx.db.find_skill_ids_by_origin_path(source_path)? {
+        if old_id == current_skill_id {
+            continue;
+        }
+        if ctx.git.skill_exists(&old_id) {
+            tx_mgr.delete_skill_unlocked(&old_id)?;
+        } else {
+            ctx.db.delete_skill(&old_id)?;
+        }
+        ctx.search.delete_skill(&old_id)?;
+        resolution_cache.invalidate(&old_id);
+        retired += 1;
+    }
+    Ok(retired)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn prepare_skill_file<'a>(
     ctx: &AppContext,
     tx_mgr: &TxManager,
     resolution_cache: &ResolutionCache,
     repository: &GitSkillRepository<'_>,
     embedder: Option<&dyn Embedder>,
-    skill: &DiscoveredSkill,
+    skill: &'a DiscoveredSkill,
     args: &IndexArgs,
-) -> Result<SkillIndexOutcome> {
+    seen_batch_ids: &mut std::collections::HashMap<String, PathBuf>,
+) -> Result<PrepareOutcome<'a>> {
     if let Some(parent) = skill.path.parent() {
         crate::security::path_policy::deny_symlink_escape(&skill.path, parent)?;
     }
-    // A repository is someone else's content, so the file has to stay inside all of it.
     if args.from_ru {
         crate::security::path_policy::deny_symlink_escape(&skill.path, &skill.root)?;
     }
 
-    // Read the file
     let content = std::fs::read_to_string(&skill.path)?;
 
     if crate::security::secret_scanner::contains_secrets(&content) {
@@ -928,7 +1095,6 @@ fn index_skill_file(
         }
     }
 
-    // Parse the skill spec
     let spec = parse_markdown(&content)
         .map_err(|e| MsError::InvalidSkill(format!("{}: {}", skill.path.display(), e)))?;
 
@@ -939,100 +1105,114 @@ fn index_skill_file(
         )));
     }
 
-    // Ahead of the unchanged check below, which would take over the recorded origin.
-    if args.from_ru
-        && !args.force
-        && ctx.git.skill_exists(&spec.metadata.id)
-        && !ctx.db.skill_came_from(&spec.metadata.id, &skill.path)?
-    {
-        return Err(MsError::InvalidSkill(format!(
-            "{}: skill {} already exists from another source; pass --force to replace it",
-            skill.path.display(),
-            spec.metadata.id
-        )));
+    if args.from_ru && !args.force {
+        if let Some(prev_path) = seen_batch_ids.get(&spec.metadata.id) {
+            if prev_path != &skill.path {
+                return Err(MsError::InvalidSkill(format!(
+                    "{}: skill {} already exists from another source; pass --force to replace it",
+                    skill.path.display(),
+                    spec.metadata.id
+                )));
+            }
+        }
+        if ctx.git.skill_exists(&spec.metadata.id)
+            && !ctx.db.skill_came_from(&spec.metadata.id, &skill.path)?
+        {
+            return Err(MsError::InvalidSkill(format!(
+                "{}: skill {} already exists from another source; pass --force to replace it",
+                skill.path.display(),
+                spec.metadata.id
+            )));
+        }
     }
 
-    // Check if already indexed (unless force)
     let new_hash = compute_spec_hash(&spec)?;
+    let existing = ctx.db.get_skill(&spec.metadata.id).ok().flatten();
+    let was_deprecated = existing.as_ref().is_some_and(|s| s.is_deprecated);
+
     if !args.force {
-        if let Ok(Some(existing)) = ctx.db.get_skill(&spec.metadata.id) {
-            // Check content hash to skip unchanged skills
+        if let Some(existing) = existing {
             let same_layer = existing.source_layer == skill.layer.as_str();
             if existing.content_hash == new_hash && same_layer {
-                // Even when content is unchanged, refresh the recorded origin:
-                // the source may have MOVED without a content change, and a
-                // stale origin path would otherwise false-positive in
-                // `ms doctor` / `ms prune stale-sources`.
-                record_skill_origin(ctx, &spec.metadata.id, skill, &new_hash)?;
-                let assets = discover_skill_assets(&skill.path);
-                let _ = ctx.db.update_skill_assets(&spec.metadata.id, &assets);
+                let mut mutated_db = false;
+                let mut mutated_search = false;
 
-                // Backfill a missing or stale embedding (databases indexed
-                // before embeddings were written, or after a backend switch)
-                // without rewriting the skill.
-                let mut outcome = SkillIndexOutcome::default();
-                if let Some(embedder) = embedder {
-                    if !embedding_is_current(ctx, &spec.metadata.id, embedder, &new_hash) {
-                        let record = search_record_for(
+                if !origin_matches_recorded(ctx, &spec.metadata.id, skill) {
+                    record_skill_origin(ctx, &spec.metadata.id, skill, &new_hash)?;
+                    mutated_db = true;
+                }
+
+                let retired = reconcile_superseded_origin_skills(
+                    ctx,
+                    tx_mgr,
+                    resolution_cache,
+                    &spec.metadata.id,
+                    &skill.path,
+                )?;
+                if retired > 0 {
+                    mutated_db = true;
+                    mutated_search = true;
+                    if existing.is_deprecated {
+                        ctx.db
+                            .update_skill_deprecation(&spec.metadata.id, false, None)?;
+                        if let Some(record) = search_record_for(
                             ctx,
                             resolution_cache,
                             repository,
                             &spec,
                             skill,
                             &new_hash,
-                        )?;
-                        if let Some(record) = record {
-                            outcome.embedded =
-                                store_skill_embedding(ctx, embedder, &record, &new_hash)?;
+                        )? {
+                            ctx.search.index_skill(&record)?;
                         }
                     }
                 }
-                return Ok(outcome); // Skip unchanged
+
+                let assets = discover_skill_assets(&skill.path);
+                let assets_json = serde_json::to_string(&assets).ok();
+                if assets_json.as_deref() != Some(existing.assets_json.as_str()) {
+                    let _ = ctx.db.update_skill_assets(&spec.metadata.id, &assets);
+                    mutated_db = true;
+                }
+
+                let mut did_embed = false;
+                if let Some(embedder) = embedder {
+                    if !embedding_is_current(ctx, &spec.metadata.id, embedder, &new_hash) {
+                        if let Some(record) = search_record_for(
+                            ctx,
+                            resolution_cache,
+                            repository,
+                            &spec,
+                            skill,
+                            &new_hash,
+                        )? {
+                            did_embed = store_skill_embedding(ctx, embedder, &record, &new_hash)?;
+                            mutated_db |= did_embed;
+                        }
+                    }
+                }
+
+                seen_batch_ids
+                    .entry(spec.metadata.id.clone())
+                    .or_insert_with(|| skill.path.clone());
+                return Ok(PrepareOutcome::Unchanged {
+                    embedded: did_embed,
+                    mutated_db,
+                    mutated_search,
+                });
             }
         }
     }
 
-    // Write using 2PC transaction manager (stores raw spec)
-    tx_mgr.write_skill_with_layer(&spec, skill.layer)?;
-    resolution_cache.invalidate(&spec.metadata.id);
-
-    // Record where this skill actually came from. Deliberately outside the
-    // 2PC transaction: provenance is derived metadata, and a crash between
-    // commit and this write leaves the row's origin NULL, which the
-    // stale-source checks treat as "unknown" (never stale). The 2PC payload
-    // is a serialized `SkillSpec` (also used by crash recovery), so threading
-    // the discovered path through it would change the recovery format for no
-    // durability benefit.
-    record_skill_origin(ctx, &spec.metadata.id, skill, &new_hash)?;
-
-    let assets = discover_skill_assets(&skill.path);
-    ctx.db.update_skill_assets(&spec.metadata.id, &assets)?;
-
-    // Compute and persist quality score
-    let scorer = crate::quality::QualityScorer::with_defaults();
-    let quality = scorer.score_spec(&spec, &crate::quality::QualityContext::default());
-    let quality_f64 = if quality.overall.to_bits() == 0.365_f32.to_bits() {
-        0.365_000_009_536_743_2_f64
-    } else {
-        f64::from(quality.overall)
-    };
-    ctx.db
-        .update_skill_quality(&spec.metadata.id, quality_f64)?;
-
-    // Index the record the search layer should see (resolved when the skill
-    // inherits or composes), and embed that same record so lexical and
-    // semantic search agree on what a skill says.
-    let mut outcome = SkillIndexOutcome::default();
-    if let Some(record) =
-        search_record_for(ctx, resolution_cache, repository, &spec, skill, &new_hash)?
-    {
-        ctx.search.index_skill(&record)?;
-        if let Some(embedder) = embedder {
-            outcome.embedded = store_skill_embedding(ctx, embedder, &record, &new_hash)?;
-        }
-    }
-
-    Ok(outcome)
+    seen_batch_ids
+        .entry(spec.metadata.id.clone())
+        .or_insert_with(|| skill.path.clone());
+    Ok(PrepareOutcome::Write(PreparedSkill {
+        skill,
+        spec,
+        new_hash,
+        was_deprecated,
+    }))
 }
 
 /// The record search indexes for `spec`: the resolved skill when it extends

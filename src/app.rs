@@ -159,16 +159,35 @@ impl AppContext {
             );
         }
 
-        // The MCP server never writes to the search index (its `index` tool
-        // only reports configured paths and defers to the CLI), so it must
-        // not hold the writer lock for its lifetime (issue #193).
-        let search_readonly_preferred = matches!(cli.command, crate::cli::Commands::Mcp(_));
+        // Strictly read-only commands never mutate SQLite or Tantivy; opening
+        // both stores read-only avoids writer locks, eager table loads, and
+        // unnecessary fsyncs (issues #193, #249).
+        let db_readonly_preferred = matches!(
+            cli.command,
+            crate::cli::Commands::List(_)
+                | crate::cli::Commands::Show(_)
+                | crate::cli::Commands::Search(_)
+        ) || matches!(
+            &cli.command,
+            crate::cli::Commands::Load(load_args) if load_args.no_track && !load_args.auto
+        );
+        // The MCP server and `ms load` never write to the search index either.
+        let search_readonly_preferred = db_readonly_preferred
+            || matches!(
+                cli.command,
+                crate::cli::Commands::Mcp(_) | crate::cli::Commands::Load(_)
+            );
+        let db = if db_readonly_preferred {
+            Database::open_readonly(ms_root.join("ms.db"))?
+        } else {
+            Database::open(ms_root.join("ms.db"))?
+        };
 
         Ok(Self {
             ms_root: ms_root.clone(),
             config_path,
             config,
-            db: Arc::new(Database::open(ms_root.join("ms.db"))?),
+            db: Arc::new(db),
             git: Arc::new(GitArchive::open(ms_root.join("archive"))?),
             search: Arc::new(open_search_index(
                 &ms_root.join("index"),

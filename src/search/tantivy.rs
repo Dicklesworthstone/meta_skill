@@ -77,8 +77,9 @@ impl Bm25Index {
             .reload_policy(ReloadPolicy::Manual)
             .try_into()?;
 
-        // Create writer with 50MB buffer
-        let writer = index.writer(50_000_000)?;
+        // Use a single indexing thread so each commit emits one compact segment
+        // instead of sharding small batches across N worker threads (issue #249).
+        let writer = index.writer_with_num_threads(1, 50_000_000)?;
 
         Ok(Self {
             index,
@@ -130,7 +131,7 @@ impl Bm25Index {
             .reader_builder()
             .reload_policy(ReloadPolicy::Manual)
             .try_into()?;
-        let writer = index.writer(15_000_000)?;
+        let writer = index.writer_with_num_threads(1, 15_000_000)?;
 
         Ok(Self {
             index,

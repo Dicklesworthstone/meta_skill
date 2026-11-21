@@ -1241,6 +1241,7 @@ fn handle_tool_load(ctx: &AppContext, args: &Value) -> Result<ToolResult> {
         let load_args = super::load::LoadArgs {
             skill: Some(skill.id.clone()),
             auto: false,
+            no_track: false,
             threshold: 0.3,
             confirm: false,
             dry_run: false,

@@ -415,9 +415,6 @@ impl GlobalLock {
         file_ref
             .write_all(holder_json.as_bytes())
             .map_err(|e| MsError::TransactionFailed(format!("write lock holder: {e}")))?;
-        file_ref
-            .sync_all()
-            .map_err(|e| MsError::TransactionFailed(format!("sync lock file: {e}")))?;
 
         fs::write(Self::holder_path(ms_root), holder_json.as_bytes())
             .map_err(|e| MsError::TransactionFailed(format!("write lock holder sidecar: {e}")))?;
@@ -465,6 +462,12 @@ pub struct LockHolder {
 // =============================================================================
 // TRANSACTION MANAGER
 // =============================================================================
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct BatchSkillEntry {
+    skill: SkillSpec,
+    layer: SkillLayer,
+}
 
 /// Two-Phase Commit transaction manager for dual persistence
 pub struct TxManager {
@@ -540,11 +543,61 @@ impl TxManager {
         }
 
         let _lock = GlobalLock::acquire(&self.ms_root)?;
+        let items: Vec<(&SkillSpec, SkillLayer)> =
+            skills.iter().map(|s| (s, SkillLayer::Project)).collect();
+        self.write_skills_batch_with_layers(&items)
+    }
 
-        for skill in skills {
-            self.write_skill_with_layer(skill, SkillLayer::Project)?;
+    /// Batch write multiple skills with explicit layers under a single 2PC
+    /// transaction journal, one SQLite pending transaction, one Git commit,
+    /// and one SQLite finalize transaction (issue #249).
+    ///
+    /// Caller must already hold `GlobalLock` when coordinating concurrent writers.
+    pub fn write_skills_batch_with_layers(
+        &self,
+        skills: &[(&SkillSpec, SkillLayer)],
+    ) -> Result<()> {
+        if skills.is_empty() {
+            return Ok(());
+        }
+        if skills.len() == 1 {
+            return self.write_skill_with_layer(skills[0].0, skills[0].1);
         }
 
+        let entries: Vec<BatchSkillEntry> = skills
+            .iter()
+            .map(|(spec, layer)| BatchSkillEntry {
+                skill: (*spec).clone(),
+                layer: *layer,
+            })
+            .collect();
+        let tx = TxRecord::prepare("skill_batch", &format!("batch:{}", entries.len()), &entries)?;
+        debug!(
+            "Starting batch 2PC transaction {} for {} skills",
+            tx.id,
+            entries.len()
+        );
+
+        // Phase 1: Prepare - write single batch intent journal
+        self.write_tx_record(&tx)?;
+
+        // Phase 2: Pending - write all skills to SQLite in one transaction
+        let tx = self.db_write_pending_batch(&tx, &entries)?;
+
+        // Phase 3: Commit - write all skills to Git in one commit
+        let tx = self.git_commit_batch(&tx, &entries)?;
+
+        // Phase 4: Complete - finalize all skills in SQLite in one transaction
+        let tx = self.db_mark_committed_batch(&tx, &entries)?;
+
+        // Cleanup
+        self.cleanup_tx(&tx)?;
+
+        info!(
+            "Batch 2PC transaction {} completed for {} skills",
+            tx.id,
+            entries.len()
+        );
         Ok(())
     }
 
@@ -802,6 +855,185 @@ impl TxManager {
         Ok(tx)
     }
 
+    fn db_write_pending_batch(
+        &self,
+        tx: &TxRecord,
+        entries: &[BatchSkillEntry],
+    ) -> Result<TxRecord> {
+        debug!(
+            "Phase: pending batch (tx={}, count={})",
+            tx.id,
+            entries.len()
+        );
+
+        let mut tx = tx.clone();
+        tx.phase = TxPhase::Pending;
+
+        self.db.with_transaction(|db| {
+            for entry in entries {
+                let token_count = SkillSlicer::estimate_total_tokens(&entry.skill) as i64;
+                db.upsert_skill_pending(&entry.skill, entry.layer, token_count)?;
+            }
+            db.update_tx_phase(&tx.id, TxPhase::Pending)?;
+            Ok(())
+        })?;
+
+        let tx_path = self.tx_dir.join(format!("{}.json", tx.id));
+        let tx_json = serde_json::to_string_pretty(&tx)
+            .map_err(|e| MsError::TransactionFailed(format!("serialize tx: {e}")))?;
+        write_and_sync(&tx_path, &tx_json)?;
+
+        Ok(tx)
+    }
+
+    fn git_commit_batch(&self, tx: &TxRecord, entries: &[BatchSkillEntry]) -> Result<TxRecord> {
+        debug!(
+            "Phase: committed batch (tx={}, count={})",
+            tx.id,
+            entries.len()
+        );
+
+        let spec_refs: Vec<&SkillSpec> = entries.iter().map(|e| &e.skill).collect();
+        self.git.write_skills_batch(&spec_refs)?;
+
+        let mut tx = tx.clone();
+        tx.phase = TxPhase::Committed;
+        self.db.update_tx_phase(&tx.id, TxPhase::Committed)?;
+
+        let tx_path = self.tx_dir.join(format!("{}.json", tx.id));
+        let tx_json = serde_json::to_string_pretty(&tx)
+            .map_err(|e| MsError::TransactionFailed(format!("serialize tx: {e}")))?;
+        write_and_sync(&tx_path, &tx_json)?;
+
+        Ok(tx)
+    }
+
+    fn db_mark_committed_batch(
+        &self,
+        tx: &TxRecord,
+        entries: &[BatchSkillEntry],
+    ) -> Result<TxRecord> {
+        use sha2::{Digest, Sha256};
+
+        debug!(
+            "Phase: complete batch (tx={}, count={})",
+            tx.id,
+            entries.len()
+        );
+
+        let packs_dir = self.ms_root.join("packs");
+        fs::create_dir_all(&packs_dir)
+            .map_err(|err| MsError::TransactionFailed(format!("create packs dir: {err}")))?;
+
+        struct FinalizedItem {
+            skill_id: String,
+            git_path_str: String,
+            content_hash: String,
+            body: String,
+            pack_path_str: String,
+            slices_hash: String,
+            embedding_hash: String,
+            predicate_index_hash: String,
+            evidence: Option<crate::core::SkillEvidenceIndex>,
+        }
+
+        let mut prepared = Vec::with_capacity(entries.len());
+        for entry in entries {
+            let skill = &entry.skill;
+            let git_path = self
+                .git
+                .root()
+                .join("skills/by-id")
+                .join(&skill.metadata.id);
+            let git_path_str = git_path.to_string_lossy().to_string();
+            let content_hash = compute_content_hash(skill)?;
+            let body = compile_markdown(skill);
+            let slice_index = SkillSlicer::slice(skill);
+
+            let slices_json = serde_json::to_string(&slice_index)
+                .map_err(|e| MsError::TransactionFailed(format!("serialize slices: {e}")))?;
+            let slices_hash = hex::encode(Sha256::digest(slices_json.as_bytes()));
+            let predicates: Vec<_> = slice_index
+                .slices
+                .iter()
+                .map(|s| s.condition.as_ref())
+                .collect();
+            let predicate_json = serde_json::to_string(&predicates).unwrap_or_default();
+            let predicate_index_hash = hex::encode(Sha256::digest(predicate_json.as_bytes()));
+            let embedding_hash = hex::encode(Sha256::digest(body.as_bytes()));
+
+            let pack_file = packs_dir.join(format!("{}.pack.json", skill.metadata.id));
+            let pack_payload = serde_json::json!({
+                "skill_id": skill.metadata.id,
+                "spec_hash": content_hash,
+                "slices_hash": slices_hash,
+                "embedding_hash": embedding_hash,
+                "predicate_index_hash": predicate_index_hash,
+                "slices": slice_index,
+            });
+            let pack_str = serde_json::to_string_pretty(&pack_payload)
+                .map_err(|e| MsError::TransactionFailed(format!("serialize pack: {e}")))?;
+            fs::write(&pack_file, pack_str).map_err(|err| {
+                MsError::TransactionFailed(format!("write pack for {}: {err}", skill.metadata.id))
+            })?;
+
+            let evidence_path = git_path.join("evidence.json");
+            let evidence = fs::read_to_string(&evidence_path)
+                .ok()
+                .and_then(|raw| serde_json::from_str::<crate::core::SkillEvidenceIndex>(&raw).ok());
+
+            prepared.push(FinalizedItem {
+                skill_id: skill.metadata.id.clone(),
+                git_path_str,
+                content_hash,
+                body,
+                pack_path_str: pack_file.to_string_lossy().to_string(),
+                slices_hash,
+                embedding_hash,
+                predicate_index_hash,
+                evidence,
+            });
+        }
+
+        let mut tx = tx.clone();
+        tx.phase = TxPhase::Complete;
+
+        let res_cache = crate::core::ResolutionCache::new();
+        let res_cache_loaded = res_cache.load_from_db(self.db.conn()).is_ok();
+
+        self.db.with_transaction(|db| {
+            for item in &prepared {
+                db.finalize_skill_commit(
+                    &item.skill_id,
+                    &item.git_path_str,
+                    &item.content_hash,
+                    &item.body,
+                )?;
+                if res_cache_loaded {
+                    let _ = res_cache.invalidate_from_db(db.conn(), &item.skill_id);
+                }
+                db.upsert_skill_pack(
+                    &item.skill_id,
+                    &item.pack_path_str,
+                    &item.content_hash,
+                    &item.slices_hash,
+                    &item.embedding_hash,
+                    &item.predicate_index_hash,
+                )?;
+                if let Some(ref ev_index) = item.evidence {
+                    for (rule_id, refs) in &ev_index.rules {
+                        let _ =
+                            db.upsert_evidence(&item.skill_id, rule_id, refs, &ev_index.coverage);
+                    }
+                }
+            }
+            db.update_tx_phase(&tx.id, TxPhase::Complete)?;
+            Ok(())
+        })?;
+
+        Ok(tx)
+    }
+
     /// Clean up completed transaction
     fn cleanup_tx(&self, tx: &TxRecord) -> Result<()> {
         debug!("Cleanup tx={}", tx.id);
@@ -832,6 +1064,8 @@ impl TxManager {
             // Handle delete_skill transactions differently from write transactions
             if tx.entity_type == "delete_skill" {
                 self.recover_delete_tx(&tx, &mut report)?;
+            } else if tx.entity_type == "skill_batch" {
+                self.recover_batch_write_tx(&tx, &mut report)?;
             } else {
                 self.recover_write_tx(&tx, &mut report)?;
             }
@@ -874,6 +1108,58 @@ impl TxManager {
         }
 
         Ok(report)
+    }
+
+    /// Recover a batch write transaction (`entity_type` = "skill_batch")
+    fn recover_batch_write_tx(&self, tx: &TxRecord, report: &mut RecoveryReport) -> Result<()> {
+        let entries: Vec<BatchSkillEntry> = serde_json::from_str(&tx.payload_json)
+            .map_err(|e| MsError::TransactionFailed(format!("deserialize batch tx: {e}")))?;
+        match tx.phase {
+            TxPhase::Prepare => {
+                info!("Rolling back prepare-only batch tx: {}", tx.id);
+                self.db.delete_tx_record(&tx.id)?;
+                let tx_path = self.tx_dir.join(format!("{}.json", tx.id));
+                let _ = tombstone_file(&self.ms_root, &tx_path, "tx");
+                report.rolled_back += 1;
+            }
+            TxPhase::Pending => {
+                let all_committed = !entries.is_empty()
+                    && entries.iter().all(|e| {
+                        self.git
+                            .skill_committed(&e.skill.metadata.id)
+                            .unwrap_or(false)
+                    });
+                if all_committed {
+                    info!(
+                        "Completing pending batch tx with committed Git data: {}",
+                        tx.id
+                    );
+                    let tx = self.db_mark_committed_batch(tx, &entries)?;
+                    self.cleanup_tx(&tx)?;
+                    report.completed += 1;
+                } else {
+                    info!("Rolling back pending batch tx (not committed): {}", tx.id);
+                    for entry in &entries {
+                        self.db.delete_pending_skill(&entry.skill.metadata.id)?;
+                    }
+                    self.db.delete_tx_record(&tx.id)?;
+                    let tx_path = self.tx_dir.join(format!("{}.json", tx.id));
+                    let _ = tombstone_file(&self.ms_root, &tx_path, "tx");
+                    report.rolled_back += 1;
+                }
+            }
+            TxPhase::Committed => {
+                info!("Completing committed batch tx: {}", tx.id);
+                let tx = self.db_mark_committed_batch(tx, &entries)?;
+                self.cleanup_tx(&tx)?;
+                report.completed += 1;
+            }
+            TxPhase::Complete => {
+                warn!("Found complete batch tx in incomplete list: {}", tx.id);
+                self.cleanup_tx(tx)?;
+            }
+        }
+        Ok(())
     }
 
     /// Recover a write transaction (`entity_type` = "skill")
