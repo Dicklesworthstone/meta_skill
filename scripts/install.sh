@@ -382,9 +382,9 @@ main() {
 
     # Find the binary (might be at root or in a subdirectory)
     local binary_path
-    binary_path=$(find "$temp_dir" -name "$BINARY_NAME" -type f -executable 2>/dev/null | head -1)
+    binary_path=$(find "$temp_dir" -name "$BINARY_NAME" -type f -perm -u+x 2>/dev/null | head -1 || true)
     if [[ -z "$binary_path" ]]; then
-        binary_path=$(find "$temp_dir" -name "$BINARY_NAME" -type f 2>/dev/null | head -1)
+        binary_path=$(find "$temp_dir" -name "$BINARY_NAME" -type f 2>/dev/null | head -1 || true)
     fi
 
     if [[ -z "$binary_path" ]]; then
