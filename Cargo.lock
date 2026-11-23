@@ -4411,7 +4411,7 @@ dependencies = [
 
 [[package]]
 name = "ms"
-version = "0.4.0"
+version = "0.4.1"
 dependencies = [
  "anyhow",
  "assert_cmd",

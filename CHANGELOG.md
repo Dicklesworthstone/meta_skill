@@ -9,6 +9,65 @@ All notable changes to **ms** (Meta Skill CLI) are documented here.
 
 ---
 
+## [v0.4.1] -- 2026-11-23
+
+### Security, integrity and overlay diagnostics
+
+- **Loud malformed overlay diagnostics and repository overlay hardening.**
+  `load_overlays_for_skill_with_warnings` and
+  `apply_overlays_from_dir_with_warnings` now surface explicit warnings for
+  malformed JSON/TOML/YAML overlays, unreadable overlay files, and symlink
+  escapes instead of silently dropping them, reporting warnings in both `ms
+  load` (robot JSON `warnings` and human output/stderr) and `ms show`. Overlays
+  are scanned for prompt injection patterns before application, and
+  repository-scoped `.ms/overlays` refuse wildcard (`skill_id: "*"`) and
+  `RemoveBlock` modifications by default unless explicitly opted in via
+  `MS_ALLOW_PROJECT_OVERLAYS=1`.
+- **Fail-closed `ms bundle verify` for unsigned bundles and corrupt cached blobs.**
+  `ms bundle verify` now refuses unsigned bundles by default instead of
+  reporting `valid: true`, requires a manifest checksum, fails closed on
+  corrupt or unreadable cached blobs in the local blob store, and provides an
+  explicit `--allow-unsigned` flag (mutually exclusive with `--key`) for
+  checksum-and-blob-only integrity checks.
+
+### Search performance
+
+- **Eliminate full-table `skill_usage` scans during `ms search`.** Replaced
+  `build_search_context`'s three-pass full-table `get_skill_usage_stats()`
+  queries with an O(1) primary-key tail query (`Database::get_recent_skill_ids`)
+  and avoided building search context in BM25 and semantic search unless
+  `--explain` is requested. On a 500-skill database with 20,000 `skill_usage`
+  rows and 500 `skill_slices` rows, `ms search` drops from 104.0 ms (10.77 MB
+  read) to 31.8 ms (86 KB read — 3.27x faster, 125x less DB I/O), with
+  `Database::open_readonly` keeping `PRAGMA foreign_keys` off while writer
+  connections preserve `PRAGMA foreign_keys = ON`.
+
+### CLI, CASS mining, indexing and RU sync fixes
+
+- **CASS mining and CLI hardening.** `ms antipatterns mine` now accepts both
+  session file paths and bare session IDs (resolving IDs via CASS search);
+  `ms meta update` and `ms antipatterns` construct `CassClient::from_context`
+  so `CassConfig` settings and `SafetyGate` enforcement apply consistently;
+  `ms meta update` surfaces `get_session` and extraction failures in
+  `session_errors` (marking status `partial`); `ms build` records and warns on
+  anti-pattern mining errors instead of swallowing them; and ACIP taint
+  scanning in `src/cass/mining.rs` now recursively scans `tool_calls`
+  arguments and names so hostile command lines are filtered on both pattern
+  and anti-pattern paths.
+- **Local frontmatter validation and scoped RU sync.** `ms index` now refuses
+  malformed or unterminated YAML frontmatter on local paths as well as
+  `--from-ru`. `SyncEngine::index_ru_repo_paths` writes RU skills directly at
+  the canonical `Base` layer (eliminating `Project` → `Base` rewrites), and
+  `ms sync` only triggers `auto_reindex` when an RU remote had changes, scoped
+  exclusively to the changed RU repositories.
+- **Robot mode environment parity and test strengthening.** Added `ROBOT_MODE`
+  environment variable fallback alongside `MS_ROBOT` and strengthened
+  `test_robot_mode_env_var`, `test_cass_integration_workflow`, and
+  `test_knowledge_query_workflow` with deterministic stand-in binaries and real
+  behavioral assertions.
+
+---
+
 ## [v0.4.0] -- 2026-11-21
 
 ### Indexing, storage and read-only queries
