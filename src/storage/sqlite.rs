@@ -329,6 +329,51 @@ impl Database {
         Ok(count.max(0) as u64)
     }
 
+    /// Return up to `limit` distinct recently used skill IDs without scanning
+    /// the full `skill_usage` history.
+    ///
+    /// Uses a primary-key tail range (`id > max_id - window`) so search latency
+    /// and page reads stay O(1) as `skill_usage` grows (meta_skill-g929).
+    pub fn get_recent_skill_ids(&self, limit: usize) -> Result<Vec<String>> {
+        use fsqlite::compat::OptionalExtension;
+
+        if limit == 0 {
+            return Ok(Vec::new());
+        }
+
+        let max_id: Option<i64> = self
+            .conn
+            .query_row_map("SELECT MAX(id) FROM skill_usage", params![], |row| {
+                row.get_typed::<Option<i64>>(0)
+            })
+            .optional()?
+            .flatten();
+
+        let Some(max_id) = max_id else {
+            return Ok(Vec::new());
+        };
+
+        let window = i64::try_from(limit.saturating_mul(16).max(64)).unwrap_or(1024);
+        let min_id = max_id.saturating_sub(window);
+        let rows: Vec<String> = self.conn.query_map_collect(
+            "SELECT skill_id FROM skill_usage WHERE id > ? ORDER BY id DESC",
+            params![min_id],
+            |row| row.get_typed::<String>(0),
+        )?;
+
+        let mut seen = std::collections::HashSet::with_capacity(limit);
+        let mut recent = Vec::with_capacity(limit);
+        for skill_id in rows {
+            if seen.insert(skill_id.clone()) {
+                recent.push(skill_id);
+                if recent.len() >= limit {
+                    break;
+                }
+            }
+        }
+        Ok(recent)
+    }
+
     /// Get skill usage statistics for building UserHistory.
     ///
     /// Returns a tuple of (total_loads, skill_load_counts, skill_last_load).
@@ -3233,5 +3278,55 @@ mod tests {
         let dir = tempdir().unwrap();
         let db = Database::open(dir.path().join("test.db")).unwrap();
         assert_eq!(db.count_skill_feedback("nope").unwrap(), 0);
+    }
+
+    #[test]
+    fn test_open_readonly_keeps_foreign_keys_off_while_writer_enforces_them() {
+        let dir = tempdir().unwrap();
+        let db_path = dir.path().join("fk_mode.db");
+        {
+            let writer = Database::open(&db_path).unwrap();
+            let writer_fk: i64 = writer
+                .conn()
+                .query_row("PRAGMA foreign_keys")
+                .unwrap()
+                .get_typed(0)
+                .unwrap();
+            assert_eq!(writer_fk, 1, "writer connections must enforce foreign_keys");
+        }
+
+        let reader = Database::open_readonly(&db_path).unwrap();
+        let reader_fk: i64 = reader
+            .conn()
+            .query_row("PRAGMA foreign_keys")
+            .unwrap()
+            .get_typed(0)
+            .unwrap();
+        assert_eq!(
+            reader_fk, 0,
+            "read-only connections must not enable foreign_keys"
+        );
+    }
+
+    #[test]
+    fn test_get_recent_skill_ids_returns_distinct_tail_in_recency_order() {
+        let dir = tempdir().unwrap();
+        let db = Database::open(dir.path().join("recent.db")).unwrap();
+        for i in 0..8 {
+            db.upsert_skill(&origin_test_skill(&format!("skill-{i}")))
+                .unwrap();
+        }
+        assert!(db.get_recent_skill_ids(5).unwrap().is_empty());
+
+        for skill_id in [
+            "skill-0", "skill-1", "skill-2", "skill-3", "skill-4", "skill-5", "skill-2", "skill-6",
+            "skill-2",
+        ] {
+            db.record_skill_usage(skill_id, None, 2, None, None, None)
+                .unwrap();
+        }
+
+        let recent = db.get_recent_skill_ids(4).unwrap();
+        assert_eq!(recent, vec!["skill-2", "skill-6", "skill-5", "skill-4"]);
     }
 }

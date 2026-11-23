@@ -96,6 +96,20 @@ impl CassClient {
         client
     }
 
+    /// Create a CASS client from `AppContext`, respecting `CassConfig` (`auto_detect`,
+    /// `cass_path`, `session_pattern`) and attaching `SafetyGate` whenever DCG is
+    /// installed or explicitly configured (meta_skill-rqg5).
+    #[must_use]
+    pub fn from_context(ctx: &crate::app::AppContext) -> Self {
+        let mut client = Self::from_config(&ctx.config.cass);
+        let gate = SafetyGate::from_context(ctx);
+        let custom_dcg = ctx.config.safety.dcg_bin != std::path::Path::new("dcg");
+        if custom_dcg || gate.status().dcg_version.is_some() {
+            client = client.with_safety(gate);
+        }
+        client
+    }
+
     /// Set a glob pattern to filter session file paths
     #[must_use]
     pub fn with_session_pattern(mut self, pattern: impl Into<String>) -> Self {

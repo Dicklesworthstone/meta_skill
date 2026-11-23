@@ -969,7 +969,11 @@ pub(crate) fn load_skill(ctx: &AppContext, args: &LoadArgs, skill_ref: &str) -> 
 
     // Apply any matching runtime overlays from <ms_root>/overlays/
     let overlay_ctx = crate::core::overlay::OverlayContext::from_env();
-    crate::core::overlay::apply_overlays_from_dir(&mut spec, &ctx.ms_root, &overlay_ctx);
+    let overlay_report = crate::core::overlay::apply_overlays_from_dir_with_warnings(
+        &mut spec,
+        &ctx.ms_root,
+        &overlay_ctx,
+    );
 
     // Load assets from database
     let assets: SkillAssets = serde_json::from_str(&skill.assets_json).unwrap_or_default();
@@ -990,6 +994,13 @@ pub(crate) fn load_skill(ctx: &AppContext, args: &LoadArgs, skill_ref: &str) -> 
         .iter()
         .map(|w| format!("{:?}", w))
         .collect();
+    for overlay_warning in &overlay_report.warnings {
+        let msg = overlay_warning.to_string();
+        if ctx.output_format == OutputFormat::Human {
+            eprintln!("warning: {msg}");
+        }
+        warnings.push(msg);
+    }
 
     if !spec.metadata.requires.is_empty() || !spec.metadata.platforms.is_empty() {
         let mut available = HashSet::new();

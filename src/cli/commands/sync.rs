@@ -72,12 +72,24 @@ pub fn run(ctx: &AppContext, args: &SyncArgs) -> Result<()> {
         engine.sync_all(&options)?
     };
 
-    // Check if we should auto-reindex after sync
+    // Only auto-reindex RU repositories when an RU remote actually cloned or pulled changes,
+    // scoped to the changed repositories rather than every configured RU repo (meta_skill-rqg5).
+    let mut changed_ru_paths: Vec<String> = Vec::new();
+    for r in &reports {
+        if r.is_ru && (!r.cloned.is_empty() || !r.pulled.is_empty()) {
+            for p in &r.changed_ru_paths {
+                let s = p.to_string_lossy().to_string();
+                if !changed_ru_paths.contains(&s) {
+                    changed_ru_paths.push(s);
+                }
+            }
+        }
+    }
     let should_reindex = !args.dry_run
         && ctx.config.ru.auto_index
         && reports
             .iter()
-            .any(|r| !r.cloned.is_empty() || !r.pulled.is_empty());
+            .any(|r| r.is_ru && (!r.cloned.is_empty() || !r.pulled.is_empty()));
 
     let held_back = held_back_error(&reports);
 
@@ -87,10 +99,10 @@ pub fn run(ctx: &AppContext, args: &SyncArgs) -> Result<()> {
             "reports": reports,
         });
 
-        // Auto-reindex if configured and there were changes
+        // Auto-reindex if configured and an RU remote had changes
         if should_reindex {
             let mut index = serde_json::Value::Null;
-            let reindex_result = auto_reindex(ctx, args.force, Some(&mut index));
+            let reindex_result = auto_reindex(ctx, args.force, &changed_ru_paths, Some(&mut index));
             let refused_a_file = index["status"] == "partial";
             if let Some(obj) = payload.as_object_mut() {
                 obj.insert(
@@ -135,11 +147,11 @@ pub fn run(ctx: &AppContext, args: &SyncArgs) -> Result<()> {
         }
         emit_human(layout);
 
-        // Auto-reindex if configured and there were changes
+        // Auto-reindex if configured and an RU remote had changes
         if should_reindex {
             println!();
             println!("{}", "Auto-reindexing skills from synced repos...".cyan());
-            match auto_reindex(ctx, args.force, None) {
+            match auto_reindex(ctx, args.force, &changed_ru_paths, None) {
                 Ok(()) => {
                     println!("{} Reindex finished", "✓".green().bold());
                 }
@@ -176,14 +188,15 @@ fn held_back_error(reports: &[SyncReport]) -> Option<MsError> {
     )))
 }
 
-/// Trigger auto-reindex of skills from ru-managed repositories
+/// Trigger auto-reindex of skills from the changed ru-managed repositories
 fn auto_reindex(
     ctx: &AppContext,
     force: bool,
+    changed_paths: &[String],
     report: Option<&mut serde_json::Value>,
 ) -> Result<()> {
     let index_args = IndexArgs {
-        paths: Vec::new(),
+        paths: changed_paths.to_vec(),
         watch: false,
         force,
         all: false,

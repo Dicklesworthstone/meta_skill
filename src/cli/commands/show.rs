@@ -404,7 +404,12 @@ fn show_json(ctx: &AppContext, skill: &SkillRecord, args: &ShowArgs, pretty: boo
     // Surface multi-layer override candidates, overlays, and section conflicts if present
     let mut layered =
         crate::core::layering::LayeredRegistry::from_skill_paths(&ctx.config.skill_paths);
-    let _ = layered.load_overlays_from_root(&ctx.ms_root);
+    let (_, overlay_warnings) = layered.load_overlays_from_root_with_warnings(&ctx.ms_root);
+    if !overlay_warnings.is_empty() {
+        let warning_strings: Vec<String> =
+            overlay_warnings.iter().map(ToString::to_string).collect();
+        output["skill"]["overlay_warnings"] = serde_json::json!(warning_strings);
+    }
     if let Ok(Some(resolved)) = layered.effective(&skill.id) {
         if !resolved.overlay_results.is_empty() {
             if let Ok(ov_val) = serde_json::to_value(&resolved.overlay_results) {

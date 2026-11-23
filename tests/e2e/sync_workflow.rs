@@ -925,7 +925,11 @@ fn test_sync_still_propagates_a_deletion_that_leaves_skills_behind() -> Result<(
         output.json()["reports"][0]["pulled"],
         json!(["alpha-notes (deleted)"])
     );
-    assert_eq!(output.json()["auto_reindex"]["success"], true);
+    assert!(
+        output.json().get("auto_reindex").is_none(),
+        "non-RU filesystem sync must not trigger RU auto_reindex: {}",
+        output.stdout
+    );
     Ok(())
 }
 
@@ -1248,7 +1252,21 @@ mod ru_repositories {
         assert_eq!(ru.reindex["success"], true, "{}", ru.reindex);
         assert_eq!(
             ru.reindex["index"]["indexed"], 1,
-            "the reindex has to reach the repository, or these tests prove one step of two"
+            "the reindex has to reach the repository, or these tests prove one step of two: {}",
+            ru.reindex
+        );
+        // Verify sync_ru wrote the skill at Base layer and auto_reindex did not rewrite it
+        // (archive history must have a single commit for repo-notes, not Project -> Base).
+        let show = run_in_home(&mut ru.fixture, &["--robot", "show", "repo-notes"], &[]);
+        ru.fixture.assert_success(&show, "show repo-notes");
+        assert_eq!(show.json()["skill"]["layer"], "base", "{}", show.stdout);
+        let archive_repo = git2::Repository::open(ru.fixture.ms_root.join("archive"))?;
+        let mut revwalk = archive_repo.revwalk()?;
+        revwalk.push_head()?;
+        let commit_count = revwalk.count();
+        assert_eq!(
+            commit_count, 1,
+            "sync_ru must write directly at Base layer without a second Project->Base rewrite commit"
         );
         Ok(())
     }
@@ -1467,6 +1485,41 @@ mod ru_repositories {
         assert_eq!(errors.len(), 2, "a count and one problem: {errors:?}");
         assert!(errors[1].contains("also has id repo-notes"), "{errors:?}");
         assert_eq!(ru.indexed_description().as_deref(), Some("copy"));
+        Ok(())
+    }
+
+    #[test]
+    fn test_ru_sync_reindexes_only_changed_repository_not_unchanged_ones() -> Result<()> {
+        let mut ru = RuRemote::new("ru_sync_scoped_reindex")?;
+        ru.write_skill("notes", repository_skill("changed-repo"))?;
+
+        // Create a second configured RU repository containing broken frontmatter.
+        // Because the stand-in ru only reports `ru.repo` as pulled, auto_reindex must NOT
+        // scan this unchanged second repository.
+        let untouched = TempDir::new()?;
+        let bad_dir = untouched.path().join("broken");
+        fs::create_dir_all(&bad_dir)?;
+        fs::write(
+            bad_dir.join("SKILL.md"),
+            "---\nid: [unclosed\n---\n\n# Should Not Scan\n",
+        )?;
+        let mut config = fs::read_to_string(&ru.fixture.config_path)?;
+        config.push_str(&format!(
+            "skill_repos = [\"{}\", \"{}\"]\n",
+            ru.repo.path().display(),
+            untouched.path().display()
+        ));
+        fs::write(&ru.fixture.config_path, config)?;
+
+        let errors = ru.sync(&[]);
+        assert_eq!(errors, Vec::<String>::new());
+        assert_eq!(ru.reindex["success"], true, "{}", ru.reindex);
+        assert_eq!(ru.reindex["index"]["indexed"], 1, "{}", ru.reindex);
+        assert_eq!(
+            ru.reindex["index"]["package_summary"]["skills_discovered"], 1,
+            "auto_reindex must scan only the 1 changed repository, not the untouched broken repo: {}",
+            ru.reindex
+        );
         Ok(())
     }
 }

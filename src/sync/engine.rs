@@ -57,6 +57,12 @@ pub struct SyncReport {
     /// Deletions this sync did not make because it could not read every skill.
     pub held_deletions: Vec<String>,
     pub duration_ms: u128,
+    /// True when this report came from an RU remote.
+    #[serde(skip)]
+    pub is_ru: bool,
+    /// Local repository paths that changed during an RU sync (scoped reindex targets).
+    #[serde(skip)]
+    pub changed_ru_paths: Vec<PathBuf>,
 }
 
 impl SyncReport {
@@ -238,6 +244,7 @@ impl SyncEngine {
         );
         report.skipped.extend(result.skipped.clone());
 
+        report.is_ru = true;
         match RuExitCode::from_code(result.exit_code) {
             RuExitCode::Ok | RuExitCode::Partial | RuExitCode::Conflicts => {
                 if !options.dry_run
@@ -248,31 +255,34 @@ impl SyncEngine {
                     changed_repos.extend(result.cloned.iter().cloned());
                     changed_repos.extend(result.pulled.iter().cloned());
 
+                    let matches_changed = |p: &Path| {
+                        p.file_name()
+                            .map(|n| changed_repos.contains(&n.to_string_lossy().to_string()))
+                            .unwrap_or(false)
+                            || changed_repos.contains(&p.to_string_lossy().to_string())
+                    };
+
                     let mut target_paths: Vec<PathBuf> = Vec::new();
-                    for repo in &self.ru_config.skill_repos {
-                        let p = PathBuf::from(repo);
-                        if p.is_dir() && !target_paths.contains(&p) {
-                            target_paths.push(p);
-                        }
-                    }
                     for repo in &changed_repos {
                         let p = PathBuf::from(repo);
                         if p.is_dir() && !target_paths.contains(&p) {
                             target_paths.push(p);
                         }
                     }
+                    for repo in &self.ru_config.skill_repos {
+                        let p = PathBuf::from(repo);
+                        if matches_changed(&p) && p.is_dir() && !target_paths.contains(&p) {
+                            target_paths.push(p);
+                        }
+                    }
                     if let Ok(paths) = client.list_paths() {
                         for p in paths {
-                            let matches_name = p
-                                .file_name()
-                                .map(|n| changed_repos.contains(&n.to_string_lossy().to_string()))
-                                .unwrap_or(false)
-                                || changed_repos.contains(&p.to_string_lossy().to_string());
-                            if matches_name && p.is_dir() && !target_paths.contains(&p) {
+                            if matches_changed(&p) && p.is_dir() && !target_paths.contains(&p) {
                                 target_paths.push(p);
                             }
                         }
                     }
+                    report.changed_ru_paths = target_paths.clone();
                     if !target_paths.is_empty() {
                         match self.index_ru_repo_paths(&target_paths, options.force) {
                             Ok(index) if index.problems.is_empty() => {}
@@ -354,7 +364,7 @@ impl SyncEngine {
         }
 
         let specs: Vec<SkillSpec> = found.iter().map(|(spec, ..)| spec.clone()).collect();
-        tx_mgr.write_skills_batch(&specs)?;
+        tx_mgr.write_skills_batch_with_layer(&specs, crate::core::SkillLayer::Base)?;
         for (spec, root, path) in found {
             self.db.record_skill_origin(
                 &spec.metadata.id,

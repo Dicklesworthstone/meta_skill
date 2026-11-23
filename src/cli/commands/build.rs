@@ -1753,6 +1753,7 @@ fn run_auto(
         draft.tags, draft.content
     );
 
+    let mut antipattern_error: Option<String> = None;
     if !args.no_antipatterns {
         let raw_sessions: Vec<_> = quality_sessions
             .iter()
@@ -1769,19 +1770,26 @@ fn run_auto(
             })
             .collect();
         let detector = crate::antipatterns::DefaultDetector::default();
-        if let Ok(mut antipatterns) =
-            crate::antipatterns::mine_anti_patterns(&raw_sessions, &detector)
-        {
-            for ap in &mut antipatterns {
-                crate::antipatterns::link_to_pattern(
-                    ap,
-                    crate::antipatterns::PatternId::new(&skill_id),
-                );
+        match crate::antipatterns::mine_anti_patterns(&raw_sessions, &detector) {
+            Ok(mut antipatterns) => {
+                for ap in &mut antipatterns {
+                    crate::antipatterns::link_to_pattern(
+                        ap,
+                        crate::antipatterns::PatternId::new(&skill_id),
+                    );
+                }
+                let section = crate::antipatterns::format_anti_patterns(&antipatterns);
+                if !section.is_empty() {
+                    skill_md.push('\n');
+                    skill_md.push_str(&section.to_markdown());
+                }
             }
-            let section = crate::antipatterns::format_anti_patterns(&antipatterns);
-            if !section.is_empty() {
-                skill_md.push('\n');
-                skill_md.push_str(&section.to_markdown());
+            Err(err) => {
+                tracing::warn!(error = %err, "anti-pattern mining failed during ms build");
+                if ctx.output_format == OutputFormat::Human {
+                    eprintln!("Warning: anti-pattern mining failed: {err}");
+                }
+                antipattern_error = Some(err.to_string());
             }
         }
     }
@@ -1921,6 +1929,7 @@ fn run_auto(
             "redaction_enabled": !args.no_redact,
             "injection_filter_enabled": !args.no_injection_filter,
         },
+        "antipattern_error": antipattern_error,
         "created_at": chrono::Utc::now().to_rfc3339(),
     });
     let manifest_path = output_dir.join("build-manifest.json");
@@ -1942,11 +1951,12 @@ fn run_auto(
     }
 
     // Final summary
+    let build_warnings = usize::from(antipattern_error.is_some());
     debug!(
         target: "build",
         stage = "complete",
         files = quality_sessions.len(),
-        warnings = 0_usize,
+        warnings = build_warnings,
         errors = 0_usize,
     );
     if ctx.output_format != OutputFormat::Human {
@@ -1963,6 +1973,7 @@ fn run_auto(
             "skill_path": skill_md_path.display().to_string(),
             "patterns_path": patterns_path.display().to_string(),
             "manifest_path": manifest_path.display().to_string(),
+            "antipattern_error": antipattern_error,
         });
         println!("{}", serde_json::to_string_pretty(&output)?);
     } else {

@@ -145,7 +145,18 @@ pub fn frontmatter_error(content: &str) -> Option<String> {
     if lines.next()?.trim() != "---" {
         return None;
     }
-    let yaml: Vec<&str> = lines.take_while(|line| line.trim() != "---").collect();
+    let mut yaml = Vec::new();
+    let mut closed = false;
+    for line in lines {
+        if line.trim() == "---" {
+            closed = true;
+            break;
+        }
+        yaml.push(line);
+    }
+    if !closed {
+        return Some("unterminated YAML frontmatter (missing closing '---')".to_string());
+    }
     serde_yaml::from_str::<FrontmatterSpec>(&yaml.join("\n"))
         .err()
         .map(|err| err.to_string())

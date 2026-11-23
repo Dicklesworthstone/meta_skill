@@ -38,7 +38,7 @@ pub enum AntiPatternsCommand {
 
 #[derive(Args, Debug)]
 pub struct MineArgs {
-    /// Session IDs to mine from
+    /// Session paths or session IDs to mine from
     pub sessions: Vec<String>,
 
     /// Output format: text, json
@@ -97,6 +97,41 @@ pub fn run(ctx: &AppContext, args: &AntiPatternsArgs) -> Result<()> {
     }
 }
 
+/// Return true when `session_ref` looks like a filesystem path rather than a bare session ID.
+fn looks_like_session_path(session_ref: &str) -> bool {
+    session_ref.contains('/')
+        || session_ref.contains('\\')
+        || session_ref.ends_with(".jsonl")
+        || session_ref.ends_with(".json")
+        || std::path::Path::new(session_ref).exists()
+}
+
+/// Resolve either a session path or a bare session ID via CASS and export the session.
+fn resolve_and_load_session(cass: &CassClient, session_ref: &str) -> Result<crate::cass::Session> {
+    if looks_like_session_path(session_ref) {
+        return cass.get_session(session_ref);
+    }
+
+    let matches_id = |m: &crate::cass::SessionMatch| {
+        m.session_id == session_ref
+            || std::path::Path::new(&m.path)
+                .file_stem()
+                .and_then(|s| s.to_str())
+                == Some(session_ref)
+    };
+
+    for (query, limit) in [(session_ref, 50usize), ("*", 200usize)] {
+        if let Ok(hits) = cass.search(query, limit) {
+            if let Some(found) = hits.into_iter().find(matches_id) {
+                return cass.get_session(&found.path);
+            }
+        }
+    }
+
+    // Fallback: let `cass export` attempt the identifier directly and surface its error.
+    cass.get_session(session_ref)
+}
+
 fn antipatterns_store_path(ctx: &AppContext) -> std::path::PathBuf {
     ctx.ms_root.join("antipatterns.json")
 }
@@ -129,23 +164,22 @@ fn run_mine(ctx: &AppContext, args: &MineArgs) -> Result<()> {
         ));
     }
 
-    // Load sessions from CASS
-    let cass = if let Some(ref cass_path) = ctx.config.cass.cass_path {
-        CassClient::with_binary(cass_path)
-    } else {
-        CassClient::new()
-    };
+    // Load sessions from CASS (honoring config and SafetyGate)
+    let cass = CassClient::from_context(ctx);
     let mut sessions = Vec::new();
+    let mut load_errors = Vec::new();
 
-    for session_id in &args.sessions {
-        match cass.get_session(session_id) {
+    for session_ref in &args.sessions {
+        match resolve_and_load_session(&cass, session_ref) {
             Ok(session) => sessions.push(session),
             Err(e) => {
+                tracing::warn!(session = %session_ref, error = %e, "failed to load session for antipattern mining");
+                load_errors.push(format!("{session_ref}: {e}"));
                 if ctx.output_format == OutputFormat::Human {
                     eprintln!(
                         "{}: failed to load {}: {}",
                         "warning".yellow(),
-                        session_id,
+                        session_ref,
                         e
                     );
                 }
@@ -154,9 +188,12 @@ fn run_mine(ctx: &AppContext, args: &MineArgs) -> Result<()> {
     }
 
     if sessions.is_empty() {
-        return Err(MsError::ValidationFailed(
-            "no valid sessions found".to_string(),
-        ));
+        let detail = if load_errors.is_empty() {
+            "no valid sessions found".to_string()
+        } else {
+            format!("no valid sessions found ({})", load_errors.join("; "))
+        };
+        return Err(MsError::ValidationFailed(detail));
     }
 
     // Mine anti-patterns

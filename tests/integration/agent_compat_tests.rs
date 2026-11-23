@@ -426,15 +426,61 @@ fn test_robot_overrides_force_rich() {
     }
 }
 
-/// Test ROBOT_MODE environment variable.
+/// Test ROBOT_MODE environment variable enables robot-mode JSON output on the spawned ms process.
 #[test]
 fn test_robot_mode_env_var() {
-    let result = run_ms_with_env(&["--version"], &[("ROBOT_MODE", "1")]);
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let ms_root = tmp.path().join(".ms");
+    let config_path = ms_root.join("config.toml");
 
-    // This may or may not be recognized, but should not produce ANSI if robot mode is active
-    if result.success && std::env::var("ROBOT_MODE").is_ok() {
-        assert_no_ansi(&result.stdout, "ROBOT_MODE=1");
-    }
+    // Initialize an isolated ms root so `ms list` executes deterministically
+    let init = run_ms_with_env(
+        &["init"],
+        &[
+            ("HOME", tmp.path().to_str().unwrap()),
+            ("MS_ROOT", ms_root.to_str().unwrap()),
+            ("MS_CONFIG", config_path.to_str().unwrap()),
+        ],
+    );
+    init.assert_success();
+
+    // Spawn ms with ROBOT_MODE=1 (and MS_FORCE_RICH=1 to prove robot mode overrides rich output)
+    let result = run_ms_with_env(
+        &["list"],
+        &[
+            ("HOME", tmp.path().to_str().unwrap()),
+            ("MS_ROOT", ms_root.to_str().unwrap()),
+            ("MS_CONFIG", config_path.to_str().unwrap()),
+            ("ROBOT_MODE", "1"),
+            ("MS_FORCE_RICH", "1"),
+        ],
+    );
+    result.assert_success();
+    assert_no_ansi(&result.stdout, "ROBOT_MODE=1 list");
+    let json = result.try_json().unwrap_or_else(|| {
+        panic!(
+            "ROBOT_MODE=1 must produce valid JSON robot output, got:\n{}",
+            result.stdout
+        )
+    });
+    assert_eq!(json["status"], "ok", "unexpected robot JSON: {json}");
+    assert!(json["skills"].is_array(), "missing skills array: {json}");
+
+    // Contrast: without ROBOT_MODE / MS_ROBOT / --robot, `ms list` produces human output (not JSON)
+    let human = run_ms_with_env(
+        &["list"],
+        &[
+            ("HOME", tmp.path().to_str().unwrap()),
+            ("MS_ROOT", ms_root.to_str().unwrap()),
+            ("MS_CONFIG", config_path.to_str().unwrap()),
+        ],
+    );
+    human.assert_success();
+    assert!(
+        human.try_json().is_none(),
+        "without ROBOT_MODE or --robot, `ms list` should emit human text, not JSON: {}",
+        human.stdout
+    );
 }
 
 // =============================================================================

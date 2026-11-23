@@ -481,17 +481,33 @@ impl LayeredRegistry {
         registry
     }
 
-    /// Load and register overlays for all registered skills from `<ms_root>/overlays`.
-    pub fn load_overlays_from_root(&mut self, ms_root: &std::path::Path) -> usize {
+    /// Load and register overlays for all registered skills from `<ms_root>/overlays`,
+    /// returning both registered overlay count and deduplicated load warnings.
+    pub fn load_overlays_from_root_with_warnings(
+        &mut self,
+        ms_root: &std::path::Path,
+    ) -> (usize, Vec<crate::core::overlay::OverlayLoadWarning>) {
         let mut count = 0;
+        let mut warnings = Vec::new();
         let ids = self.list_ids();
         for id in ids {
-            for overlay in crate::core::overlay::load_overlays_for_skill(ms_root, &id) {
+            let report = crate::core::overlay::load_overlays_for_skill_with_warnings(ms_root, &id);
+            for overlay in report.overlays {
                 self.register_overlay(overlay);
                 count += 1;
             }
+            for warning in report.warnings {
+                if !warnings.contains(&warning) {
+                    warnings.push(warning);
+                }
+            }
         }
-        count
+        (count, warnings)
+    }
+
+    /// Load and register overlays for all registered skills from `<ms_root>/overlays`.
+    pub fn load_overlays_from_root(&mut self, ms_root: &std::path::Path) -> usize {
+        self.load_overlays_from_root_with_warnings(ms_root).0
     }
 }
 

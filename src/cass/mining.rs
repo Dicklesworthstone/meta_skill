@@ -753,7 +753,48 @@ enum MessageTaint {
     Sensitive,
 }
 
-/// Scan session messages for injection and sensitive content patterns.
+/// Recursively scan a JSON value (e.g., tool call arguments) for prompt injection or sensitive data.
+fn scan_json_value_for_taint(value: &serde_json::Value) -> Option<MessageTaint> {
+    match value {
+        serde_json::Value::String(text) => {
+            if contains_injection_patterns(text) {
+                Some(MessageTaint::Injection)
+            } else if contains_sensitive_data(text) {
+                Some(MessageTaint::Sensitive)
+            } else {
+                None
+            }
+        }
+        serde_json::Value::Array(items) => {
+            let mut found_sensitive = false;
+            for item in items {
+                match scan_json_value_for_taint(item) {
+                    Some(MessageTaint::Injection) => return Some(MessageTaint::Injection),
+                    Some(MessageTaint::Sensitive) => found_sensitive = true,
+                    None => {}
+                }
+            }
+            found_sensitive.then_some(MessageTaint::Sensitive)
+        }
+        serde_json::Value::Object(fields) => {
+            let mut found_sensitive = false;
+            for (k, v) in fields {
+                if contains_injection_patterns(k) {
+                    return Some(MessageTaint::Injection);
+                }
+                match scan_json_value_for_taint(v) {
+                    Some(MessageTaint::Injection) => return Some(MessageTaint::Injection),
+                    Some(MessageTaint::Sensitive) => found_sensitive = true,
+                    None => {}
+                }
+            }
+            found_sensitive.then_some(MessageTaint::Sensitive)
+        }
+        _ => None,
+    }
+}
+
+/// Scan session messages, tool call arguments, and tool results for injection and sensitive content.
 fn scan_for_tainted_messages(session: &Session) -> std::collections::HashMap<usize, MessageTaint> {
     let mut tainted = std::collections::HashMap::new();
 
@@ -765,6 +806,29 @@ fn scan_for_tainted_messages(session: &Session) -> std::collections::HashMap<usi
         }
         if contains_sensitive_data(&msg.content) {
             tainted.insert(msg.index, MessageTaint::Sensitive);
+        }
+
+        // Check tool call names and arguments (hostile command lines can live in arguments)
+        let mut msg_injected = false;
+        for call in &msg.tool_calls {
+            if contains_injection_patterns(&call.name) {
+                tainted.insert(msg.index, MessageTaint::Injection);
+                msg_injected = true;
+                break;
+            }
+            match scan_json_value_for_taint(&call.arguments) {
+                Some(MessageTaint::Injection) => {
+                    tainted.insert(msg.index, MessageTaint::Injection);
+                    msg_injected = true;
+                    break;
+                }
+                Some(MessageTaint::Sensitive) => {
+                    tainted.entry(msg.index).or_insert(MessageTaint::Sensitive);
+                }
+                None => {}
+            }
+        }
+        if msg_injected {
             continue;
         }
 

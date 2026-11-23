@@ -538,13 +538,21 @@ impl TxManager {
 
     /// Batch write skills with a single lock acquisition
     pub fn write_skills_batch(&self, skills: &[SkillSpec]) -> Result<()> {
+        self.write_skills_batch_with_layer(skills, SkillLayer::Project)
+    }
+
+    /// Batch write skills at an explicit `SkillLayer` with a single lock acquisition.
+    pub fn write_skills_batch_with_layer(
+        &self,
+        skills: &[SkillSpec],
+        layer: SkillLayer,
+    ) -> Result<()> {
         if skills.is_empty() {
             return Ok(());
         }
 
         let _lock = GlobalLock::acquire(&self.ms_root)?;
-        let items: Vec<(&SkillSpec, SkillLayer)> =
-            skills.iter().map(|s| (s, SkillLayer::Project)).collect();
+        let items: Vec<(&SkillSpec, SkillLayer)> = skills.iter().map(|s| (s, layer)).collect();
         self.write_skills_batch_with_layers(&items)
     }
 

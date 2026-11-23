@@ -218,6 +218,10 @@ pub struct BundleVerifyArgs {
     /// Optional public or private SSH/hex key file to trust for signature verification
     #[arg(long)]
     pub key: Option<PathBuf>,
+
+    /// Allow verifying an unsigned bundle's checksum and blobs without requiring a signature
+    #[arg(long, conflicts_with = "key")]
+    pub allow_unsigned: bool,
 }
 
 #[derive(Args, Debug)]
@@ -1387,6 +1391,11 @@ fn run_verify(ctx: &AppContext, args: &BundleVerifyArgs) -> Result<()> {
         .map_err(|err| MsError::Config(format!("read {}: {err}", path.display())))?;
     let package = BundlePackage::from_bytes(&bytes)?;
     package.verify()?;
+    if package.manifest.checksum.is_none() {
+        return Err(MsError::ValidationFailed(
+            "bundle manifest is missing required checksum".to_string(),
+        ));
+    }
 
     let signed = !package.manifest.signatures.is_empty();
     let mut signatures_verified = false;
@@ -1394,17 +1403,23 @@ fn run_verify(ctx: &AppContext, args: &BundleVerifyArgs) -> Result<()> {
         let verifier = load_trusted_verifier(&ctx.ms_root, args.key.as_deref())?;
         package.verify_signatures(&verifier)?;
         signatures_verified = true;
+    } else if !args.allow_unsigned {
+        return Err(MsError::ValidationFailed(
+            "bundle is unsigned; pass --allow-unsigned to verify checksum and blobs without a signature"
+                .to_string(),
+        ));
     }
 
     let mut cached_blobs_verified = 0usize;
     let mut corrupt_cached_blobs = Vec::new();
-    if let Ok(store) = crate::bundler::blob::BlobStore::open(ctx.git.root().join("bundles")) {
+    let bundles_dir = ctx.git.root().join("bundles");
+    if bundles_dir.exists() {
+        let store = crate::bundler::blob::BlobStore::open(&bundles_dir)?;
         for blob in &package.blobs {
             if store.has_blob(&blob.hash) {
-                if store.verify_blob(&blob.hash).unwrap_or(false) {
-                    cached_blobs_verified += 1;
-                } else {
-                    corrupt_cached_blobs.push(blob.hash.clone());
+                match store.verify_blob(&blob.hash) {
+                    Ok(true) => cached_blobs_verified += 1,
+                    Ok(false) | Err(_) => corrupt_cached_blobs.push(blob.hash.clone()),
                 }
             }
         }
@@ -1416,17 +1431,20 @@ fn run_verify(ctx: &AppContext, args: &BundleVerifyArgs) -> Result<()> {
         )));
     }
     let archive_hash = crate::bundler::blob::BlobStore::hash_path(&path).ok();
+    let unsigned_allowed = !signed && args.allow_unsigned;
 
     if ctx.output_format != OutputFormat::Human {
         return emit_json(&serde_json::json!({
             "status": "ok",
             "valid": true,
+            "integrity_valid": true,
             "bundle_id": package.manifest.bundle.id,
             "version": package.manifest.bundle.version,
             "checksum": package.manifest.checksum,
             "archive_hash": archive_hash,
             "signed": signed,
             "signatures_verified": signatures_verified,
+            "unsigned_allowed": unsigned_allowed,
             "signature_count": package.manifest.signatures.len(),
             "skills": package.manifest.skills.len(),
             "blobs": package.blobs.len(),
@@ -1434,21 +1452,28 @@ fn run_verify(ctx: &AppContext, args: &BundleVerifyArgs) -> Result<()> {
         }));
     }
 
-    println!(
-        "✓ Bundle '{}' v{} is valid (checksum: {}, blobs: {}, cached_verified: {})",
-        package.manifest.bundle.id,
-        package.manifest.bundle.version,
-        package.manifest.checksum.as_deref().unwrap_or("none"),
-        package.blobs.len(),
-        cached_blobs_verified
-    );
     if signed {
+        println!(
+            "✓ Bundle '{}' v{} is valid (checksum: {}, blobs: {}, cached_verified: {})",
+            package.manifest.bundle.id,
+            package.manifest.bundle.version,
+            package.manifest.checksum.as_deref().unwrap_or("none"),
+            package.blobs.len(),
+            cached_blobs_verified
+        );
         println!(
             "  ✓ {} Ed25519 signature(s) verified",
             package.manifest.signatures.len()
         );
     } else {
-        println!("  ! Bundle is unsigned");
+        println!(
+            "✓ Bundle '{}' v{} integrity verified (unsigned; --allow-unsigned, checksum: {}, blobs: {}, cached_verified: {})",
+            package.manifest.bundle.id,
+            package.manifest.bundle.version,
+            package.manifest.checksum.as_deref().unwrap_or("none"),
+            package.blobs.len(),
+            cached_blobs_verified
+        );
     }
     Ok(())
 }
@@ -2588,6 +2613,69 @@ mod tests {
         } else {
             panic!("Expected Update command");
         }
+    }
+
+    #[test]
+    fn test_bundle_verify_args_default_requires_signature() {
+        use clap::Parser;
+
+        #[derive(Parser)]
+        struct TestCli {
+            #[command(subcommand)]
+            cmd: BundleCommand,
+        }
+
+        let cli = TestCli::try_parse_from(["test", "verify", "demo.msb"]).unwrap();
+        match cli.cmd {
+            BundleCommand::Verify(verify) => {
+                assert_eq!(verify.path, PathBuf::from("demo.msb"));
+                assert!(verify.key.is_none());
+                assert!(!verify.allow_unsigned);
+            }
+            _ => panic!("expected verify command"),
+        }
+    }
+
+    #[test]
+    fn test_bundle_verify_args_allow_unsigned() {
+        use clap::Parser;
+
+        #[derive(Parser)]
+        struct TestCli {
+            #[command(subcommand)]
+            cmd: BundleCommand,
+        }
+
+        let cli =
+            TestCli::try_parse_from(["test", "verify", "demo.msb", "--allow-unsigned"]).unwrap();
+        match cli.cmd {
+            BundleCommand::Verify(verify) => {
+                assert!(verify.allow_unsigned);
+                assert!(verify.key.is_none());
+            }
+            _ => panic!("expected verify command"),
+        }
+    }
+
+    #[test]
+    fn test_bundle_verify_args_key_conflicts_with_allow_unsigned() {
+        use clap::Parser;
+
+        #[derive(Parser)]
+        struct TestCli {
+            #[command(subcommand)]
+            cmd: BundleCommand,
+        }
+
+        let res = TestCli::try_parse_from([
+            "test",
+            "verify",
+            "demo.msb",
+            "--key",
+            "signer.pub",
+            "--allow-unsigned",
+        ]);
+        assert!(res.is_err(), "--key and --allow-unsigned must conflict");
     }
 
     #[test]

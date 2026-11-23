@@ -609,31 +609,49 @@ fn run_update(ctx: &AppContext, args: &UpdateArgs) -> Result<()> {
     let mut sessions_examined = 0usize;
     let mut lines_refused = 0usize;
     let mut cass_error = None;
+    let mut session_errors: Vec<String> = Vec::new();
 
-    // 1. Try mining CASS sessions for `ms` CLI usage patterns
-    let client = match &ctx.config.cass.cass_path {
-        Some(path) => crate::cass::CassClient::with_binary(std::path::PathBuf::from(path)),
-        None => crate::cass::CassClient::new(),
-    };
+    // 1. Try mining CASS sessions for `ms` CLI usage patterns (honoring config & SafetyGate)
+    let client = crate::cass::CassClient::from_context(ctx);
     match client.search("ms search OR ms load OR ms suggest", args.max_sessions) {
         Ok(matches) => {
             for m in matches.iter().take(args.max_sessions) {
-                if let Ok(session) = client.get_session(&m.path) {
-                    sessions_examined += 1;
-                    if let Ok(patterns) = crate::cass::mining::extract_from_session(&session) {
-                        for pat in &patterns {
-                            if let crate::cass::mining::PatternType::CommandPattern {
-                                commands,
-                                ..
-                            } = &pat.pattern_type
-                            {
-                                lines_refused += mine_ms_commands(
-                                    commands,
-                                    pat.taint_label.as_ref(),
-                                    &mut mined_patterns,
+                match client.get_session(&m.path) {
+                    Ok(session) => {
+                        sessions_examined += 1;
+                        match crate::cass::mining::extract_from_session(&session) {
+                            Ok(patterns) => {
+                                for pat in &patterns {
+                                    if let crate::cass::mining::PatternType::CommandPattern {
+                                        commands,
+                                        ..
+                                    } = &pat.pattern_type
+                                    {
+                                        lines_refused += mine_ms_commands(
+                                            commands,
+                                            pat.taint_label.as_ref(),
+                                            &mut mined_patterns,
+                                        );
+                                    }
+                                }
+                            }
+                            Err(err) => {
+                                tracing::warn!(
+                                    session = %m.path,
+                                    error = %err,
+                                    "failed to extract patterns from session during meta update"
                                 );
+                                session_errors.push(format!("{}: {err}", m.path));
                             }
                         }
+                    }
+                    Err(err) => {
+                        tracing::warn!(
+                            session = %m.path,
+                            error = %err,
+                            "failed to load session during meta update"
+                        );
+                        session_errors.push(format!("{}: {err}", m.path));
                     }
                 }
             }
@@ -690,7 +708,7 @@ fn run_update(ctx: &AppContext, args: &UpdateArgs) -> Result<()> {
         }
     }
 
-    let complete = cass_error.is_none() && lines_refused == 0;
+    let complete = cass_error.is_none() && session_errors.is_empty() && lines_refused == 0;
     let payload = serde_json::json!({
         "status": if complete { "ok" } else { "partial" },
         "skill_id": "ms",
@@ -699,6 +717,7 @@ fn run_update(ctx: &AppContext, args: &UpdateArgs) -> Result<()> {
         "patterns": mined_patterns,
         "lines_refused": lines_refused,
         "cass_error": cass_error,
+        "session_errors": session_errors,
         "updated": updated && !args.dry_run,
         "dry_run": args.dry_run,
     });
@@ -722,6 +741,9 @@ fn run_update(ctx: &AppContext, args: &UpdateArgs) -> Result<()> {
     }
     if let Some(err) = &cass_error {
         println!("{} Mined no sessions: {err}", "!".yellow());
+    }
+    for err in &session_errors {
+        println!("{} Failed to process session: {err}", "!".yellow());
     }
     Ok(())
 }

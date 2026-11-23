@@ -197,7 +197,11 @@ impl Config {
     }
 
     fn apply_env_overrides(&mut self) -> Result<()> {
-        if env_bool("MS_ROBOT")?.unwrap_or(false) {
+        let robot_env = match env_bool("MS_ROBOT")? {
+            Some(v) => v,
+            None => env_bool("ROBOT_MODE")?.unwrap_or(false),
+        };
+        if robot_env {
             self.robot.format = "json".to_string();
             self.robot.include_metadata = true;
         }

@@ -277,7 +277,6 @@ fn search_hybrid(ctx: &AppContext, args: &SearchArgs, filters: &SearchFilters) -
 fn search_bm25(ctx: &AppContext, args: &SearchArgs, filters: &SearchFilters) -> Result<()> {
     // Increase limit to allow for filtering
     let ranked = bm25_ranked(ctx, &args.query, args.layer.as_deref(), args.limit * 50)?;
-    let search_ctx = build_search_context(ctx);
     let mut filter_audit = FilterResult::new(ranked.len(), filters);
 
     let mut results = Vec::new();
@@ -314,6 +313,7 @@ fn search_bm25(ctx: &AppContext, args: &SearchArgs, filters: &SearchFilters) -> 
     }
 
     if args.explain {
+        let search_ctx = build_search_context(ctx);
         let config = RrfConfig::with_weights(ctx.config.search.bm25_weight, 0.0);
         return display_explained_results(
             ctx,
@@ -368,7 +368,6 @@ fn search_semantic(ctx: &AppContext, args: &SearchArgs, filters: &SearchFilters)
 
     // Search more to allow filtering
     let search_results = vector_index.search(&query_embedding, args.limit * 50);
-    let search_ctx = build_search_context(ctx);
     let mut filter_audit = FilterResult::new(search_results.len(), filters);
 
     let mut results = Vec::new();
@@ -406,6 +405,7 @@ fn search_semantic(ctx: &AppContext, args: &SearchArgs, filters: &SearchFilters)
     }
 
     if args.explain {
+        let search_ctx = build_search_context(ctx);
         let config = RrfConfig::with_weights(0.0, ctx.config.search.semantic_weight);
         return display_explained_results(
             ctx,
@@ -441,16 +441,7 @@ fn build_search_context(ctx: &AppContext) -> SearchContext {
                 .collect::<Vec<_>>()
         })
         .unwrap_or_default();
-    let recent_skills = ctx
-        .db
-        .get_skill_usage_stats()
-        .map(|(_, counts, _)| {
-            let mut pairs: Vec<(String, u64)> =
-                counts.into_iter().filter(|(_, c)| *c > 0).collect();
-            pairs.sort_by(|a, b| b.1.cmp(&a.1));
-            pairs.into_iter().take(5).map(|(id, _)| id).collect()
-        })
-        .unwrap_or_default();
+    let recent_skills = ctx.db.get_recent_skill_ids(5).unwrap_or_default();
     SearchContext {
         cwd: cwd_path.map(|p| p.display().to_string()),
         recent_skills,

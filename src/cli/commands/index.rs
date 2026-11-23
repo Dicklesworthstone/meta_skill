@@ -269,6 +269,19 @@ fn infer_skill_layer(path: &std::path::Path, config: &crate::config::Config) -> 
 
 fn collect_index_paths(ctx: &AppContext, args: &IndexArgs) -> Result<Vec<SkillRoot>> {
     if !args.paths.is_empty() {
+        // When --from-ru is combined with explicit paths (e.g., scoped auto-reindex
+        // after an RU sync), index only those repositories at the canonical Base layer.
+        if args.from_ru {
+            return Ok(args
+                .paths
+                .iter()
+                .map(|p| SkillRoot {
+                    path: expand_path(p),
+                    layer: SkillLayer::Base,
+                })
+                .collect());
+        }
+
         // Use explicitly provided paths
         return Ok(args
             .paths
@@ -1086,13 +1099,11 @@ fn prepare_skill_file<'a>(
         );
     }
 
-    if args.from_ru {
-        if let Some(err) = crate::core::spec_lens::frontmatter_error(&content) {
-            return Err(MsError::InvalidSkill(format!(
-                "{}: frontmatter: {err}",
-                skill.path.display()
-            )));
-        }
+    if let Some(err) = crate::core::spec_lens::frontmatter_error(&content) {
+        return Err(MsError::InvalidSkill(format!(
+            "{}: frontmatter: {err}",
+            skill.path.display()
+        )));
     }
 
     let spec = parse_markdown(&content)
@@ -1189,6 +1200,20 @@ fn prepare_skill_file<'a>(
                             did_embed = store_skill_embedding(ctx, embedder, &record, &new_hash)?;
                             mutated_db |= did_embed;
                         }
+                    }
+                }
+
+                if args.from_ru {
+                    if let Some(record) = search_record_for(
+                        ctx,
+                        resolution_cache,
+                        repository,
+                        &spec,
+                        skill,
+                        &new_hash,
+                    )? {
+                        ctx.search.index_skill(&record)?;
+                        mutated_search = true;
                     }
                 }
 

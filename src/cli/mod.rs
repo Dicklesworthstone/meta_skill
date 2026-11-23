@@ -75,11 +75,15 @@ pub enum ColorMode {
 }
 
 impl Cli {
-    /// Check whether `MS_ROBOT` is enabled in the environment.
+    /// Check whether `MS_ROBOT` (or fallback `ROBOT_MODE`) is enabled in the environment.
     #[must_use]
     pub fn env_robot_enabled() -> bool {
-        std::env::var("MS_ROBOT")
-            .is_ok_and(|v| matches!(v.trim().to_ascii_lowercase().as_str(), "1" | "true" | "yes"))
+        let is_truthy =
+            |v: &str| matches!(v.trim().to_ascii_lowercase().as_str(), "1" | "true" | "yes");
+        if let Ok(v) = std::env::var("MS_ROBOT") {
+            return is_truthy(&v);
+        }
+        std::env::var("ROBOT_MODE").is_ok_and(|v| is_truthy(&v))
     }
 
     /// Get the effective output format, considering flags and environment variables.
