@@ -70,7 +70,12 @@ impl CassClient {
     /// Create a CASS client from `CassConfig`, honoring `cass_path`, `auto_detect`, and `session_pattern`.
     #[must_use]
     pub fn from_config(config: &crate::config::CassConfig) -> Self {
-        let (cass_bin, enabled) = if let Some(ref path) = config.cass_path {
+        let (cass_bin, enabled) = if let Some(path) = config
+            .cass_path
+            .as_deref()
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+        {
             (PathBuf::from(path), true)
         } else if config.auto_detect {
             (PathBuf::from("cass"), true)
@@ -1350,5 +1355,27 @@ mod tests {
             ..matching
         };
         assert!(!client.matches_filters(&too_old));
+    }
+
+    #[test]
+    fn test_cass_client_from_config_ignores_blank_cass_path() {
+        let mut cfg = crate::config::CassConfig::default();
+        cfg.auto_detect = false;
+        cfg.cass_path = Some("   ".to_string());
+        let disabled = CassClient::from_config(&cfg);
+        assert!(!disabled.enabled);
+        assert_eq!(disabled.cass_bin, PathBuf::from("cass"));
+
+        cfg.auto_detect = true;
+        cfg.cass_path = Some("".to_string());
+        let fallback = CassClient::from_config(&cfg);
+        assert!(fallback.enabled);
+        assert_eq!(fallback.cass_bin, PathBuf::from("cass"));
+
+        cfg.auto_detect = false;
+        cfg.cass_path = Some("  /custom/bin/cass  ".to_string());
+        let explicit = CassClient::from_config(&cfg);
+        assert!(explicit.enabled);
+        assert_eq!(explicit.cass_bin, PathBuf::from("/custom/bin/cass"));
     }
 }

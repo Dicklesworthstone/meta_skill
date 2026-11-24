@@ -408,6 +408,17 @@ fn run_search(ctx: &AppContext, args: &SearchArgs) -> Result<()> {
 fn run_bootstrap(ctx: &AppContext) -> Result<()> {
     let is_robot = ctx.output_format != OutputFormat::Human;
     if ctx.git.skill_exists("ms") {
+        if let Some(record) = ctx.db.get_skill("ms")? {
+            let already_indexed = ctx
+                .search
+                .search("meta_skill", 20)?
+                .iter()
+                .any(|hit| hit.skill_id == "ms");
+            if !already_indexed {
+                ctx.search.index_skill(&record)?;
+                ctx.search.commit()?;
+            }
+        }
         if is_robot {
             return emit_json(&serde_json::json!({
                 "status": "ok",
@@ -418,6 +429,14 @@ fn run_bootstrap(ctx: &AppContext) -> Result<()> {
         }
         println!("Meta skill 'ms' already exists.");
         return Ok(());
+    }
+
+    if ctx.search.is_readonly() {
+        return Err(crate::error::MsError::SearchIndex(
+            tantivy::TantivyError::InternalError(
+                "Index opened in read-only mode; cannot bootstrap meta skill 'ms'".to_string(),
+            ),
+        ));
     }
 
     let content = r#"---

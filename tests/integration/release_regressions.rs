@@ -19,6 +19,7 @@ fn ms_cmd(home: &Path) -> Command {
         cmd.env_remove(k);
     }
     cmd.env("HOME", home)
+        .env("MS_ROOT", home.join(".local/share/ms"))
         .env("XDG_CONFIG_HOME", home.join(".config"))
         .env("XDG_DATA_HOME", home.join(".local/share"))
         .env("XDG_CACHE_HOME", home.join(".cache"))
@@ -1836,6 +1837,36 @@ fn fe2_coverage_fails_loudly_on_configured_cass_path_and_db_errors() {
         &ok_cass,
         "#!/bin/sh\nif [ \"$1\" = --version ]; then echo 'cass 0.6.0'; exit 0; fi\necho '{\"hits\":[{\"source_path\":\"/tmp/s1.jsonl\",\"workspace\":\"/work/rust\",\"score\":1.0,\"title\":\"Rust session\"}]}'\n",
     );
+    let fake_bin_dir = tmp.path().join("fake-path-bin");
+    fs::create_dir_all(&fake_bin_dir).unwrap();
+    let path_cass = fake_bin_dir.join("cass");
+    fs::copy(&ok_cass, &path_cass).unwrap();
+    let orig_path = std::env::var("PATH").unwrap_or_default();
+    let blank_env_out = ms_cmd(&home)
+        .env("MS_CASS_PATH", "   ")
+        .env("PATH", format!("{}:{orig_path}", fake_bin_dir.display()))
+        .args(["--robot", "coverage", "--min-sessions", "1"])
+        .current_dir(tmp.path())
+        .output()
+        .unwrap();
+    assert!(
+        blank_env_out.status.success(),
+        "blank MS_CASS_PATH must fall back to PATH discovery: stdout={} stderr={}",
+        String::from_utf8_lossy(&blank_env_out.stdout),
+        String::from_utf8_lossy(&blank_env_out.stderr)
+    );
+    let blank_env_json: serde_json::Value = serde_json::from_slice(&blank_env_out.stdout).unwrap();
+    assert_eq!(
+        blank_env_json["status"].as_str(),
+        Some("ok"),
+        "{blank_env_json}"
+    );
+    assert_eq!(
+        blank_env_json["cass_available"].as_bool(),
+        Some(true),
+        "{blank_env_json}"
+    );
+
     let ok_out = ms_cmd(&home)
         .env("MS_CASS_PATH", &ok_cass)
         .args(["--robot", "coverage", "--min-sessions", "1"])
@@ -2012,6 +2043,17 @@ fn fe3_validate_lint_fails_nonzero_and_meta_bootstrap_propagates_search_errors()
         String::from_utf8_lossy(&boot_fail.stdout),
         String::from_utf8_lossy(&boot_fail.stderr)
     );
+    let boot_retry_still_locked = ms_cmd(&home)
+        .args(["--robot", "meta", "bootstrap"])
+        .current_dir(tmp.path())
+        .output()
+        .unwrap();
+    assert!(
+        !boot_retry_still_locked.status.success(),
+        "retrying meta bootstrap while search index is still locked must still fail: stdout={} stderr={}",
+        String::from_utf8_lossy(&boot_retry_still_locked.stdout),
+        String::from_utf8_lossy(&boot_retry_still_locked.stderr)
+    );
     drop(_held_writer);
     let boot_ok = ms_cmd(&home)
         .args(["--robot", "meta", "bootstrap"])
@@ -2023,5 +2065,66 @@ fn fe3_validate_lint_fails_nonzero_and_meta_bootstrap_propagates_search_errors()
         "meta bootstrap should succeed after lock release: stdout={} stderr={}",
         String::from_utf8_lossy(&boot_ok.stdout),
         String::from_utf8_lossy(&boot_ok.stderr)
+    );
+    let boot_ok_json: serde_json::Value =
+        serde_json::from_slice(&boot_ok.stdout).expect("boot_ok valid JSON");
+    assert_eq!(
+        boot_ok_json["created"].as_bool(),
+        Some(true),
+        "{boot_ok_json}"
+    );
+    let search_ms = ms_cmd(&home)
+        .args(["--robot", "search", "meta_skill"])
+        .current_dir(tmp.path())
+        .output()
+        .unwrap();
+    assert!(search_ms.status.success());
+    let search_json: serde_json::Value =
+        serde_json::from_slice(&search_ms.stdout).expect("search valid JSON");
+    assert!(
+        search_json["results"]
+            .as_array()
+            .is_some_and(|arr| arr.iter().any(|r| r["id"].as_str() == Some("ms"))),
+        "bootstrapped `ms` must be searchable in BM25 index: {search_json}"
+    );
+
+    let bm25 = ms::search::Bm25Index::open(&index_dir).expect("open bm25 to clear");
+    bm25.clear().expect("clear bm25");
+    let repair_locked = ms_cmd(&home)
+        .args(["--robot", "meta", "bootstrap"])
+        .current_dir(tmp.path())
+        .output()
+        .unwrap();
+    assert!(
+        !repair_locked.status.success(),
+        "meta bootstrap must fail when repairing unindexed `ms` under read-only index lock: stdout={} stderr={}",
+        String::from_utf8_lossy(&repair_locked.stdout),
+        String::from_utf8_lossy(&repair_locked.stderr)
+    );
+    drop(bm25);
+    let repair_ok = ms_cmd(&home)
+        .args(["--robot", "meta", "bootstrap"])
+        .current_dir(tmp.path())
+        .output()
+        .unwrap();
+    assert!(
+        repair_ok.status.success(),
+        "meta bootstrap should repair missing BM25 entry after lock release: stdout={} stderr={}",
+        String::from_utf8_lossy(&repair_ok.stdout),
+        String::from_utf8_lossy(&repair_ok.stderr)
+    );
+    let search_repaired = ms_cmd(&home)
+        .args(["--robot", "search", "meta_skill"])
+        .current_dir(tmp.path())
+        .output()
+        .unwrap();
+    assert!(search_repaired.status.success());
+    let repaired_json: serde_json::Value =
+        serde_json::from_slice(&search_repaired.stdout).expect("repaired search JSON");
+    assert!(
+        repaired_json["results"]
+            .as_array()
+            .is_some_and(|arr| arr.iter().any(|r| r["id"].as_str() == Some("ms"))),
+        "repaired `ms` must be searchable in BM25 index: {repaired_json}"
     );
 }
