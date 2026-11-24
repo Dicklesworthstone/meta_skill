@@ -22,13 +22,16 @@ fn main() -> ExitCode {
     match run(&cli) {
         Ok(()) => ExitCode::SUCCESS,
         Err(e) => {
+            // Commands that already emitted their structured report (including via local
+            // `--json` / `--format json` flags when global active format is Human) only
+            // need a non-zero exit without duplicate JSON or stderr `Error:` output.
+            if matches!(e, ms::MsError::ReportedValidationFailed(_)) {
+                return ExitCode::FAILURE;
+            }
             let active_fmt = ms::cli::output::active_output_format();
             if active_fmt != ms::cli::OutputFormat::Human {
-                // Commands that already emitted their structured report only need a non-zero exit
-                if matches!(
-                    e,
-                    ms::MsError::TestsFailed(_) | ms::MsError::ReportedValidationFailed(_)
-                ) {
+                // `ms test` already printed its one document, and that says what failed
+                if matches!(e, ms::MsError::TestsFailed(_)) {
                     return ExitCode::FAILURE;
                 }
                 // Structured error output to stdout for non-human modes

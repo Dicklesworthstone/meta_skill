@@ -576,12 +576,11 @@ ms meta bootstrap
 
     let scorer = crate::quality::QualityScorer::with_defaults();
     let quality = scorer.score_spec(&spec, &crate::quality::QualityContext::default());
-    let _ = ctx
-        .db
-        .update_skill_quality("ms", f64::from(quality.overall));
-    if let Ok(Some(record)) = ctx.db.get_skill("ms") {
-        let _ = ctx.search.index_skill(&record);
-        let _ = ctx.search.commit();
+    ctx.db
+        .update_skill_quality("ms", f64::from(quality.overall))?;
+    if let Some(record) = ctx.db.get_skill("ms")? {
+        ctx.search.index_skill(&record)?;
+        ctx.search.commit()?;
     }
 
     if is_robot {
@@ -702,9 +701,9 @@ fn run_update(ctx: &AppContext, args: &UpdateArgs) -> Result<()> {
         let tx_mgr =
             crate::storage::TxManager::new(ctx.db.clone(), ctx.git.clone(), ctx.ms_root.clone())?;
         tx_mgr.write_skill_with_layer(&spec, crate::core::SkillLayer::Base)?;
-        if let Ok(Some(record)) = ctx.db.get_skill("ms") {
-            let _ = ctx.search.index_skill(&record);
-            let _ = ctx.search.commit();
+        if let Some(record) = ctx.db.get_skill("ms")? {
+            ctx.search.index_skill(&record)?;
+            ctx.search.commit()?;
         }
     }
 

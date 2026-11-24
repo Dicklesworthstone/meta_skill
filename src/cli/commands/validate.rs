@@ -96,6 +96,7 @@ pub fn run(ctx: &AppContext, args: &ValidateArgs) -> Result<()> {
         }
         let mut reports = Vec::new();
         let mut ubs_failed = false;
+        let mut lint_failed = false;
 
         for skill_md in skill_files {
             let raw = std::fs::read_to_string(&skill_md).map_err(|err| {
@@ -113,6 +114,9 @@ pub fn run(ctx: &AppContext, args: &ValidateArgs) -> Result<()> {
             }
             let (lint_res, fix_info) =
                 run_lint_engine(ctx, &mut spec, &raw, &skill_md, args.fix, args.lint)?;
+            if args.lint && !lint_res.passed {
+                lint_failed = true;
+            }
             let ubs_result = if args.ubs {
                 let gate = SafetyGate::from_context(ctx);
                 let client = UbsClient::new(None).with_safety(gate);
@@ -136,9 +140,10 @@ pub fn run(ctx: &AppContext, args: &ValidateArgs) -> Result<()> {
             ));
         }
 
+        let has_errors = ubs_failed || lint_failed;
         if ctx.output_format != OutputFormat::Human {
             let clean = reports.iter().all(|r| r.clean);
-            let status = if ubs_failed {
+            let status = if has_errors {
                 "error"
             } else if clean {
                 "ok"
@@ -150,11 +155,12 @@ pub fn run(ctx: &AppContext, args: &ValidateArgs) -> Result<()> {
                 "count": reports.len(),
                 "clean": clean,
                 "ubs_failed": ubs_failed,
+                "lint_failed": lint_failed,
                 "results": reports,
             }))?;
-            if ubs_failed {
+            if has_errors {
                 return Err(MsError::ReportedValidationFailed(
-                    "UBS findings detected".to_string(),
+                    validation_failure_message(ubs_failed, lint_failed),
                 ));
             }
             return Ok(());
@@ -172,6 +178,10 @@ pub fn run(ctx: &AppContext, args: &ValidateArgs) -> Result<()> {
             layout.kv("Path", &r.path);
             layout.kv("Clean", if r.clean { "yes" } else { "no" });
             layout.kv("Roundtrip OK", if r.roundtrip_ok { "yes" } else { "no" });
+            if args.lint || args.fix {
+                layout.kv("Lint Errors", &r.lint_errors.to_string());
+                layout.kv("Lint Warnings", &r.lint_warnings.to_string());
+            }
             for w in &r.warnings {
                 layout.bullet(&format!("{}: {}", w.field, w.message));
             }
@@ -190,10 +200,11 @@ pub fn run(ctx: &AppContext, args: &ValidateArgs) -> Result<()> {
             }
         }
         emit_human(layout);
-        if ubs_failed {
-            return Err(MsError::ValidationFailed(
-                "UBS findings detected".to_string(),
-            ));
+        if has_errors {
+            return Err(MsError::ValidationFailed(validation_failure_message(
+                ubs_failed,
+                lint_failed,
+            )));
         }
         return Ok(());
     }
@@ -223,8 +234,11 @@ pub fn run(ctx: &AppContext, args: &ValidateArgs) -> Result<()> {
         None
     };
 
+    let ubs_failed = ubs_result.as_ref().is_some_and(|result| !result.is_clean());
+    let lint_failed = args.lint && !lint_res.passed;
+    let has_errors = ubs_failed || lint_failed;
+
     if ctx.output_format != OutputFormat::Human {
-        let ubs_failed = ubs_result.as_ref().is_some_and(|result| !result.is_clean());
         let report = build_report(
             skill_arg,
             &skill_md,
@@ -236,9 +250,9 @@ pub fn run(ctx: &AppContext, args: &ValidateArgs) -> Result<()> {
             args.lint,
         );
         emit_json(&report)?;
-        if ubs_failed {
+        if has_errors {
             return Err(MsError::ReportedValidationFailed(
-                "UBS findings detected".to_string(),
+                validation_failure_message(ubs_failed, lint_failed),
             ));
         }
         return Ok(());
@@ -255,6 +269,15 @@ pub fn run(ctx: &AppContext, args: &ValidateArgs) -> Result<()> {
         if let Some((fixed, all_ok)) = fix_info {
             layout.kv("Fixes Applied", &fixed.to_string());
             layout.kv("All Fixes Succeeded", if all_ok { "yes" } else { "no" });
+        }
+        if !lint_res.diagnostics.is_empty() {
+            layout.section("Lint Diagnostics");
+            for diag in &lint_res.diagnostics {
+                layout.bullet(&format!(
+                    "[{}] {}: {}",
+                    diag.severity, diag.rule_id, diag.message
+                ));
+            }
         }
     }
 
@@ -284,23 +307,18 @@ pub fn run(ctx: &AppContext, args: &ValidateArgs) -> Result<()> {
         }
     }
 
-    if warnings.is_empty()
-        && ubs_result
-            .as_ref()
-            .is_none_or(crate::quality::ubs::UbsResult::is_clean)
-    {
+    if warnings.is_empty() && !has_errors {
         layout.section("Status");
         layout.bullet("OK");
     }
 
     emit_human(layout);
 
-    if let Some(result) = ubs_result {
-        if !result.is_clean() {
-            return Err(MsError::ValidationFailed(
-                "UBS findings detected".to_string(),
-            ));
-        }
+    if has_errors {
+        return Err(MsError::ValidationFailed(validation_failure_message(
+            ubs_failed,
+            lint_failed,
+        )));
     }
 
     Ok(())
@@ -420,6 +438,15 @@ fn map_finding(finding: &UbsFinding) -> UbsFindingOutput {
         column: finding.column,
         message: finding.message.clone(),
         suggested_fix: finding.suggested_fix.clone(),
+    }
+}
+
+fn validation_failure_message(ubs_failed: bool, lint_failed: bool) -> String {
+    match (ubs_failed, lint_failed) {
+        (true, true) => "UBS findings and lint errors detected".to_string(),
+        (true, false) => "UBS findings detected".to_string(),
+        (false, true) => "lint errors detected".to_string(),
+        (false, false) => "validation failed".to_string(),
     }
 }
 

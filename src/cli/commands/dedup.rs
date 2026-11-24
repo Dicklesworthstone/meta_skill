@@ -446,11 +446,16 @@ fn run_merge(ctx: &AppContext, args: &MergeArgs) -> Result<()> {
     let created_at = chrono::Utc::now().to_rfc3339();
     db.upsert_alias(&secondary.id, &primary.id, "deprecated", &created_at)?;
 
+    let mut indexed_any = false;
     if let Some(record) = db.get_skill(&primary.id)? {
         ctx.search.index_skill(&record)?;
+        indexed_any = true;
     }
     if let Some(record) = db.get_skill(&secondary.id)? {
         ctx.search.index_skill(&record)?;
+        indexed_any = true;
+    }
+    if indexed_any {
         ctx.search.commit()?;
     }
 

@@ -14,6 +14,7 @@ fn ms_cmd(home: &Path) -> Command {
         "ROBOT_MODE",
         "MS_ROBOT_FORMAT",
         "MS_OUTPUT_FORMAT",
+        "MS_CASS_PATH",
     ] {
         cmd.env_remove(k);
     }
@@ -1659,4 +1660,368 @@ fn p31d_l9_import_index_propagates_search_index_error() {
     );
     let ok_json: serde_json::Value = serde_json::from_slice(&ok_out.stdout).unwrap();
     assert_eq!(ok_json["indexed"].as_bool(), Some(true), "{ok_json}");
+}
+
+#[test]
+fn fe1_local_json_flags_suppress_duplicate_stderr_on_reported_validation_failure() {
+    let (tmp, home, skills) = setup_env();
+
+    // Planted negative 1: `ms meta validate --json` (no global --robot/--output-format)
+    // must emit one valid JSON document on stdout, exit non-zero, and NOT print `Error:` on stderr.
+    let meta_fail = ms_cmd(&home)
+        .args(["meta", "validate", "--json"])
+        .current_dir(tmp.path())
+        .output()
+        .unwrap();
+    assert!(
+        !meta_fail.status.success(),
+        "meta validate --json with nothing bootstrapped must exit non-zero"
+    );
+    let meta_json: serde_json::Value =
+        serde_json::from_slice(&meta_fail.stdout).expect("single valid JSON on stdout");
+    assert_eq!(meta_json["ok"].as_bool(), Some(false), "{meta_json}");
+    let meta_stderr = String::from_utf8_lossy(&meta_fail.stderr);
+    assert!(
+        !meta_stderr.contains("Error:"),
+        "meta validate --json must not emit duplicate Error: on stderr: {meta_stderr}"
+    );
+
+    // Positive contrast 1: bootstrap `ms` -> `ms meta validate --json` succeeds cleanly
+    let boot = ms_cmd(&home)
+        .args(["--robot", "meta", "bootstrap"])
+        .current_dir(tmp.path())
+        .output()
+        .unwrap();
+    assert!(
+        boot.status.success(),
+        "meta bootstrap --json failed: {}",
+        String::from_utf8_lossy(&boot.stderr)
+    );
+    let meta_ok = ms_cmd(&home)
+        .args(["meta", "validate", "--json"])
+        .current_dir(tmp.path())
+        .output()
+        .unwrap();
+    assert!(meta_ok.status.success());
+    let meta_ok_json: serde_json::Value =
+        serde_json::from_slice(&meta_ok.stdout).expect("valid JSON on stdout");
+    assert_eq!(meta_ok_json["ok"].as_bool(), Some(true), "{meta_ok_json}");
+    assert!(
+        !String::from_utf8_lossy(&meta_ok.stderr).contains("Error:"),
+        "stderr={}",
+        String::from_utf8_lossy(&meta_ok.stderr)
+    );
+
+    // Prepare an indexed skill for `ms requirements --all --format json`
+    let good_dir = skills.join("req-local-json");
+    fs::create_dir_all(&good_dir).unwrap();
+    fs::write(
+        good_dir.join("SKILL.md"),
+        "---\nname: req-local-json\ndescription: Skill for local JSON flag test.\n---\n\n# Req Local Json\n\nBody.\n",
+    )
+    .unwrap();
+    let idx = ms_cmd(&home)
+        .args(["--robot", "index"])
+        .current_dir(tmp.path())
+        .output()
+        .unwrap();
+    assert!(idx.status.success());
+
+    // Positive contrast 2: `ms requirements --all --format json` succeeds with valid JSON
+    let req_ok = ms_cmd(&home)
+        .args(["requirements", "--all", "--format", "json"])
+        .current_dir(tmp.path())
+        .output()
+        .unwrap();
+    assert!(req_ok.status.success());
+    let req_ok_json: serde_json::Value =
+        serde_json::from_slice(&req_ok.stdout).expect("valid JSON on stdout");
+    assert_eq!(req_ok_json["status"].as_str(), Some("ok"), "{req_ok_json}");
+
+    // Planted negative 2: corrupt stored skill frontmatter -> `ms requirements --all --format json`
+    // exits non-zero, emits single valid JSON on stdout, and has NO `Error:` line on stderr.
+    let db_path = home.join(".local/share/ms/ms.db");
+    let conn = rusqlite::Connection::open(&db_path).expect("open ms.db");
+    conn.execute(
+        "UPDATE skills SET body = '---\nid: [unclosed\n---\n\n# Broken\n' WHERE id = 'req-local-json'",
+        [],
+    )
+    .expect("corrupt skill body");
+    drop(conn);
+
+    let req_fail = ms_cmd(&home)
+        .args(["requirements", "--all", "--format", "json"])
+        .current_dir(tmp.path())
+        .output()
+        .unwrap();
+    assert!(
+        !req_fail.status.success(),
+        "requirements --all --format json with corrupt skill must exit non-zero"
+    );
+    let req_fail_json: serde_json::Value =
+        serde_json::from_slice(&req_fail.stdout).expect("single valid JSON on stdout");
+    assert_eq!(
+        req_fail_json["status"].as_str(),
+        Some("error"),
+        "{req_fail_json}"
+    );
+    assert_eq!(
+        req_fail_json["parse_error_count"].as_u64(),
+        Some(1),
+        "{req_fail_json}"
+    );
+    let req_stderr = String::from_utf8_lossy(&req_fail.stderr);
+    assert!(
+        !req_stderr.contains("Error:"),
+        "requirements --all --format json must not emit duplicate Error: on stderr: {req_stderr}"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn fe2_coverage_fails_loudly_on_configured_cass_path_and_db_errors() {
+    let (tmp, home, skills) = setup_env();
+    let skill_dir = skills.join("cov-probe");
+    fs::create_dir_all(&skill_dir).unwrap();
+    fs::write(
+        skill_dir.join("SKILL.md"),
+        "---\nid: cov-probe\nname: Coverage Probe\ndescription: Skill for coverage error propagation.\ntags: [rust]\n---\n\n# Coverage Probe\n\nBody.\n",
+    )
+    .unwrap();
+    let idx = ms_cmd(&home)
+        .args(["--robot", "index"])
+        .current_dir(tmp.path())
+        .output()
+        .unwrap();
+    assert!(idx.status.success());
+
+    // Planted negative 1: explicit `MS_CASS_PATH` pointing to nonexistent binary must fail loudly
+    let bad_env = ms_cmd(&home)
+        .env("MS_CASS_PATH", "/nonexistent/ms-cass-env")
+        .args(["--robot", "coverage"])
+        .current_dir(tmp.path())
+        .output()
+        .unwrap();
+    assert!(
+        !bad_env.status.success(),
+        "coverage with missing MS_CASS_PATH must fail loudly: stdout={} stderr={}",
+        String::from_utf8_lossy(&bad_env.stdout),
+        String::from_utf8_lossy(&bad_env.stderr)
+    );
+
+    // Planted negative 2: explicit `[cass] cass_path` in config.toml pointing to nonexistent binary must fail loudly
+    let cfg_path = home.join(".config/ms/config.toml");
+    let orig_cfg = fs::read_to_string(&cfg_path).unwrap();
+    fs::write(
+        &cfg_path,
+        format!("{orig_cfg}\n[cass]\ncass_path = \"/nonexistent/ms-cass-config\"\n"),
+    )
+    .unwrap();
+    let bad_cfg = ms_cmd(&home)
+        .args(["--robot", "coverage"])
+        .current_dir(tmp.path())
+        .output()
+        .unwrap();
+    assert!(
+        !bad_cfg.status.success(),
+        "coverage with missing config cass_path must fail loudly: stdout={} stderr={}",
+        String::from_utf8_lossy(&bad_cfg.stdout),
+        String::from_utf8_lossy(&bad_cfg.stderr)
+    );
+    fs::write(&cfg_path, &orig_cfg).unwrap();
+
+    // Positive contrast: valid stand-in `MS_CASS_PATH` succeeds with status:"ok" and counts both session and skill
+    let ok_cass = tmp.path().join("ok-cass");
+    write_executable_script(
+        &ok_cass,
+        "#!/bin/sh\nif [ \"$1\" = --version ]; then echo 'cass 0.6.0'; exit 0; fi\necho '{\"hits\":[{\"source_path\":\"/tmp/s1.jsonl\",\"workspace\":\"/work/rust\",\"score\":1.0,\"title\":\"Rust session\"}]}'\n",
+    );
+    let ok_out = ms_cmd(&home)
+        .env("MS_CASS_PATH", &ok_cass)
+        .args(["--robot", "coverage", "--min-sessions", "1"])
+        .current_dir(tmp.path())
+        .output()
+        .unwrap();
+    assert!(
+        ok_out.status.success(),
+        "coverage with valid MS_CASS_PATH should succeed: stdout={} stderr={}",
+        String::from_utf8_lossy(&ok_out.stdout),
+        String::from_utf8_lossy(&ok_out.stderr)
+    );
+    let ok_json: serde_json::Value = serde_json::from_slice(&ok_out.stdout).unwrap();
+    assert_eq!(ok_json["status"].as_str(), Some("ok"), "{ok_json}");
+    assert_eq!(ok_json["cass_available"].as_bool(), Some(true), "{ok_json}");
+    assert_eq!(
+        ok_json["topics"][0]["topic"].as_str(),
+        Some("rust"),
+        "{ok_json}"
+    );
+    assert_eq!(
+        ok_json["topics"][0]["indexed_skills"].as_u64(),
+        Some(1),
+        "{ok_json}"
+    );
+
+    // Planted negative 3: corrupt SQLite column type in `skills` makes `ctx.db.list_skills` error -> must propagate loudly
+    let db_path = home.join(".local/share/ms/ms.db");
+    let conn = rusqlite::Connection::open(&db_path).expect("open ms.db");
+    conn.execute(
+        "UPDATE skills SET name = X'deadbeef' WHERE id = 'cov-probe'",
+        [],
+    )
+    .expect("corrupt skills.name to blob");
+    drop(conn);
+
+    let db_fail = ms_cmd(&home)
+        .env("MS_CASS_PATH", &ok_cass)
+        .args(["--robot", "coverage"])
+        .current_dir(tmp.path())
+        .output()
+        .unwrap();
+    assert!(
+        !db_fail.status.success(),
+        "coverage must propagate SQLite list_skills errors instead of swallowing them: stdout={} stderr={}",
+        String::from_utf8_lossy(&db_fail.stdout),
+        String::from_utf8_lossy(&db_fail.stderr)
+    );
+}
+
+#[test]
+fn fe3_validate_lint_fails_nonzero_and_meta_bootstrap_propagates_search_errors() {
+    let (tmp, home, skills) = setup_env();
+
+    // Clean skill that passes strict `--lint`
+    let clean_dir = skills.join("lint-clean");
+    fs::create_dir_all(&clean_dir).unwrap();
+    let clean_md = clean_dir.join("SKILL.md");
+    fs::write(
+        &clean_md,
+        "---\nid: lint-clean\nname: Lint Clean Skill\nversion: 1.0.0\ndescription: A complete skill with clear guidance and examples for linting.\ntags: [rust, testing]\n---\n\n# Lint Clean Skill\n\nA complete skill with clear guidance and examples for linting.\n\n## Rules\n\n- Always verify invariants before shipping changes.\n\n## Examples\n\n```bash\ncargo test --workspace\n```\n",
+    )
+    .unwrap();
+
+    // Positive: clean skill passes `ms --robot validate <skill> --lint` and human mode
+    let ok_robot = ms_cmd(&home)
+        .args(["--robot", "validate", clean_md.to_str().unwrap(), "--lint"])
+        .current_dir(tmp.path())
+        .output()
+        .unwrap();
+    assert!(
+        ok_robot.status.success(),
+        "clean skill must pass validate --lint: stdout={} stderr={}",
+        String::from_utf8_lossy(&ok_robot.stdout),
+        String::from_utf8_lossy(&ok_robot.stderr)
+    );
+    let ok_json: serde_json::Value = serde_json::from_slice(&ok_robot.stdout).unwrap();
+    assert_eq!(ok_json["clean"].as_bool(), Some(true), "{ok_json}");
+    assert_eq!(ok_json["lint_errors"].as_u64(), Some(0), "{ok_json}");
+
+    // Planted negative: skill referencing a missing parent triggers strict lint Severity::Error
+    let broken_dir = skills.join("lint-broken");
+    fs::create_dir_all(&broken_dir).unwrap();
+    let broken_md = broken_dir.join("SKILL.md");
+    fs::write(
+        &broken_md,
+        "---\nid: lint-broken\nname: Lint Broken Skill\nversion: 1.0.0\ndescription: References a missing parent skill to trigger lint error.\nextends: nonexistent-parent-skill\ntags: [rust]\n---\n\n# Lint Broken Skill\n\nBody.\n",
+    )
+    .unwrap();
+
+    // Single-skill robot mode: exits non-zero, emits single valid JSON, no duplicate Error: on stderr
+    let fail_robot = ms_cmd(&home)
+        .args(["--robot", "validate", broken_md.to_str().unwrap(), "--lint"])
+        .current_dir(tmp.path())
+        .output()
+        .unwrap();
+    assert!(
+        !fail_robot.status.success(),
+        "validate --lint with lint errors must exit non-zero in robot mode: stdout={}",
+        String::from_utf8_lossy(&fail_robot.stdout)
+    );
+    let fail_json: serde_json::Value =
+        serde_json::from_slice(&fail_robot.stdout).expect("single valid JSON");
+    assert_eq!(fail_json["clean"].as_bool(), Some(false), "{fail_json}");
+    assert!(
+        fail_json["lint_errors"].as_u64().unwrap_or(0) > 0,
+        "{fail_json}"
+    );
+    assert!(
+        !String::from_utf8_lossy(&fail_robot.stderr).contains("Error:"),
+        "stderr={}",
+        String::from_utf8_lossy(&fail_robot.stderr)
+    );
+
+    // Single-skill human mode: exits non-zero, does NOT print Status OK, and shows lint error
+    let fail_human = ms_cmd(&home)
+        .args(["validate", broken_md.to_str().unwrap(), "--lint"])
+        .current_dir(tmp.path())
+        .output()
+        .unwrap();
+    assert!(
+        !fail_human.status.success(),
+        "validate --lint with lint errors must exit non-zero in human mode"
+    );
+    let human_stdout = String::from_utf8_lossy(&fail_human.stdout);
+    assert!(
+        !human_stdout.contains("Status\n") && !human_stdout.contains("  - OK"),
+        "human output must not claim OK when lint fails: {human_stdout}"
+    );
+    assert!(
+        human_stdout.contains("nonexistent-parent-skill"),
+        "human output should show lint diagnostic detail: {human_stdout}"
+    );
+
+    // `--all --lint` robot mode: exits non-zero with status:"error", clean:false, lint_failed:true
+    let fail_all = ms_cmd(&home)
+        .args(["--robot", "validate", "--all", "--lint"])
+        .current_dir(tmp.path())
+        .output()
+        .unwrap();
+    assert!(
+        !fail_all.status.success(),
+        "validate --all --lint must exit non-zero when any skill has lint errors"
+    );
+    let fail_all_json: serde_json::Value =
+        serde_json::from_slice(&fail_all.stdout).expect("single valid JSON");
+    assert_eq!(
+        fail_all_json["status"].as_str(),
+        Some("error"),
+        "{fail_all_json}"
+    );
+    assert_eq!(
+        fail_all_json["lint_failed"].as_bool(),
+        Some(true),
+        "{fail_all_json}"
+    );
+    assert_eq!(
+        fail_all_json["clean"].as_bool(),
+        Some(false),
+        "{fail_all_json}"
+    );
+
+    // Planted negative (`meta bootstrap`): holding Tantivy writer lock must propagate search index error
+    let index_dir = home.join(".local/share/ms/index");
+    let _held_writer = ms::search::Bm25Index::open(&index_dir).expect("open bm25 writer lock");
+    let boot_fail = ms_cmd(&home)
+        .args(["--robot", "meta", "bootstrap"])
+        .current_dir(tmp.path())
+        .output()
+        .unwrap();
+    assert!(
+        !boot_fail.status.success(),
+        "meta bootstrap must fail when search index is locked read-only: stdout={} stderr={}",
+        String::from_utf8_lossy(&boot_fail.stdout),
+        String::from_utf8_lossy(&boot_fail.stderr)
+    );
+    drop(_held_writer);
+    let boot_ok = ms_cmd(&home)
+        .args(["--robot", "meta", "bootstrap"])
+        .current_dir(tmp.path())
+        .output()
+        .unwrap();
+    assert!(
+        boot_ok.status.success(),
+        "meta bootstrap should succeed after lock release: stdout={} stderr={}",
+        String::from_utf8_lossy(&boot_ok.stdout),
+        String::from_utf8_lossy(&boot_ok.stderr)
+    );
 }

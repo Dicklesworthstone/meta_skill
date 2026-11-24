@@ -425,6 +425,27 @@ fn format_date(raw: Option<&str>) -> String {
     parsed.map_or_else(|| raw.to_string(), |dt| dt.format("%Y-%m-%d").to_string())
 }
 
+fn explicit_cass_path(ctx: &AppContext, override_path: &Option<PathBuf>) -> Option<PathBuf> {
+    if let Some(cass_path) = override_path {
+        return Some(cass_path.clone());
+    }
+    if let Some(cass_path) = ctx
+        .config
+        .cass
+        .cass_path
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+    {
+        return Some(PathBuf::from(cass_path));
+    }
+    std::env::var("MS_CASS_PATH")
+        .ok()
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+        .map(PathBuf::from)
+}
+
 fn cass_client(ctx: &AppContext, override_path: &Option<PathBuf>) -> CassClient {
     if let Some(cass_path) = override_path {
         CassClient::with_binary(cass_path)
@@ -1121,6 +1142,7 @@ pub fn run_coverage(ctx: &AppContext, args: &CoverageArgs) -> Result<()> {
     }
 
     // 2. Fold in CASS sessions; never hide CASS failures
+    let configured_cass_path = explicit_cass_path(ctx, &args.cass_path);
     let client = cass_client(ctx, &args.cass_path);
     let cass_available = client.is_available();
     let cass_error = if cass_available {
@@ -1141,18 +1163,30 @@ pub fn run_coverage(ctx: &AppContext, args: &CoverageArgs) -> Result<()> {
             }
         }
         None
-    } else if args.cass_path.is_some() {
-        return Err(MsError::CassUnavailable(
-            "cass binary not found or not executable".to_string(),
-        ));
+    } else if let Some(configured_path) = configured_cass_path {
+        return Err(MsError::CassUnavailable(format!(
+            "configured cass binary '{}' not found or not executable",
+            configured_path.display()
+        )));
     } else {
         Some("cass binary not found or not executable".to_string())
     };
 
     // 3. Fold in indexed skills and their tags from SQLite
-    if let Ok(skills) = ctx.db.list_skills(1000, 0) {
+    const SKILL_PAGE_SIZE: usize = 1000;
+    let mut offset = 0usize;
+    loop {
+        let skills = ctx.db.list_skills(SKILL_PAGE_SIZE, offset)?;
+        let count = skills.len();
         for skill in skills {
-            if let Ok(meta) = serde_json::from_str::<serde_json::Value>(&skill.metadata_json) {
+            if !skill.metadata_json.trim().is_empty() {
+                let meta: serde_json::Value =
+                    serde_json::from_str(&skill.metadata_json).map_err(|err| {
+                        MsError::Serialization(format!(
+                            "failed to parse metadata_json for skill '{}': {err}",
+                            skill.id
+                        ))
+                    })?;
                 if let Some(tags) = meta.get("tags").and_then(|v| v.as_array()) {
                     for tag in tags.iter().filter_map(|v| v.as_str()) {
                         let t = tag.trim().to_lowercase();
@@ -1164,6 +1198,10 @@ pub fn run_coverage(ctx: &AppContext, args: &CoverageArgs) -> Result<()> {
                 }
             }
         }
+        if count < SKILL_PAGE_SIZE {
+            break;
+        }
+        offset += count;
     }
 
     let mut topics: Vec<TopicCoverageItem> = topic_sessions

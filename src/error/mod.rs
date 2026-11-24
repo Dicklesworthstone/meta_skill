@@ -116,8 +116,9 @@ pub enum MsError {
     #[error("{0}")]
     TestsFailed(String),
 
-    /// A validation/diagnostic report was already printed in machine-readable mode;
-    /// `main` only has to set the non-zero exit code without emitting a duplicate JSON document.
+    /// A validation/diagnostic report was already printed (via global output format
+    /// or command-local `--json`/`--format json`); `main` only has to set the non-zero
+    /// exit code without emitting a duplicate JSON document or stderr `Error:` line.
     #[error("{0}")]
     ReportedValidationFailed(String),
 
