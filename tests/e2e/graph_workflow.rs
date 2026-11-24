@@ -6,10 +6,13 @@
 //! - Cycle detection
 //!
 //! Note: The graph command requires `bv` (beads_viewer) to be available.
-//! Tests gracefully handle the case where `bv` is not installed.
+//! Tests requiring `bv` are marked `#[ignore = "needs bv"]` and fail loudly
+//! through `ms::test_utils::tool_gate::require_bv` if invoked via `--ignored`
+//! when `bv` is absent.
 
 use super::fixture::E2EFixture;
 use ms::error::Result;
+use ms::test_utils::tool_gate::require_bv;
 
 // Skill definitions with dependencies to create a graph structure
 
@@ -120,50 +123,21 @@ fn setup_graph_fixture(scenario: &str) -> Result<E2EFixture> {
     Ok(fixture)
 }
 
-/// Check if bv is available, returning true if it is.
-#[allow(dead_code)]
-fn check_bv_available(fixture: &mut E2EFixture) -> bool {
-    let output = fixture.run_ms(&["--robot", "graph", "export", "--format", "json"]);
-    if !output.success {
-        let combined = format!("{}{}", output.stdout, output.stderr);
-        if combined.contains("bv is not available") || combined.contains("not available on PATH") {
-            fixture.emit_event(
-                super::fixture::LogLevel::Warn,
-                "graph",
-                "bv not available, skipping graph test",
-                None,
-            );
-            return false;
-        }
-    }
-    true
-}
-
 #[test]
+#[ignore = "needs bv"]
 fn test_graph_export_json() -> Result<()> {
+    let bv = require_bv("test_graph_export_json");
     let mut fixture = setup_graph_fixture("graph_export_json")?;
+    fixture.emit_event(
+        super::fixture::LogLevel::Info,
+        "graph",
+        &format!("Running against {}", bv.version),
+        None,
+    );
 
     fixture.log_step("Export graph as JSON");
     let output = fixture.run_ms(&["--robot", "graph", "export", "--format", "json"]);
-
-    // If bv is not available, skip gracefully
-    if !output.success {
-        let combined = format!("{}{}", output.stdout, output.stderr);
-        if combined.contains("bv is not available") || combined.contains("not available on PATH") {
-            fixture.emit_event(
-                super::fixture::LogLevel::Warn,
-                "graph",
-                "bv not available on this system, skipping test",
-                None,
-            );
-            fixture.generate_report();
-            return Ok(());
-        }
-        // If it failed for another reason, that is a real failure
-        fixture.assert_success(&output, "graph export json");
-    }
-
-    // If we got here, bv is available and the command succeeded
+    fixture.assert_success(&output, "graph export json");
     fixture.assert_output_contains(&output, "status");
 
     fixture.emit_event(
@@ -173,6 +147,7 @@ fn test_graph_export_json() -> Result<()> {
         Some(serde_json::json!({
             "format": "json",
             "stdout_len": output.stdout.len(),
+            "bv_version": bv.version,
         })),
     );
 
@@ -181,26 +156,14 @@ fn test_graph_export_json() -> Result<()> {
 }
 
 #[test]
+#[ignore = "needs bv"]
 fn test_graph_export_dot() -> Result<()> {
+    let bv = require_bv("test_graph_export_dot");
     let mut fixture = setup_graph_fixture("graph_export_dot")?;
 
     fixture.log_step("Export graph as DOT format");
     let output = fixture.run_ms(&["--robot", "graph", "export", "--format", "dot"]);
-
-    if !output.success {
-        let combined = format!("{}{}", output.stdout, output.stderr);
-        if combined.contains("bv is not available") || combined.contains("not available on PATH") {
-            fixture.emit_event(
-                super::fixture::LogLevel::Warn,
-                "graph",
-                "bv not available on this system, skipping test",
-                None,
-            );
-            fixture.generate_report();
-            return Ok(());
-        }
-        fixture.assert_success(&output, "graph export dot");
-    }
+    fixture.assert_success(&output, "graph export dot");
 
     fixture.emit_event(
         super::fixture::LogLevel::Info,
@@ -209,6 +172,7 @@ fn test_graph_export_dot() -> Result<()> {
         Some(serde_json::json!({
             "format": "dot",
             "stdout_len": output.stdout.len(),
+            "bv_version": bv.version,
         })),
     );
 
@@ -217,7 +181,9 @@ fn test_graph_export_dot() -> Result<()> {
 }
 
 #[test]
+#[ignore = "needs bv"]
 fn test_graph_cycles() -> Result<()> {
+    let bv = require_bv("test_graph_cycles");
     let mut fixture = setup_graph_fixture("graph_cycles")?;
 
     // Checkpoint: pre-cycles
@@ -225,21 +191,7 @@ fn test_graph_cycles() -> Result<()> {
 
     fixture.log_step("Detect cycles in skill graph");
     let output = fixture.run_ms(&["--robot", "graph", "cycles", "--limit", "10"]);
-
-    if !output.success {
-        let combined = format!("{}{}", output.stdout, output.stderr);
-        if combined.contains("bv is not available") || combined.contains("not available on PATH") {
-            fixture.emit_event(
-                super::fixture::LogLevel::Warn,
-                "graph",
-                "bv not available on this system, skipping test",
-                None,
-            );
-            fixture.generate_report();
-            return Ok(());
-        }
-        fixture.assert_success(&output, "graph cycles");
-    }
+    fixture.assert_success(&output, "graph cycles");
 
     let json = output.json();
     let status = json["status"].as_str().expect("status field");
@@ -263,6 +215,7 @@ fn test_graph_cycles() -> Result<()> {
         Some(serde_json::json!({
             "count": cycle_count,
             "limit": 10,
+            "bv_version": bv.version,
         })),
     );
 
@@ -278,26 +231,14 @@ fn test_graph_cycles() -> Result<()> {
 }
 
 #[test]
+#[ignore = "needs bv"]
 fn test_graph_insights() -> Result<()> {
+    let bv = require_bv("test_graph_insights");
     let mut fixture = setup_graph_fixture("graph_insights")?;
 
     fixture.log_step("Get graph insights");
     let output = fixture.run_ms(&["--robot", "graph", "insights"]);
-
-    if !output.success {
-        let combined = format!("{}{}", output.stdout, output.stderr);
-        if combined.contains("bv is not available") || combined.contains("not available on PATH") {
-            fixture.emit_event(
-                super::fixture::LogLevel::Warn,
-                "graph",
-                "bv not available on this system, skipping test",
-                None,
-            );
-            fixture.generate_report();
-            return Ok(());
-        }
-        fixture.assert_success(&output, "graph insights");
-    }
+    fixture.assert_success(&output, "graph insights");
 
     // Verify the output is valid JSON and contains insight data
     let json = output.json();
@@ -310,6 +251,7 @@ fn test_graph_insights() -> Result<()> {
             "has_cycles": json.get("Cycles").is_some(),
             "has_keystones": json.get("Keystones").is_some(),
             "has_bottlenecks": json.get("Bottlenecks").is_some(),
+            "bv_version": bv.version,
         })),
     );
 
@@ -318,26 +260,14 @@ fn test_graph_insights() -> Result<()> {
 }
 
 #[test]
+#[ignore = "needs bv"]
 fn test_graph_keystones() -> Result<()> {
+    let bv = require_bv("test_graph_keystones");
     let mut fixture = setup_graph_fixture("graph_keystones")?;
 
     fixture.log_step("Get top keystone skills");
     let output = fixture.run_ms(&["--robot", "graph", "keystones", "--limit", "5"]);
-
-    if !output.success {
-        let combined = format!("{}{}", output.stdout, output.stderr);
-        if combined.contains("bv is not available") || combined.contains("not available on PATH") {
-            fixture.emit_event(
-                super::fixture::LogLevel::Warn,
-                "graph",
-                "bv not available on this system, skipping test",
-                None,
-            );
-            fixture.generate_report();
-            return Ok(());
-        }
-        fixture.assert_success(&output, "graph keystones");
-    }
+    fixture.assert_success(&output, "graph keystones");
 
     let json = output.json();
     let status = json["status"].as_str().expect("status");
@@ -367,6 +297,7 @@ fn test_graph_keystones() -> Result<()> {
             "count": json["count"],
             "items_count": items.len(),
             "limit": 5,
+            "bv_version": bv.version,
         })),
     );
 
@@ -375,26 +306,14 @@ fn test_graph_keystones() -> Result<()> {
 }
 
 #[test]
+#[ignore = "needs bv"]
 fn test_graph_bottlenecks() -> Result<()> {
+    let bv = require_bv("test_graph_bottlenecks");
     let mut fixture = setup_graph_fixture("graph_bottlenecks")?;
 
     fixture.log_step("Get top bottleneck skills");
     let output = fixture.run_ms(&["--robot", "graph", "bottlenecks", "--limit", "5"]);
-
-    if !output.success {
-        let combined = format!("{}{}", output.stdout, output.stderr);
-        if combined.contains("bv is not available") || combined.contains("not available on PATH") {
-            fixture.emit_event(
-                super::fixture::LogLevel::Warn,
-                "graph",
-                "bv not available on this system, skipping test",
-                None,
-            );
-            fixture.generate_report();
-            return Ok(());
-        }
-        fixture.assert_success(&output, "graph bottlenecks");
-    }
+    fixture.assert_success(&output, "graph bottlenecks");
 
     let json = output.json();
     let status = json["status"].as_str().expect("status");
@@ -411,6 +330,7 @@ fn test_graph_bottlenecks() -> Result<()> {
         "Bottlenecks query completed",
         Some(serde_json::json!({
             "count": json["count"],
+            "bv_version": bv.version,
         })),
     );
 

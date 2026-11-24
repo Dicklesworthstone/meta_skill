@@ -837,6 +837,19 @@ fn run_validate(ctx: &AppContext, args: &ValidateArgs) -> Result<()> {
         }));
     }
 
+    if let Some(ref target_id) = args.id {
+        if target_id != "ms" && validated_toml.is_empty() {
+            return Err(crate::error::MsError::SkillNotFound(format!(
+                "Meta-skill '{target_id}' not found"
+            )));
+        }
+    } else if !ctx.git.skill_exists("ms") && validated_toml.is_empty() {
+        issues.push(
+            "No meta-skills found: 'ms' is not bootstrapped (run `ms meta bootstrap`) and no TOML meta-skills are registered"
+                .to_string(),
+        );
+    }
+
     let ok = issues.is_empty();
     let payload = serde_json::json!({
         "status": if ok { "ok" } else { "invalid" },
@@ -851,7 +864,14 @@ fn run_validate(ctx: &AppContext, args: &ValidateArgs) -> Result<()> {
     });
 
     if args.json || ctx.output_format != OutputFormat::Human {
-        return emit_meta_output(ctx, args.json, &payload);
+        emit_meta_output(ctx, args.json, &payload)?;
+        if !ok {
+            return Err(crate::error::MsError::ReportedValidationFailed(format!(
+                "meta-skill validation failed with {} issue(s)",
+                issues.len()
+            )));
+        }
+        return Ok(());
     }
 
     if ok {
@@ -862,6 +882,7 @@ fn run_validate(ctx: &AppContext, args: &ValidateArgs) -> Result<()> {
             loaded_count,
             ms_quality_score
         );
+        Ok(())
     } else {
         println!(
             "{} Meta-skill validation found issues:",
@@ -870,8 +891,11 @@ fn run_validate(ctx: &AppContext, args: &ValidateArgs) -> Result<()> {
         for issue in &issues {
             println!("  - {issue}");
         }
+        Err(crate::error::MsError::ValidationFailed(format!(
+            "meta-skill validation failed with {} issue(s)",
+            issues.len()
+        )))
     }
-    Ok(())
 }
 
 fn get_meta_skill_paths(ctx: &AppContext) -> Vec<PathBuf> {

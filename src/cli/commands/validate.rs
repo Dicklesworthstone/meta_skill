@@ -69,7 +69,8 @@ fn run_lint_engine(
         let all_ok = fix_res.all_succeeded();
         if fixed_count > 0 {
             let updated_md = compile_markdown(spec);
-            let _ = std::fs::write(skill_md, &updated_md);
+            std::fs::write(skill_md, &updated_md)
+                .map_err(|err| MsError::Config(format!("write {}: {err}", skill_md.display())))?;
             let updated_ctx = crate::lint::ValidationContext::new(spec, engine.config())
                 .with_repository(&repo)
                 .with_source(&updated_md)
@@ -88,6 +89,11 @@ pub fn run(ctx: &AppContext, args: &ValidateArgs) -> Result<()> {
 
     if args.all {
         let skill_files = crate::cli::commands::discover_skill_markdowns(ctx)?;
+        if skill_files.is_empty() {
+            return Err(MsError::ValidationFailed(
+                "no skills found to validate".to_string(),
+            ));
+        }
         let mut reports = Vec::new();
         let mut ubs_failed = false;
 
@@ -132,12 +138,26 @@ pub fn run(ctx: &AppContext, args: &ValidateArgs) -> Result<()> {
 
         if ctx.output_format != OutputFormat::Human {
             let clean = reports.iter().all(|r| r.clean);
-            return emit_json(&serde_json::json!({
-                "status": if clean { "ok" } else { "warnings" },
+            let status = if ubs_failed {
+                "error"
+            } else if clean {
+                "ok"
+            } else {
+                "warnings"
+            };
+            emit_json(&serde_json::json!({
+                "status": status,
                 "count": reports.len(),
                 "clean": clean,
+                "ubs_failed": ubs_failed,
                 "results": reports,
-            }));
+            }))?;
+            if ubs_failed {
+                return Err(MsError::ReportedValidationFailed(
+                    "UBS findings detected".to_string(),
+                ));
+            }
+            return Ok(());
         }
 
         let mut layout = HumanLayout::new();
@@ -154,6 +174,19 @@ pub fn run(ctx: &AppContext, args: &ValidateArgs) -> Result<()> {
             layout.kv("Roundtrip OK", if r.roundtrip_ok { "yes" } else { "no" });
             for w in &r.warnings {
                 layout.bullet(&format!("{}: {}", w.field, w.message));
+            }
+            if let Some(ubs) = &r.ubs {
+                layout.kv("UBS Findings", &ubs.findings.to_string());
+                for finding in &ubs.items {
+                    layout.bullet(&format!(
+                        "UBS {}:{}:{} {} ({})",
+                        finding.file,
+                        finding.line,
+                        finding.column,
+                        finding.message,
+                        finding.severity
+                    ));
+                }
             }
         }
         emit_human(layout);
@@ -191,6 +224,7 @@ pub fn run(ctx: &AppContext, args: &ValidateArgs) -> Result<()> {
     };
 
     if ctx.output_format != OutputFormat::Human {
+        let ubs_failed = ubs_result.as_ref().is_some_and(|result| !result.is_clean());
         let report = build_report(
             skill_arg,
             &skill_md,
@@ -201,7 +235,13 @@ pub fn run(ctx: &AppContext, args: &ValidateArgs) -> Result<()> {
             fix_info,
             args.lint,
         );
-        return emit_json(&report);
+        emit_json(&report)?;
+        if ubs_failed {
+            return Err(MsError::ReportedValidationFailed(
+                "UBS findings detected".to_string(),
+            ));
+        }
+        return Ok(());
     }
 
     let mut layout = HumanLayout::new();

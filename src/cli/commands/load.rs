@@ -1432,9 +1432,21 @@ fn record_usage(
         }
     }
 
-    // Closed-loop implicit feedback: record skill load & mark pending suggestion as selected
+    // Closed-loop implicit feedback: record skill load & mark pending suggestion as selected.
+    // Never overwrite a corrupt tracking or bandit state file on disk.
     let tracking_path = crate::suggestions::tracking::FeedbackCollector::default_path(&ctx.ms_root);
-    let mut collector = crate::suggestions::tracking::FeedbackCollector::load(&tracking_path);
+    let mut collector =
+        match crate::suggestions::tracking::FeedbackCollector::load_checked(&tracking_path) {
+            Ok(collector) => collector,
+            Err(err) => {
+                tracing::warn!(
+                    path = %tracking_path.display(),
+                    error = %err,
+                    "preserving corrupt suggestion tracking file; skipping implicit feedback save"
+                );
+                return;
+            }
+        };
     let was_pending_suggestion = collector
         .suggestions
         .pending_suggestions()
@@ -1475,17 +1487,26 @@ fn record_usage(
     }
     if was_pending_suggestion {
         let bandit_path = default_bandit_path(&ctx.ms_root);
-        let mut bandit =
-            ContextualBandit::load(&bandit_path).unwrap_or_else(|_| ContextualBandit::default());
-        bandit.register_skill(skill_id);
-        let features = crate::suggestions::bandit::features::ContextFeatures::default();
-        collector.update_bandit_for_skill(
-            &mut bandit,
-            skill_id,
-            &SkillFeedback::LoadedOnly,
-            &features,
-        );
-        let _ = bandit.save(&bandit_path);
+        match ContextualBandit::load(&bandit_path) {
+            Ok(mut bandit) => {
+                bandit.register_skill(skill_id);
+                let features = crate::suggestions::bandit::features::ContextFeatures::default();
+                collector.update_bandit_for_skill(
+                    &mut bandit,
+                    skill_id,
+                    &SkillFeedback::LoadedOnly,
+                    &features,
+                );
+                let _ = bandit.save(&bandit_path);
+            }
+            Err(err) => {
+                tracing::warn!(
+                    path = %bandit_path.display(),
+                    error = %err,
+                    "preserving corrupt contextual bandit file; skipping implicit update"
+                );
+            }
+        }
     }
     let _ = collector.save(&tracking_path);
 }

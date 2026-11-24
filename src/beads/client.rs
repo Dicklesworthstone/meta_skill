@@ -824,6 +824,7 @@ mod integration_tests {
 
     use super::*;
     use crate::beads::{CreateIssueRequest, IssueStatus, IssueType, TestLogger};
+    use crate::test_utils::tool_gate::require_br;
 
     /// Test fixture that creates an isolated beads environment.
     ///
@@ -842,21 +843,15 @@ mod integration_tests {
     impl TestBeadsEnv {
         /// Create a new isolated test environment.
         ///
-        /// Returns None if bd is not available.
-        fn new(test_name: &str) -> Option<Self> {
+        /// Panics loudly if `br`/`bd` is unavailable or `init` fails.
+        fn new(test_name: &str) -> Self {
             let mut log = TestLogger::new(test_name);
-
-            // Check if beads is available first (prefer `br`, fall back to `bd`).
-            let beads_bin = super::resolve_beads_binary();
-            if !Command::new(&beads_bin)
-                .arg("--version")
-                .output()
-                .map(|o| o.status.success())
-                .unwrap_or(false)
-            {
-                log.warn("SKIP", "beads not available, skipping test", None);
-                return None;
-            }
+            let tool = require_br(test_name);
+            log.info(
+                "TOOL",
+                &format!("{} ({})", tool.binary.display(), tool.version),
+                None,
+            );
 
             let temp_dir = tempfile::tempdir().expect("Failed to create temp directory");
             let project_dir = temp_dir.path().join("testproj");
@@ -873,33 +868,34 @@ mod integration_tests {
             );
 
             // Initialize database using env var
-            let init_status = Command::new(&beads_bin)
+            let output = Command::new(&tool.binary)
                 .args(["init"])
                 .env("BEADS_DB", &db_path)
                 .current_dir(&project_dir)
-                .output();
+                .output()
+                .unwrap_or_else(|e| {
+                    panic!(
+                        "[{test_name}] Failed to run `{} init` ({}): {e}",
+                        tool.binary.display(),
+                        tool.version
+                    )
+                });
 
-            match init_status {
-                Ok(output) if output.status.success() => {
-                    log.success("INIT", "Test database initialized", None);
-                }
-                Ok(output) => {
-                    let stderr = String::from_utf8_lossy(&output.stderr);
-                    log.error("INIT", &format!("bd init failed: {}", stderr), None);
-                    return None;
-                }
-                Err(e) => {
-                    log.error("INIT", &format!("Failed to run bd: {}", e), None);
-                    return None;
-                }
-            }
+            assert!(
+                output.status.success(),
+                "[{test_name}] `{} init` failed ({}): {}",
+                tool.binary.display(),
+                tool.version,
+                String::from_utf8_lossy(&output.stderr)
+            );
+            log.success("INIT", "Test database initialized", None);
 
-            Some(TestBeadsEnv {
+            TestBeadsEnv {
                 _temp_dir: temp_dir,
                 project_dir,
                 db_path,
                 log,
-            })
+            }
         }
 
         /// Get a BeadsClient configured for this test environment.
@@ -930,15 +926,14 @@ mod integration_tests {
     }
 
     #[test]
+    #[ignore = "needs br"]
     fn test_is_available_with_real_bd() {
-        let Some(mut env) = TestBeadsEnv::new("test_is_available") else {
-            return; // Skip if bd not available
-        };
+        let mut env = TestBeadsEnv::new("test_is_available");
         let client = env.client();
 
         assert!(
             client.is_available(),
-            "bd should be available in test environment"
+            "br/bd should be available in test environment"
         );
         env.log()
             .success("VERIFY", "is_available() returns true", None);
@@ -958,10 +953,9 @@ mod integration_tests {
     }
 
     #[test]
+    #[ignore = "needs br"]
     fn test_full_issue_lifecycle() {
-        let Some(mut env) = TestBeadsEnv::new("test_full_lifecycle") else {
-            return;
-        };
+        let mut env = TestBeadsEnv::new("test_full_lifecycle");
         let client = env.client();
 
         // CREATE
@@ -1021,10 +1015,9 @@ mod integration_tests {
     }
 
     #[test]
+    #[ignore = "needs br"]
     fn test_list_operations() {
-        let Some(mut env) = TestBeadsEnv::new("test_list_operations") else {
-            return;
-        };
+        let mut env = TestBeadsEnv::new("test_list_operations");
         let client = env.client();
 
         // Create variety of issues
@@ -1120,10 +1113,9 @@ mod integration_tests {
     }
 
     #[test]
+    #[ignore = "needs br"]
     fn test_dependency_operations() {
-        let Some(mut env) = TestBeadsEnv::new("test_dependencies") else {
-            return;
-        };
+        let mut env = TestBeadsEnv::new("test_dependencies");
         let client = env.client();
 
         // Create parent and child
@@ -1166,10 +1158,9 @@ mod integration_tests {
     }
 
     #[test]
+    #[ignore = "needs br"]
     fn test_error_handling_not_found() {
-        let Some(mut env) = TestBeadsEnv::new("test_errors") else {
-            return;
-        };
+        let mut env = TestBeadsEnv::new("test_errors");
         let client = env.client();
 
         // Test NotFound error - bd may return different error types for non-existent issues
@@ -1224,10 +1215,9 @@ mod integration_tests {
     }
 
     #[test]
+    #[ignore = "needs br"]
     fn test_performance_baseline() {
-        let Some(mut env) = TestBeadsEnv::new("test_performance") else {
-            return;
-        };
+        let mut env = TestBeadsEnv::new("test_performance");
         let client = env.client();
 
         // Create baseline data
@@ -1265,10 +1255,9 @@ mod integration_tests {
     }
 
     #[test]
+    #[ignore = "needs br"]
     fn test_create_with_labels() {
-        let Some(mut env) = TestBeadsEnv::new("test_labels") else {
-            return;
-        };
+        let mut env = TestBeadsEnv::new("test_labels");
         let client = env.client();
 
         let issue = client
@@ -1302,34 +1291,34 @@ mod integration_tests {
     }
 
     #[test]
+    #[ignore = "needs br"]
     fn test_version_check() {
         let mut log = TestLogger::new("test_version");
+        let tool = require_br("test_version_check");
 
         let client = BeadsClient::new();
-        if !client.is_available() {
-            log.warn("SKIP", "bd not available", None);
-            return;
-        }
+        assert!(client.is_available(), "br/bd should be available");
 
         let version = client.version();
         assert!(version.is_some(), "Should be able to get version");
 
         let version_str = version.unwrap();
-        log.info("VERSION", &format!("bd version: {}", version_str), None);
+        log.info("VERSION", &format!("beads version: {}", version_str), None);
         assert!(!version_str.is_empty(), "Version should not be empty");
+        assert_eq!(version_str, tool.version);
 
         log.success("VERSION", "Version check works", None);
     }
 
     #[test]
+    #[ignore = "needs br"]
     fn test_version_compatibility_check() {
         let mut log = TestLogger::new("test_version_compatibility");
+        let tool = require_br("test_version_compatibility_check");
+        log.info("TOOL", &tool.version, None);
 
         let client = BeadsClient::new();
-        if !client.is_available() {
-            log.warn("SKIP", "bd not available", None);
-            return;
-        }
+        assert!(client.is_available(), "br/bd should be available");
 
         let compat = client
             .check_compatibility()

@@ -169,7 +169,7 @@ pub fn run(ctx: &AppContext, args: &CmArgs) -> Result<()> {
                     );
                 }
             }
-            if let Ok(Some(existing)) = client.rule_exists(content, *threshold) {
+            if let Some(existing) = client.rule_exists(content, *threshold)? {
                 if ctx.output_format != OutputFormat::Human {
                     return emit_json(&serde_json::json!({
                         "status": "duplicate",

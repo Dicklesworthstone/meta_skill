@@ -133,46 +133,86 @@ pub fn run(ctx: &AppContext, args: &SuggestArgs) -> Result<()> {
         },
     );
 
-    // 2. Load cooldown cache
+    // 2. Load cooldown cache (preserve corrupt files on disk unless --reset-cooldowns)
     let cache_path = ctx.ms_root.join("cooldowns.json");
+    let mut cache_corrupt = false;
     let mut cache = if args.reset_cooldowns {
         SuggestionCooldownCache::new()
     } else {
-        crate::suggestions::cooldown_storage::load_cache(&cache_path).unwrap_or_else(|e| {
-            if !ctx.output_format.is_machine_readable() {
-                eprintln!("Warning: Failed to load cooldown cache: {e}. Starting fresh.");
+        match crate::suggestions::cooldown_storage::load_cache(&cache_path) {
+            Ok(loaded) => loaded,
+            Err(e) => {
+                cache_corrupt = true;
+                tracing::warn!(
+                    path = %cache_path.display(),
+                    error = %e,
+                    "preserving corrupt cooldown cache; pass --reset-cooldowns to replace"
+                );
+                if !ctx.output_format.is_machine_readable() {
+                    eprintln!(
+                        "Warning: Failed to load cooldown cache: {e}. Leaving file intact (use --reset-cooldowns to reset)."
+                    );
+                }
+                SuggestionCooldownCache::new()
             }
-            SuggestionCooldownCache::new()
-        })
+        }
     };
 
     if args.reset_cooldowns {
         crate::suggestions::cooldown_storage::save_cache(&cache_path, &cache)?;
     }
 
-    // 3. Load contextual bandit & signal bandit
+    // 3. Load contextual bandit & signal bandit (preserve corrupt files unless --reset-bandit)
     let contextual_bandit_path = ctx.ms_root.join("contextual_bandit.json");
+    let mut contextual_bandit_corrupt = false;
     let mut contextual_bandit = if args.reset_bandit {
         let bandit = ContextualBandit::with_feature_dim(FEATURE_DIM);
         bandit.save(&contextual_bandit_path)?;
         bandit
     } else {
-        ContextualBandit::load(&contextual_bandit_path).unwrap_or_else(|e| {
-            if !ctx.output_format.is_machine_readable() {
-                eprintln!("Warning: Failed to load bandit state: {e}. Starting fresh.");
+        match ContextualBandit::load(&contextual_bandit_path) {
+            Ok(loaded) => loaded,
+            Err(e) => {
+                contextual_bandit_corrupt = true;
+                tracing::warn!(
+                    path = %contextual_bandit_path.display(),
+                    error = %e,
+                    "preserving corrupt contextual bandit state; pass --reset-bandit to replace"
+                );
+                if !ctx.output_format.is_machine_readable() {
+                    eprintln!(
+                        "Warning: Failed to load bandit state: {e}. Leaving file intact (use --reset-bandit to reset)."
+                    );
+                }
+                ContextualBandit::with_feature_dim(FEATURE_DIM)
             }
-            ContextualBandit::with_feature_dim(FEATURE_DIM)
-        })
+        }
     };
 
     let signal_bandit_path = ctx.ms_root.join("bandit.json");
+    let mut signal_bandit_corrupt = false;
     let mut signal_bandit = if args.reset_bandit {
         let bandit = crate::suggestions::SignalBandit::new();
         bandit.save(&signal_bandit_path)?;
         bandit
     } else {
-        crate::suggestions::SignalBandit::load(&signal_bandit_path)
-            .unwrap_or_else(|_| crate::suggestions::SignalBandit::new())
+        match crate::suggestions::SignalBandit::load(&signal_bandit_path) {
+            Ok(loaded) => loaded,
+            Err(e) => {
+                signal_bandit_corrupt = true;
+                tracing::warn!(
+                    path = %signal_bandit_path.display(),
+                    error = %e,
+                    "preserving corrupt signal bandit state; pass --reset-bandit to replace"
+                );
+                if !ctx.output_format.is_machine_readable() {
+                    eprintln!(
+                        "Warning: Failed to load signal bandit state: {e}. Leaving file intact (use --reset-bandit to reset)."
+                    );
+                }
+                crate::suggestions::SignalBandit::new()
+            }
+        }
     };
 
     if let Some(factor) = args.bandit_exploration {
@@ -220,8 +260,12 @@ pub fn run(ctx: &AppContext, args: &SuggestArgs) -> Result<()> {
             + weights.get(crate::suggestions::bandit::SignalType::Embedding))
             as f32;
         let recs = contextual_bandit.recommend(&context_features, fetch_limit);
-        let _ = contextual_bandit.save(&contextual_bandit_path);
-        let _ = signal_bandit.save(&signal_bandit_path);
+        if !contextual_bandit_corrupt {
+            let _ = contextual_bandit.save(&contextual_bandit_path);
+        }
+        if !signal_bandit_corrupt {
+            let _ = signal_bandit.save(&signal_bandit_path);
+        }
         (recs, (0.85 + 0.15 * boost).clamp(0.8, 1.2))
     };
 
@@ -421,35 +465,55 @@ pub fn run(ctx: &AppContext, args: &SuggestArgs) -> Result<()> {
     }
 
     // 15. Record suggestions for closed-loop implicit bandit learning
+    // (never overwrite corrupt tracking or bandit files on disk)
     let tracking_path = FeedbackCollector::default_path(&ctx.ms_root);
-    let mut feedback_collector = FeedbackCollector::load(&tracking_path);
-    let ignored_prior = feedback_collector.suggestions.end_tracking();
-    if !ignored_prior.is_empty() && !args.no_bandit {
-        for (ignored_id, fb) in &ignored_prior {
-            feedback_collector.update_bandit_for_skill(
-                &mut contextual_bandit,
-                ignored_id,
-                fb,
-                &context_features,
-            );
+    match FeedbackCollector::load_checked(&tracking_path) {
+        Ok(mut feedback_collector) => {
+            let ignored_prior = feedback_collector.suggestions.end_tracking();
+            if !ignored_prior.is_empty() && !args.no_bandit {
+                for (ignored_id, fb) in &ignored_prior {
+                    feedback_collector.update_bandit_for_skill(
+                        &mut contextual_bandit,
+                        ignored_id,
+                        fb,
+                        &context_features,
+                    );
+                }
+                if !contextual_bandit_corrupt {
+                    let _ = contextual_bandit.save(&contextual_bandit_path);
+                }
+            }
+            let all_suggested_ids: Vec<String> = suggestions
+                .iter()
+                .chain(discovery_suggestions.iter())
+                .map(|s| s.skill_id.clone())
+                .collect();
+            feedback_collector.on_suggestions_shown(&all_suggested_ids, Some(fingerprint.as_u64()));
+            let _ = feedback_collector.save(&tracking_path);
         }
-        let _ = contextual_bandit.save(&contextual_bandit_path);
+        Err(err) => {
+            tracing::warn!(
+                path = %tracking_path.display(),
+                error = %err,
+                "preserving corrupt suggestion tracking file; skipping tracking save"
+            );
+            if !ctx.output_format.is_machine_readable() {
+                eprintln!(
+                    "Warning: Failed to load suggestion tracking state: {err}. Leaving file intact."
+                );
+            }
+        }
     }
-    let all_suggested_ids: Vec<String> = suggestions
-        .iter()
-        .chain(discovery_suggestions.iter())
-        .map(|s| s.skill_id.clone())
-        .collect();
-    feedback_collector.on_suggestions_shown(&all_suggested_ids, Some(fingerprint.as_u64()));
-    let _ = feedback_collector.save(&tracking_path);
 
     // 15b. Update cooldowns for shown suggestions using configured cooldown_seconds and purge expired
-    let cooldown_seconds = ctx.config.disclosure.cooldown_seconds;
-    for suggestion in &suggestions {
-        cache.record(fp, suggestion.skill_id.clone(), cooldown_seconds);
+    if !cache_corrupt {
+        let cooldown_seconds = ctx.config.disclosure.cooldown_seconds;
+        for suggestion in &suggestions {
+            cache.record(fp, suggestion.skill_id.clone(), cooldown_seconds);
+        }
+        cache.purge_expired();
+        cache.save(&cache_path)?;
     }
-    cache.purge_expired();
-    cache.save(&cache_path)?;
 
     // 15c. Auto-load top suggested skills if --load is requested
     let loaded_skills = if args.load {

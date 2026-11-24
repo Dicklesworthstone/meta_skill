@@ -10,6 +10,7 @@ use std::time::Duration;
 use tempfile::TempDir;
 
 use crate::beads::{BeadsClient, CreateIssueRequest, IssueStatus, TestLogger, WorkFilter};
+use crate::test_utils::tool_gate::require_br;
 
 /// Test fixture that creates an isolated beads environment.
 ///
@@ -21,14 +22,20 @@ pub struct TestBeadsEnv {
     db_path: PathBuf,
     /// Test logger for this environment
     pub log: TestLogger,
-    /// Whether bd was successfully initialized
-    pub initialized: bool,
 }
 
 impl TestBeadsEnv {
     /// Create a new isolated test environment.
+    ///
+    /// Panics loudly if `br`/`bd` is unavailable or `init` fails.
     pub fn new(test_name: &str) -> Self {
         let mut log = TestLogger::new(test_name);
+        let tool = require_br(test_name);
+        log.info(
+            "TOOL",
+            &format!("{} ({})", tool.binary.display(), tool.version),
+            None,
+        );
 
         let temp_dir = tempfile::tempdir().expect("Failed to create temp directory");
         let beads_dir = temp_dir.path().join(".beads");
@@ -43,35 +50,33 @@ impl TestBeadsEnv {
 
         // Initialize database using env var (prefer `br`, fall back to legacy `bd`).
         log.info("INIT", "Initializing test database", None);
-        let status = Command::new(crate::beads::resolve_beads_binary())
+        let output = Command::new(&tool.binary)
             .args(["init"])
             .env("BEADS_DB", &db_path)
             .current_dir(temp_dir.path())
-            .output();
+            .output()
+            .unwrap_or_else(|e| {
+                panic!(
+                    "[{test_name}] Failed to run `{} init` ({}): {e}",
+                    tool.binary.display(),
+                    tool.version
+                )
+            });
 
-        let initialized = match status {
-            Ok(output) if output.status.success() => {
-                log.success("INIT", "Database initialized", None);
-                true
-            }
-            Ok(output) => {
-                let stderr = String::from_utf8_lossy(&output.stderr);
-                log.warn("INIT", &format!("bd init warning: {}", stderr), None);
-                false
-            }
-            Err(e) => {
-                log.warn("INIT", &format!("bd init failed: {}", e), None);
-                false
-            }
-        };
-
+        assert!(
+            output.status.success(),
+            "[{test_name}] `{} init` failed ({}): {}",
+            tool.binary.display(),
+            tool.version,
+            String::from_utf8_lossy(&output.stderr)
+        );
+        log.success("INIT", "Database initialized", None);
         log.success("SETUP", "Test environment ready", None);
 
         TestBeadsEnv {
             temp_dir,
             db_path,
             log,
-            initialized,
         }
     }
 
@@ -113,15 +118,11 @@ fn count_bd_processes() -> usize {
 // =============================================================================
 
 #[test]
+#[ignore = "needs br"]
 fn test_no_orphan_processes() {
     let mut log = TestLogger::new("test_no_orphan_processes");
     let env = TestBeadsEnv::new("test_no_orphan");
     let client = env.client();
-
-    if !client.is_available() {
-        log.warn("SKIP", "bd not available", None);
-        return;
-    }
 
     // Get baseline process count
     let before = count_bd_processes();
@@ -156,20 +157,11 @@ fn test_no_orphan_processes() {
 }
 
 #[test]
+#[ignore = "needs br"]
 fn test_wal_integrity_during_operations() {
     let mut log = TestLogger::new("test_wal_integrity");
     let env = TestBeadsEnv::new("test_wal_integrity");
     let client = env.client();
-
-    if !client.is_available() {
-        log.warn("SKIP", "bd not available", None);
-        return;
-    }
-
-    if !env.initialized {
-        log.warn("SKIP", "Test database not initialized", None);
-        return;
-    }
 
     let db_dir = env.temp_dir.path().join(".beads");
 
@@ -222,31 +214,18 @@ fn test_wal_integrity_during_operations() {
 }
 
 #[test]
+#[ignore = "needs br"]
 fn test_operation_continuity() {
     // This test verifies operations complete cleanly without corruption
     let mut log = TestLogger::new("test_operation_continuity");
     let env = TestBeadsEnv::new("test_operation_continuity");
     let client = env.client();
 
-    if !client.is_available() {
-        log.warn("SKIP", "bd not available", None);
-        return;
-    }
-
-    if !env.initialized {
-        log.warn("SKIP", "Test database not initialized", None);
-        return;
-    }
-
     // Create a baseline issue
     let req = CreateIssueRequest::new("Continuity Test");
-    let issue = match client.create(&req) {
-        Ok(issue) => issue,
-        Err(e) => {
-            log.warn("SKIP", &format!("Could not create issue: {}", e), None);
-            return;
-        }
-    };
+    let issue = client
+        .create(&req)
+        .expect("Should create baseline issue for continuity test");
 
     log.info(
         "SETUP",
@@ -286,7 +265,7 @@ fn test_operation_continuity() {
                 panic!("Database appears corrupted: {}", e);
             }
             log.warn(
-                "SKIP",
+                "VERIFY",
                 &format!("List failed (not corruption): {}", e),
                 None,
             );
@@ -295,20 +274,11 @@ fn test_operation_continuity() {
 }
 
 #[test]
+#[ignore = "needs br"]
 fn test_sync_persistence() {
     let mut log = TestLogger::new("test_sync_persistence");
     let env = TestBeadsEnv::new("test_sync_persistence");
     let client = env.client();
-
-    if !client.is_available() {
-        log.warn("SKIP", "bd not available", None);
-        return;
-    }
-
-    if !env.initialized {
-        log.warn("SKIP", "Test database not initialized", None);
-        return;
-    }
 
     // Create some issues
     let mut created_count = 0;
@@ -319,10 +289,10 @@ fn test_sync_persistence() {
         }
     }
 
-    if created_count == 0 {
-        log.warn("SKIP", "Could not create any issues", None);
-        return;
-    }
+    assert!(
+        created_count > 0,
+        "Expected sync persistence test to create at least one issue"
+    );
 
     // Call sync explicitly (as agents should do); flushing JSONL needs no git repo.
     let sync_result = client.sync();
@@ -353,27 +323,17 @@ fn test_sync_persistence() {
 }
 
 #[test]
+#[ignore = "needs br"]
 fn test_database_lock_detection_via_flock() {
     let mut log = TestLogger::new("test_lock_flock");
     let env = TestBeadsEnv::new("test_lock_flock");
     let client = env.client();
 
-    if !client.is_available() {
-        log.warn("SKIP", "bd not available", None);
-        return;
-    }
-
-    if !env.initialized {
-        log.warn("SKIP", "Test database not initialized", None);
-        return;
-    }
-
     // First create something so the database is non-trivial
     let req = CreateIssueRequest::new("Lock Test");
-    if client.create(&req).is_err() {
-        log.warn("SKIP", "Could not create initial issue", None);
-        return;
-    }
+    client
+        .create(&req)
+        .expect("Should create initial issue for flock lock test");
 
     let db_path = env.temp_dir.path().join(".beads/beads.db");
 
@@ -423,7 +383,11 @@ fn test_database_lock_detection_via_flock() {
             log.info("LOCK", "Lock holder terminated", None);
         }
         Err(e) => {
-            log.warn("SKIP", &format!("flock not available: {}", e), None);
+            log.info(
+                "LOCK",
+                &format!("flock command not present on host: {e}"),
+                None,
+            );
         }
     }
 
@@ -431,20 +395,11 @@ fn test_database_lock_detection_via_flock() {
 }
 
 #[test]
+#[ignore = "needs br"]
 fn test_wal_files_not_deleted_during_operations() {
     let mut log = TestLogger::new("test_wal_files_preserved");
     let env = TestBeadsEnv::new("test_wal_preserved");
     let client = env.client();
-
-    if !client.is_available() {
-        log.warn("SKIP", "bd not available", None);
-        return;
-    }
-
-    if !env.initialized {
-        log.warn("SKIP", "Test database not initialized", None);
-        return;
-    }
 
     let db_dir = env.temp_dir.path().join(".beads");
 
@@ -457,10 +412,10 @@ fn test_wal_files_not_deleted_during_operations() {
         }
     }
 
-    if created == 0 {
-        log.warn("SKIP", "Could not create any issues", None);
-        return;
-    }
+    assert!(
+        created > 0,
+        "Expected WAL preservation test to create at least one issue"
+    );
 
     // Check initial file state
     let db_exists = db_dir.join("beads.db").exists();
@@ -502,20 +457,11 @@ fn test_wal_files_not_deleted_during_operations() {
 }
 
 #[test]
+#[ignore = "needs br"]
 fn test_rapid_create_operations() {
     let mut log = TestLogger::new("test_rapid_create");
     let env = TestBeadsEnv::new("test_rapid_create");
     let client = env.client();
-
-    if !client.is_available() {
-        log.warn("SKIP", "bd not available", None);
-        return;
-    }
-
-    if !env.initialized {
-        log.warn("SKIP", "Test database not initialized", None);
-        return;
-    }
 
     // Rapid fire creation - stress test WAL handling
     let mut created_ids = Vec::new();
@@ -538,10 +484,10 @@ fn test_rapid_create_operations() {
         None,
     );
 
-    if created_ids.is_empty() {
-        log.warn("SKIP", "Could not create any issues", None);
-        return;
-    }
+    assert!(
+        !created_ids.is_empty(),
+        "Expected rapid create test to create at least one issue"
+    );
 
     // Verify at least some were created
     let filter = WorkFilter::default();

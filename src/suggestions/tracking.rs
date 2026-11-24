@@ -455,18 +455,32 @@ impl FeedbackCollector {
         ms_root.join("suggestion_tracking.json")
     }
 
+    fn default_for_env() -> Self {
+        std::env::var("MS_SESSION_ID")
+            .ok()
+            .filter(|s| !s.trim().is_empty())
+            .map_or_else(Self::new, Self::with_session_id)
+    }
+
+    /// Load a `FeedbackCollector` from disk, returning an error if an existing file
+    /// cannot be read or parsed so callers do not silently overwrite corrupt state.
+    pub fn load_checked(path: &std::path::Path) -> crate::error::Result<Self> {
+        if !path.exists() {
+            return Ok(Self::default_for_env());
+        }
+        let raw = std::fs::read_to_string(path)?;
+        serde_json::from_str(&raw).map_err(|err| {
+            crate::error::MsError::Serialization(format!(
+                "suggestion tracking parse ({}): {err}",
+                path.display()
+            ))
+        })
+    }
+
     /// Load a `FeedbackCollector` from disk, falling back to a new instance.
     #[must_use]
     pub fn load(path: &std::path::Path) -> Self {
-        std::fs::read_to_string(path)
-            .ok()
-            .and_then(|raw| serde_json::from_str(&raw).ok())
-            .unwrap_or_else(|| {
-                std::env::var("MS_SESSION_ID")
-                    .ok()
-                    .filter(|s| !s.trim().is_empty())
-                    .map_or_else(Self::new, Self::with_session_id)
-            })
+        Self::load_checked(path).unwrap_or_else(|_| Self::default_for_env())
     }
 
     /// Save the `FeedbackCollector` to disk.
@@ -717,5 +731,26 @@ mod tests {
         let ignored = loaded.suggestions.end_tracking();
         assert_eq!(ignored.len(), 1);
         assert_eq!(ignored[0].0, "s2");
+    }
+
+    #[test]
+    fn test_feedback_collector_load_checked_rejects_corrupt_json() {
+        let temp = tempfile::tempdir().unwrap();
+        let path = FeedbackCollector::default_path(temp.path());
+
+        // Missing file succeeds with a fresh collector.
+        let missing = FeedbackCollector::load_checked(&path).unwrap();
+        assert!(missing.suggestions.all_suggestions().is_empty());
+
+        // Corrupt existing file must error instead of silently returning default.
+        let corrupt = b"{\"session\": broken_json";
+        std::fs::write(&path, corrupt).unwrap();
+        let err = FeedbackCollector::load_checked(&path)
+            .expect_err("corrupt suggestion_tracking.json must error");
+        assert!(
+            err.to_string().contains("suggestion tracking parse"),
+            "unexpected error: {err}"
+        );
+        assert_eq!(std::fs::read(&path).unwrap(), corrupt);
     }
 }

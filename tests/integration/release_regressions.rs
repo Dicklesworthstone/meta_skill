@@ -904,3 +904,759 @@ fn rqg5_local_index_refuses_broken_yaml_frontmatter() {
         "broken-frontmatter skill must not be indexed"
     );
 }
+
+#[cfg(unix)]
+fn write_executable_script(path: &Path, contents: &str) {
+    use std::os::unix::fs::PermissionsExt;
+    fs::write(path, contents).expect("write script");
+    fs::set_permissions(path, fs::Permissions::from_mode(0o755)).expect("chmod script");
+}
+
+#[test]
+fn p31d_m3_validate_all_empty_fails_and_ubs_findings_exit_nonzero_in_robot_mode() {
+    let (tmp, home, skills) = setup_env();
+
+    // Planted negative 1: `ms --robot validate --all` with 0 skills must NOT report clean:true
+    let empty_out = ms_cmd(&home)
+        .args(["--robot", "validate", "--all"])
+        .current_dir(tmp.path())
+        .output()
+        .unwrap();
+    assert!(
+        !empty_out.status.success(),
+        "validate --all on empty workspace must fail: stdout={} stderr={}",
+        String::from_utf8_lossy(&empty_out.stdout),
+        String::from_utf8_lossy(&empty_out.stderr)
+    );
+    let empty_json: serde_json::Value =
+        serde_json::from_slice(&empty_out.stdout).expect("single json error");
+    assert_eq!(empty_json["status"].as_str(), Some("error"));
+
+    // Create a skill with a code block so `--ubs` exercises UbsClient
+    let skill_dir = skills.join("ubs-probe");
+    fs::create_dir_all(&skill_dir).unwrap();
+    fs::write(
+        skill_dir.join("SKILL.md"),
+        "---\nid: ubs-probe\nname: UBS Probe\ndescription: Skill with a Rust code block for UBS check.\ntags: [rust]\n---\n\n# UBS Probe\n\nSkill with a Rust code block for UBS check.\n\n## Examples\n\n```rust\nfn main() { println!(\"hi\"); }\n```\n",
+    )
+    .unwrap();
+    let idx = ms_cmd(&home)
+        .args(["--robot", "index"])
+        .current_dir(tmp.path())
+        .output()
+        .unwrap();
+    assert!(idx.status.success());
+
+    // Positive: validate --all without --ubs succeeds and reports clean:true
+    let clean_out = ms_cmd(&home)
+        .args(["--robot", "validate", "--all"])
+        .current_dir(tmp.path())
+        .output()
+        .unwrap();
+    assert!(
+        clean_out.status.success(),
+        "clean validate --all should pass: {}",
+        String::from_utf8_lossy(&clean_out.stdout)
+    );
+    let clean_json: serde_json::Value = serde_json::from_slice(&clean_out.stdout).unwrap();
+    assert_eq!(clean_json["clean"].as_bool(), Some(true));
+    assert_eq!(clean_json["count"].as_u64(), Some(1));
+
+    // Planted negative 2: stand-in ubs reports findings; `--all --ubs` in robot mode
+    // must emit ONE JSON document containing the findings AND exit non-zero.
+    #[cfg(unix)]
+    {
+        let bin_dir = tmp.path().join("bin");
+        fs::create_dir_all(&bin_dir).unwrap();
+        let fake_ubs = bin_dir.join("ubs");
+        write_executable_script(
+            &fake_ubs,
+            "#!/bin/sh\necho '⚠️  Security (1 errors)'\necho '    block.rs:1:1 – Simulated UBS critical finding'\nexit 1\n",
+        );
+        let allow_dcg = bin_dir.join("allow-dcg");
+        write_executable_script(
+            &allow_dcg,
+            "#!/bin/sh\nif [ \"$1\" = --version ]; then echo 'dcg 0.0.0'; exit 0; fi\necho '{\"decision\":\"allow\",\"reason\":\"test\"}'\n",
+        );
+        let path_env = format!(
+            "{}:{}",
+            bin_dir.display(),
+            std::env::var("PATH").unwrap_or_default()
+        );
+        let ubs_out = ms_cmd(&home)
+            .env("PATH", &path_env)
+            .env("MS_SAFETY_DCG_BIN", &allow_dcg)
+            .args(["--robot", "validate", "--all", "--ubs"])
+            .current_dir(tmp.path())
+            .output()
+            .unwrap();
+        assert!(
+            !ubs_out.status.success(),
+            "validate --all --ubs with UBS findings must exit non-zero: stdout={}",
+            String::from_utf8_lossy(&ubs_out.stdout)
+        );
+        let ubs_json: serde_json::Value =
+            serde_json::from_slice(&ubs_out.stdout).expect("single valid JSON document");
+        assert_eq!(ubs_json["status"].as_str(), Some("error"), "{ubs_json}");
+        assert_eq!(ubs_json["clean"].as_bool(), Some(false), "{ubs_json}");
+        assert_eq!(ubs_json["ubs_failed"].as_bool(), Some(true), "{ubs_json}");
+        assert_eq!(
+            ubs_json["results"][0]["ubs"]["exit_code"].as_i64(),
+            Some(1),
+            "{ubs_json}"
+        );
+    }
+}
+
+#[test]
+fn p31d_m4_meta_validate_rejects_unbootstrapped_unknown_id_and_issues() {
+    let (tmp, home, _skills) = setup_env();
+
+    // Planted negative 1: nothing bootstrapped -> exits non-zero with ok:false
+    let unboot = ms_cmd(&home)
+        .args(["--robot", "meta", "validate"])
+        .current_dir(tmp.path())
+        .output()
+        .unwrap();
+    assert!(
+        !unboot.status.success(),
+        "meta validate with nothing bootstrapped must exit non-zero: {}",
+        String::from_utf8_lossy(&unboot.stdout)
+    );
+    let unboot_json: serde_json::Value =
+        serde_json::from_slice(&unboot.stdout).expect("single valid json");
+    assert_eq!(unboot_json["ok"].as_bool(), Some(false), "{unboot_json}");
+    assert_eq!(
+        unboot_json["status"].as_str(),
+        Some("invalid"),
+        "{unboot_json}"
+    );
+    assert!(
+        !unboot_json["issues"].as_array().unwrap().is_empty(),
+        "{unboot_json}"
+    );
+
+    // Planted negative 2: unknown ID -> exits non-zero (SkillNotFound)
+    let unknown = ms_cmd(&home)
+        .args(["--robot", "meta", "validate", "does-not-exist"])
+        .current_dir(tmp.path())
+        .output()
+        .unwrap();
+    assert!(
+        !unknown.status.success(),
+        "meta validate unknown id must exit non-zero: {}",
+        String::from_utf8_lossy(&unknown.stdout)
+    );
+
+    // Positive: bootstrap `ms` -> meta validate passes cleanly
+    let boot = ms_cmd(&home)
+        .args(["--robot", "meta", "bootstrap"])
+        .current_dir(tmp.path())
+        .output()
+        .unwrap();
+    assert!(boot.status.success());
+
+    let ok_out = ms_cmd(&home)
+        .args(["--robot", "meta", "validate"])
+        .current_dir(tmp.path())
+        .output()
+        .unwrap();
+    assert!(
+        ok_out.status.success(),
+        "bootstrapped meta validate must succeed: stdout={} stderr={}",
+        String::from_utf8_lossy(&ok_out.stdout),
+        String::from_utf8_lossy(&ok_out.stderr)
+    );
+    let ok_json: serde_json::Value = serde_json::from_slice(&ok_out.stdout).unwrap();
+    assert_eq!(ok_json["ok"].as_bool(), Some(true), "{ok_json}");
+
+    // Planted negative 3: TOML meta-skill referencing missing required skill -> exits non-zero
+    let meta_dir = home.join(".local/share/ms/meta-skills");
+    fs::create_dir_all(&meta_dir).unwrap();
+    fs::write(
+        meta_dir.join("broken-bundle.toml"),
+        r#"[meta_skill]
+id = "broken-bundle"
+name = "Broken Bundle"
+description = "References a nonexistent required skill"
+
+[[slices]]
+skill_id = "missing-required-skill-xyz"
+required = true
+"#,
+    )
+    .unwrap();
+    let bad_toml = ms_cmd(&home)
+        .args(["--robot", "meta", "validate"])
+        .current_dir(tmp.path())
+        .output()
+        .unwrap();
+    assert!(
+        !bad_toml.status.success(),
+        "meta validate with missing required slice must exit non-zero: {}",
+        String::from_utf8_lossy(&bad_toml.stdout)
+    );
+    let bad_json: serde_json::Value =
+        serde_json::from_slice(&bad_toml.stdout).expect("single valid json");
+    assert_eq!(bad_json["ok"].as_bool(), Some(false), "{bad_json}");
+    assert!(
+        bad_json["issues"].as_array().unwrap().iter().any(|v| v
+            .as_str()
+            .unwrap_or("")
+            .contains("missing-required-skill-xyz")),
+        "{bad_json}"
+    );
+}
+
+#[test]
+fn p31d_m5_requirements_all_rejects_empty_and_surfaces_unparseable_skills() {
+    let (tmp, home, skills) = setup_env();
+
+    // Planted negative 1: empty workspace must fail instead of returning status:"ok"
+    let empty_out = ms_cmd(&home)
+        .args(["--robot", "requirements", "--all"])
+        .current_dir(tmp.path())
+        .output()
+        .unwrap();
+    assert!(
+        !empty_out.status.success(),
+        "requirements --all on empty db must fail: {}",
+        String::from_utf8_lossy(&empty_out.stdout)
+    );
+
+    // Positive: valid skill indexed -> status:"ok"
+    let good_dir = skills.join("req-good");
+    fs::create_dir_all(&good_dir).unwrap();
+    fs::write(
+        good_dir.join("SKILL.md"),
+        "---\nname: req-good\ndescription: Valid requirement skill.\n---\n\n# Req Good\n\nBody.\n",
+    )
+    .unwrap();
+    let idx = ms_cmd(&home)
+        .args(["--robot", "index"])
+        .current_dir(tmp.path())
+        .output()
+        .unwrap();
+    assert!(idx.status.success());
+
+    let ok_out = ms_cmd(&home)
+        .args(["--robot", "requirements", "--all"])
+        .current_dir(tmp.path())
+        .output()
+        .unwrap();
+    assert!(
+        ok_out.status.success(),
+        "requirements --all with valid skill must succeed: {}",
+        String::from_utf8_lossy(&ok_out.stdout)
+    );
+    let ok_json: serde_json::Value = serde_json::from_slice(&ok_out.stdout).unwrap();
+    assert_eq!(ok_json["status"].as_str(), Some("ok"), "{ok_json}");
+    assert_eq!(ok_json["total_skills"].as_u64(), Some(1), "{ok_json}");
+
+    // Planted negative 2: corrupt a stored skill body in SQLite with broken YAML frontmatter
+    // so build_spec_from_record fails loudly instead of silently dropping the skill.
+    let db_path = home.join(".local/share/ms/ms.db");
+    let conn = rusqlite::Connection::open(&db_path).expect("open ms.db");
+    conn.execute(
+        "UPDATE skills SET body = '---\nid: [unclosed\n---\n\n# Broken\n' WHERE id = 'req-good'",
+        [],
+    )
+    .expect("corrupt skill body");
+    drop(conn);
+
+    let bad_out = ms_cmd(&home)
+        .args(["--robot", "requirements", "--all"])
+        .current_dir(tmp.path())
+        .output()
+        .unwrap();
+    assert!(
+        !bad_out.status.success(),
+        "requirements --all with unparseable skill must exit non-zero: {}",
+        String::from_utf8_lossy(&bad_out.stdout)
+    );
+    let bad_json: serde_json::Value =
+        serde_json::from_slice(&bad_out.stdout).expect("single valid json");
+    assert_eq!(bad_json["status"].as_str(), Some("error"), "{bad_json}");
+    assert_eq!(
+        bad_json["parse_error_count"].as_u64(),
+        Some(1),
+        "{bad_json}"
+    );
+    assert_eq!(bad_json["total_skills"].as_u64(), Some(1), "{bad_json}");
+    assert_eq!(
+        bad_json["skills"][0]["satisfied"].as_bool(),
+        Some(false),
+        "{bad_json}"
+    );
+}
+
+#[test]
+fn p31d_m6_dedup_merge_write_failure_does_not_deprecate_secondary() {
+    let (tmp, home, skills) = setup_env();
+    let d1 = skills.join("merge-primary");
+    let d2 = skills.join("merge-secondary");
+    fs::create_dir_all(&d1).unwrap();
+    fs::create_dir_all(&d2).unwrap();
+    fs::write(
+        d1.join("SKILL.md"),
+        "---\nname: merge-primary\ndescription: Primary skill.\ntags: [alpha]\n---\n\n# Merge Primary\n\n## Core\n\nPrimary rule.\n",
+    )
+    .unwrap();
+    fs::write(
+        d2.join("SKILL.md"),
+        "---\nname: merge-secondary\ndescription: Secondary skill.\ntags: [beta]\n---\n\n# Merge Secondary\n\n## Extra\n\nSecondary rule to merge.\n",
+    )
+    .unwrap();
+    let idx = ms_cmd(&home)
+        .args(["--robot", "index"])
+        .current_dir(tmp.path())
+        .output()
+        .unwrap();
+    assert!(idx.status.success());
+
+    // Plant git index.lock so TxManager::write_skill_with_layer fails deterministically
+    let lock_path = home.join(".local/share/ms/archive/.git/index.lock");
+    fs::write(&lock_path, b"locked").unwrap();
+
+    let failed_merge = ms_cmd(&home)
+        .args([
+            "--robot",
+            "dedup",
+            "merge",
+            "merge-primary",
+            "merge-secondary",
+        ])
+        .current_dir(tmp.path())
+        .output()
+        .unwrap();
+    assert!(
+        !failed_merge.status.success(),
+        "dedup merge must fail when primary write fails: {}",
+        String::from_utf8_lossy(&failed_merge.stdout)
+    );
+
+    // Secondary must NOT have been deprecated
+    let show_sec = ms_cmd(&home)
+        .args(["--robot", "show", "merge-secondary"])
+        .current_dir(tmp.path())
+        .output()
+        .unwrap();
+    assert!(show_sec.status.success());
+    let sec_json: serde_json::Value = serde_json::from_slice(&show_sec.stdout).unwrap();
+    assert_eq!(
+        sec_json["skill"]["is_deprecated"].as_bool(),
+        Some(false),
+        "secondary must remain active when primary merge write failed: {sec_json}"
+    );
+
+    // Positive contrast: removing the lock allows merge + deprecation to succeed
+    fs::remove_file(&lock_path).unwrap();
+    let ok_merge = ms_cmd(&home)
+        .args([
+            "--robot",
+            "dedup",
+            "merge",
+            "merge-primary",
+            "merge-secondary",
+        ])
+        .current_dir(tmp.path())
+        .output()
+        .unwrap();
+    assert!(
+        ok_merge.status.success(),
+        "dedup merge should succeed once archive lock is clear: {}",
+        String::from_utf8_lossy(&ok_merge.stdout)
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn p31d_m7_edit_and_fmt_propagate_store_write_error() {
+    let (tmp, home, skills) = setup_env();
+    let skill_dir = skills.join("edit-fmt-probe");
+    fs::create_dir_all(&skill_dir).unwrap();
+    let skill_md = skill_dir.join("SKILL.md");
+    // Unformatted extra trailing blank lines so `ms fmt` sees raw != formatted
+    fs::write(
+        &skill_md,
+        "---\nname: edit-fmt-probe\ndescription: Probe edit and fmt write propagation.\n---\n\n# Edit Fmt Probe\n\nBody text.\n\n\n\n",
+    )
+    .unwrap();
+    let idx = ms_cmd(&home)
+        .args(["--robot", "index"])
+        .current_dir(tmp.path())
+        .output()
+        .unwrap();
+    assert!(idx.status.success());
+
+    let lock_path = home.join(".local/share/ms/archive/.git/index.lock");
+    fs::write(&lock_path, b"locked").unwrap();
+
+    // Planted negative 1: `ms fmt` must fail when store write fails
+    let fmt_fail = ms_cmd(&home)
+        .args(["--robot", "fmt", skill_md.to_str().unwrap()])
+        .current_dir(tmp.path())
+        .output()
+        .unwrap();
+    assert!(
+        !fmt_fail.status.success(),
+        "ms fmt must fail when archive write fails: stdout={} stderr={}",
+        String::from_utf8_lossy(&fmt_fail.stdout),
+        String::from_utf8_lossy(&fmt_fail.stderr)
+    );
+
+    // Planted negative 2: `ms edit` must fail when store write fails
+    let noop_editor = tmp.path().join("noop-editor");
+    write_executable_script(&noop_editor, "#!/bin/sh\nexit 0\n");
+    let allow_dcg = tmp.path().join("allow-dcg");
+    write_executable_script(
+        &allow_dcg,
+        "#!/bin/sh\nif [ \"$1\" = --version ]; then echo 'dcg 0.0.0'; exit 0; fi\necho '{\"decision\":\"allow\",\"reason\":\"test\"}'\n",
+    );
+    let edit_fail = ms_cmd(&home)
+        .env("MS_SAFETY_DCG_BIN", &allow_dcg)
+        .args([
+            "--robot",
+            "edit",
+            skill_md.to_str().unwrap(),
+            "--editor",
+            noop_editor.to_str().unwrap(),
+        ])
+        .current_dir(tmp.path())
+        .output()
+        .unwrap();
+    assert!(
+        !edit_fail.status.success(),
+        "ms edit must fail when archive write fails: stdout={} stderr={}",
+        String::from_utf8_lossy(&edit_fail.stdout),
+        String::from_utf8_lossy(&edit_fail.stderr)
+    );
+
+    // Positive contrast: once lock is removed, both succeed
+    fs::remove_file(&lock_path).unwrap();
+    let edit_ok = ms_cmd(&home)
+        .env("MS_SAFETY_DCG_BIN", &allow_dcg)
+        .args([
+            "--robot",
+            "edit",
+            skill_md.to_str().unwrap(),
+            "--editor",
+            noop_editor.to_str().unwrap(),
+        ])
+        .current_dir(tmp.path())
+        .output()
+        .unwrap();
+    assert!(
+        edit_ok.status.success(),
+        "ms edit should succeed when archive is writable: {}",
+        String::from_utf8_lossy(&edit_ok.stdout)
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn p31d_l1_cm_add_fails_when_duplicate_check_errors() {
+    let (tmp, home, _skills) = setup_env();
+    let log_file = tmp.path().join("cm-calls.log");
+    let failing_cm = tmp.path().join("failing-cm");
+    write_executable_script(
+        &failing_cm,
+        &format!(
+            r#"#!/bin/sh
+echo "$@" >> '{log}'
+case "$1" in
+  onboard) echo '{{"status":"ready","initialized":true}}' ;;
+  validate) echo '{{"valid":true}}' ;;
+  similar) echo 'index unavailable' >&2; exit 1 ;;
+  playbook) echo '{{"id":"b-unexpected","content":"should not be added","category":"general"}}' ;;
+  *) exit 1 ;;
+esac
+"#,
+            log = log_file.display()
+        ),
+    );
+    let allow_dcg = tmp.path().join("allow-dcg");
+    write_executable_script(
+        &allow_dcg,
+        "#!/bin/sh\nif [ \"$1\" = --version ]; then echo 'dcg 0.0.0'; exit 0; fi\necho '{\"decision\":\"allow\",\"reason\":\"test\"}'\n",
+    );
+
+    // Planted negative: when `cm similar` (rule_exists) fails, `ms cm add` must fail
+    // and must NOT proceed to `cm playbook add`.
+    let fail_out = ms_cmd(&home)
+        .env("MS_CM_PATH", &failing_cm)
+        .env("MS_SAFETY_DCG_BIN", &allow_dcg)
+        .args(["--robot", "cm", "add", "Always propagate errors"])
+        .current_dir(tmp.path())
+        .output()
+        .unwrap();
+    assert!(
+        !fail_out.status.success(),
+        "cm add must fail when rule_exists fails: {}",
+        String::from_utf8_lossy(&fail_out.stdout)
+    );
+    let calls = fs::read_to_string(&log_file).unwrap_or_default();
+    assert!(
+        !calls.contains("playbook add"),
+        "cm add must not call `playbook add` after duplicate check failure: {calls}"
+    );
+
+    // Positive contrast: when `similar` succeeds with no matches, `playbook add` runs
+    let ok_cm = tmp.path().join("ok-cm");
+    write_executable_script(
+        &ok_cm,
+        r#"#!/bin/sh
+case "$1" in
+  onboard) echo '{"status":"ready","initialized":true}' ;;
+  validate) echo '{"valid":true}' ;;
+  similar) echo '{"matches":[]}' ;;
+  playbook) echo '{"id":"b-added-1","content":"Always propagate errors","category":"rust"}' ;;
+  *) exit 1 ;;
+esac
+"#,
+    );
+    let ok_out = ms_cmd(&home)
+        .env("MS_CM_PATH", &ok_cm)
+        .env("MS_SAFETY_DCG_BIN", &allow_dcg)
+        .args([
+            "--robot",
+            "cm",
+            "add",
+            "Always propagate errors",
+            "--category",
+            "rust",
+        ])
+        .current_dir(tmp.path())
+        .output()
+        .unwrap();
+    assert!(
+        ok_out.status.success(),
+        "cm add should succeed when duplicate check returns empty: {}",
+        String::from_utf8_lossy(&ok_out.stdout)
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn p31d_l3_mark_preserves_corrupt_store_and_coverage_surfaces_cass_failures() {
+    let (tmp, home, _skills) = setup_env();
+    let ms_root = home.join(".local/share/ms");
+    fs::create_dir_all(&ms_root).unwrap();
+    let marks_path = ms_root.join("session_marks.json");
+    let corrupt = b"[{\"session_id\": \"keep-me\", broken";
+    fs::write(&marks_path, corrupt).unwrap();
+
+    // Planted negative 1: `ms mark` refuses corrupt session_marks.json and leaves bytes intact
+    let mark_fail = ms_cmd(&home)
+        .args(["--robot", "mark", "sess-new", "--exemplary"])
+        .current_dir(tmp.path())
+        .output()
+        .unwrap();
+    assert!(
+        !mark_fail.status.success(),
+        "ms mark must fail on corrupt session_marks.json: {}",
+        String::from_utf8_lossy(&mark_fail.stdout)
+    );
+    assert_eq!(
+        fs::read(&marks_path).unwrap(),
+        corrupt,
+        "corrupt session_marks.json must not be overwritten"
+    );
+
+    // Clear corrupt file for coverage checks
+    fs::remove_file(&marks_path).unwrap();
+
+    // Planted negative 2: `ms coverage --cass-path /nonexistent` fails loudly
+    let bad_path = ms_cmd(&home)
+        .args(["--robot", "coverage", "--cass-path", "/nonexistent/cass"])
+        .current_dir(tmp.path())
+        .output()
+        .unwrap();
+    assert!(
+        !bad_path.status.success(),
+        "ms coverage with explicit nonexistent --cass-path must fail: {}",
+        String::from_utf8_lossy(&bad_path.stdout)
+    );
+
+    // Planted negative 3: stand-in cass where --version succeeds but search fails -> fails loudly
+    let broken_cass = tmp.path().join("broken-cass");
+    write_executable_script(
+        &broken_cass,
+        "#!/bin/sh\nif [ \"$1\" = --version ]; then echo 'cass 0.6.0'; exit 0; fi\necho 'corrupt index' >&2; exit 1\n",
+    );
+    let broken_search = ms_cmd(&home)
+        .args([
+            "--robot",
+            "coverage",
+            "--cass-path",
+            broken_cass.to_str().unwrap(),
+        ])
+        .current_dir(tmp.path())
+        .output()
+        .unwrap();
+    assert!(
+        !broken_search.status.success(),
+        "ms coverage must fail when cass search fails: {}",
+        String::from_utf8_lossy(&broken_search.stdout)
+    );
+
+    // Planted negative 4: no cass on PATH (no explicit --cass-path) -> reports partial + cass_error
+    let no_cass_out = ms_cmd(&home)
+        .env("PATH", "/usr/bin:/bin")
+        .args(["--robot", "coverage", "--min-sessions", "0"])
+        .current_dir(tmp.path())
+        .output()
+        .unwrap();
+    assert!(no_cass_out.status.success());
+    let cov_json: serde_json::Value = serde_json::from_slice(&no_cass_out.stdout).unwrap();
+    assert_eq!(cov_json["status"].as_str(), Some("partial"), "{cov_json}");
+    assert_eq!(
+        cov_json["cass_available"].as_bool(),
+        Some(false),
+        "{cov_json}"
+    );
+    assert!(cov_json["cass_error"].is_string(), "{cov_json}");
+}
+
+#[test]
+fn p31d_l4_corrupt_bandit_and_tracker_files_are_not_overwritten() {
+    let (tmp, home, skills) = setup_env();
+    let skill_dir = skills.join("bandit-probe");
+    fs::create_dir_all(&skill_dir).unwrap();
+    fs::write(
+        skill_dir.join("SKILL.md"),
+        "---\nname: bandit-probe\ndescription: Skill for corrupt state preservation test.\ntags: [rust]\n---\n\n# Bandit Probe\n\nBody.\n",
+    )
+    .unwrap();
+    let idx = ms_cmd(&home)
+        .args(["--robot", "index"])
+        .current_dir(tmp.path())
+        .output()
+        .unwrap();
+    assert!(idx.status.success());
+
+    let ms_root = home.join(".local/share/ms");
+    let files: &[(&str, &[u8])] = &[
+        ("contextual_bandit.json", b"{corrupt contextual bandit"),
+        ("bandit.json", b"{corrupt signal bandit"),
+        ("suggestion_tracking.json", b"{corrupt tracking state"),
+        ("cooldowns.json", b"{corrupt cooldown cache"),
+    ];
+    for (name, payload) in files {
+        fs::write(ms_root.join(name), payload).unwrap();
+    }
+
+    // Run `ms suggest` and `ms load`: neither may overwrite any corrupt file on disk
+    let suggest_out = ms_cmd(&home)
+        .args(["--robot", "suggest"])
+        .current_dir(tmp.path())
+        .output()
+        .unwrap();
+    assert!(
+        suggest_out.status.success(),
+        "ms suggest should degrade gracefully without overwriting corrupt files: {}",
+        String::from_utf8_lossy(&suggest_out.stderr)
+    );
+
+    let load_out = ms_cmd(&home)
+        .args(["--robot", "load", "bandit-probe"])
+        .current_dir(tmp.path())
+        .output()
+        .unwrap();
+    assert!(
+        load_out.status.success(),
+        "ms load should succeed without overwriting corrupt tracking/bandit files: {}",
+        String::from_utf8_lossy(&load_out.stderr)
+    );
+
+    for (name, expected) in files {
+        assert_eq!(
+            fs::read(ms_root.join(name)).unwrap(),
+            *expected,
+            "corrupt {name} must not be overwritten with default state"
+        );
+    }
+
+    // Positive contrast: explicit --reset-bandit / --reset-cooldowns resets bandit & cooldown files
+    let reset_out = ms_cmd(&home)
+        .args(["--robot", "suggest", "--reset-bandit", "--reset-cooldowns"])
+        .current_dir(tmp.path())
+        .output()
+        .unwrap();
+    assert!(reset_out.status.success());
+    assert!(
+        serde_json::from_slice::<serde_json::Value>(
+            &fs::read(ms_root.join("contextual_bandit.json")).unwrap()
+        )
+        .is_ok(),
+        "explicit --reset-bandit should write valid JSON"
+    );
+    assert!(
+        serde_json::from_slice::<serde_json::Value>(
+            &fs::read(ms_root.join("bandit.json")).unwrap()
+        )
+        .is_ok(),
+        "explicit --reset-bandit should write valid signal bandit JSON"
+    );
+}
+
+#[test]
+fn p31d_l9_import_index_propagates_search_index_error() {
+    let (tmp, home, _skills) = setup_env();
+    let input_doc = tmp.path().join("guide.md");
+    fs::write(
+        &input_doc,
+        "# Deployment Checklist\n\n## Rules\n\n- Always verify staging health before production rollout.\n- Never skip database backups before migrations.\n",
+    )
+    .unwrap();
+    let out_skill = tmp.path().join("out.skill.md");
+
+    // Hold the Tantivy index writer lock so the child `ms` opens search read-only
+    // and `ctx.search.index_skill(&record)` fails with SearchIndexReadOnly.
+    let index_dir = home.join(".local/share/ms/index");
+    let _held_writer = ms::search::Bm25Index::open(&index_dir).expect("open bm25 writer lock");
+
+    let fail_out = ms_cmd(&home)
+        .args([
+            "--robot",
+            "import",
+            input_doc.to_str().unwrap(),
+            "--non-interactive",
+            "--output",
+            out_skill.to_str().unwrap(),
+            "--index",
+        ])
+        .current_dir(tmp.path())
+        .output()
+        .unwrap();
+    assert!(
+        !fail_out.status.success(),
+        "ms import --index must fail when search index cannot be written: stdout={} stderr={}",
+        String::from_utf8_lossy(&fail_out.stdout),
+        String::from_utf8_lossy(&fail_out.stderr)
+    );
+
+    // Positive contrast: release lock -> import --index succeeds and sets indexed:true
+    drop(_held_writer);
+    let ok_out = ms_cmd(&home)
+        .args([
+            "--robot",
+            "import",
+            input_doc.to_str().unwrap(),
+            "--non-interactive",
+            "--output",
+            out_skill.to_str().unwrap(),
+            "--index",
+        ])
+        .current_dir(tmp.path())
+        .output()
+        .unwrap();
+    assert!(
+        ok_out.status.success(),
+        "ms import --index should succeed when search index is writable: stdout={} stderr={}",
+        String::from_utf8_lossy(&ok_out.stdout),
+        String::from_utf8_lossy(&ok_out.stderr)
+    );
+    let ok_json: serde_json::Value = serde_json::from_slice(&ok_out.stdout).unwrap();
+    assert_eq!(ok_json["indexed"].as_bool(), Some(true), "{ok_json}");
+}

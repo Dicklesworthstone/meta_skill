@@ -83,7 +83,7 @@ fn update_bandits_from_outcome(
 
     // Flush any pending session/unload feedback for loaded skills and ignored suggestions
     let tracking_path = FeedbackCollector::default_path(&ctx.ms_root);
-    let mut collector = FeedbackCollector::load(&tracking_path);
+    let mut collector = FeedbackCollector::load_checked(&tracking_path)?;
 
     let was_loaded = collector.session.is_skill_loaded(skill_id);
     let load_mins = collector

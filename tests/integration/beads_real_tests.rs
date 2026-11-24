@@ -30,8 +30,10 @@
 //!
 //! # Requirements
 //!
-//! - `bd` CLI must be installed and in PATH
-//! - Tests are automatically skipped if `bd` is not available
+//! - `br` (or legacy `bd`) CLI must be installed and in PATH
+//! - Tool-gated tests are marked `#[ignore = "needs br"]` and fail loudly via
+//!   `ms::test_utils::tool_gate::require_br` when invoked via `--ignored`
+//!   without the binary.
 
 use std::path::PathBuf;
 use std::process::Command;
@@ -41,6 +43,7 @@ use std::time::Duration;
 use ms::beads::{
     BeadsClient, CreateIssueRequest, IssueStatus, IssueType, UpdateIssueRequest, WorkFilter,
 };
+use ms::test_utils::tool_gate::require_br;
 use tempfile::TempDir;
 
 // =============================================================================
@@ -59,26 +62,17 @@ struct RealBeadsEnv {
     project_dir: PathBuf,
     /// Path to the test database
     db_path: PathBuf,
-    /// Whether bd was successfully initialized
-    initialized: bool,
+    /// Recorded tool version this test ran against
+    #[allow(dead_code)]
+    tool_version: String,
 }
 
 impl RealBeadsEnv {
     /// Create a new isolated test environment.
     ///
-    /// Returns None if bd is not available.
-    fn new(test_name: &str) -> Option<Self> {
-        // Check if beads is available (prefer `br`, fall back to legacy `bd`).
-        let beads_bin = ms::beads::resolve_beads_binary();
-        if !Command::new(&beads_bin)
-            .arg("--version")
-            .output()
-            .map(|o| o.status.success())
-            .unwrap_or(false)
-        {
-            eprintln!("[{}] SKIP: beads not available", test_name);
-            return None;
-        }
+    /// Panics loudly if `br`/`bd` is unavailable or `init` fails.
+    fn new(test_name: &str) -> Self {
+        let tool = require_br(test_name);
 
         let temp_dir = tempfile::tempdir().expect("Failed to create temp directory");
         let project_dir = temp_dir.path().join("project");
@@ -89,31 +83,33 @@ impl RealBeadsEnv {
         let db_path = beads_dir.join("beads.db");
 
         // Initialize database using BEADS_DB env var
-        let init_status = Command::new(&beads_bin)
+        let output = Command::new(&tool.binary)
             .args(["init"])
             .env("BEADS_DB", &db_path)
             .current_dir(&project_dir)
-            .output();
+            .output()
+            .unwrap_or_else(|e| {
+                panic!(
+                    "[{test_name}] Failed to run `{} init` ({}): {e}",
+                    tool.binary.display(),
+                    tool.version
+                )
+            });
 
-        let initialized = match init_status {
-            Ok(output) if output.status.success() => true,
-            Ok(output) => {
-                let stderr = String::from_utf8_lossy(&output.stderr);
-                eprintln!("[{}] bd init failed: {}", test_name, stderr);
-                false
-            }
-            Err(e) => {
-                eprintln!("[{}] Failed to run bd init: {}", test_name, e);
-                false
-            }
-        };
+        assert!(
+            output.status.success(),
+            "[{test_name}] `{} init` failed ({}): {}",
+            tool.binary.display(),
+            tool.version,
+            String::from_utf8_lossy(&output.stderr)
+        );
 
-        Some(RealBeadsEnv {
+        RealBeadsEnv {
             temp_dir,
             project_dir,
             db_path,
-            initialized,
-        })
+            tool_version: tool.version,
+        }
     }
 
     /// Get a BeadsClient configured for this test environment.
@@ -139,24 +135,18 @@ impl RealBeadsEnv {
 // =============================================================================
 
 #[test]
+#[ignore = "needs br"]
 fn test_real_beads_availability() {
-    let Some(env) = RealBeadsEnv::new("test_availability") else {
-        return;
-    };
+    let env = RealBeadsEnv::new("test_availability");
 
     let client = env.client();
-    assert!(client.is_available(), "bd should be available");
+    assert!(client.is_available(), "br/bd should be available");
 }
 
 #[test]
+#[ignore = "needs br"]
 fn test_real_beads_create_issue() {
-    let Some(env) = RealBeadsEnv::new("test_create") else {
-        return;
-    };
-    if !env.initialized {
-        eprintln!("SKIP: Test database not initialized");
-        return;
-    }
+    let env = RealBeadsEnv::new("test_create");
 
     let client = env.client();
     let req = CreateIssueRequest::new("Test Issue")
@@ -173,13 +163,9 @@ fn test_real_beads_create_issue() {
 }
 
 #[test]
+#[ignore = "needs br"]
 fn test_real_beads_full_lifecycle() {
-    let Some(env) = RealBeadsEnv::new("test_lifecycle") else {
-        return;
-    };
-    if !env.initialized {
-        return;
-    }
+    let env = RealBeadsEnv::new("test_lifecycle");
 
     let client = env.client();
 
@@ -210,13 +196,9 @@ fn test_real_beads_full_lifecycle() {
 }
 
 #[test]
+#[ignore = "needs br"]
 fn test_real_beads_list_and_ready() {
-    let Some(env) = RealBeadsEnv::new("test_list_ready") else {
-        return;
-    };
-    if !env.initialized {
-        return;
-    }
+    let env = RealBeadsEnv::new("test_list_ready");
 
     let client = env.client();
 
@@ -253,13 +235,9 @@ fn test_real_beads_list_and_ready() {
 }
 
 #[test]
+#[ignore = "needs br"]
 fn test_real_beads_update_multiple_fields() {
-    let Some(env) = RealBeadsEnv::new("test_update_fields") else {
-        return;
-    };
-    if !env.initialized {
-        return;
-    }
+    let env = RealBeadsEnv::new("test_update_fields");
 
     let client = env.client();
 
@@ -285,13 +263,9 @@ fn test_real_beads_update_multiple_fields() {
 // =============================================================================
 
 #[test]
+#[ignore = "needs br"]
 fn test_real_beads_dependencies() {
-    let Some(env) = RealBeadsEnv::new("test_dependencies") else {
-        return;
-    };
-    if !env.initialized {
-        return;
-    }
+    let env = RealBeadsEnv::new("test_dependencies");
 
     let client = env.client();
 
@@ -320,10 +294,9 @@ fn test_real_beads_dependencies() {
 // =============================================================================
 
 #[test]
+#[ignore = "needs br"]
 fn test_real_beads_not_found_error() {
-    let Some(env) = RealBeadsEnv::new("test_not_found") else {
-        return;
-    };
+    let env = RealBeadsEnv::new("test_not_found");
 
     let client = env.client();
     let result = client.show("nonexistent-issue-xyz-12345");
@@ -349,13 +322,9 @@ fn test_real_beads_security_validation() {
 // =============================================================================
 
 #[test]
+#[ignore = "needs br"]
 fn test_real_beads_concurrent_reads() {
-    let Some(env) = RealBeadsEnv::new("test_concurrent_reads") else {
-        return;
-    };
-    if !env.initialized {
-        return;
-    }
+    let env = RealBeadsEnv::new("test_concurrent_reads");
 
     let client = env.client();
 
@@ -399,13 +368,9 @@ fn test_real_beads_concurrent_reads() {
 }
 
 #[test]
+#[ignore = "needs br"]
 fn test_real_beads_concurrent_writes_no_corruption() {
-    let Some(env) = RealBeadsEnv::new("test_concurrent_writes") else {
-        return;
-    };
-    if !env.initialized {
-        return;
-    }
+    let env = RealBeadsEnv::new("test_concurrent_writes");
 
     let project_dir = env.project_dir();
     let db_path = env.db_path();
@@ -463,13 +428,9 @@ fn test_real_beads_concurrent_writes_no_corruption() {
 }
 
 #[test]
+#[ignore = "needs br"]
 fn test_real_beads_interleaved_read_write() {
-    let Some(env) = RealBeadsEnv::new("test_interleaved") else {
-        return;
-    };
-    if !env.initialized {
-        return;
-    }
+    let env = RealBeadsEnv::new("test_interleaved");
 
     let project_dir = env.project_dir();
     let db_path = env.db_path();
@@ -528,13 +489,9 @@ fn test_real_beads_interleaved_read_write() {
 // =============================================================================
 
 #[test]
+#[ignore = "needs br"]
 fn test_real_beads_wal_integrity() {
-    let Some(env) = RealBeadsEnv::new("test_wal_integrity") else {
-        return;
-    };
-    if !env.initialized {
-        return;
-    }
+    let env = RealBeadsEnv::new("test_wal_integrity");
 
     let client = env.client();
     let db_dir = env.project_dir().join(".beads");
@@ -563,13 +520,9 @@ fn test_real_beads_wal_integrity() {
 }
 
 #[test]
+#[ignore = "needs br"]
 fn test_real_beads_rapid_creates() {
-    let Some(env) = RealBeadsEnv::new("test_rapid_creates") else {
-        return;
-    };
-    if !env.initialized {
-        return;
-    }
+    let env = RealBeadsEnv::new("test_rapid_creates");
 
     let client = env.client();
 
@@ -593,13 +546,9 @@ fn test_real_beads_rapid_creates() {
 }
 
 #[test]
+#[ignore = "needs br"]
 fn test_real_beads_sync_persistence() {
-    let Some(env) = RealBeadsEnv::new("test_sync_persistence") else {
-        return;
-    };
-    if !env.initialized {
-        return;
-    }
+    let env = RealBeadsEnv::new("test_sync_persistence");
 
     let client = env.client();
 
@@ -634,13 +583,9 @@ fn test_real_beads_sync_persistence() {
 // =============================================================================
 
 #[test]
+#[ignore = "needs br"]
 fn test_real_beads_labels() {
-    let Some(env) = RealBeadsEnv::new("test_labels") else {
-        return;
-    };
-    if !env.initialized {
-        return;
-    }
+    let env = RealBeadsEnv::new("test_labels");
 
     let client = env.client();
 
@@ -658,13 +603,9 @@ fn test_real_beads_labels() {
 }
 
 #[test]
+#[ignore = "needs br"]
 fn test_real_beads_filter_by_status() {
-    let Some(env) = RealBeadsEnv::new("test_filter_status") else {
-        return;
-    };
-    if !env.initialized {
-        return;
-    }
+    let env = RealBeadsEnv::new("test_filter_status");
 
     let client = env.client();
 
@@ -700,16 +641,16 @@ fn test_real_beads_filter_by_status() {
 // =============================================================================
 
 #[test]
+#[ignore = "needs br"]
 fn test_real_beads_version() {
+    let tool = require_br("test_real_beads_version");
     let client = BeadsClient::new();
-
-    if !client.is_available() {
-        return;
-    }
+    assert!(client.is_available(), "br/bd should be available");
 
     let version = client.version();
     assert!(version.is_some(), "Should get version string");
 
     let version_str = version.unwrap();
     assert!(!version_str.is_empty(), "Version should not be empty");
+    assert_eq!(version_str, tool.version);
 }

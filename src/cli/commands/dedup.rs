@@ -424,16 +424,14 @@ fn run_merge(ctx: &AppContext, args: &MergeArgs) -> Result<()> {
         }
 
         if sections_merged > 0 || blocks_merged > 0 || tags_merged > 0 {
-            if let Ok(tx_mgr) = TxManager::new(ctx.db.clone(), ctx.git.clone(), ctx.ms_root.clone())
-            {
-                let layer = match primary.source_layer.to_ascii_lowercase().as_str() {
-                    "base" | "system" => SkillLayer::Base,
-                    "org" | "global" => SkillLayer::Org,
-                    "user" | "local" | "session" => SkillLayer::User,
-                    _ => SkillLayer::Project,
-                };
-                let _ = tx_mgr.write_skill_with_layer(&primary_spec, layer);
-            }
+            let tx_mgr = TxManager::new(ctx.db.clone(), ctx.git.clone(), ctx.ms_root.clone())?;
+            let layer = match primary.source_layer.to_ascii_lowercase().as_str() {
+                "base" | "system" => SkillLayer::Base,
+                "org" | "global" => SkillLayer::Org,
+                "user" | "local" | "session" => SkillLayer::User,
+                _ => SkillLayer::Project,
+            };
+            tx_mgr.write_skill_with_layer(&primary_spec, layer)?;
         }
     }
 
@@ -449,7 +447,7 @@ fn run_merge(ctx: &AppContext, args: &MergeArgs) -> Result<()> {
     db.upsert_alias(&secondary.id, &primary.id, "deprecated", &created_at)?;
 
     if let Some(record) = db.get_skill(&primary.id)? {
-        let _ = ctx.search.index_skill(&record);
+        ctx.search.index_skill(&record)?;
     }
     if let Some(record) = db.get_skill(&secondary.id)? {
         ctx.search.index_skill(&record)?;

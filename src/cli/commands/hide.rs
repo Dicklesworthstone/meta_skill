@@ -114,21 +114,29 @@ fn add_hidden(ctx: &AppContext, skill: &str) -> Result<()> {
 
     let record = ctx.db.set_user_preference(&skill_id, "hidden")?;
 
-    // Record hidden outcome in suggestion tracker and bandit
+    // Record hidden outcome in suggestion tracker and bandit (preserving corrupt files)
     let tracking_path = crate::suggestions::tracking::FeedbackCollector::default_path(&ctx.ms_root);
-    let mut collector = crate::suggestions::tracking::FeedbackCollector::load(&tracking_path);
-    collector.suggestions.on_suggestion_hidden(&skill_id);
-    let _ = collector.save(&tracking_path);
-    let bandit_path = ctx.ms_root.join("contextual_bandit.json");
-    if let Ok(mut bandit) = crate::suggestions::bandit::ContextualBandit::load(&bandit_path) {
-        let features = crate::suggestions::bandit::features::ContextFeatures::default();
-        collector.update_bandit_for_skill(
-            &mut bandit,
-            &skill_id,
-            &crate::suggestions::bandit::rewards::SkillFeedback::Ignored,
-            &features,
+    if let Ok(mut collector) =
+        crate::suggestions::tracking::FeedbackCollector::load_checked(&tracking_path)
+    {
+        collector.suggestions.on_suggestion_hidden(&skill_id);
+        let _ = collector.save(&tracking_path);
+        let bandit_path = ctx.ms_root.join("contextual_bandit.json");
+        if let Ok(mut bandit) = crate::suggestions::bandit::ContextualBandit::load(&bandit_path) {
+            let features = crate::suggestions::bandit::features::ContextFeatures::default();
+            collector.update_bandit_for_skill(
+                &mut bandit,
+                &skill_id,
+                &crate::suggestions::bandit::rewards::SkillFeedback::Ignored,
+                &features,
+            );
+            let _ = bandit.save(&bandit_path);
+        }
+    } else {
+        tracing::warn!(
+            path = %tracking_path.display(),
+            "preserving corrupt suggestion tracking file; skipping hide tracking update"
         );
-        let _ = bandit.save(&bandit_path);
     }
 
     if ctx.output_format != OutputFormat::Human {

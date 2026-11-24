@@ -2,6 +2,7 @@
 
 pub mod fixtures;
 pub mod logging;
+pub mod tool_gate;
 
 #[cfg(test)]
 pub mod arbitrary;

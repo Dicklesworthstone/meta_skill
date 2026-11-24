@@ -83,8 +83,7 @@ impl ValidationRule for RequiredMetadataRule {
             } else {
                 "this skill"
             };
-            skill.metadata.description =
-                format!("Operational guide and best practices for {label}.");
+            skill.metadata.description = format!("TODO: Add description for {label}");
             Ok(())
         } else {
             Err(crate::error::MsError::NotImplemented(
@@ -334,6 +333,38 @@ mod tests {
 
         let diagnostics = rule.validate(&ctx);
         assert!(diagnostics.is_empty());
+    }
+
+    #[test]
+    fn test_required_metadata_autofix_keeps_placeholder_lint_firing() {
+        use crate::lint::rules::quality::MeaningfulDescriptionRule;
+
+        let req_rule = RequiredMetadataRule;
+        let quality_rule = MeaningfulDescriptionRule::default();
+        let config = ValidationConfig::new();
+        let mut skill = SkillSpec::new("deploy-checks", "Deploy Checks");
+        skill.metadata.description.clear();
+
+        let diags = req_rule.validate(&make_context(&skill, &config));
+        let desc_diag = diags
+            .iter()
+            .find(|d| d.message.contains("description"))
+            .expect("empty description should trigger required-metadata warning");
+        req_rule
+            .fix(&mut skill, desc_diag)
+            .expect("auto-fix should succeed");
+
+        assert!(
+            req_rule.validate(&make_context(&skill, &config)).is_empty(),
+            "auto-fix must satisfy required-metadata"
+        );
+        let quality_diags = quality_rule.validate(&make_context(&skill, &config));
+        assert!(
+            quality_diags
+                .iter()
+                .any(|d| d.message.contains("placeholder")),
+            "auto-fixed description must still trigger placeholder warning, got: {quality_diags:?}"
+        );
     }
 
     #[test]

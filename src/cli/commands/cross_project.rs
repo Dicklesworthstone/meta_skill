@@ -695,10 +695,22 @@ mod tests {
             marked_at: "2026-10-14T00:00:00Z".to_string(),
         };
         save_session_marks(dir.path(), std::slice::from_ref(&record)).unwrap();
-        let loaded = load_session_marks(dir.path());
+        let loaded = load_session_marks(dir.path()).unwrap();
         assert_eq!(loaded.len(), 1);
         assert_eq!(loaded[0].session_id, "sess-42");
         assert_eq!(loaded[0].topics, vec!["debugging", "rust"]);
+    }
+
+    #[test]
+    fn test_session_marks_corrupt_store_returns_err() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let path = dir.path().join("session_marks.json");
+        std::fs::write(&path, b"[{\"session_id\": \"s1\", truncated").unwrap();
+        let err = load_session_marks(dir.path()).expect_err("corrupt store must error");
+        assert!(
+            err.to_string().contains("session marks"),
+            "unexpected error: {err}"
+        );
     }
 }
 
@@ -985,20 +997,32 @@ struct TopicCoverageItem {
 
 #[derive(Debug, Serialize)]
 struct CoverageReport {
+    status: String,
+    cass_available: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    cass_error: Option<String>,
     min_sessions: usize,
     total_topics: usize,
     topics: Vec<TopicCoverageItem>,
 }
 
-pub fn load_session_marks(ms_root: &std::path::Path) -> Vec<SessionMarkRecord> {
+pub fn load_session_marks(ms_root: &std::path::Path) -> Result<Vec<SessionMarkRecord>> {
     let path = ms_root.join("session_marks.json");
     if !path.exists() {
-        return Vec::new();
+        return Ok(Vec::new());
     }
-    std::fs::read_to_string(&path)
-        .ok()
-        .and_then(|s| serde_json::from_str(&s).ok())
-        .unwrap_or_default()
+    let raw = std::fs::read_to_string(&path).map_err(|e| {
+        MsError::Config(format!(
+            "failed to read session marks store {}: {e}",
+            path.display()
+        ))
+    })?;
+    serde_json::from_str(&raw).map_err(|e| {
+        MsError::Config(format!(
+            "failed to parse session marks store {}: {e}",
+            path.display()
+        ))
+    })
 }
 
 fn save_session_marks(ms_root: &std::path::Path, marks: &[SessionMarkRecord]) -> Result<()> {
@@ -1040,7 +1064,7 @@ pub fn run_mark(ctx: &AppContext, args: &MarkArgs) -> Result<()> {
         marked_at: Utc::now().to_rfc3339(),
     };
 
-    let mut marks = load_session_marks(&ctx.ms_root);
+    let mut marks = load_session_marks(&ctx.ms_root)?;
     if let Some(existing) = marks.iter_mut().find(|m| m.session_id == args.session) {
         *existing = record.clone();
     } else {
@@ -1084,7 +1108,7 @@ pub fn run_coverage(ctx: &AppContext, args: &CoverageArgs) -> Result<()> {
     let mut topic_skills: HashMap<String, usize> = HashMap::new();
 
     // 1. Fold in marked sessions from session_marks.json
-    let marks = load_session_marks(&ctx.ms_root);
+    let marks = load_session_marks(&ctx.ms_root)?;
     for mark in &marks {
         for topic in &mark.topics {
             *topic_sessions.entry(topic.clone()).or_insert(0) += 1;
@@ -1096,9 +1120,11 @@ pub fn run_coverage(ctx: &AppContext, args: &CoverageArgs) -> Result<()> {
         }
     }
 
-    // 2. Fold in CASS sessions if CASS is available
+    // 2. Fold in CASS sessions; never hide CASS failures
     let client = cass_client(ctx, &args.cass_path);
-    if let Ok(matches) = client.search(&args.query, args.limit) {
+    let cass_available = client.is_available();
+    let cass_error = if cass_available {
+        let matches = client.search(&args.query, args.limit)?;
         for m in matches {
             if let Some(proj) = m
                 .project
@@ -1114,7 +1140,14 @@ pub fn run_coverage(ctx: &AppContext, args: &CoverageArgs) -> Result<()> {
                 *topic_sessions.entry(topic).or_insert(0) += 1;
             }
         }
-    }
+        None
+    } else if args.cass_path.is_some() {
+        return Err(MsError::CassUnavailable(
+            "cass binary not found or not executable".to_string(),
+        ));
+    } else {
+        Some("cass binary not found or not executable".to_string())
+    };
 
     // 3. Fold in indexed skills and their tags from SQLite
     if let Ok(skills) = ctx.db.list_skills(1000, 0) {
@@ -1155,6 +1188,13 @@ pub fn run_coverage(ctx: &AppContext, args: &CoverageArgs) -> Result<()> {
     }
 
     let report = CoverageReport {
+        status: if cass_error.is_none() {
+            "ok".to_string()
+        } else {
+            "partial".to_string()
+        },
+        cass_available,
+        cass_error,
         min_sessions: args.min_sessions,
         total_topics: topics.len(),
         topics,
@@ -1162,6 +1202,13 @@ pub fn run_coverage(ctx: &AppContext, args: &CoverageArgs) -> Result<()> {
 
     if ctx.output_format != OutputFormat::Human {
         return emit_json(&report);
+    }
+
+    if let Some(err) = &report.cass_error {
+        eprintln!(
+            "{}: CASS session data omitted from coverage report: {err}",
+            "warning".yellow()
+        );
     }
 
     let mut layout = HumanLayout::new();

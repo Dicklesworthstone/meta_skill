@@ -260,10 +260,17 @@ fn run_single(ctx: &AppContext, args: &ImportArgs) -> Result<()> {
                 ctx.ms_root.clone(),
             )?;
             tx_mgr.write_skill_with_layer(&generated.skill, crate::core::SkillLayer::Project)?;
-            if let Ok(Some(record)) = ctx.db.get_skill(&generated.skill.metadata.id) {
-                let _ = ctx.search.index_skill(&record);
-                let _ = ctx.search.commit();
-            }
+            let record = ctx
+                .db
+                .get_skill(&generated.skill.metadata.id)?
+                .ok_or_else(|| {
+                    MsError::TransactionFailed(format!(
+                        "imported skill '{}' missing from database after write",
+                        generated.skill.metadata.id
+                    ))
+                })?;
+            ctx.search.index_skill(&record)?;
+            ctx.search.commit()?;
             indexed = true;
         }
     }
@@ -497,10 +504,17 @@ fn import_single_for_batch(
                 ctx.ms_root.clone(),
             )?;
             tx_mgr.write_skill_with_layer(&generated.skill, crate::core::SkillLayer::Project)?;
-            if let Ok(Some(record)) = ctx.db.get_skill(&generated.skill.metadata.id) {
-                let _ = ctx.search.index_skill(&record);
-                let _ = ctx.search.commit();
-            }
+            let record = ctx
+                .db
+                .get_skill(&generated.skill.metadata.id)?
+                .ok_or_else(|| {
+                    MsError::TransactionFailed(format!(
+                        "imported skill '{}' missing from database after write",
+                        generated.skill.metadata.id
+                    ))
+                })?;
+            ctx.search.index_skill(&record)?;
+            ctx.search.commit()?;
         }
 
         if ctx.output_format == OutputFormat::Human {

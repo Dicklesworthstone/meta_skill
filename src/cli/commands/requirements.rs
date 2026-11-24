@@ -188,6 +188,12 @@ fn collect_available_skills_and_capabilities(
 fn build_spec_from_record(
     record: &crate::storage::sqlite::SkillRecord,
 ) -> Result<crate::core::skill::SkillSpec> {
+    if let Some(err) = crate::core::spec_lens::frontmatter_error(&record.body) {
+        return Err(crate::error::MsError::ValidationFailed(format!(
+            "failed to parse skill '{}' frontmatter: {err}",
+            record.id
+        )));
+    }
     let mut spec = crate::core::spec_lens::parse_markdown(&record.body).map_err(|e| {
         crate::error::MsError::ValidationFailed(format!(
             "failed to parse skill '{}': {e}",
@@ -200,7 +206,13 @@ fn build_spec_from_record(
     if spec.metadata.name.is_empty() {
         spec.metadata.name.clone_from(&record.name);
     }
-    if let Ok(meta) = serde_json::from_str::<serde_json::Value>(&record.metadata_json) {
+    if !record.metadata_json.trim().is_empty() {
+        let meta: serde_json::Value = serde_json::from_str(&record.metadata_json).map_err(|e| {
+            crate::error::MsError::ValidationFailed(format!(
+                "failed to parse skill '{}' metadata_json: {e}",
+                record.id
+            ))
+        })?;
         if spec.metadata.requires.is_empty() {
             if let Some(reqs) = meta.get("requires").and_then(|v| v.as_array()) {
                 spec.metadata.requires = reqs
@@ -252,24 +264,69 @@ fn run_skill_requirements(
 
 fn run_all_skill_requirements(ctx: &AppContext, args: &RequirementsArgs) -> Result<()> {
     let (records, available) = collect_available_skills_and_capabilities(ctx)?;
+    if records.is_empty() {
+        return Err(crate::error::MsError::ValidationFailed(
+            "no indexed skills found to check requirements".to_string(),
+        ));
+    }
+
     let mut reports = Vec::with_capacity(records.len());
+    let mut parse_errors = Vec::new();
 
     for record in &records {
-        if let Ok(spec) = build_spec_from_record(record) {
-            reports.push(crate::core::requirements::check_skill_requirements(
-                &spec, &available,
-            ));
+        match build_spec_from_record(record) {
+            Ok(spec) => {
+                reports.push(crate::core::requirements::check_skill_requirements(
+                    &spec, &available,
+                ));
+            }
+            Err(err) => {
+                let err_msg = err.to_string();
+                parse_errors.push(serde_json::json!({
+                    "skill_id": record.id,
+                    "error": err_msg,
+                }));
+                reports.push(crate::core::requirements::SkillRequirementReport {
+                    skill_id: record.id.clone(),
+                    skill_name: record.name.clone(),
+                    satisfied: false,
+                    checks: vec![crate::core::requirements::RequirementCheck {
+                        name: "skill-markdown".to_string(),
+                        category: "parse".to_string(),
+                        required: true,
+                        satisfied: false,
+                        message: Some(err_msg),
+                    }],
+                });
+            }
         }
     }
 
+    let all_satisfied = parse_errors.is_empty() && reports.iter().all(|r| r.satisfied);
+
     if ctx.output_format != OutputFormat::Human || args.format == "json" {
-        let all_satisfied = reports.iter().all(|r| r.satisfied);
-        return crate::cli::output::emit_json(&serde_json::json!({
-            "status": if all_satisfied { "ok" } else { "unsatisfied" },
+        let status = if !parse_errors.is_empty() {
+            "error"
+        } else if all_satisfied {
+            "ok"
+        } else {
+            "unsatisfied"
+        };
+        crate::cli::output::emit_json(&serde_json::json!({
+            "status": status,
             "total_skills": reports.len(),
             "satisfied_skills": reports.iter().filter(|r| r.satisfied).count(),
+            "parse_error_count": parse_errors.len(),
+            "parse_errors": parse_errors,
             "skills": reports,
-        }));
+        }))?;
+        if !parse_errors.is_empty() {
+            return Err(crate::error::MsError::ReportedValidationFailed(format!(
+                "failed to parse {} indexed skill(s) during requirements check",
+                parse_errors.len()
+            )));
+        }
+        return Ok(());
     }
 
     println!("{}", "All Indexed Skills Requirements Check".bold());
@@ -278,6 +335,12 @@ fn run_all_skill_requirements(ctx: &AppContext, args: &RequirementsArgs) -> Resu
     for report in &reports {
         print_skill_report(report);
         println!();
+    }
+    if !parse_errors.is_empty() {
+        return Err(crate::error::MsError::ValidationFailed(format!(
+            "failed to parse {} indexed skill(s) during requirements check",
+            parse_errors.len()
+        )));
     }
     Ok(())
 }

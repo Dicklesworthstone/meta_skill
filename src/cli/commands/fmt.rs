@@ -70,19 +70,22 @@ pub fn run(_ctx: &AppContext, _args: &FmtArgs) -> Result<()> {
             std::fs::write(&path, formatted).map_err(|err| {
                 crate::error::MsError::Config(format!("write {}: {err}", path.display()))
             })?;
-            if let Ok(Some(existing)) = ctx.db.get_skill(&spec.metadata.id) {
-                if let Ok(tx_mgr) = crate::storage::TxManager::new(
+            if let Some(existing) = ctx.db.get_skill(&spec.metadata.id)? {
+                let tx_mgr = crate::storage::TxManager::new(
                     ctx.db.clone(),
                     ctx.git.clone(),
                     ctx.ms_root.clone(),
-                ) {
-                    let layer = match existing.source_layer.to_ascii_lowercase().as_str() {
-                        "base" | "system" => crate::core::SkillLayer::Base,
-                        "org" | "global" => crate::core::SkillLayer::Org,
-                        "user" | "local" | "session" => crate::core::SkillLayer::User,
-                        _ => crate::core::SkillLayer::Project,
-                    };
-                    let _ = tx_mgr.write_skill_with_layer(&spec, layer);
+                )?;
+                let layer = match existing.source_layer.to_ascii_lowercase().as_str() {
+                    "base" | "system" => crate::core::SkillLayer::Base,
+                    "org" | "global" => crate::core::SkillLayer::Org,
+                    "user" | "local" | "session" => crate::core::SkillLayer::User,
+                    _ => crate::core::SkillLayer::Project,
+                };
+                tx_mgr.write_skill_with_layer(&spec, layer)?;
+                if let Some(updated_record) = ctx.db.get_skill(&spec.metadata.id)? {
+                    ctx.search.index_skill(&updated_record)?;
+                    ctx.search.commit()?;
                 }
             }
         }

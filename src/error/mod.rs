@@ -116,6 +116,11 @@ pub enum MsError {
     #[error("{0}")]
     TestsFailed(String),
 
+    /// A validation/diagnostic report was already printed in machine-readable mode;
+    /// `main` only has to set the non-zero exit code without emitting a duplicate JSON document.
+    #[error("{0}")]
+    ReportedValidationFailed(String),
+
     #[error("Cyclic inheritance detected for skill '{skill_id}': {}", .cycle.join(" -> "))]
     CyclicInheritance {
         skill_id: String,
@@ -142,7 +147,9 @@ impl MsError {
             Self::Io(_) => ErrorCode::IoError,
             Self::SkillNotFound(_) => ErrorCode::SkillNotFound,
             Self::InvalidSkill(_) => ErrorCode::SkillInvalid,
-            Self::ValidationFailed(_) => ErrorCode::ValidationFailed,
+            Self::ValidationFailed(_) | Self::ReportedValidationFailed(_) => {
+                ErrorCode::ValidationFailed
+            }
             Self::SearchIndex(_) => ErrorCode::IndexCorrupted,
             Self::SearchIndexReadOnly(_) => ErrorCode::IndexBusy,
             Self::Json(_) | Self::Yaml(_) | Self::Serialization(_) => ErrorCode::SerializationError,

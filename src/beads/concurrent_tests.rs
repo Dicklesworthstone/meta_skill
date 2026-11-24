@@ -16,6 +16,7 @@ use std::time::Duration;
 use tempfile::TempDir;
 
 use crate::beads::{BeadsClient, CreateIssueRequest, TestLogger, WorkFilter};
+use crate::test_utils::tool_gate::require_br;
 
 /// Test fixture for concurrent tests (similar to WAL tests).
 struct ConcurrentTestEnv {
@@ -23,12 +24,17 @@ struct ConcurrentTestEnv {
     db_path: PathBuf,
     #[allow(dead_code)]
     log: TestLogger,
-    initialized: bool,
 }
 
 impl ConcurrentTestEnv {
     fn new(test_name: &str) -> Self {
         let mut log = TestLogger::new(test_name);
+        let tool = require_br(test_name);
+        log.info(
+            "TOOL",
+            &format!("{} ({})", tool.binary.display(), tool.version),
+            None,
+        );
 
         let temp_dir = tempfile::tempdir().expect("Failed to create temp directory");
         let beads_dir = temp_dir.path().join(".beads");
@@ -43,33 +49,32 @@ impl ConcurrentTestEnv {
 
         // Initialize database (prefer `br`, fall back to legacy `bd`).
         log.info("INIT", "Initializing test database", None);
-        let status = Command::new(crate::beads::resolve_beads_binary())
+        let output = Command::new(&tool.binary)
             .args(["init"])
             .env("BEADS_DB", &db_path)
             .current_dir(temp_dir.path())
-            .output();
+            .output()
+            .unwrap_or_else(|e| {
+                panic!(
+                    "[{test_name}] Failed to run `{} init` ({}): {e}",
+                    tool.binary.display(),
+                    tool.version
+                )
+            });
 
-        let initialized = match status {
-            Ok(output) if output.status.success() => {
-                log.success("INIT", "Database initialized", None);
-                true
-            }
-            Ok(output) => {
-                let stderr = String::from_utf8_lossy(&output.stderr);
-                log.warn("INIT", &format!("bd init warning: {}", stderr), None);
-                false
-            }
-            Err(e) => {
-                log.warn("INIT", &format!("bd init failed: {}", e), None);
-                false
-            }
-        };
+        assert!(
+            output.status.success(),
+            "[{test_name}] `{} init` failed ({}): {}",
+            tool.binary.display(),
+            tool.version,
+            String::from_utf8_lossy(&output.stderr)
+        );
+        log.success("INIT", "Database initialized", None);
 
         ConcurrentTestEnv {
             temp_dir,
             db_path,
             log,
-            initialized,
         }
     }
 
@@ -93,20 +98,11 @@ impl ConcurrentTestEnv {
 // =============================================================================
 
 #[test]
+#[ignore = "needs br"]
 fn test_serial_access_baseline() {
     let mut log = TestLogger::new("test_serial_access");
     let env = ConcurrentTestEnv::new("test_serial_access");
     let client = env.client();
-
-    if !client.is_available() {
-        log.warn("SKIP", "bd not available", None);
-        return;
-    }
-
-    if !env.initialized {
-        log.warn("SKIP", "Test database not initialized", None);
-        return;
-    }
 
     // Create issues serially
     let mut created_count = 0;
@@ -123,10 +119,10 @@ fn test_serial_access_baseline() {
         }
     }
 
-    if created_count == 0 {
-        log.warn("SKIP", "Could not create any issues", None);
-        return;
-    }
+    assert!(
+        created_count > 0,
+        "Expected serial access baseline to create at least one issue"
+    );
 
     // Sync after batch (as recommended)
     client.sync().expect("BeadsClient::sync() must succeed");
@@ -162,30 +158,18 @@ fn test_serial_access_baseline() {
 // =============================================================================
 
 #[test]
+#[ignore = "needs br"]
 fn test_concurrent_reads() {
     let mut log = TestLogger::new("test_concurrent_reads");
     let env = ConcurrentTestEnv::new("test_concurrent_reads");
     let client = env.client();
 
-    if !client.is_available() {
-        log.warn("SKIP", "bd not available", None);
-        return;
-    }
-
-    if !env.initialized {
-        log.warn("SKIP", "Test database not initialized", None);
-        return;
-    }
-
     // Create baseline data
     let req = CreateIssueRequest::new("Concurrent Read Test");
-    let created_title = match client.create(&req) {
-        Ok(issue) => issue.title,
-        Err(e) => {
-            log.warn("SKIP", &format!("Could not create test issue: {}", e), None);
-            return;
-        }
-    };
+    let created_title = client
+        .create(&req)
+        .expect("Should create baseline issue for concurrent reads")
+        .title;
 
     log.info(
         "SETUP",
@@ -249,19 +233,10 @@ fn test_concurrent_reads() {
 // =============================================================================
 
 #[test]
+#[ignore = "needs br"]
 fn test_concurrent_writes_no_corruption() {
     let mut log = TestLogger::new("test_concurrent_writes");
     let env = ConcurrentTestEnv::new("test_concurrent_writes");
-
-    if !env.client().is_available() {
-        log.warn("SKIP", "bd not available", None);
-        return;
-    }
-
-    if !env.initialized {
-        log.warn("SKIP", "Test database not initialized", None);
-        return;
-    }
 
     let work_dir = env.work_dir();
     let db_path = env.db_path();
@@ -350,19 +325,10 @@ fn test_concurrent_writes_no_corruption() {
 // =============================================================================
 
 #[test]
+#[ignore = "needs br"]
 fn test_sync_after_each_agent_pattern() {
     let mut log = TestLogger::new("test_sync_pattern");
     let env = ConcurrentTestEnv::new("test_sync_pattern");
-
-    if !env.client().is_available() {
-        log.warn("SKIP", "bd not available", None);
-        return;
-    }
-
-    if !env.initialized {
-        log.warn("SKIP", "Test database not initialized", None);
-        return;
-    }
 
     // Simulate multiple "agents" working sequentially with sync between
     let mut total_created = 0;
@@ -402,10 +368,7 @@ fn test_sync_after_each_agent_pattern() {
         );
     }
 
-    if total_created == 0 {
-        log.warn("SKIP", "No tasks were created", None);
-        return;
-    }
+    assert!(total_created > 0, "Expected agents to create tasks");
 
     // Verify all work persisted
     let client = env.client();
@@ -435,22 +398,18 @@ fn test_sync_after_each_agent_pattern() {
 // =============================================================================
 
 #[test]
+#[ignore = "needs br"]
 fn test_failure_detection() {
     let mut log = TestLogger::new("test_failure_detection");
     let env = ConcurrentTestEnv::new("test_failure_detection");
     let client = env.client();
-
-    if !client.is_available() {
-        log.warn("SKIP", "bd not available", None);
-        return;
-    }
 
     // Test that errors are properly surfaced for nonexistent issues
     let result = client.show("nonexistent-issue-xyz-12345");
 
     match result {
         Ok(_) => {
-            log.warn("UNEXPECTED", "Show succeeded for nonexistent issue", None);
+            panic!("Show unexpectedly succeeded for nonexistent issue");
         }
         Err(e) => {
             let err_str = e.to_string().to_lowercase();
@@ -481,19 +440,10 @@ fn test_failure_detection() {
 // =============================================================================
 
 #[test]
+#[ignore = "needs br"]
 fn test_interleaved_read_write() {
     let mut log = TestLogger::new("test_interleaved_read_write");
     let env = ConcurrentTestEnv::new("test_interleaved_rw");
-
-    if !env.client().is_available() {
-        log.warn("SKIP", "bd not available", None);
-        return;
-    }
-
-    if !env.initialized {
-        log.warn("SKIP", "Test database not initialized", None);
-        return;
-    }
 
     let work_dir = env.work_dir();
     let db_path = env.db_path();
@@ -580,19 +530,10 @@ fn test_interleaved_read_write() {
 // =============================================================================
 
 #[test]
+#[ignore = "needs br"]
 fn test_stress_rapid_concurrent_ops() {
     let mut log = TestLogger::new("test_stress_concurrent");
     let env = ConcurrentTestEnv::new("test_stress");
-
-    if !env.client().is_available() {
-        log.warn("SKIP", "bd not available", None);
-        return;
-    }
-
-    if !env.initialized {
-        log.warn("SKIP", "Test database not initialized", None);
-        return;
-    }
 
     let work_dir = env.work_dir();
     let db_path = env.db_path();

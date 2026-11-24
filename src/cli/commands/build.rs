@@ -1329,7 +1329,7 @@ fn run_auto(
     // gate one session enters the build twice, double-weighting its patterns
     // against --min-patterns and in the extracted set (issue #171).
     let mut seen_session_ids = std::collections::HashSet::new();
-    let session_marks = super::cross_project::load_session_marks(&ctx.ms_root);
+    let session_marks = super::cross_project::load_session_marks(&ctx.ms_root)?;
 
     for (i, session_match) in session_matches.into_iter().take(search_limit).enumerate() {
         // Update phase progress

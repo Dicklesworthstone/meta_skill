@@ -1621,13 +1621,23 @@ fn handle_tool_suggest(ctx: &AppContext, args: &Value) -> Result<ToolResult> {
     scored.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
     scored.truncate(limit);
 
-    // Record shown suggestions in FeedbackCollector for implicit bandit learning
+    // Record shown suggestions in FeedbackCollector for implicit bandit learning (preserving corrupt files)
     if !scored.is_empty() {
         let shown_ids: Vec<String> = scored.iter().map(|(s, _)| s.id.clone()).collect();
         let tracking_path = crate::suggestions::FeedbackCollector::default_path(&ctx.ms_root);
-        let mut collector = crate::suggestions::FeedbackCollector::load(&tracking_path);
-        collector.on_suggestions_shown(&shown_ids, None);
-        let _ = collector.save(&tracking_path);
+        match crate::suggestions::FeedbackCollector::load_checked(&tracking_path) {
+            Ok(mut collector) => {
+                collector.on_suggestions_shown(&shown_ids, None);
+                let _ = collector.save(&tracking_path);
+            }
+            Err(err) => {
+                tracing::warn!(
+                    path = %tracking_path.display(),
+                    error = %err,
+                    "preserving corrupt suggestion tracking file; skipping MCP tracking save"
+                );
+            }
+        }
     }
 
     // Format detected contexts

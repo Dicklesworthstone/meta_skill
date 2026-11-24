@@ -24,8 +24,11 @@ fn main() -> ExitCode {
         Err(e) => {
             let active_fmt = ms::cli::output::active_output_format();
             if active_fmt != ms::cli::OutputFormat::Human {
-                // `ms test` already printed its one document, and that says what failed
-                if matches!(e, ms::MsError::TestsFailed(_)) {
+                // Commands that already emitted their structured report only need a non-zero exit
+                if matches!(
+                    e,
+                    ms::MsError::TestsFailed(_) | ms::MsError::ReportedValidationFailed(_)
+                ) {
                     return ExitCode::FAILURE;
                 }
                 // Structured error output to stdout for non-human modes
@@ -68,17 +71,25 @@ fn run(cli: &Cli) -> Result<()> {
     ms::cli::commands::run(&ctx, &cli.command)
 }
 
+fn default_tracing_filter(verbose: u8) -> &'static str {
+    // Only suppress the per-open startup WARN emitted by `fsqlite_core::connection`
+    // ("WAL-FEC requires a caller-owned native runtime; primary WAL durability is unchanged")
+    // below `-vv`, keeping real warnings from `fsqlite_pager` and other `fsqlite_core`
+    // modules visible at default verbosity.
+    match verbose {
+        0 => "warn,ms=info,fsqlite_core::connection=error",
+        1 => "info,ms=debug,fsqlite_core::connection=error",
+        2 => "debug,ms=trace,fsqlite_core::connection=warn",
+        _ => "trace",
+    }
+}
+
 fn init_tracing(cli: &Cli) {
     if cli.quiet {
         return;
     }
 
-    let filter = match cli.verbose {
-        0 => "warn,ms=info,fsqlite_core=error,fsqlite_pager=error",
-        1 => "info,ms=debug,fsqlite_core=error,fsqlite_pager=error",
-        2 => "debug,ms=trace,fsqlite_core=warn,fsqlite_pager=warn",
-        _ => "trace",
-    };
+    let filter = default_tracing_filter(cli.verbose);
 
     let env_filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new(filter));
 
@@ -99,5 +110,31 @@ fn init_tracing(cli: &Cli) {
             .with(env_filter)
             .with(fmt::layer().with_ansi(ansi).with_writer(std::io::stderr))
             .init();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::default_tracing_filter;
+
+    #[test]
+    fn default_tracing_filter_keeps_fsqlite_pager_and_core_submodules_visible() {
+        for level in [0u8, 1] {
+            let filter = default_tracing_filter(level);
+            assert!(
+                filter.contains("fsqlite_core::connection=error"),
+                "level {level} should silence routine connection WAL-FEC startup warning: {filter}"
+            );
+            assert!(
+                !filter.contains("fsqlite_pager=error"),
+                "level {level} must not blanket-hide fsqlite_pager warnings: {filter}"
+            );
+            assert!(
+                !filter.contains("fsqlite_core=error"),
+                "level {level} must not blanket-hide non-connection fsqlite_core warnings: {filter}"
+            );
+        }
+        assert!(default_tracing_filter(2).contains("fsqlite_core::connection=warn"));
+        assert_eq!(default_tracing_filter(3), "trace");
     }
 }
