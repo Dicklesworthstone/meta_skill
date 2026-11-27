@@ -1987,7 +1987,7 @@ dependencies = [
  "hashbrown 0.17.1",
  "itoa",
  "lazy_static",
- "lru 0.19.1",
+ "lru 0.19.2",
  "serde",
  "serde_json",
  "smallvec",
@@ -2174,7 +2174,7 @@ dependencies = [
  "fsqlite-error",
  "fsqlite-parser",
  "fsqlite-types",
- "lru 0.19.1",
+ "lru 0.19.2",
  "serde",
  "serde_json",
  "tracing",
@@ -4298,9 +4298,9 @@ dependencies = [
 
 [[package]]
 name = "lru"
-version = "0.19.1"
+version = "0.19.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "83be4da409554841af087163ad187608824ad8ca8713d8e124c8e0f704a2f92f"
+checksum = "d4e2a1b977b42ee8b53a2a4adbd1183431c493f1d1960b7ccd893e2f0b9407ba"
 dependencies = [
  "hashbrown 0.17.1",
 ]
@@ -4442,7 +4442,7 @@ dependencies = [
  "itertools 0.15.0",
  "keyring",
  "libc",
- "lru 0.19.1",
+ "lru 0.19.2",
  "memchr",
  "open",
  "parking_lot 0.13.0",
