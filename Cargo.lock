@@ -1722,9 +1722,9 @@ dependencies = [
 
 [[package]]
 name = "fancy-regex"
-version = "0.18.0"
+version = "0.20.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e1e1dacd0d2082dfcf1351c4bdd566bbe89a2b263235a2b50058f1e130a47277"
+checksum = "0a2e16b9a584b602f1e0e5e22c30ca0906786088c27500653e432d086def8b53"
 dependencies = [
  "bit-set 0.8.0",
  "regex-automata",
@@ -5894,16 +5894,16 @@ dependencies = [
 
 [[package]]
 name = "rich_rust"
-version = "0.2.3"
+version = "0.2.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d49c27580d13ba376b565cbaa1af2de2ee320a93789c66d54c0478c53f11dcfe"
+checksum = "72e015f48c6658ba6b493933695fb75f06e4b9af37f5c3ecc730761b28b59ed4"
 dependencies = [
  "backtrace",
  "bitflags 2.13.2",
  "crossterm",
- "fancy-regex 0.18.0",
+ "fancy-regex 0.20.2",
  "log",
- "lru 0.18.5",
+ "lru 0.19.1",
  "num-rational",
  "once_cell",
  "os_pipe",
